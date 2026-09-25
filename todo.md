@@ -45,13 +45,18 @@ have shipped. Parakeet implementation and manual acceptance are in progress on
   `cuda` / `float32` provenance and retained playable source audio. Linux
   packaged build verification passed for AppImage, pacman, and deb; this is a
   bounded short-clip smoke, not completion of the remaining lifecycle checks.
-  Windows hardware validation remains open. On 2026-09-24 a dev-electron
-  lifecycle on the same CachyOS host covered setup cancel/repair/validate/remove,
+  On 2026-09-24 a dev-electron lifecycle on the same CachyOS host covered setup
+  cancel/repair/validate/remove,
   quit/resume, seams on a repeated short clip, guided Speakrs and guidance
   fallback, runtime-loss fail-closed, and an explicit Whisper retry. On
   2026-09-25 the same dev-electron lifecycle passed on an Apple M4 Pro: Metal
   `mps` / `float32` for Parakeet, `mps` / `float16` for the explicit Whisper
-  Small retry, and the same exceptions. Network disconnect, memory pressure,
+  Small retry, and the same exceptions. On 2026-09-25 the same dev-electron
+  lifecycle passed on Windows 11 x64 with an RTX 4070: CUDA `cuda` /
+  `float32` for Parakeet, `cuda` / `float16` for the explicit Whisper Small
+  retry, and the same exceptions. The first Windows probe failed closed until
+  the isolated interpreter loaded the standard-library DLL directory and
+  preloaded the pinned CUDA 12 libraries. Network disconnect, memory pressure,
   live recording recovery, and packaged update survival were not run. Details
   are in the plan.
 - Remaining committed work: Parakeet, Whisper Large, extra language removals,
@@ -70,9 +75,9 @@ remaining host checks while retaining live GPU admission.
    shortcuts, click-away rename, and the curated Whisper choice list (Slice A).
 2. **Active Parakeet implementation:** Complete guided transcription, engine
    activation and recovery UI, packaging/legal/contracts, and the remaining
-   lifecycle checks in the approved three-platform plan. The CachyOS and Mac
-   dev-electron lifecycles have passed. Validate Windows CUDA on matching
-   hardware and repeat the Mac test in a packaged app. Other independent
+   lifecycle checks in the approved three-platform plan. The CachyOS, Mac, and
+   Windows dev-electron lifecycles have passed. Repeat the
+   Mac test in a packaged app. Other independent
    investigations remain on their matching
    release machines:
    Whisper Large, other listed languages, Qwen summary languages, a local
@@ -99,7 +104,7 @@ removals. Slice B (Large) and slice C (other languages) need qualification first
 - [ ] Explore whether any other currently listed languages also have poor performance and should be removed.
 - [ ] Add Whisper Large as a transcription model option.
 - [x] Remove Tiny and Base model options; Small becomes the smallest available Whisper model.
-- [ ] Add optional English-only Parakeet transcription in Settings for Windows CUDA, Apple Silicon Metal, and Linux managed CUDA. The approved [three-platform plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) governs implementation. The Mac service-level smoke and the CachyOS and Mac dev-electron lifecycles passed. Windows hardware validation and the packaged Mac checks are open. Do not claim a speed, memory, or accuracy win from these runs.
+- [ ] Add optional English-only Parakeet transcription in Settings for Windows CUDA, Apple Silicon Metal, and Linux managed CUDA. The approved [three-platform plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) governs implementation. The Mac service-level smoke and the CachyOS, Mac, and Windows dev-electron lifecycles passed. The packaged Mac checks are open. Do not claim a speed, memory, or accuracy win from these runs.
 
 ### Summarisation
 

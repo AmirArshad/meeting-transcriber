@@ -14,9 +14,8 @@ Implementation is in progress on `codex/parakeet-three-platform-gpu`. Catalog,
 locks, durable selection, capture snapshot/recovery, pinned setup, guided
 transcription, Settings activation/recovery UI, and packaging/legal/contracts
 are in place. Automated regression coverage and the Mac service smoke have
-been run. Manual acceptance continues below. The Mac dev-electron lifecycle
-is recorded with the CachyOS one. Windows hardware validation and the
-packaged Mac checks are open.
+been run. Manual acceptance continues below. The CachyOS, Mac, and Windows
+dev-electron lifecycles are recorded. The packaged Mac checks remain open.
 
 On an Apple M4 Pro (macOS 26.7), explicit setup installed the pinned model and
 47-wheel isolated runtime under Electron userData. A live Metal probe and
@@ -35,7 +34,7 @@ and Librosa's Numba cache created directories inside the immutable runtime.
 Focused regression coverage was added. `npm run test:all` passed (1,023 JS passed,
 3 skipped; 715 Python passed, 9 skipped; Python syntax passed). At that time,
 Windows and Linux hardware validation had not yet been run for this
-integration. Windows hardware validation remains open; the bounded Linux
+integration. The Windows dev-electron lifecycle is recorded below; the bounded Linux
 result follows.
 
 ### CachyOS packaged smoke — 2026-09-23
@@ -84,6 +83,16 @@ Isolated userData on an Apple M4 Pro (48 GB, macOS 26.7, MacBook Pro Mac16,8), u
 Passed: cancel at the first download progress event (0 of 2,603,193,609 bytes) returned `AI_ADDON_SETUP_CANCELLED` and left Parakeet `not-installed`, with Whisper English Small still saved across restart; repair and validate reached `ready` for `parakeet-mlx-metal-v1`, model revision `8ae155301e23d820d82aa60d24817c900e69e487`, and runtime lock `943ea4b3c51a193ea5459a21e3c74171ce6d43965ad898215eee5fa14aa911dc`; a pending Parakeet job survived quit and resumed to `mps` / `float32`; a second quit while the isolated runtime Python was running `transcription.parakeet_bootstrap` also resumed to `mps` / `float32`. Both retained WAVs are 455,230 bytes, decode, last 14.22 seconds, and match fixture SHA-256 `1eed9687badcdd0d554638c8229fdb48d5c80e21ed1393c3bb5621f0c83bd998`. Changing the settings store to Whisper Medium did not rewrite a queued Parakeet request. An 85.35-second fixture made by repeating that clip six times produced 37 timestamped segments from `00:00` through `01:25`, with the opening and closing words present and the repeated clip's segment texts appearing six times, plus one extra short fragment. Its retained audio matches the repeated fixture and is `mps` / `float32`. Cancel of an active job returned `cancelled: true` and the meeting stayed `failed`. Deleting a still-pending queued meeting while another Parakeet job was pending left that job to finish `mps` / `float32`. Hiding the runtime failed the retry with `PARAKEET_ARTIFACT_INVALID`, kept the prior transcript bytes, and left the row's `mps` / `float32` provenance in place. An explicit Whisper Small retry then completed `mps` / `float16` on the same fixture audio. Restoring the runtime validated `ready`. Guided Speakrs completed `mps` / `float32` with a Speaker 1 label and diarization `speakerCount` 1. Removing `wespeaker-voxceleb-resnet34-tail.mlmodelc` still completed Parakeet `mps` / `float32` with diarization error `Speakrs model pack is not installed.` Relaunch stayed `ready` with Whisper English Small. Remove returned `not-installed` and left those Whisper preferences.
 
 The stored Mac cancel error is `Transcription was terminated because the app is quitting.` That is the same wall-clock terminator as the CachyOS lookup sentence, labeled for the transcription stage. Memory pressure, a live interrupted recording, a disconnected network, and packaged update survival were not run.
+
+### Windows dev-electron lifecycle — 2026-09-25
+
+Isolated userData on Windows 11 x64 (`10.0.26200`), NVIDIA GeForce RTX 4070, driver 617.14, 12,282 MiB, using dev Electron from `codex/parakeet-three-platform-gpu`. The network stayed connected. This is not a packaged-app or update-survival run, and it establishes no performance comparison.
+
+The first repair downloaded and verified the pinned 4,468,275,139-byte payload, then failed closed with `PARAKEET_GPU_UNAVAILABLE`. The isolated Windows interpreter was not putting the standard-library `DLLs` directory on its path, so `ctypes` could not load, and ONNX Runtime's CUDA provider did not see the pinned NVIDIA libraries until they were preloaded. After that fix, repair and validate reached `ready`.
+
+Passed: cancel at the first download progress event (0 of 4,468,275,139 bytes) returned `AI_ADDON_SETUP_CANCELLED` and left Parakeet `not-installed`, with Whisper English Small still saved across restart; repair and validate reached `ready` for `parakeet-onnx-win-cuda-v1`, model revision `0bbb45a3365852604aef28b538a8f066f4ccaa85`, and runtime lock `f7a3e6ef1876e2932d7d4f7d63df9b3bf2c04268634d0d3d916146172c91c3e9`; a pending Parakeet job survived quit and resumed to `cuda` / `float32`; a second quit while `.venv` Python was running `transcription.parakeet_bootstrap` also resumed to `cuda` / `float32`. The short retained WAV is 455,230 bytes, decodes, lasts 14.2245 seconds, and matches fixture SHA-256 `1eed9687badcdd0d554638c8229fdb48d5c80e21ed1393c3bb5621f0c83bd998`. Changing the settings store to Whisper Medium did not rewrite a queued Parakeet request. An 85.347-second fixture made by repeating that clip six times produced 36 timestamped segments from `00:00` through `01:25`, with the opening and closing lines present six times. Its retained audio matches the repeated fixture and is `cuda` / `float32`. Cancel of an active job returned `cancelled: true` and the meeting stayed `failed`. Deleting a still-pending queued meeting while another Parakeet job was pending left that job to finish `cuda` / `float32`. Hiding the runtime failed the retry with `PARAKEET_ARTIFACT_INVALID`, kept the prior transcript bytes, and left the row's `cuda` / `float32` provenance in place. An explicit Whisper Small retry then completed `cuda` / `float16` on the same fixture audio. Restoring the runtime validated `ready`. Guided Speakrs completed `cuda` / `float32` with a Speaker 1 label, diarization `speakerCount` 1, and Speakrs `device: cuda`. Removing `wespeaker-voxceleb-resnet34-tail-b3.onnx` still completed Parakeet `cuda` / `float32` with diarization error `Speakrs model pack is not installed.` Relaunch stayed `ready` with Whisper English Small. Remove returned `not-installed` and left those Whisper preferences.
+
+The stored Windows cancel error is `Meeting lookup was terminated because the app is quitting.` That is the same quit terminator recorded on CachyOS. Memory pressure, a live interrupted recording, a disconnected network, and packaged update survival were not run.
 
 ## Global constraints and authority
 
@@ -575,11 +584,11 @@ Run on Windows CUDA, Linux managed CUDA 12, and macOS Metal:
 8. Repeat setup/offline inference in packaged app; installed resources survive update.
 
 Record results separately per platform. The partial Mac service-level smoke,
-the bounded CachyOS packaged smoke, and the CachyOS and Mac dev-electron
-lifecycles are recorded above. Each lifecycle covered the Section 12 behaviors
+the bounded CachyOS packaged smoke, and the CachyOS, Mac, and Windows
+dev-electron lifecycles are recorded above. Each lifecycle covered the Section 12 behaviors
 listed in its note, except network disconnect, memory pressure, live
-recording recovery, and packaged update survival. Windows hardware validation
-and the packaged Mac checks are still open. Mocked GPU tests prove
+recording recovery, and packaged update survival. The packaged Mac checks
+are still open. Mocked GPU tests prove
 contracts/routing, not hardware execution.
 
 ## Out of scope

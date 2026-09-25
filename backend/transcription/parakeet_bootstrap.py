@@ -25,6 +25,27 @@ _CUDA_PROBE_MODEL = bytes.fromhex(
     "066f7574707574120e0a0c080112080a0208010a020804"
 )
 _DLL_DIR_HANDLES: List[object] = []
+# Load order matches ONNX Runtime 1.23 CUDA 12 preload: dependents after the
+# libraries they require. nvJitLink and NVRTC sit ahead of cuBLAS because the
+# CUDA 12 wheels load them as dependencies of cublas64.
+_WINDOWS_CUDA_DLLS = (
+    ("nvidia", "nvjitlink", "bin", "nvJitLink_120_0.dll"),
+    ("nvidia", "cuda_runtime", "bin", "cudart64_12.dll"),
+    ("nvidia", "cublas", "bin", "cublasLt64_12.dll"),
+    ("nvidia", "cublas", "bin", "cublas64_12.dll"),
+    ("nvidia", "cuda_nvrtc", "bin", "nvrtc-builtins64_129.dll"),
+    ("nvidia", "cuda_nvrtc", "bin", "nvrtc64_120_0.dll"),
+    ("nvidia", "cufft", "bin", "cufft64_11.dll"),
+    ("nvidia", "curand", "bin", "curand64_10.dll"),
+    ("nvidia", "cudnn", "bin", "cudnn_engines_runtime_compiled64_9.dll"),
+    ("nvidia", "cudnn", "bin", "cudnn_engines_precompiled64_9.dll"),
+    ("nvidia", "cudnn", "bin", "cudnn_heuristic64_9.dll"),
+    ("nvidia", "cudnn", "bin", "cudnn_ops64_9.dll"),
+    ("nvidia", "cudnn", "bin", "cudnn_adv64_9.dll"),
+    ("nvidia", "cudnn", "bin", "cudnn_graph64_9.dll"),
+    ("nvidia", "cudnn", "bin", "cudnn_engines_tensor_ir64_9.dll"),
+    ("nvidia", "cudnn", "bin", "cudnn64_9.dll"),
+)
 
 
 def _is_disallowed_import_root(entry: str) -> bool:
@@ -76,7 +97,16 @@ def positive_stdlib_paths(*, executable: Optional[str] = None) -> List[str]:
         dynload = Path(stdlib) / "lib-dynload"
         if dynload.is_dir():
             add(str(dynload))
+        # Windows keeps _ctypes.pyd and the other stdlib extensions in DLLs,
+        # beside the prefix, not inside Lib. -S does not add that directory.
+        windows_dlls = Path(stdlib).parent / "DLLs"
+        if (windows_dlls / "_ctypes.pyd").is_file():
+            add(str(windows_dlls))
     exe = Path(executable or sys.executable).resolve()
+    if (exe.parent / "_ctypes.pyd").is_file():
+        add(str(exe.parent))
+    if (exe.parent / "DLLs" / "_ctypes.pyd").is_file():
+        add(str(exe.parent / "DLLs"))
     bundled_zip = exe.parent / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
     if bundled_zip.is_file():
         add(str(bundled_zip))
@@ -195,6 +225,44 @@ def _unavailable_device() -> dict:
     return {"device": "cpu", "deviceAvailable": False}
 
 
+def preload_windows_cuda_dlls(runtime_dir: str, *, loader=None, add_directory=None) -> List[str]:
+    """Load pinned NVIDIA DLLs before ONNX Runtime imports its CUDA provider.
+
+    ``os.add_dll_directory`` is not enough: the provider loads dependencies with
+    a search that does not see those directories unless the DLLs are already
+    mapped. Missing files are skipped so a partial tree still fails closed in
+    the CUDA session check.
+    """
+    if os.name != "nt" or not runtime_dir:
+        return []
+    import ctypes
+
+    root = Path(runtime_dir)
+    add_dir = add_directory if add_directory is not None else getattr(os, "add_dll_directory", None)
+    load = loader or (lambda dll_path: ctypes.WinDLL(dll_path))
+    loaded: List[str] = []
+    seen_dirs = set()
+    for parts in _WINDOWS_CUDA_DLLS:
+        dll = root.joinpath(*parts)
+        if not dll.is_file():
+            continue
+        directory = str(dll.parent)
+        if add_dir is not None and directory not in seen_dirs:
+            seen_dirs.add(directory)
+            try:
+                handle = add_dir(directory)
+            except OSError:
+                handle = None
+            if handle is not None:
+                _DLL_DIR_HANDLES.append(handle)
+        try:
+            load(str(dll))
+        except OSError:
+            continue
+        loaded.append(dll.name)
+    return loaded
+
+
 def _retain_windows_dll_directories(runtime_dir: str) -> None:
     if os.name != "nt" or not hasattr(os, "add_dll_directory") or not runtime_dir:
         return
@@ -219,6 +287,7 @@ def probe_cuda_device(
     """Run a CUDA session inside this interpreter. Provider lists are not enough."""
     try:
         _retain_windows_dll_directories(runtime_dir)
+        preload_windows_cuda_dlls(runtime_dir)
         ort = ort_module
         if ort is None:
             import onnxruntime as ort  # type: ignore
@@ -318,6 +387,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     discard_ambient_modules(paths)
     apply_isolated_path(paths)
+    if os.name == "nt" and args.runtime and (args.probe_device or args.run_module):
+        preload_windows_cuda_dlls(args.runtime)
     if args.extract_wheel:
         safe_extract_wheel(Path(args.extract_wheel), Path(args.extract_dest or args.runtime))
         return 0

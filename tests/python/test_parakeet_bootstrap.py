@@ -13,8 +13,11 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from transcription.parakeet_bootstrap import (  # noqa: E402
     _CUDA_PROBE_MODEL,
+    _WINDOWS_CUDA_DLLS,
     assert_device,
     build_isolated_sys_path,
+    positive_stdlib_paths,
+    preload_windows_cuda_dlls,
     probe_cuda_device,
     probe_metal_device,
     safe_extract_wheel,
@@ -71,6 +74,58 @@ class _FakeArray:
 
     def ones(self, shape, dtype=None):
         return {"shape": shape, "dtype": dtype}
+
+
+def test_windows_stdlib_path_includes_extension_dlls(tmp_path: Path, monkeypatch):
+    lib = tmp_path / "Lib"
+    dlls = tmp_path / "DLLs"
+    lib.mkdir()
+    dlls.mkdir()
+    (dlls / "_ctypes.pyd").write_bytes(b"")
+    monkeypatch.setattr(
+        "transcription.parakeet_bootstrap.sysconfig.get_path",
+        lambda key: str(lib) if key == "stdlib" else "",
+    )
+    monkeypatch.setattr("transcription.parakeet_bootstrap.sys.executable", str(tmp_path / "python.exe"))
+
+    paths = [str(Path(entry).resolve()) for entry in positive_stdlib_paths()]
+
+    assert str(dlls.resolve()) in paths
+
+
+def test_windows_cuda_dlls_preload_in_dependency_order(tmp_path: Path, monkeypatch):
+    for parts in _WINDOWS_CUDA_DLLS:
+        dll = tmp_path.joinpath(*parts)
+        dll.parent.mkdir(parents=True, exist_ok=True)
+        dll.write_bytes(b"")
+    loaded = []
+    directories = []
+    monkeypatch.setattr("transcription.parakeet_bootstrap.os.name", "nt")
+
+    result = preload_windows_cuda_dlls(
+        str(tmp_path),
+        loader=lambda dll_path: loaded.append(Path(dll_path).name),
+        add_directory=lambda directory: directories.append(directory) or object(),
+    )
+
+    assert result == [parts[-1] for parts in _WINDOWS_CUDA_DLLS]
+    assert loaded.index("cublasLt64_12.dll") < loaded.index("cublas64_12.dll")
+    assert loaded.index("nvJitLink_120_0.dll") < loaded.index("cublas64_12.dll")
+    assert loaded.index("cudnn_ops64_9.dll") < loaded.index("cudnn64_9.dll")
+    assert len(directories) == len({str(tmp_path.joinpath(*parts[:-1])) for parts in _WINDOWS_CUDA_DLLS})
+
+
+def test_windows_cuda_preload_skips_missing_files(tmp_path: Path, monkeypatch):
+    dll = tmp_path / "nvidia" / "cublas" / "bin" / "cublasLt64_12.dll"
+    dll.parent.mkdir(parents=True)
+    dll.write_bytes(b"")
+    monkeypatch.setattr("transcription.parakeet_bootstrap.os.name", "nt")
+
+    assert preload_windows_cuda_dlls(
+        str(tmp_path),
+        loader=lambda dll_path: None,
+        add_directory=lambda directory: object(),
+    ) == ["cublasLt64_12.dll"]
 
 
 def test_cuda_probe_rejects_a_cpu_fallback():

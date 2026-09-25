@@ -292,6 +292,11 @@ function addExistingStdlib(entries, seen, candidate, fsModule, pathModule) {
       seen.add(dynload);
       entries.push(dynload);
     }
+    const dlls = pathModule.join(pathModule.dirname(candidate), 'DLLs');
+    if (!seen.has(dlls) && fsModule.existsSync(pathModule.join(dlls, '_ctypes.pyd'))) {
+      seen.add(dlls);
+      entries.push(dlls);
+    }
   }
 }
 
