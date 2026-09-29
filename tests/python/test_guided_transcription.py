@@ -60,7 +60,7 @@ def test_extract_window_text_for_turn_drops_padded_context():
     assert guided.extract_window_text_for_turn(result, window) == 'current speaker words'
 
 
-def test_extract_window_text_for_turn_keeps_text_when_segments_do_not_overlap():
+def test_extract_window_text_for_turn_does_not_keep_context_when_segments_do_not_overlap():
     result = {
         'segments': [
             {'start': 0.0, 'end': 0.2, 'text': 'edge words'},
@@ -69,7 +69,56 @@ def test_extract_window_text_for_turn_keeps_text_when_segments_do_not_overlap():
     }
     window = {'start': 20.0, 'end': 21.0, 'audioStart': 10.0, 'audioEnd': 21.2}
 
-    assert guided.extract_window_text_for_turn(result, window) == 'edge words kept'
+    assert guided.extract_window_text_for_turn(result, window) == ''
+
+
+def test_guided_word_assignment_uses_greatest_overlap_then_stable_ties():
+    word = {'start': 1.0, 'end': 2.0, 'text': 'hello'}
+    assigned = guided.assign_words_to_speaker_turns(
+        [word],
+        [
+            {'start': 0.8, 'end': 1.8, 'speaker': 'SPEAKER_00'},
+            {'start': 1.0, 'end': 2.0, 'speaker': 'SPEAKER_01'},
+        ],
+    )
+    assert assigned == [{**word, 'speaker': 'SPEAKER_01'}]
+
+    tied = guided.assign_words_to_speaker_turns(
+        [word],
+        [
+            {'start': 1.0, 'end': 2.0, 'speaker': 'SPEAKER_01'},
+            {'start': 1.0, 'end': 2.0, 'speaker': 'SPEAKER_00'},
+        ],
+    )
+    assert tied == [{**word, 'speaker': 'SPEAKER_00'}]
+
+
+def test_assign_words_to_speaker_turns_drops_words_outside_unpadded_turns():
+    assert guided.assign_words_to_speaker_turns(
+        [{'start': 0.0, 'end': 0.2, 'text': 'padded context'}],
+        [{'start': 1.0, 'end': 2.0, 'speaker': 'SPEAKER_00'}],
+    ) == []
+
+
+def test_diarization_only_stage_returns_turns_without_loading_a_transcriber(monkeypatch, tmp_path):
+    audio_path = tmp_path / 'meeting.wav'
+    audio_path.write_bytes(b'audio')
+    monkeypatch.setattr(guided, 'prepare_diarization_audio', lambda *_args, **_kwargs: audio_path)
+    monkeypatch.setattr(guided, 'get_audio_duration_seconds', lambda _path: 4.0)
+    monkeypatch.setattr(
+        'backend.diarization.speakrs_runner.run_speakrs_diarization',
+        lambda *_args, **_kwargs: ([{'start': 0.5, 'end': 2.0, 'speaker': 'SPEAKER_00'}], 'exclusive', 'cuda'),
+    )
+    monkeypatch.setattr(guided, 'create_transcriber', lambda **_kwargs: pytest.fail('diarization stage must not load ASR'))
+
+    result = guided.diarize_for_guided_transcription(
+        audio_path=str(audio_path), engine='speakrs', required_device='cuda',
+    )
+
+    assert result['speakerSegments'] == [{'start': 0.5, 'end': 2.0, 'speaker': 'SPEAKER_00'}]
+    assert result['duration'] == 4.0
+    assert result['device'] == 'cuda'
+    assert result['hasUsableWindows'] is True
 
 
 def test_decode_process_output_replaces_invalid_bytes():

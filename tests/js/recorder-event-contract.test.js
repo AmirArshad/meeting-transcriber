@@ -80,10 +80,10 @@ test('Windows recorder emitter uses audioPath in the final result payload', () =
   assertEmitterDefinesFinalKey(source, 'audioPath');
   assert.equal(/['"]outputPath['"]\s*:/.test(source), false);
 
-  // The final dict construction near main() must keep the Windows spelling.
+  // The final success payload near main() must keep the Windows spelling.
   assert.match(
     source,
-    /recording_info\s*=\s*\{[\s\S]*?["']audioPath["']\s*:/,
+    /recording_info\s*=\s*with_transcription_selection\(\{[\s\S]*?["']audioPath["']\s*:/,
   );
 });
 

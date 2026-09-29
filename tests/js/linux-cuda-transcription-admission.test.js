@@ -638,3 +638,110 @@ test('Linux CUDA transcription is skipped when quit is already committed at job 
     assert.equal(spawnCalls.length, 0);
   });
 });
+
+test('guided Parakeet failure settles before a same-engine fallback under one deadline and fresh admission', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+    const request = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+      platform: 'linux', arch: 'x64', osRelease: '',
+    }).request;
+    const meeting = {
+      ...fallbackJobMeeting(),
+      transcriptionRequest: request,
+      transcriptionStatus: 'pending',
+    };
+    const events = [];
+    const admissionTimeouts = [];
+    let statusChecks = 0;
+    let liveProbes = 0;
+    let parakeetRuns = 0;
+    let committed = null;
+    const { service } = createLinuxTranscriptionService({
+      runWallClockComputeAction: async ({ label, timeoutMs, action }) => {
+        admissionTimeouts.push({ label, timeoutMs });
+        if (String(label).startsWith('Meeting lookup')) return meeting;
+        return action((proc) => proc, { signal: undefined });
+      },
+      getGuidedDiarizationStatusForJob: async () => ({
+        engine: 'speakrs', modelId: 'speakrs-community1-vbx', modelRef: 'speakrs-community1-vbx',
+        speakerCount: 'auto', requiredDevice: 'cuda',
+      }),
+      runParakeetDiarizationProcessForJob: async ({ diarizationStatus }) => {
+        events.push('diarization-start');
+        assert.equal(diarizationStatus.engine, 'speakrs');
+        await Promise.resolve();
+        events.push('diarization-settled');
+        return {
+          duration: 14,
+          hasUsableWindows: true,
+          speakerSegments: [{ start: 0.5, end: 4, speaker: 'SPEAKER_00' }],
+          annotationSource: 'exclusive_speaker_diarization',
+          device: 'cuda',
+        };
+      },
+      getParakeetStatusForJob: () => {
+        statusChecks += 1;
+        return { status: 'ready', artifactRevision: request.artifactRevision,
+          runtimeLockId: request.runtimeLockId };
+      },
+      probeParakeetRuntime: async () => {
+        liveProbes += 1;
+        events.push(`parakeet-probe-${liveProbes}`);
+        return { deviceAvailable: true, device: 'cuda' };
+      },
+      runParakeetProcessForJob: async ({ speakerTurnsPath, request: executionRequest, candidatePath }) => {
+        parakeetRuns += 1;
+        assert.equal(executionRequest.engine, 'parakeet');
+        if (speakerTurnsPath) {
+          events.push('guided-child-start');
+          await Promise.resolve();
+          events.push('guided-child-settled');
+          throw new Error('guided Parakeet child failed');
+        }
+        events.push('ordinary-child-start');
+        return {
+          text: 'ordinary result', segments: [{ start: 0, end: 1, text: 'ordinary result' }],
+          duration: 14, engine: 'parakeet', device: 'cuda', computeType: 'float32',
+          language: 'en', modelId: request.modelId, boundaryPolicy: request.boundaryPolicy,
+          adapterId: request.adapterId, artifactRevision: request.artifactRevision,
+          runtimeLockId: request.runtimeLockId, output_file: candidatePath,
+        };
+      },
+      commitTranscriptionAttempt: async (_id, payload) => {
+        committed = payload;
+        events.push('commit');
+        return { ...meeting, transcriptionStatus: 'completed' };
+      },
+      fs: {
+        promises: {
+          readFile: async () => '# Meeting Transcription\n\n## Transcript\n\nordinary result',
+          writeFile: async () => {}, rm: async () => {}, mkdtemp: async (prefix) => `${prefix}test`,
+        },
+        existsSync: () => true,
+      },
+    });
+
+    const result = await service.admitMeetingTranscriptionJob({ meetingId: meeting.id, request });
+
+    assert.equal(parakeetRuns, 2);
+    assert.equal(statusChecks, 2);
+    assert.equal(liveProbes, 2);
+    assert.equal(committed.result.device, 'cuda');
+    assert.deepEqual(events, [
+      'diarization-start', 'diarization-settled', 'parakeet-probe-1',
+      'guided-child-start', 'guided-child-settled', 'parakeet-probe-2',
+      'ordinary-child-start', 'commit',
+    ]);
+    const guidedDeadlines = admissionTimeouts.filter((item) => item.label === 'Speaker-guided transcription');
+    assert.equal(guidedDeadlines.length, 1);
+    assert.equal(guidedDeadlines[0].timeoutMs, 90 * 60 * 1000);
+
+    const diarizationArgs = service.buildManagedDiarizationGuidedTranscriptionArgs({
+      audioPath: meeting.audioPath, outputTranscript: `${meeting.audioPath}.tmp.md`,
+      language: 'en', modelSize: 'small', engine: 'speakrs', diarizationOnly: true,
+    });
+    assert.equal(diarizationArgs[diarizationArgs.indexOf('--engine') + 1], 'speakrs');
+    assert.equal(diarizationArgs.includes('parakeet'), false);
+    assert.equal(result.text, 'ordinary result');
+  });
+});

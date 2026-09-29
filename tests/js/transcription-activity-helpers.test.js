@@ -132,6 +132,23 @@ test('buildActivityRows merges queue + durable, caps Ready, and exposes rename/d
   assert.equal(rows.find((row) => row.meetingId === 'pending_old').durationLabel, '10s');
 });
 
+test('a failed saved Parakeet request keeps the History recovery path available', () => {
+  const [row] = buildActivityRows({
+    queueState: { jobs: [] },
+    meetings: [{
+      id: 'parakeet-unavailable',
+      title: 'Unavailable Parakeet meeting',
+      transcriptionStatus: 'failed',
+      transcriptionRequest: { engine: 'parakeet', language: 'en' },
+      transcriptionError: 'PARAKEET_SELECTION_UNAVAILABLE',
+    }],
+  });
+
+  assert.equal(row.meetingId, 'parakeet-unavailable');
+  assert.ok(row.actions.includes('open'), 'History stays reachable to choose Retry with Whisper');
+  assert.ok(row.actions.includes('retry'), 'ordinary retry stays available for the saved request');
+});
+
 test('duration helpers ignore display M:SS strings', () => {
   assert.equal(resolveMeetingDurationSeconds({ duration: '1:23', durationSeconds: 83 }), 83);
   assert.equal(formatDurationLabel(83), '1 min');

@@ -391,7 +391,7 @@
         engine,
         title: 'Add speaker labels to future transcripts',
         message: missingCliMessage
-          || 'Set up local speaker identification in Settings. Once ready, it will run automatically after transcription.',
+          || 'Set up once. Local speaker labels are added automatically after each transcript.',
       };
     }
 

@@ -69,7 +69,8 @@ def has_sibling_capture_session(audio_file: Path) -> bool:
     manifest = capture_dir / "manifest.json"
     if not manifest.is_file():
         return False
-    # Discarded (cancelled) captures are cleanup-only and must not block finals.
+    # Discarded (cancelled) captures are cleanup-only. A transcription selection
+    # on that tombstone must not block a final or become an imported meeting.
     try:
         data = json.loads(manifest.read_text(encoding="utf-8"))
         if isinstance(data, dict) and data.get("state") == "discarded":
@@ -304,6 +305,14 @@ def select_scannable_audio_files(recordings_dir: Path) -> List[Path]:
             preferred_files[stem] = audio_file
 
     return sorted(preferred_files.values(), key=lambda item: item.name)
+
+
+def transcript_candidate_for_audio(audio_file: Path) -> Path:
+    """Return the canonical transcript beside an audio file.
+
+    Unreferenced ``{stem}.transcript-{attemptId}.md`` sidecars are not candidates.
+    """
+    return audio_file.with_suffix('.md')
 
 
 def extract_duration_seconds_from_transcript(content: str) -> float:

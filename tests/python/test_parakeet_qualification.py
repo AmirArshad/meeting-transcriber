@@ -98,6 +98,7 @@ def test_missing_gpu_telemetry_remains_unavailable():
     assert summary["peak_gpu_memory_bytes"] == "unavailable"
 
 
+@pytest.mark.skipif(not Path("/proc").is_dir(), reason="CachyOS process-tree telemetry requires /proc")
 def test_timeout_terminates_descendant_process_group(tmp_path):
     worker = tmp_path / "hang.py"
     worker.write_text(

@@ -11,6 +11,7 @@
 
 const os = require('os');
 const { coerceIntegerDeviceId } = require('../main-process/device-id-helpers');
+const { resolveTranscriptionRequest } = require('./transcription-engine-resolver');
 
 const CAPTURE_MODES = new Set([
   'mic-and-desktop',
@@ -138,6 +139,9 @@ function createRecorderService(deps) {
     getBackendModuleArgs = null,
     collectPythonProcessOutput = null,
     scanRecordings = null,
+    listMeetings = null,
+    stageTranscriptionRequest = null,
+    excludeIncompleteTranscription = null,
     resolveRecorderModule = getRecorderModule,
     terminateProcessBestEffort = async (proc) => {
       try {
@@ -187,6 +191,7 @@ function createRecorderService(deps) {
   };
   /** Capture mode of the in-flight/active recording (main-process authority). */
   let activeCaptureMode = DEFAULT_CAPTURE_MODE;
+  let activeCaptureTranscriptionRequest = null;
   // Last structured result seen by the live stdout listener (not only stop buffer).
   let lastLiveRecorderResult = null;
   // Suppress unexpected_exit UI after a stop-timeout force-kill (renderer already failed).
@@ -210,6 +215,8 @@ function createRecorderService(deps) {
   let recoveryActionPromise = null;
   let recoveryProcess = null;
   let recoveryScanImportPending = false;
+  /** Recovered audio whose capture-time request is not staged or excluded yet. */
+  let pendingRecoveredSelections = [];
   let recoveryProgressMessage = null;
   let recoveryLastBatchSize = 0;
   let recoveryLastSuccessCount = 0;
@@ -559,12 +566,15 @@ function createRecorderService(deps) {
             : null,
           approxBytes: Number.isFinite(item.approxBytes) ? item.approxBytes : null,
           state: item.state ?? null,
+          ...(item.transcriptionSelection && typeof item.transcriptionSelection === 'object'
+            ? { transcriptionSelection: item.transcriptionSelection }
+            : {}),
         }));
       recoveryFailed = [];
       recoveryActiveCandidateIndex = null;
       recoveryProgressMessage = null;
-      recoveryScanImportPending = false;
-      if (recoveryInternalCandidates.length > 0) {
+      recoveryScanImportPending = pendingRecoveredSelections.length > 0;
+      if (recoveryInternalCandidates.length > 0 || pendingRecoveredSelections.length > 0) {
         setRecoveryStatus('available');
       } else {
         setRecoveryStatus('idle');
@@ -712,7 +722,7 @@ function createRecorderService(deps) {
     }
 
     const batch = recoveryInternalCandidates.slice();
-    if (batch.length === 0 && !recoveryScanImportPending) {
+    if (batch.length === 0 && !recoveryScanImportPending && pendingRecoveredSelections.length === 0) {
       recordingsMaintenanceGate.release('recovery');
       setRecoveryStatus('idle');
       return { success: true, recovered: 0, failed: 0 };
@@ -728,6 +738,7 @@ function createRecorderService(deps) {
     }
 
     const unresolved = [];
+    const recoveredItems = [];
     let heldOwner = 'recovery';
     try {
       for (let index = 0; index < batch.length; index += 1) {
@@ -748,6 +759,12 @@ function createRecorderService(deps) {
         try {
           // eslint-disable-next-line no-await-in-loop
           const outcome = await recoverOneCapture(candidate);
+          if (outcome.ok && outcome.recovered) {
+            const selection = outcome.recovered.transcriptionSelection || candidate.transcriptionSelection;
+            recoveredItems.push(selection
+              ? { ...outcome.recovered, transcriptionSelection: selection }
+              : outcome.recovered);
+          }
           if (!outcome.ok) {
             const failure = {
               candidate,
@@ -779,8 +796,10 @@ function createRecorderService(deps) {
       }
 
       const anySucceeded = unresolved.length < batch.length;
+      const selectionsForScan = mergeRecoveredSelections(pendingRecoveredSelections, recoveredItems);
       let scanOk = true;
-      if ((anySucceeded || recoveryScanImportPending) && typeof scanRecordings === 'function') {
+      let selectionHookRan = false;
+      if ((anySucceeded || recoveryScanImportPending || selectionsForScan.length > 0) && typeof scanRecordings === 'function') {
         // Hand off recovery → scan without releasing to idle (blocks start).
         if (heldOwner === 'recovery' && recordingsMaintenanceGate.transfer('recovery', 'scan')) {
           heldOwner = 'scan';
@@ -800,17 +819,31 @@ function createRecorderService(deps) {
 
         if (heldOwner === 'scan') {
           try {
-            await scanRecordings({ alreadyHoldingScan: true });
+            await scanRecordings({
+              alreadyHoldingScan: true,
+              beforeAutoResume: async () => {
+                selectionHookRan = true;
+                await stageRecoveredTranscriptionRequests(selectionsForScan);
+              },
+            });
+            pendingRecoveredSelections = [];
             recoveryScanImportPending = false;
           } catch (error) {
             scanOk = false;
             recoveryScanImportPending = true;
           }
         }
+      } else if (selectionsForScan.length > 0) {
+        scanOk = false;
+        recoveryScanImportPending = true;
+      }
+      if (!scanOk && !selectionHookRan) {
+        pendingRecoveredSelections = selectionsForScan;
       }
 
       if (unresolved.length === 0 && scanOk) {
         recoveryInternalCandidates = [];
+        pendingRecoveredSelections = [];
         recoveryFailed = [];
         recoveryActiveCandidateIndex = null;
         recoveryProgressMessage = null;
@@ -910,6 +943,7 @@ function createRecorderService(deps) {
     disableRecordingPowerSaveBlocker(reason);
     resetStopWorkflowState();
 
+    activeCaptureTranscriptionRequest = null;
     if (publishIdle) {
       activeCaptureMode = DEFAULT_CAPTURE_MODE;
       publishCaptureState('idle', null, null);
@@ -966,11 +1000,49 @@ function createRecorderService(deps) {
     }
   }
 
-  function parseRecordingStopResultFromStdout(stdoutData) {
-    return parseRecordingStopResult(stdoutData, {
+  const capturedTranscriptionByAudioPath = new Map();
+
+  function rememberCapturedTranscriptionRequest(audioPath, request) {
+    if (!audioPath || !request || typeof request !== 'object') {
+      return;
+    }
+    capturedTranscriptionByAudioPath.set(path.resolve(String(audioPath)), request);
+  }
+
+  function consumeCapturedTranscriptionRequest(audioPath) {
+    if (!audioPath) {
+      return null;
+    }
+    const key = path.resolve(String(audioPath));
+    const request = capturedTranscriptionByAudioPath.get(key) || null;
+    if (request) {
+      capturedTranscriptionByAudioPath.delete(key);
+    }
+    return request;
+  }
+
+  function attachCapturedTranscriptionSelection(parsed, selection) {
+    if (
+      !parsed
+      || parsed.cancelled
+      || !parsed.audioPath
+      || parsed.transcriptionSelection
+      || !selection
+      || (parsed.success !== true && parsed.success !== false)
+    ) {
+      return parsed;
+    }
+    return {
+      ...parsed,
+      transcriptionSelection: selection,
+    };
+  }
+
+  function parseRecordingStopResultFromStdout(stdoutData, selection = null) {
+    return attachCapturedTranscriptionSelection(parseRecordingStopResult(stdoutData, {
       existsSync: fs.existsSync,
       getRecordingsDir,
-    });
+    }), selection);
   }
 
   function stopRecordingProcess() {
@@ -993,6 +1065,7 @@ function createRecorderService(deps) {
     }
 
     const currentProcess = pythonProcess;
+    let selectionSnapshot = activeCaptureTranscriptionRequest;
 
     recordingStopPromise = new Promise((resolve, reject) => {
       let stdoutData = '';
@@ -1016,6 +1089,7 @@ function createRecorderService(deps) {
       };
 
       const finalizeState = () => {
+        selectionSnapshot = activeCaptureTranscriptionRequest || selectionSnapshot;
         if (pythonProcess === currentProcess) {
           clearRecordingRuntimeState('recording completed', {
             expectedProcess: currentProcess,
@@ -1038,7 +1112,7 @@ function createRecorderService(deps) {
         // Prefer a structured stdout result when present, including non-zero
         // exits where Windows may still emit audioPath from finally.
         try {
-          const parsed = parseRecordingStopResultFromStdout(stdoutData);
+          const parsed = parseRecordingStopResultFromStdout(stdoutData, selectionSnapshot);
           if (parsed) {
             resolve(parsed);
             return;
@@ -1595,14 +1669,139 @@ function createRecorderService(deps) {
       fs.writeFileSync(transcriptPath, transcriptContent, 'utf8');
     }
 
-    await addMeetingToHistory({
+    const selection = recordingInfo.transcriptionSelection;
+    const savedMeeting = await addMeetingToHistory({
       audioPath,
       transcriptPath,
       duration: recordingInfo.duration || 0,
-      language: 'unknown',
-      model: 'not-transcribed',
+      language: selection?.language || 'unknown',
+      model: selection?.engine === 'parakeet'
+        ? (selection.modelId || 'parakeet-tdt-0.6b-v2')
+        : (selection?.modelSize || 'not-transcribed'),
       title,
+      ...(selection ? { transcriptionStatus: 'pending', transcriptionRequest: selection } : {}),
     });
+    const requestSaved = Boolean(
+      selection
+      && savedMeeting?.transcriptionRequest?.attemptId
+      && savedMeeting.transcriptionRequest.attemptId === selection.attemptId
+    );
+    if (selection && savedMeeting?.id && !requestSaved) {
+      let staged = false;
+      if (typeof stageTranscriptionRequest === 'function') {
+        try {
+          const stagedMeeting = await stageTranscriptionRequest(savedMeeting.id, selection);
+          staged = stagedMeeting?.transcriptionRequest?.attemptId === selection.attemptId;
+        } catch (error) {
+          staged = false;
+        }
+      }
+      if (!staged && typeof excludeIncompleteTranscription === 'function') {
+        try {
+          await excludeIncompleteTranscription(savedMeeting.id);
+        } catch (error) {
+          console.warn(
+            'Could not exclude an incomplete transcription request. Audio was kept and transcription was not queued:',
+            error?.message || error,
+          );
+        }
+      } else if (!staged) {
+        console.warn(
+          'Could not stage the capture-time transcription request. Audio was kept and transcription was not queued.',
+        );
+      }
+    }
+  }
+
+  function recoveredSelectionKey(item) {
+    const attemptId = item?.transcriptionSelection?.attemptId;
+    if (attemptId) {
+      return `attempt:${attemptId}`;
+    }
+    return `audio:${path.resolve(String(item.audioPath))}`;
+  }
+
+  function mergeRecoveredSelections(existing, incoming) {
+    const merged = new Map();
+    for (const item of [...(existing || []), ...(incoming || [])]) {
+      if (!item?.audioPath || !item.transcriptionSelection || typeof item.transcriptionSelection !== 'object') {
+        continue;
+      }
+      merged.set(recoveredSelectionKey(item), item);
+    }
+    return [...merged.values()];
+  }
+
+  function recoveredSelectionPersistError(message) {
+    const error = new Error(message || 'Recovered transcription requests were not saved.');
+    error.code = 'PENDING_MEETING_PERSIST_FAILED';
+    return error;
+  }
+
+  async function recoveredSelectionIsDurable(meeting, selection) {
+    let stagedMeeting = null;
+    try {
+      stagedMeeting = await stageTranscriptionRequest(meeting.id, selection);
+    } catch (error) {
+      stagedMeeting = null;
+    }
+    if (stagedMeeting?.transcriptionRequest?.attemptId === selection.attemptId) {
+      return true;
+    }
+    if (typeof excludeIncompleteTranscription !== 'function') {
+      return false;
+    }
+    try {
+      const excluded = await excludeIncompleteTranscription(meeting.id);
+      if (excluded?.transcriptionRequest?.attemptId === selection.attemptId) {
+        return true;
+      }
+      return excluded?.transcriptionResumeExcluded === true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async function stageRecoveredTranscriptionRequests(recoveredItems) {
+    const selected = mergeRecoveredSelections([], recoveredItems);
+    pendingRecoveredSelections = selected.slice();
+    if (selected.length === 0) {
+      return;
+    }
+    if (typeof listMeetings !== 'function' || typeof stageTranscriptionRequest !== 'function') {
+      throw recoveredSelectionPersistError('Recovered transcription requests could not be saved.');
+    }
+
+    let meetings = [];
+    try {
+      meetings = await listMeetings();
+    } catch (error) {
+      throw recoveredSelectionPersistError(
+        error?.message || 'Could not list meetings for recovered transcription requests.',
+      );
+    }
+
+    const meetingsByAudioName = new Map();
+    for (const meeting of Array.isArray(meetings) ? meetings : []) {
+      if (meeting?.audioPath && meeting.id) {
+        meetingsByAudioName.set(path.basename(meeting.audioPath), meeting);
+      }
+    }
+
+    const stillPending = [];
+    for (const item of selected) {
+      const meeting = meetingsByAudioName.get(path.basename(item.audioPath));
+      const saved = meeting
+        ? await recoveredSelectionIsDurable(meeting, item.transcriptionSelection)
+        : false;
+      if (!saved) {
+        stillPending.push(item);
+      }
+    }
+    pendingRecoveredSelections = stillPending;
+    if (stillPending.length > 0) {
+      throw recoveredSelectionPersistError('Recovered transcription requests were not saved.');
+    }
   }
 
   async function persistStoppedRecordingForQuit(recordingInfo) {
@@ -1730,6 +1929,23 @@ function createRecorderService(deps) {
           code: 'INVALID_CAPTURE_MODE',
           message: 'Choose a valid recording capture mode.',
         };
+      }
+
+      let resolvedTranscriptionRequest = null;
+      if (options?.transcriptionSelection) {
+        const resolved = resolveTranscriptionRequest(options.transcriptionSelection, {
+          platform: process.platform,
+          arch: process.arch,
+          osRelease: os.release(),
+        });
+        if (!resolved.ok) {
+          return {
+            success: false,
+            code: resolved.code,
+            message: resolved.message,
+          };
+        }
+        resolvedTranscriptionRequest = resolved.request;
       }
 
       // Resolve argv device ids before any admission/spawn work so a missing
@@ -1933,13 +2149,18 @@ function createRecorderService(deps) {
         // Run as module (-m) to support relative imports within the audio package
         const recorderModule = resolveRecorderModule(process.platform);
 
-        proc = spawnTrackedPython([
+        const recorderArgs = [
           '-m', recorderModule,
           '--mic', deviceArgs.micArg,
           '--loopback', deviceArgs.loopbackArg,
           '--capture-mode', captureMode,
-          '--output', outputPath
-        ], { cwd: pythonConfig.backendPath });
+          '--output', outputPath,
+        ];
+        if (resolvedTranscriptionRequest) {
+          recorderArgs.push('--transcription-selection', JSON.stringify(resolvedTranscriptionRequest));
+        }
+        activeCaptureTranscriptionRequest = resolvedTranscriptionRequest;
+        proc = spawnTrackedPython(recorderArgs, { cwd: pythonConfig.backendPath });
         pythonProcess = proc;
 
         if (startCancelled()) {
@@ -2171,7 +2392,10 @@ function createRecorderService(deps) {
                   existsSync: fs.existsSync,
                 });
                 if (normalizedLive && !normalizedLive.error) {
-                  lastLiveRecorderResult = normalizedLive;
+                  lastLiveRecorderResult = attachCapturedTranscriptionSelection(
+                    normalizedLive,
+                    activeCaptureTranscriptionRequest,
+                  );
                 }
                 break;
               }
@@ -2414,7 +2638,17 @@ function createRecorderService(deps) {
       }
       // Quit-cancel recovery may already have persisted this path; tell the
       // renderer to skip the normal transcribe-and-save flow for the same file.
-      return consumeQuitPersistedFlag(result);
+      const delivered = consumeQuitPersistedFlag(result);
+      if (
+        delivered
+        && delivered.audioPath
+        && delivered.transcriptionSelection
+        && !delivered.cancelled
+        && !delivered.alreadyPersistedForQuit
+      ) {
+        rememberCapturedTranscriptionRequest(delivered.audioPath, delivered.transcriptionSelection);
+      }
+      return delivered;
     });
 
     ipcMain.handle('cancel-recording', async (event, options = {}) => {
@@ -2455,6 +2689,7 @@ function createRecorderService(deps) {
     recoverInterruptedCaptures,
     deferRecordingRecovery,
     notifyScanImportSucceeded,
+    consumeCapturedTranscriptionRequest,
     registerIpc,
   };
 }

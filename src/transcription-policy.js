@@ -116,6 +116,32 @@
     return { ok: true, language: language, modelSize: modelSize };
   }
 
+  // Versioned engine preferences. Parakeet is never a Whisper size. Migrating a
+  // pre-engine profile keeps Whisper active; installation does not activate it.
+  function migrateEnginePreferences(preferences) {
+    var input = preferences || {};
+    var whisperSource = input.whisper && typeof input.whisper === 'object' ? input.whisper : input;
+    var versioned = Number(input.schemaVersion) === 1 && input.whisper && typeof input.whisper === 'object';
+    var normalized = normalizePreferences(whisperSource);
+    var requestedEngine = normalizeString(input.activeEngine);
+    var activeEngine = 'whisper';
+    if (versioned && (requestedEngine === 'whisper' || requestedEngine === 'parakeet')) {
+      activeEngine = requestedEngine;
+    }
+    return {
+      schemaVersion: 1,
+      activeEngine: activeEngine,
+      whisper: {
+        language: normalized.language,
+        modelSize: normalized.modelSize,
+      },
+      migrated: !versioned,
+      requiresChoice: normalized.requiresChoice,
+      normalizedLarge: normalized.normalizedLarge,
+      whisperMigrated: normalized.migrated,
+    };
+  }
+
   return {
     SELECTABLE_LANGUAGES: SELECTABLE_LANGUAGES,
     SELECTABLE_MODEL_SIZES: SELECTABLE_MODEL_SIZES,
@@ -129,5 +155,6 @@
     isCompatibleModelSize: isCompatibleModelSize,
     normalizePreferences: normalizePreferences,
     validateNewSelection: validateNewSelection,
+    migrateEnginePreferences: migrateEnginePreferences,
   };
 }));

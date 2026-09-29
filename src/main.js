@@ -223,6 +223,7 @@ const {
   pythonConfig,
   buildPythonProcessArgs,
   spawnTrackedPython,
+  spawnParakeetPython,
 } = pythonRuntime;
 
 // ============================================================================
@@ -245,8 +246,8 @@ const gpuResourceActionQueue = createAsyncActionQueue();
 const enqueueGpuExclusiveComputeAction = (action) => (
   enqueueAiComputeAction(() => gpuResourceActionQueue.enqueue(action))
 );
-const createGpuExclusiveAbortableComputeAction = ({ cancelSignal, cancelMessage, action }) => (
-  waitForAiComputeQueueIdle({ cancelSignal, cancelMessage })
+const createGpuExclusiveAbortableComputeAction = ({ cancelSignal, cancelMessage, onWaiting, action }) => (
+  waitForAiComputeQueueIdle({ cancelSignal, cancelMessage, onWaiting })
     .then(() => {
       if (cancelSignal && cancelSignal.aborted) {
         throw createAiAddonCancelErrorStandalone(cancelMessage);
@@ -645,6 +646,10 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
 const {
   addMeetingToHistory,
   updateMeetingAiMetadata,
+  stageTranscriptionRequest,
+  excludeIncompleteTranscription,
+  commitTranscriptionAttempt,
+  failTranscriptionAttempt,
   isRecordingsScanInProgress,
   scanRecordings,
   listMeetings,
@@ -764,6 +769,12 @@ const {
 // ============================================================================
 // Phase 3c: transcription + summary + recorder lifecycle (Pattern C)
 // ============================================================================
+const capturedTranscriptionBridge = {
+  consume() {
+    return null;
+  },
+};
+
 transcriptionService = createTranscriptionService({
   app,
   path,
@@ -771,8 +782,11 @@ transcriptionService = createTranscriptionService({
   os,
   pythonConfig,
   spawnTrackedPython,
+  spawnParakeetPython,
+  consumeCapturedTranscriptionRequest: (audioPath) => capturedTranscriptionBridge.consume(audioPath),
   getBackendModuleArgs,
   enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
+  createAbortableComputeAction: createGpuExclusiveAbortableComputeAction,
   waitForAiComputeQueueIdle,
   enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
@@ -802,6 +816,10 @@ transcriptionService = createTranscriptionService({
   formatDurationForTranscript,
   addMeetingToHistory,
   updateMeetingAiMetadata,
+  stageTranscriptionRequest,
+  excludeIncompleteTranscription,
+  commitTranscriptionAttempt,
+  failTranscriptionAttempt,
   listMeetings,
   isQuitCommitted,
   resolveSpeakrsCliPath: resolveAppSpeakrsCliPath,
@@ -861,6 +879,9 @@ recorderService = createRecorderService({
   checkAudioOutputSupport,
   getMacOSPermissionStatus,
   addMeetingToHistory,
+  stageTranscriptionRequest,
+  excludeIncompleteTranscription,
+  listMeetings,
   formatDurationForTranscript,
   getRecordingsDir,
   signalProcessTree,
@@ -880,6 +901,7 @@ recorderService = createRecorderService({
     }
   },
 });
+capturedTranscriptionBridge.consume = (audioPath) => recorderService.consumeCapturedTranscriptionRequest(audioPath);
 recorderService.registerIpc(ipcMain);
 
 // Presence may be constructed before ready; tray/Dock/taskbar mutations wait for createTray().

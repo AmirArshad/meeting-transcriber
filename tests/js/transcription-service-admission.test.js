@@ -7,6 +7,8 @@ const os = require('node:os');
 const { EventEmitter } = require('node:events');
 
 const { createTranscriptionService } = require('../../src/main/transcription-service');
+const { createAsyncActionQueue } = require('../../src/main/ai-compute-queue');
+const { runDiarizationOnlyProcess } = require('../../src/main-process/transcription-runtime-helpers');
 const { createMeetingManagerClient } = require('../../src/main/meeting-manager-client');
 const {
   QUEUE_JOB_STATUSES,
@@ -162,6 +164,27 @@ function createServiceHarness(overrides = {}) {
     getQueueState: () => service.getTranscriptionQueueStatePayload(),
   };
 }
+
+test('diarization process errors settle on close before the caller can start fallback', async () => {
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  let settled = false;
+  const action = runDiarizationOnlyProcess({
+    spawnProcess: () => child,
+    args: [],
+  }).then(
+    () => { settled = true; },
+    () => { settled = true; },
+  );
+
+  child.emit('error', new Error('spawn failed'));
+  await Promise.resolve();
+  assert.equal(settled, false);
+  child.emit('close', -1);
+  await action;
+  assert.equal(settled, true);
+});
 
 test('shouldTerminateComputeJobsForMeeting only matches the active meeting', () => {
   assert.equal(shouldTerminateComputeJobsForMeeting({
@@ -778,6 +801,109 @@ function registerHandlers(harness) {
   return handlers;
 }
 
+test('standalone Parakeet validation waits for the transcription resource slot', async () => {
+  const resourceQueue = createAsyncActionQueue();
+  let transcriptionActive = false;
+  let releaseTranscription;
+  let markTranscriptionStarted;
+  const transcriptionStarted = new Promise((resolve) => { markTranscriptionStarted = resolve; });
+  const transcriptionHold = new Promise((resolve) => { releaseTranscription = resolve; });
+  const activeTranscription = resourceQueue.enqueue(async () => {
+    transcriptionActive = true;
+    markTranscriptionStarted();
+    await transcriptionHold;
+    transcriptionActive = false;
+  });
+  await transcriptionStarted;
+
+  let validationCalls = 0;
+  const harness = createServiceHarness({
+    createAbortableComputeAction: ({ cancelSignal, action }) => resourceQueue.enqueue(async () => {
+      if (cancelSignal && cancelSignal.aborted) {
+        throw Object.assign(new Error('Canceled'), { code: 'AI_ADDON_SETUP_CANCELLED' });
+      }
+      return action();
+    }),
+    validateParakeetImplementation: async () => {
+      assert.equal(transcriptionActive, false, 'the Parakeet probe must wait for transcription');
+      validationCalls += 1;
+      return { ok: true, engine: 'parakeet', status: 'ready' };
+    },
+  });
+  const handlers = registerHandlers(harness);
+  const validation = handlers['validate-transcription-engine']({}, { engine: 'parakeet' });
+  let validationSettledWhileTranscribing = false;
+  validation.then(() => { validationSettledWhileTranscribing = true; });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  const callsWhileTranscribing = validationCalls;
+  const settledWhileTranscribing = validationSettledWhileTranscribing;
+
+  releaseTranscription();
+  await activeTranscription;
+  const result = await validation;
+
+  assert.equal(callsWhileTranscribing, 0);
+  assert.equal(settledWhileTranscribing, false);
+  assert.equal(validationCalls, 1);
+  assert.equal(result.status, 'ready');
+});
+
+test('Parakeet repair admission holds promotion until an active transcription releases the resource slot', async () => {
+  const resourceQueue = createAsyncActionQueue();
+  let transcriptionActive = false;
+  let releaseTranscription;
+  let markTranscriptionStarted;
+  const transcriptionStarted = new Promise((resolve) => { markTranscriptionStarted = resolve; });
+  const transcriptionHold = new Promise((resolve) => { releaseTranscription = resolve; });
+  const activeTranscription = resourceQueue.enqueue(async () => {
+    transcriptionActive = true;
+    markTranscriptionStarted();
+    await transcriptionHold;
+    transcriptionActive = false;
+  });
+  await transcriptionStarted;
+
+  let staged = false;
+  let promoted = false;
+  const harness = createServiceHarness({
+    createAbortableComputeAction: ({ cancelSignal, action }) => resourceQueue.enqueue(async () => {
+      if (cancelSignal && cancelSignal.aborted) {
+        throw Object.assign(new Error('Canceled'), { code: 'AI_ADDON_SETUP_CANCELLED' });
+      }
+      return action();
+    }),
+    setupParakeetImplementation: async ({ runValidationAndPromotion }) => {
+      staged = true;
+      return runValidationAndPromotion({
+        action: async () => {
+          assert.equal(transcriptionActive, false, 'staged GPU validation must wait for transcription');
+          promoted = true;
+          return { ok: true, engine: 'parakeet', status: 'ready' };
+        },
+      });
+    },
+  });
+  const handlers = registerHandlers(harness);
+  const setup = handlers['setup-transcription-engine']({}, {
+    engine: 'parakeet', operation: 'repair',
+  });
+  let setupSettledWhileTranscribing = false;
+  setup.then(() => { setupSettledWhileTranscribing = true; });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  const promotedWhileTranscribing = promoted;
+  const settledWhileTranscribing = setupSettledWhileTranscribing;
+
+  releaseTranscription();
+  await activeTranscription;
+  const result = await setup;
+
+  assert.equal(staged, true);
+  assert.equal(promotedWhileTranscribing, false);
+  assert.equal(settledWhileTranscribing, false);
+  assert.equal(promoted, true);
+  assert.equal(result.status, 'ready');
+});
+
 test('Slice A: finalize rejects unsupported new selections before persistence', async () => {
   for (const [input, code] of SLICE_A_REJECTIONS) {
     const counts = { writes: 0, persists: 0 };
@@ -880,15 +1006,23 @@ const SLICE_A_LEGACY_MEETING = {
   title: 'Legacy',
 };
 
-function createRetryHarness() {
-  return createServiceHarness({
-    runWallClockComputeAction: async ({ label, action }) => {
-      if (String(label).startsWith('Meeting lookup')) {
-        return { ...SLICE_A_LEGACY_MEETING };
-      }
-      throw new Error(`test: unexpected compute ${label}`);
-    },
-  });
+function createRetryHarness(meeting = SLICE_A_LEGACY_MEETING) {
+  const stagedRequests = [];
+  return {
+    ...createServiceHarness({
+      runWallClockComputeAction: async ({ label, action }) => {
+        if (String(label).startsWith('Meeting lookup')) {
+          return { ...meeting };
+        }
+        return action((proc) => proc, { signal: undefined });
+      },
+      stageTranscriptionRequest: async (_meetingId, request) => {
+        stagedRequests.push({ ...request });
+        return { ...meeting, transcriptionRequest: { ...request } };
+      },
+    }),
+    stagedRequests,
+  };
 }
 
 async function settleAdmitted(harness, promise) {
@@ -909,57 +1043,128 @@ async function settleAdmitted(harness, promise) {
   await assert.rejects(promise);
 }
 
-test('Slice A: retry uses field presence, not truthiness, for explicit selection', async () => {
-  // Present-but-empty must fail validation, never fall back to saved legacy.
-  {
-    const harness = createRetryHarness();
-    const handlers = registerHandlers(harness);
-    await assert.rejects(
-      handlers['retry-transcription']({}, { meetingId: 'legacy_retry', language: '', modelSize: '' }),
-      (error) => error && error.code === 'UNSUPPORTED_LANGUAGE',
-    );
-    assert.equal(harness.getQueueState().jobs.length, 0);
-  }
+test('ordinary retry ignores caller settings and stages a new attempt with the saved engine selection', async () => {
+  const savedWhisperRequest = {
+    schemaVersion: 1,
+    attemptId: '00000000-0000-4000-8000-000000000001',
+    engine: 'whisper', language: 'fa', modelSize: 'tiny', artifactRevision: null,
+  };
+  const whisperMeeting = { ...SLICE_A_LEGACY_MEETING, transcriptionRequest: savedWhisperRequest };
+  const whisperHarness = createRetryHarness(whisperMeeting);
+  const whisperHandlers = registerHandlers(whisperHarness);
+  const whisperRetry = whisperHandlers['retry-transcription'](
+    {}, { meetingId: whisperMeeting.id, language: 'fr', modelSize: 'small', engine: 'whisper' },
+  );
+  await settleAdmitted(whisperHarness, whisperRetry);
+  assert.equal(whisperHarness.stagedRequests.length, 1);
+  assert.equal(whisperHarness.stagedRequests[0].engine, 'whisper');
+  assert.equal(whisperHarness.stagedRequests[0].language, 'fa');
+  assert.equal(whisperHarness.stagedRequests[0].modelSize, 'tiny');
+  assert.notEqual(whisperHarness.stagedRequests[0].attemptId, savedWhisperRequest.attemptId);
 
-  // Explicit legacy values are new-work selections: rejected.
-  {
-    const harness = createRetryHarness();
-    const handlers = registerHandlers(harness);
-    await assert.rejects(
-      handlers['retry-transcription']({}, { meetingId: 'legacy_retry', language: 'fa', modelSize: 'tiny' }),
-      (error) => error && (error.code === 'UNSUPPORTED_LANGUAGE' || error.code === 'UNSUPPORTED_MODEL'),
-    );
-    assert.equal(harness.getQueueState().jobs.length, 0);
-  }
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const resolvedParakeet = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+    platform: process.platform, arch: process.arch, osRelease: '24.0.0',
+  });
+  assert.equal(resolvedParakeet.ok, true);
+  const savedParakeetRequest = {
+    ...resolvedParakeet.request,
+    attemptId: '00000000-0000-4000-8000-000000000002',
+  };
+  const parakeetMeeting = { ...SLICE_A_LEGACY_MEETING, transcriptionRequest: savedParakeetRequest };
+  const parakeetHarness = createRetryHarness(parakeetMeeting);
+  const parakeetHandlers = registerHandlers(parakeetHarness);
+  const parakeetRetry = parakeetHandlers['retry-transcription'](
+    {}, { meetingId: parakeetMeeting.id, language: 'fr', modelSize: 'small', engine: 'whisper' },
+  );
+  await settleAdmitted(parakeetHarness, parakeetRetry);
+  assert.equal(parakeetHarness.stagedRequests[0].engine, 'parakeet');
+  assert.equal(parakeetHarness.stagedRequests[0].adapterId, savedParakeetRequest.adapterId);
+  assert.equal(parakeetHarness.stagedRequests[0].artifactRevision, savedParakeetRequest.artifactRevision);
+  assert.notEqual(parakeetHarness.stagedRequests[0].attemptId, savedParakeetRequest.attemptId);
+});
 
-  // Partial explicit selection still validates the resolved pair strictly.
-  {
-    const harness = createRetryHarness();
-    const handlers = registerHandlers(harness);
-    await assert.rejects(
-      handlers['retry-transcription']({}, { meetingId: 'legacy_retry', language: 'en' }),
-      (error) => error && error.code === 'UNSUPPORTED_MODEL',
-    );
-    assert.equal(harness.getQueueState().jobs.length, 0);
-  }
+test('explicit Whisper retry stages the requested Whisper selection without changing the saved engine preference', async () => {
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const resolvedParakeet = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+    platform: process.platform, arch: process.arch, osRelease: '24.0.0',
+  });
+  assert.equal(resolvedParakeet.ok, true);
+  const savedParakeetRequest = {
+    ...resolvedParakeet.request,
+    attemptId: '00000000-0000-4000-8000-000000000003',
+  };
+  const meeting = { ...SLICE_A_LEGACY_MEETING, transcriptionRequest: savedParakeetRequest };
+  const harness = createRetryHarness(meeting);
+  const handlers = registerHandlers(harness);
 
-  // Curated explicit selection admits.
-  {
-    const harness = createRetryHarness();
-    const handlers = registerHandlers(harness);
-    const promise = handlers['retry-transcription'](
-      {}, { meetingId: 'legacy_retry', language: 'en', modelSize: 'small' },
-    );
-    await settleAdmitted(harness, promise);
-  }
+  const retry = handlers['retry-transcription']({}, {
+    meetingId: meeting.id,
+    transcriptionSelection: { engine: 'whisper', language: 'fr', modelSize: 'medium' },
+  });
+  await settleAdmitted(harness, retry);
 
-  // Both keys absent: legacy fallback admits the saved fa/tiny pair.
-  {
-    const harness = createRetryHarness();
-    const handlers = registerHandlers(harness);
-    const promise = handlers['retry-transcription']({}, { meetingId: 'legacy_retry' });
-    await settleAdmitted(harness, promise);
-  }
+  assert.equal(harness.stagedRequests.length, 1);
+  assert.equal(harness.stagedRequests[0].engine, 'whisper');
+  assert.equal(harness.stagedRequests[0].language, 'fr');
+  assert.equal(harness.stagedRequests[0].modelSize, 'medium');
+  assert.notEqual(harness.stagedRequests[0].attemptId, savedParakeetRequest.attemptId);
+  assert.equal(meeting.transcriptionRequest.engine, 'parakeet');
+  assert.equal(meeting.transcriptionRequest.attemptId, savedParakeetRequest.attemptId);
+});
+
+test('queued Parakeet request is snapshotted before waiting for the compute queue', async () => {
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const resolved = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+    platform: process.platform, arch: process.arch, osRelease: '24.0.0',
+  });
+  assert.equal(resolved.ok, true);
+  const request = { ...resolved.request };
+  const storedRequest = { ...request };
+  const meeting = {
+    id: 'queued-parakeet', audioPath: '/tmp/avanevis-test/recordings/a.opus',
+    transcriptPath: '/tmp/avanevis-test/recordings/a.md', transcriptionRequest: storedRequest,
+  };
+  const device = request.adapterId.includes('metal') ? 'metal' : 'cuda';
+  let receivedRequest = null;
+  const harness = createServiceHarness({
+    runWallClockComputeAction: async ({ label, action }) => (
+      String(label).startsWith('Meeting lookup')
+        ? meeting
+        : action((proc) => proc, { signal: undefined })
+    ),
+    getGuidedDiarizationStatusForJob: async () => null,
+    getParakeetStatusForJob: () => ({ status: 'ready', artifactRevision: request.artifactRevision,
+      runtimeLockId: request.runtimeLockId }),
+    probeParakeetRuntime: async () => ({ deviceAvailable: true, device }),
+    runParakeetProcessForJob: async ({ candidatePath, request: queuedRequest }) => {
+      receivedRequest = queuedRequest;
+      return {
+        text: 'hello', segments: [{ start: 0, end: 1, text: 'hello' }], duration: 1,
+        engine: 'parakeet', device, computeType: 'float32', language: 'en',
+        modelId: request.modelId, boundaryPolicy: request.boundaryPolicy,
+        adapterId: request.adapterId, artifactRevision: request.artifactRevision,
+        runtimeLockId: request.runtimeLockId, output_file: candidatePath,
+      };
+    },
+    commitTranscriptionAttempt: async () => ({ id: meeting.id, transcriptionStatus: 'completed' }),
+    fs: { ...createMinimalFs(), promises: { ...createMinimalFs().promises,
+      readFile: async () => '# Meeting Transcription\n\n## Transcript\n\nhello',
+    } },
+  });
+  const job = harness.service.admitMeetingTranscriptionJob({ meetingId: meeting.id, request });
+  const jobOutcome = job.then(() => null, (error) => error);
+  request.modelId = 'changed-after-enqueue';
+  request.adapterId = 'changed-after-enqueue';
+
+  const queueOutcome = await harness.computeQueue.runNext().then(() => null, (error) => error);
+  const jobError = await jobOutcome;
+  assert.equal(queueOutcome, null);
+  assert.equal(jobError, null);
+  assert.ok(receivedRequest);
+  assert.equal(receivedRequest.modelId, storedRequest.modelId);
+  assert.equal(receivedRequest.adapterId, storedRequest.adapterId);
+  assert.equal(Object.isFrozen(receivedRequest), true);
 });
 
 test('Slice A: resume keeps legacy rows, canonicalizes, and reports skipped', async () => {
@@ -971,7 +1176,13 @@ test('Slice A: resume keeps legacy rows, canonicalizes, and reports skipped', as
     { id: 'unknown-row', transcriptionStatus: 'pending', language: 'xx', model: 'xx', title: 'E' },
     { id: 'done', transcriptionStatus: 'completed', language: 'en', model: 'small', title: 'F' },
   ];
-  const harness = createServiceHarness({ listMeetings: async () => meetings });
+  const harness = createServiceHarness({
+    listMeetings: async () => meetings,
+    stageTranscriptionRequest: async (meetingId, request) => ({
+      id: meetingId,
+      transcriptionRequest: { ...request },
+    }),
+  });
   const result = await harness.service.resumePendingTranscriptions();
   assert.deepEqual([...result.meetingIds].sort(), [
     'legacy-fa-tiny',
@@ -985,6 +1196,74 @@ test('Slice A: resume keeps legacy rows, canonicalizes, and reports skipped', as
   assert.ok(result.skipped[0].code === 'UNSUPPORTED_LANGUAGE' || result.skipped[0].code === 'UNSUPPORTED_MODEL');
   harness.computeQueue.rejectAll(new Error('test teardown'));
   await new Promise((resolve) => setTimeout(resolve, 20));
+});
+
+test('resume queues the exact saved Parakeet identity in an immutable request', async () => {
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const { getAdapterSpec } = require('../../src/main/transcription-engine-catalog');
+  const resolved = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+    platform: process.platform, arch: process.arch, osRelease: '24.0.0',
+  });
+  assert.equal(resolved.ok, true);
+  const savedRequest = { ...resolved.request };
+  const resumeRow = {
+    id: 'resume-parakeet',
+    audioPath: '/tmp/avanevis-test/recordings/resume.opus',
+    transcriptPath: '/tmp/avanevis-test/recordings/resume.md',
+    transcriptionStatus: 'pending',
+    transcriptionRequest: { ...savedRequest },
+  };
+  const persistedMeeting = {
+    ...resumeRow,
+    transcriptionRequest: { ...savedRequest },
+  };
+  let receivedRequest = null;
+  let committedAttempt = null;
+  const spec = getAdapterSpec(savedRequest.adapterId);
+  const harness = createServiceHarness({
+    listMeetings: async () => [resumeRow],
+    runWallClockComputeAction: async ({ label, action }) => (
+      String(label).startsWith('Meeting lookup') ? persistedMeeting : action((proc) => proc, { signal: undefined })
+    ),
+    stageTranscriptionRequest: async () => {
+      throw new Error('an exact saved request does not need restaging');
+    },
+    getGuidedDiarizationStatusForJob: async () => null,
+    getParakeetStatusForJob: () => ({ status: 'ready',
+      artifactRevision: savedRequest.artifactRevision, runtimeLockId: savedRequest.runtimeLockId }),
+    probeParakeetRuntime: async () => ({ deviceAvailable: true, device: spec.device }),
+    runParakeetProcessForJob: async ({ request, candidatePath }) => {
+      receivedRequest = request;
+      return {
+        text: 'resumed', segments: [{ start: 0, end: 1, text: 'resumed' }], duration: 1,
+        engine: 'parakeet', device: spec.device, computeType: 'float32', language: 'en',
+        modelId: savedRequest.modelId, boundaryPolicy: savedRequest.boundaryPolicy,
+        adapterId: savedRequest.adapterId, artifactRevision: savedRequest.artifactRevision,
+        runtimeLockId: savedRequest.runtimeLockId, output_file: candidatePath,
+      };
+    },
+    commitTranscriptionAttempt: async (_meetingId, payload) => {
+      committedAttempt = payload.attemptId;
+      return { ...persistedMeeting, transcriptionStatus: 'completed' };
+    },
+    fs: { ...createMinimalFs(), promises: {
+      ...createMinimalFs().promises,
+      readFile: async () => '# Meeting Transcription\n\n## Transcript\n\nresumed',
+    } },
+  });
+
+  const resumed = await harness.service.resumePendingTranscriptions();
+  assert.deepEqual(resumed.meetingIds, [resumeRow.id]);
+  resumeRow.transcriptionRequest.adapterId = 'changed-after-resume';
+  await harness.computeQueue.flush();
+
+  assert.ok(receivedRequest);
+  assert.equal(Object.isFrozen(receivedRequest), true);
+  assert.equal(receivedRequest.attemptId, savedRequest.attemptId);
+  assert.equal(receivedRequest.adapterId, savedRequest.adapterId);
+  assert.equal(receivedRequest.artifactRevision, savedRequest.artifactRevision);
+  assert.equal(committedAttempt, savedRequest.attemptId);
+  assert.equal(harness.getQueueState().jobs[0].status, 'ready');
 });
 
 test('Slice A: legacy resolver returns canonical normalized values', () => {
@@ -1025,4 +1304,300 @@ test('Slice A: model setup IPC serves Small/Medium only', async () => {
   const check = await handlers['check-model-downloaded']({}, 'small');
   assert.equal(check.modelSize, 'small');
   assert.equal(typeof check.downloaded, 'boolean');
+});
+
+test('Parakeet finalization queues its saved request and commits a candidate through the compute queue', async () => {
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const { getAdapterSpec } = require('../../src/main/transcription-engine-catalog');
+  const requested = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+    platform: process.platform, arch: process.arch, osRelease: os.release(),
+  });
+  assert.equal(requested.ok, true);
+  const request = requested.request;
+  const adapter = getAdapterSpec(request.adapterId);
+  const audioPath = '/tmp/avanevis-test/recordings/a.opus';
+  let committed = null;
+  let pending = null;
+  const harness = createServiceHarness({
+    fs: { ...createMinimalFs(), promises: {
+      ...createMinimalFs().promises,
+      readFile: async () => '# Meeting Transcription\n\n## Transcript\n\nhello',
+    } },
+    spawnTrackedPython: () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({
+          id: 'm1', audioPath, transcriptPath: '/tmp/avanevis-test/recordings/a.md',
+          transcriptionRequest: pending.transcriptionRequest,
+        })));
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+    addMeetingToHistory: async (record) => {
+      pending = record;
+      return { ...record, id: 'm1', audioPath };
+    },
+    getParakeetStatusForJob: () => ({ status: 'ready',
+      artifactRevision: pending.transcriptionRequest.artifactRevision, runtimeLockId: pending.transcriptionRequest.runtimeLockId }),
+    probeParakeetRuntime: async () => ({ deviceAvailable: true, device: adapter.device }),
+    runParakeetProcessForJob: async ({ candidatePath }) => ({
+      text: 'hello', segments: [{ start: 0, end: 1, text: 'hello' }], duration: 1,
+      engine: 'parakeet', device: adapter.device, computeType: 'float32',
+      language: 'en', modelId: pending.transcriptionRequest.modelId,
+      boundaryPolicy: pending.transcriptionRequest.boundaryPolicy,
+      adapterId: pending.transcriptionRequest.adapterId, artifactRevision: pending.transcriptionRequest.artifactRevision,
+      runtimeLockId: pending.transcriptionRequest.runtimeLockId, output_file: candidatePath,
+    }),
+    commitTranscriptionAttempt: async (id, payload) => {
+      committed = { id, ...payload };
+      return { id, transcriptionStatus: 'completed' };
+    },
+  });
+  const result = await harness.service.finalizeRecordingTranscription({
+    audioPath, transcriptionSelection: { engine: 'parakeet', language: 'en' },
+  });
+  assert.equal(result.enqueued, true);
+  assert.equal(pending.transcriptionRequest.engine, 'parakeet');
+  await harness.computeQueue.flush();
+  assert.equal(committed.result.engine, 'parakeet');
+  assert.equal(committed.result.device, adapter.device === 'metal' ? 'mps' : adapter.device);
+  assert.equal(harness.getQueueState().jobs[0].status, 'ready');
+});
+
+test('missing Parakeet runtime fails the saved attempt before any CPU or Whisper child', async () => {
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const request = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+    platform: process.platform, arch: process.arch, osRelease: os.release(),
+  }).request;
+  const spawns = [];
+  const failures = [];
+  const harness = createServiceHarness({
+    spawnTrackedPython: (args) => {
+      spawns.push(args);
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({
+          id: 'm1', audioPath: '/tmp/avanevis-test/recordings/a.opus',
+          transcriptionRequest: request,
+        })));
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+    getParakeetStatusForJob: () => ({ status: 'repair-required', code: 'PARAKEET_ARTIFACT_INVALID' }),
+    probeParakeetRuntime: () => { throw new Error('unexpected GPU probe'); },
+    runParakeetProcessForJob: () => { throw new Error('unexpected ASR child'); },
+    commitTranscriptionAttempt: () => { throw new Error('unexpected commit'); },
+    failTranscriptionAttempt: async (id, attemptId, code) => failures.push({ id, attemptId, code }),
+  });
+  const job = harness.service.admitMeetingTranscriptionJob({ meetingId: 'm1', request });
+  await assert.rejects(harness.computeQueue.runNext(), (error) => error.code === 'PARAKEET_ARTIFACT_INVALID');
+  await assert.rejects(job, (error) => error.code === 'PARAKEET_ARTIFACT_INVALID');
+  assert.deepEqual(failures, [{ id: 'm1', attemptId: request.attemptId, code: 'PARAKEET_ARTIFACT_INVALID' }]);
+  assert.equal(spawns.length, 1);
+  assert.equal(harness.getQueueState().jobs[0].status, 'failed');
+});
+
+test('Parakeet re-admission fails closed when its live GPU disappears', async () => {
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const request = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+    platform: process.platform, arch: process.arch, osRelease: '24.0.0',
+  }).request;
+  const meeting = {
+    id: 'parakeet-gpu-removed',
+    audioPath: '/tmp/avanevis-test/recordings/gpu-removed.opus',
+    transcriptPath: '/tmp/avanevis-test/recordings/gpu-removed.md',
+    transcriptionRequest: { ...request },
+  };
+  let probes = 0;
+  let transcriptionChildren = 0;
+  const harness = createServiceHarness({
+    runWallClockComputeAction: async ({ label, action }) => (
+      String(label).startsWith('Meeting lookup') ? meeting : action((proc) => proc, { signal: undefined })
+    ),
+    getGuidedDiarizationStatusForJob: async () => null,
+    getParakeetStatusForJob: () => ({ status: 'ready', artifactRevision: request.artifactRevision,
+      runtimeLockId: request.runtimeLockId }),
+    probeParakeetRuntime: async () => {
+      probes += 1;
+      return { deviceAvailable: false, device: 'cpu' };
+    },
+    runParakeetProcessForJob: async () => {
+      transcriptionChildren += 1;
+      throw new Error('Parakeet transcription must not start without its GPU');
+    },
+  });
+
+  const job = harness.service.admitMeetingTranscriptionJob({ meetingId: meeting.id, request });
+  const queueOutcome = await harness.computeQueue.runNext().then(() => null, (error) => error);
+  await assert.rejects(job, (error) => error && error.code === 'PARAKEET_GPU_UNAVAILABLE');
+
+  assert.equal(queueOutcome.code, 'PARAKEET_GPU_UNAVAILABLE');
+  assert.equal(probes, 1);
+  assert.equal(transcriptionChildren, 0);
+  assert.equal(harness.getQueueState().jobs[0].status, 'failed');
+});
+
+test('delete during Parakeet result commit cannot publish a Ready queue row', async () => {
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const { getAdapterSpec } = require('../../src/main/transcription-engine-catalog');
+  const request = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+    platform: process.platform, arch: process.arch, osRelease: '24.0.0',
+  }).request;
+  const spec = getAdapterSpec(request.adapterId);
+  const meeting = {
+    id: 'delete-at-parakeet-commit',
+    audioPath: '/tmp/avanevis-test/recordings/commit.opus',
+    transcriptPath: '/tmp/avanevis-test/recordings/commit.md',
+    transcriptionRequest: { ...request },
+  };
+  let releaseCommit;
+  const commitGate = new Promise((resolve) => { releaseCommit = resolve; });
+  let commitStarted = false;
+  const harness = createServiceHarness({
+    runWallClockComputeAction: async ({ label, action }) => (
+      String(label).startsWith('Meeting lookup') ? meeting : action((proc) => proc, { signal: undefined })
+    ),
+    getGuidedDiarizationStatusForJob: async () => null,
+    getParakeetStatusForJob: () => ({ status: 'ready', artifactRevision: request.artifactRevision,
+      runtimeLockId: request.runtimeLockId }),
+    probeParakeetRuntime: async () => ({ deviceAvailable: true, device: spec.device }),
+    runParakeetProcessForJob: async ({ candidatePath }) => ({
+      text: 'complete', segments: [{ start: 0, end: 1, text: 'complete' }], duration: 1,
+      engine: 'parakeet', device: spec.device, computeType: 'float32', language: 'en',
+      modelId: request.modelId, boundaryPolicy: request.boundaryPolicy,
+      adapterId: request.adapterId, artifactRevision: request.artifactRevision,
+      runtimeLockId: request.runtimeLockId, output_file: candidatePath,
+    }),
+    commitTranscriptionAttempt: async () => {
+      commitStarted = true;
+      await commitGate;
+      return { ...meeting, transcriptionStatus: 'completed' };
+    },
+    fs: { ...createMinimalFs(), promises: {
+      ...createMinimalFs().promises,
+      readFile: async () => '# Meeting Transcription\n\n## Transcript\n\ncomplete',
+    } },
+  });
+
+  const job = harness.service.admitMeetingTranscriptionJob({ meetingId: meeting.id, request });
+  const jobOutcome = job.then(() => null, (error) => error);
+  const running = harness.computeQueue.runNext().then(() => null, (error) => error);
+  for (let index = 0; index < 50 && !commitStarted; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.equal(commitStarted, true, 'expected atomic commit to be in progress');
+
+  const deletion = harness.service.cancelJobForDelete(meeting.id);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  releaseCommit();
+  const [jobError, queueError, deleted] = await Promise.all([jobOutcome, running, deletion]);
+
+  assert.equal(jobError.code, 'TRANSCRIPTION_DELETED');
+  assert.equal(queueError.code, 'TRANSCRIPTION_DELETED');
+  assert.equal(deleted.tombstoned, true);
+  assert.equal(harness.getQueueState().jobs.some((item) => item.meetingId === meeting.id), false);
+});
+
+test('request-based Whisper jobs commit a candidate and retain the prior transcript on failure', async () => {
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const request = resolveTranscriptionRequest({ engine: 'whisper', language: 'en', modelSize: 'small' }, {
+    platform: process.platform, arch: process.arch,
+  }).request;
+
+  async function runAttempt(candidateMarkdown) {
+    const files = new Map([
+      ['/tmp/avanevis-test/recordings/whisper-retry.md', '# Old committed transcript\n'],
+    ]);
+    const meeting = {
+      id: 'whisper-retry',
+      audioPath: '/tmp/avanevis-test/recordings/whisper-retry.opus',
+      transcriptPath: '/tmp/avanevis-test/recordings/whisper-retry.md',
+      transcriptionStatus: 'pending',
+      transcriptionRequest: { ...request },
+      language: 'en',
+      model: 'small',
+    };
+    const commits = [];
+    const failedAttempts = [];
+    const harness = createServiceHarness({
+      fs: {
+        existsSync: () => true,
+        promises: {
+          readFile: async (filePath) => {
+            if (!files.has(filePath)) throw new Error(`missing test file: ${filePath}`);
+            return files.get(filePath);
+          },
+          writeFile: async (filePath, content) => { files.set(filePath, String(content)); },
+          rm: async (filePath) => { files.delete(filePath); },
+          mkdtemp: async (prefix) => `${prefix}test`,
+        },
+      },
+      spawnTrackedPython: (args) => {
+        const child = new EventEmitter();
+        child.stdout = new EventEmitter();
+        child.stderr = new EventEmitter();
+        queueMicrotask(() => {
+          if (args[0] === 'meeting_manager') {
+            child.stdout.emit('data', Buffer.from(JSON.stringify(meeting)));
+          } else {
+            const outputPath = args[args.indexOf('--output') + 1];
+            files.set(outputPath, candidateMarkdown);
+            const requestedDevice = args.includes('--device')
+              ? args[args.indexOf('--device') + 1]
+              : 'metal';
+            child.stdout.emit('data', Buffer.from(JSON.stringify({
+              text: 'new transcript',
+              segments: [{ start: 0, end: 1, text: 'new transcript' }],
+              language: 'en', duration: 1,
+              device: requestedDevice === 'auto' ? 'metal' : requestedDevice,
+              computeType: requestedDevice === 'cpu' ? 'int8' : 'float32',
+              output_file: outputPath,
+            })));
+          }
+          child.emit('close', 0);
+        });
+        return child;
+      },
+      appendSpawnJsonStdout: (buffer, data) => `${buffer}${data}`,
+      checkAiAddonSetupStatus: async () => ({ features: { diarization: { status: 'notConfigured' } } }),
+      commitTranscriptionAttempt: async (meetingId, payload) => {
+        commits.push({ meetingId, payload });
+        return { ...meeting, transcriptPath: payload.candidatePath, transcriptionStatus: 'completed' };
+      },
+      failTranscriptionAttempt: async (meetingId, attemptId, code) => {
+        failedAttempts.push({ meetingId, attemptId, code });
+        return { ...meeting, transcriptionStatus: 'failed' };
+      },
+    });
+
+    const job = harness.service.admitMeetingTranscriptionJob({
+      meetingId: meeting.id, request, language: 'fr', modelSize: 'medium',
+    });
+    const queued = await harness.computeQueue.runNext().then(() => null, (error) => error);
+    const outcome = await job.then((value) => ({ value }), (error) => ({ error }));
+    return { files, meeting, commits, failedAttempts, harness, queued, outcome };
+  }
+
+  const failed = await runAttempt('# Invalid child output\n');
+  assert.ok(failed.outcome.error, JSON.stringify(failed.outcome));
+  assert.equal(failed.outcome.error.code, 'TRANSCRIPTION_INVALID_OUTPUT', failed.outcome.error.message);
+  assert.equal(failed.commits.length, 0);
+  assert.equal(failed.failedAttempts[0].attemptId, request.attemptId);
+  assert.equal(failed.files.get(failed.meeting.transcriptPath), '# Old committed transcript\n');
+
+  const passed = await runAttempt('# Meeting Transcription\n\n## Transcript\n\nnew transcript');
+  assert.equal(passed.outcome.error, undefined);
+  assert.equal(passed.queued, null);
+  assert.equal(passed.commits.length, 1);
+  assert.equal(passed.commits[0].payload.candidatePath,
+    path.join('/tmp/avanevis-test/recordings', `whisper-retry.transcript-${request.attemptId}.md`));
+  assert.equal(passed.commits[0].payload.result.engine, 'whisper');
+  assert.equal(passed.commits[0].payload.result.attemptId, request.attemptId);
+  assert.equal(passed.files.get(passed.meeting.transcriptPath), '# Old committed transcript\n');
 });

@@ -412,6 +412,7 @@ test('download URL validation allows configured HTTPS hosts and expected redirec
   assert.equal(isAllowedDownloadUrl('https://release-assets.githubusercontent.com/github-production-release-asset/runtime.tar.gz'), true);
   assert.equal(isAllowedDownloadUrl('https://huggingface.co/unsloth/model/resolve/main/model.gguf'), true);
   assert.equal(isAllowedDownloadUrl('https://cdn-lfs.hf.co/repos/model.gguf'), true);
+  assert.equal(isAllowedDownloadUrl('https://us.aws.cdn.hf.co/xet-bridge-us/model.safetensors'), true);
   assert.equal(isAllowedDownloadUrl('https://cas-bridge.xethub.hf.co/xet-bridge-us/model.gguf'), true);
   assert.equal(isAllowedDownloadUrl('https://cas-server.xethub.hf.co/reconstruction/model.gguf'), true);
   assert.equal(isAllowedDownloadUrl('https://transfer.xethub.hf.co/xorbs/model.gguf'), true);

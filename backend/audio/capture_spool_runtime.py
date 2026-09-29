@@ -14,6 +14,15 @@ import numpy as np
 PathLike = Union[str, Path]
 
 
+def with_transcription_selection(payload: dict, selection) -> dict:
+    """Copy a recorder result and attach the capture-time selection when present."""
+    if not selection:
+        return payload
+    copied = dict(payload)
+    copied["transcriptionSelection"] = selection
+    return copied
+
+
 def load_track_segment_bytes(session_dir: PathLike, segments: List[str]) -> bytes:
     root = Path(session_dir)
     parts = []

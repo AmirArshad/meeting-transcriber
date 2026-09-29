@@ -54,6 +54,146 @@ test('add-meeting forwards resolved transcription runtime metadata', async () =>
   ]);
 });
 
+test('transcription provenance commands forward bounded records and drop paths', async () => {
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  let spawnedArgs = null;
+  const client = createMeetingManagerClient({
+    app: { getPath: () => '/tmp/avanevis-test' },
+    path,
+    spawnTrackedPython(args) {
+      spawnedArgs = args;
+      return proc;
+    },
+    pythonConfig: { backendPath: '/tmp/backend' },
+    getBackendModuleArgs: (moduleName, args) => [moduleName, ...args],
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      return { getStdout: () => stdout, getStderr: () => '', assertStdoutWithinLimit() {} };
+    },
+    appendSpawnLogBuffer: (buffer, chunk) => buffer + String(chunk),
+    assertTrustedRendererSender() {},
+    sanitizeTranscriptionError: (value) => value,
+    getRecordingsDir: () => '/tmp/avanevis-test/recordings',
+    assertSafeExistingRecordingAudioPath: (value) => value,
+    assertSafeExistingTranscriptPath: (value) => value,
+    validateAiMetadataPaths: (value) => value,
+  });
+
+  const pending = client.stageTranscriptionRequest('meeting-1', {
+    schemaVersion: 1,
+    attemptId: '11111111-1111-1111-1111-111111111111',
+    engine: 'parakeet',
+    language: 'en',
+    modelPath: '/tmp/secret/model.onnx',
+    sha256: 'abc',
+    token: 'hf_secret',
+  }, { cancelGeneration: 2, deleteGeneration: 3 });
+  proc.stdout.emit('data', Buffer.from('{"id":"meeting-1"}'));
+  proc.emit('close', 0);
+  await pending;
+  const requestJson = spawnedArgs[spawnedArgs.indexOf('--request-json') + 1];
+  assert.equal(JSON.parse(requestJson).engine, 'parakeet');
+  assert.equal(requestJson.includes('modelPath'), false);
+  assert.equal(requestJson.includes('hf_secret'), false);
+  assert.equal(requestJson.includes('/tmp/secret'), false);
+  assert.ok(spawnedArgs.includes('--cancel-generation'));
+  assert.ok(spawnedArgs.includes('2'));
+});
+
+test('commit forwards device, compute type, and transcript hash without paths', async () => {
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  let spawnedArgs = null;
+  const client = createMeetingManagerClient({
+    app: { getPath: () => '/tmp/avanevis-test' },
+    path,
+    spawnTrackedPython(args) {
+      spawnedArgs = args;
+      return proc;
+    },
+    pythonConfig: { backendPath: '/tmp/backend' },
+    getBackendModuleArgs: (moduleName, args) => [moduleName, ...args],
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      return { getStdout: () => stdout, getStderr: () => '', assertStdoutWithinLimit() {} };
+    },
+    appendSpawnLogBuffer: (buffer, chunk) => buffer + String(chunk),
+    assertTrustedRendererSender() {},
+    sanitizeTranscriptionError: (value) => value,
+    getRecordingsDir: () => '/tmp/avanevis-test/recordings',
+    assertSafeExistingRecordingAudioPath: (value) => value,
+    assertSafeExistingTranscriptPath: (value) => value,
+    validateAiMetadataPaths: (value) => value,
+  });
+  const hash = `sha256:${'ab'.repeat(32)}`;
+  const pending = client.commitTranscriptionAttempt('meeting-1', {
+    attemptId: '11111111-1111-4111-8111-111111111111',
+    candidatePath: '/tmp/avanevis-test/recordings/candidate.md',
+    result: {
+      schemaVersion: 1,
+      attemptId: '11111111-1111-4111-8111-111111111111',
+      engine: 'parakeet',
+      language: 'en',
+      device: 'cuda',
+      computeType: 'float32',
+      transcriptHash: hash,
+      modelPath: '/tmp/secret/model.onnx',
+      token: 'hf_secret',
+    },
+  });
+  proc.stdout.emit('data', Buffer.from('{"id":"meeting-1"}'));
+  proc.emit('close', 0);
+  await pending;
+  const resultJson = spawnedArgs[spawnedArgs.indexOf('--result-json') + 1];
+  const parsed = JSON.parse(resultJson);
+  assert.equal(parsed.device, 'cuda');
+  assert.equal(parsed.computeType, 'float32');
+  assert.equal(parsed.transcriptHash, hash);
+  assert.equal(resultJson.includes('modelPath'), false);
+  assert.equal(resultJson.includes('hf_secret'), false);
+});
+
+test('scan recovery hook failure rejects the scan before auto-resume', async () => {
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  let resumed = false;
+  const client = createMeetingManagerClient({
+    app: { getPath: () => '/tmp/avanevis-test' },
+    path,
+    spawnTrackedPython: () => proc,
+    pythonConfig: { backendPath: '/tmp/backend' },
+    getBackendModuleArgs: () => [],
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      return { getStdout: () => stdout, getStderr: () => '', assertStdoutWithinLimit() {} };
+    },
+    appendSpawnLogBuffer: (buffer, chunk) => buffer + String(chunk),
+    assertTrustedRendererSender() {},
+    sanitizeTranscriptionError: (value) => value,
+    getRecordingsDir: () => '/tmp/avanevis-test/recordings',
+    assertSafeExistingRecordingAudioPath: (value) => value,
+    assertSafeExistingTranscriptPath: (value) => value,
+    validateAiMetadataPaths: (value) => value,
+    onScanSucceeded() { resumed = true; },
+  });
+  const scanPromise = client.scanRecordings({
+    beforeAutoResume: async () => {
+      throw new Error('request staging failed');
+    },
+  });
+  proc.stdout.emit('data', Buffer.from('{"scanned":1,"added":1,"skipped":0}'));
+  proc.emit('close', 0);
+  await assert.rejects(scanPromise, /request staging failed/);
+  assert.equal(resumed, false);
+});
+
 test('scan-recordings rejects before spawning while recorder work is active', async () => {
   let spawned = false;
   const client = createMeetingManagerClient({
