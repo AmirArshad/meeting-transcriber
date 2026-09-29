@@ -56,8 +56,12 @@ have shipped. Parakeet implementation and manual acceptance are in progress on
   `float32` for Parakeet, `cuda` / `float16` for the explicit Whisper Small
   retry, and the same exceptions. The first Windows probe failed closed until
   the isolated interpreter loaded the standard-library DLL directory and
-  preloaded the pinned CUDA 12 libraries. Network disconnect, memory pressure,
-  live recording recovery, and packaged update survival were not run. Details
+  preloaded the pinned CUDA 12 libraries. On 2026-09-29 the same lifecycle
+  passed in a packaged arm64 app on the Apple M4 Pro: Metal `mps` /
+  `float32` for Parakeet, `mps` / `float16` for the explicit Whisper Small
+  retry, and the same exceptions. Network disconnect, memory pressure,
+  live recording recovery, and packaged update survival were not run. The
+  Windows packaged smoke remains open before the v2.10 release. Details
   are in the plan.
 - Remaining committed work: Parakeet, Whisper Large, extra language removals,
   summarisation language/model qualification, inference-performance slices,
@@ -76,8 +80,8 @@ remaining host checks while retaining live GPU admission.
 2. **Active Parakeet implementation:** Complete guided transcription, engine
    activation and recovery UI, packaging/legal/contracts, and the remaining
    lifecycle checks in the approved three-platform plan. The CachyOS, Mac, and
-   Windows dev-electron lifecycles have passed. Repeat the
-   Mac test in a packaged app. Other independent
+   Windows dev-electron lifecycles and the packaged Mac lifecycle have passed.
+   The Windows packaged smoke remains before the v2.10 release. Other independent
    investigations remain on their matching
    release machines:
    Whisper Large, other listed languages, Qwen summary languages, a local
@@ -104,7 +108,7 @@ removals. Slice B (Large) and slice C (other languages) need qualification first
 - [ ] Explore whether any other currently listed languages also have poor performance and should be removed.
 - [ ] Add Whisper Large as a transcription model option.
 - [x] Remove Tiny and Base model options; Small becomes the smallest available Whisper model.
-- [ ] Add optional English-only Parakeet transcription in Settings for Windows CUDA, Apple Silicon Metal, and Linux managed CUDA. The approved [three-platform plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) governs implementation. The Mac service-level smoke and the CachyOS, Mac, and Windows dev-electron lifecycles passed. The packaged Mac checks are open. Do not claim a speed, memory, or accuracy win from these runs.
+- [ ] Add optional English-only Parakeet transcription in Settings for Windows CUDA, Apple Silicon Metal, and Linux managed CUDA. The approved [three-platform plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) governs implementation. The Mac service-level smoke, the CachyOS, Mac, and Windows dev-electron lifecycles, and the packaged Mac lifecycle passed. Network disconnect, memory pressure, live recording recovery, packaged update survival, and the Windows packaged smoke remain open before the v2.10 release. Do not claim a speed, memory, or accuracy win from these runs.
 
 ### Summarisation
 
