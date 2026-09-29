@@ -1,6 +1,6 @@
 # Language/model policy and Whisper Large — Design and Implementation Plan
 
-> Design and file-level plan. Implementation is not authorized by this document. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md). Slice A (curated choices) can proceed without hardware qualification; slices B and C cannot.
+> Design and file-level plan. Implementation is not authorized by this document. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md). Slice A shipped in PR #102. Slice B (Large) still needs qualification. Slice C (further language removals) was dropped from v2.10 on 2026-09-29.
 
 **Status:** Design only, 2026-09-07. No implementation, downloads, benchmarks, or platform acceptance performed.
 
@@ -24,7 +24,7 @@
 ## 2. User-facing change
 
 - Keep the Record page controls. Use **Transcription language** and **Whisper model**; offer Small, Medium and **Large (v3)**, with Small still the default. Describe Large as requiring more download space, memory and processing time; do not promise better accuracy for every language or publish unmeasured sizes/speeds.
-- Remove Persian from new selections. Retain the other 11 languages until the qualification slice supplies evidence for a product decision. The current Chinese label must be tested separately for Mandarin and Cantonese; one code does not establish both claims.
+- Remove Persian from new selections. The other listed languages stay. Further language removals, including a separate Mandarin and Cantonese review, are out of v2.10.
 - Migrate saved Tiny/Base preferences to Small once, with a visible explanation. Preserve valid Small/Medium preferences and normalize a saved `large` preference to `large-v3`. A removed/unknown saved language shows **Choose a transcription language**, not a silent English substitution. Fresh profiles retain English. Require a choice before starting new recording/transcription; existing recordings and History remain accessible.
 - Show model states beside the selector: **Checking**, **Download required**, **Waiting for current AI work**, **Downloading**, **Downloaded**, **Unavailable**, and **Download failed**. “Downloaded” describes cache completeness, not successful inference on this machine. Actual inference keeps existing Activity loading/running/error states. Use indeterminate progress unless real byte totals are available.
 - Offer explicit **Download model**, **Cancel download**, and **Retry download** actions at this control/setup flow. Selecting a model or migrating a preference must not start a transfer. Recheck the active selection after asynchronous checks so an old result cannot overwrite a newer choice.
@@ -56,13 +56,13 @@ Unchanged: queue sequencing and per-job snapshots; one GPU-heavy job at a time; 
 
 - **Identity/packaging gate:** Verify the exact shipped faster-whisper/CTranslate2 and MLX dependency versions against real v3 artifacts, cache paths, required files, public download/token behavior and packaged runtime. The code's MLX repo mapping is not availability evidence. Record model revisions/digests in qualification evidence; investigate reproducible revision selection before release. Do not add arbitrary repo IDs or URLs to IPC. Any necessary dependency/pin change needs its own packaging-contract review.
 - **Performance gate:** Measure peak RAM/VRAM, disk usage and wall time for ordinary and guided Large on each intended device path, including Linux CPU. Preserve current budgets first; do not lengthen them merely to make a benchmark pass. “Downloaded” can still fail at runtime. Resource thresholds or warnings must derive from measurements, not guessed GPU sizes.
-- **Language gate:** The committed Persian removal reflects reported poor performance, not a measured conclusion from this investigation. Test retained languages on consented/public, locally processed representative speech, noise, accents and domain vocabulary, with reference transcripts and fluent review. Use language-appropriate WER/CER plus omission, hallucination and mixed-language checks; no universal WER threshold across scripts. Include Small as the floor and Medium/Large comparisons. Audit Mandarin/Cantonese separately. No automatic removals from a small sample or language table.
+- **Language gate:** Persian is already off new choices. Further removals are out of v2.10, so do not run a retained-language removal review for this release. The languages still listed stay, including the current Chinese label.
 - **Migration/privacy:** Blindly pruning backend allowlists breaks saved recovery; silently changing Persian to English changes meaning. Downloads need explicit consent even after migration or cache loss. Do not upload customer recordings for evaluation or add telemetry. Retaining unused Tiny/Base caches is intentional; global HF caches may be shared with other applications.
 - **Adjacent scope:** Parakeet owns its optional English-only engine policy; summary-language gating owns summary eligibility. Share stable language codes and evaluation identities with those designs and the inference-performance baseline, without treating Whisper support as summary or Parakeet support.
 
 ## 6. Validation outline and implementation plan
 
-Three independently deliverable slices: **A — selectable policy and upgrade compatibility**; **B — Large qualification and exposure**; **C — retained-language evaluation**. A can ship Small/Medium without B; C supplies evidence and any additional removals require a separate product decision. B depends on canonical identity and download/recovery safeguards, not on finishing every language evaluation.
+Slice A (selectable policy) shipped in PR #102. Slice B (Large qualification and exposure) remains. Slice C (retained-language evaluation) is out of v2.10 as of 2026-09-29. B depends on canonical identity and download/recovery safeguards.
 
 ### A. Curated choices and safe migration
 
@@ -84,7 +84,9 @@ Three independently deliverable slices: **A — selectable policy and upgrade co
 
 **Manual release gates:** Packaged Windows CPU/CUDA (including device fallback), Apple Silicon MLX, supported Linux CPU/managed CUDA, with cold download, interrupted/resumed download, offline restart, low-memory failure, long ordinary/guided meetings and subsequent queue recovery. Test upgrade with Persian/Tiny/Base preferences and pending jobs; new recording while earlier work is queued; download cancellation; quit during waiting/loading/running; Linux broken managed runtime and Repair/Uninstall recovery. Use real artifacts and hardware; mocks and complete files do not establish acceptance. A CPU-only pass does not qualify CUDA, or vice versa.
 
-### C. Evaluate other listed languages
+### C. Evaluate other listed languages — out of v2.10
+
+Dropped on 2026-09-29. Do not execute this slice. The notes below are the withdrawn design.
 
 **Files:** Add results to `docs/development/V2_10_LANGUAGE_MODEL_QUALIFICATION.md`; update this plan and `todo.md` with decisions. Only approved removals change the policy/UI and migration tests from A.
 
@@ -98,4 +100,4 @@ Parakeet implementation, summary models/languages, automatic language detection 
 
 1. **Recommended compatibility policy:** remove Persian/Tiny/Base from **new choices**, while allowing existing pending jobs to finish with their saved values. A prohibition on legacy execution would need a separately designed blocked-job flow, not silent substitution.
 2. If Large passes only some platform/runtime gates, may those paths ship first, or must exposure wait for all target platforms? Recommendation: independent exposure with explicit unavailable reasons.
-3. Additional language removals need fluent review and an explicit product decision after evidence exists. Retain current non-Persian choices until then. Dependency compatibility, cache identity, and resource measurements are engineering investigations.
+3. Closed on 2026-09-29: no further language removals in v2.10. Keep the languages still listed.

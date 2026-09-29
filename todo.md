@@ -11,21 +11,21 @@ implementation or acceptance evidence.
 ## Status
 
 v2.10 is partly implemented. No-hardware UX and Whisper choice policy Slice A
-have shipped. Parakeet implementation and manual acceptance are in progress on
-`codex/parakeet-three-platform-gpu`; it has not shipped.
+have shipped. Parakeet is merged on `master`. Its checkbox stays open until
+the Windows packaged smoke and the four deferred lifecycle checks are recorded.
 
 - Designs exist for inference performance, optional Parakeet, Whisper
   language/model policy, summarisation languages/models, and Settings /
   navigation / shortcuts.
 - Whisper choice policy Slice A shipped in PR #102: Persian is off new
   choices; Tiny/Base are retired; Small is the floor; pending jobs keep their
-  saved language/model. Slice B (Large) and slice C (other language removals)
-  remain blocked on hardware qualification.
+  saved language/model. Slice B (Large) still needs qualification. Slice C
+  (other language removals) was dropped on 2026-09-29.
 - Settings, navigation, keyboard shortcuts, and click-away meeting rename
   shipped in PR #103. The AvaNevis rail logo shipped in PR #104.
 - Apple Silicon inference qualification (2026-09-14) retained current Opus
-  encoding, Whisper defaults, and 32k summary context. No production change;
-  Windows/Linux inference-default changes remain unqualified.
+  encoding, Whisper defaults, and 32k summary context. No production change.
+  Further inference-default changes were dropped on 2026-09-29.
 - Linux Parakeet CachyOS CUDA 12 meeting screening is complete
   (2026-09-22). The uncontended batches defer Parakeet against Whisper Small
   and record a speed-versus-VRAM tradeoff against Whisper Medium, with WER
@@ -63,16 +63,23 @@ have shipped. Parakeet implementation and manual acceptance are in progress on
   live recording recovery, and packaged update survival were not run. The
   Windows packaged smoke remains open before the v2.10 release. Details
   are in the plan.
-- Remaining committed work: Parakeet, Whisper Large, extra language removals,
-  summarisation language/model qualification, inference-performance slices,
-  and the Linux microphone-volume investigation.
+- On 2026-09-29, v2.10 dropped extra transcription-language removals,
+  alternative summary-model evaluation, and further inference-default changes.
+  Apple Silicon already rejected lower Opus effort, MLX decode changes, and a
+  smaller summary context. Windows and Linux inference defaults are not being
+  pursued.
+- Remaining committed work: Parakeet acceptance gates, Whisper Large, Qwen
+  summary-language qualification and output-language matching, a recording
+  and encoding performance assessment, and the Linux microphone-volume
+  investigation.
 
 ## How to sequence the work
 
 Settings, click-away rename, and the transcription **policy** change (Persian /
 Tiny / Base off new choices) did not wait on hardware investigations. Whisper
-Large, extra language removals, summary-language claims, and inference default
-changes still do. The approved Parakeet plan allows implementation before the
+Large and summary-language claims still do. Extra language removals,
+alternative summary models, and inference-default changes were dropped on
+2026-09-29. The approved Parakeet plan allows implementation before the
 remaining host checks while retaining live GPU admission.
 
 1. **Shipped without hardware qualification:** Settings presentation, keyboard
@@ -84,13 +91,11 @@ remaining host checks while retaining live GPU admission.
    The Windows packaged smoke remains before the v2.10 release. Other independent
    investigations remain on their matching
    release machines:
-   Whisper Large, other listed languages, Qwen summary languages, a local
-   output-language check, alternative summary models, Linux mic volume, and
-   Windows/Linux inference only if a speed change is still in play. Details
-   and hosts are in the [plan index](docs/superpowers/plans/2026-09-06-v2.10.md).
-3. **Implement after their own results:** Large, summary-language gating, any
-   extra language removals, any replacement summary model, and any inference
-   default change.
+   Whisper Large, Qwen summary languages, a local output-language check,
+   recording and encoding performance, and Linux mic volume. Details and hosts
+   are in the [plan index](docs/superpowers/plans/2026-09-06-v2.10.md).
+3. **Implement after their own results:** Large and summary-language gating.
+   Recording or encoding changes ship only if that assessment qualifies one.
 
 Keep recordings, transcripts, tokens, scratch reports, and user paths out of
 git. Public qualification notes should identify hardware class, OS, app
@@ -101,11 +106,11 @@ revision, and artifact hashes — not home directories or meeting content.
 ### Transcription and language support
 
 Design: [Language/model policy and Whisper Large](docs/superpowers/plans/2026-09-07-language-model-policy-whisper-large.md).
-Slice A (curated choices) shipped in PR #102 without Large or extra language
-removals. Slice B (Large) and slice C (other languages) need qualification first.
+Slice A (curated choices) shipped in PR #102 without Large. Slice B (Large)
+needs qualification first. Slice C (other language removals) was dropped from
+v2.10 on 2026-09-29; the languages still listed stay.
 
 - [x] Remove Farsi/Persian from the language list because of poor observed performance.
-- [ ] Explore whether any other currently listed languages also have poor performance and should be removed.
 - [ ] Add Whisper Large as a transcription model option.
 - [x] Remove Tiny and Base model options; Small becomes the smallest available Whisper model.
 - [ ] Add optional English-only Parakeet transcription in Settings for Windows CUDA, Apple Silicon Metal, and Linux managed CUDA. The approved [three-platform plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) governs implementation. The Mac service-level smoke, the CachyOS, Mac, and Windows dev-electron lifecycles, and the packaged Mac lifecycle passed. Network disconnect, memory pressure, live recording recovery, packaged update survival, and the Windows packaged smoke remain open before the v2.10 release. Do not claim a speed, memory, or accuracy win from these runs.
@@ -113,14 +118,13 @@ removals. Slice B (Large) and slice C (other languages) need qualification first
 ### Summarisation
 
 Design: [Qwen language support and alternative summarisation models](docs/superpowers/plans/2026-09-07-summary-languages-and-models.md).
-Language qualification (slice A) and alternative-model evaluation (slice B)
-are independent. Do not claim supported languages or a better model until
-those results exist.
+Language qualification (slice A) remains. Alternative-model evaluation (slice B)
+was dropped from v2.10 on 2026-09-29; keep the current Qwen model. Do not claim
+supported languages until the language results exist.
 
 - [ ] Explore which languages the current Qwen summarisation model actually supports.
 - [ ] Enable summarisation only for the supported languages retained by the product.
 - [ ] Ensure Qwen summary output matches the language of the transcript.
-- [ ] Explore whether a better summarisation model than the current Qwen model is now available.
 
 ### Settings and navigation UX
 
@@ -144,7 +148,7 @@ Pyannote removal.
 
 ### Performance
 
-- [ ] Deliver measured local inference-performance improvements through independently qualified slices. Design: [Inference performance](docs/superpowers/plans/2026-09-06-inference-performance.md). Apple Silicon evidence retains Opus effort 10, existing MLX Whisper defaults, and 32k summary context. No optimization is qualified. Windows/Linux qualification is only needed if a default change is still being pursued. Persistent workers need a separate design.
+- [ ] Assess recording and post-stop encoding performance. Apple Silicon already measured backend finalization and direct Opus effort 5, 6, and 10 on 2026-09-14 and kept effort 10. Live capture cost and UI Stop-to-ready were not measured. Do not reopen Whisper beam, MLX batch, summary context, or Windows/Linux inference defaults. Design context: [Inference performance](docs/superpowers/plans/2026-09-06-inference-performance.md). Evidence: [V2_10_INFERENCE_PERFORMANCE.md](docs/development/V2_10_INFERENCE_PERFORMANCE.md).
 - [ ] Investigate Linux input-volume defaults: determine why some PipeWire/PulseAudio setups reset the microphone to 50%, measure capture/transcription impact, and assess a safe app-side or setup-side remedy without unexpectedly changing user device settings. Linux desktop session only.
 
 ## Deferred beyond v2.10

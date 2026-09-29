@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing plain HTML/CSS/JS, Electron, Python 3.11, ffmpeg/libopus, faster-whisper, lightning-whisper-mlx, and catalog-pinned llama.cpp.
 
-**Status:** Task 5 release decision recorded 2026-09-14 from the Task 1–4 local evidence. No optimization is qualified or implemented. The recorded evidence is Apple Silicon macOS only. Windows and Linux remain unqualified; run those rows only if a production default change is still being pursued. Persistent workers still need a separate lifecycle design.
+**Status:** Task 5 release decision recorded 2026-09-14 from the Task 1–4 local evidence. No optimization is qualified or implemented. On 2026-09-29, v2.10 stopped pursuing Whisper, summary-context, and Windows/Linux inference-default changes. Apple Silicon already kept Opus effort 10. The remaining performance question is recording and encoding: live capture cost and UI Stop-to-ready were not measured. Persistent workers still need a separate lifecycle design.
 
 ## Global Constraints
 
@@ -42,12 +42,12 @@ Windows retains faster-whisper CPU/CUDA behavior. Apple Silicon retains MLX tran
 
 Split into independent slices sharing one measurement protocol:
 
-1. **A — Baseline and encoding:** measure real finalization, then compare effort 5 and 6 against 10 through the existing compressor override. Promote a constant change only after all release-target encoding gates pass. This can ship independently of inference tuning.
-2. **B — Whisper qualification:** compare beam 1/2/5 on identical audio/model/language and measure model load separately from decoding. Include guided runs in the end-to-end baseline, preserving speaker behavior. Keep MLX batch 1 in production; higher-batch experiments require explicit long-meeting completeness evidence. This slice yields an accept/reject decision; a user-visible speed/accuracy mode needs a subsequent focused design.
-3. **C — Summary context:** qualify smaller context allocation per complete prompt while retaining the existing per-prompt CLI lifetime. Count prompt/template overhead plus output allowance and safety headroom, capped at the current 32,768. Apply to chunk, repair, and merge prompts. Do not change chunking or truncate inputs to make a smaller allocation fit. If the pinned runtime has no validated tokenizer/counting mechanism, retain 32k; a character estimate alone is not qualification.
-4. **D — Resident workers:** separate architectural design after load-time evidence establishes value. Not an implementation task in this plan. A future design must resolve eviction before other GPU jobs/resource mutation, model/device/cache invalidation, per-job isolation, late responses, child-tree termination, idle memory, and quit drain. A localhost server is not assumed available or acceptable.
+1. **A — Encoding:** closed for a default change. Apple Silicon measured finalization and Opus effort 5, 6, and 10 on 2026-09-14 and kept effort 10. The remaining measurement is live capture cost and UI Stop-to-ready. Do not rerun the effort comparison unless a later release reopens it.
+2. **B — Whisper qualification:** closed for v2.10 on 2026-09-29. Keep the current MLX and faster-whisper defaults, including MLX batch 1.
+3. **C — Summary context:** closed for v2.10 on 2026-09-29. Keep 32,768 tokens.
+4. **D — Resident workers:** separate architectural design. Not a v2.10 task.
 
-Prefer A and independently qualified C over a blanket Fast preset (conflates model and quality decisions) or workers first (changes lifetime/resource ownership before measuring benefit).
+The open v2.10 performance work is live recording cost and the on-screen Stop-to-ready wait. A qualified encode or stop-path change still needs the release-host gates before it ships.
 
 Loading remains within current task states; queued time is measured separately from execution. Uninstalled/unsupported engines remain unavailable. Cancellation, timeout, quit, and recovery follow existing behavior: pending transcription cancellation remains distinct from active work; summary cancellation remains effective before metadata finalization; metadata commit is protected. No automatic quality downgrade/retry is added. Missing timing data is “unavailable,” never zero; failed/cancelled trials are recorded separately and excluded from successful speed averages. Diagnostic failure cannot fail a real meeting.
 
@@ -71,7 +71,9 @@ Measure 5/20/60-minute fixtures with ordinary speech, silence, overlap, desktop 
 
 **Validation:** `python -m pytest tests/python/test_inference_performance_benchmark.py -q`; prove missing measurements, failure/cancel exclusion, unit consistency, lazy-segment timing, and redaction. Capture real baselines before selecting changes.
 
-### Task 2: Encode qualification and conditional promotion
+### Task 2: Encode qualification and conditional promotion — closed
+
+Apple Silicon evidence on 2026-09-14 kept Opus effort 10. Do not promote effort 5 or 6 from that run. The historical method is below.
 
 **Possible modify:** `backend/audio/constants.py` only for the accepted effort value. **Tests:** `tests/python/test_compressor.py`, `tests/python/test_streaming_post_processor.py`; extend Task 1's harness for effort comparisons through the existing compressor parameter.
 
@@ -79,7 +81,9 @@ Preserve the finalizer's intermediate WAV, verification passes, capture cleanup 
 
 **Validation:** `python -m pytest tests/python/test_compressor.py tests/python/test_streaming_post_processor.py -q`, plus actual packaged ffmpeg decode/playback, duration/channel checks, WER comparison, output size, and recoverable-failure trials. Retain effort 10 if no candidate passes.
 
-### Task 3: Whisper qualification; no default flip
+### Task 3: Whisper qualification — closed for v2.10
+
+Dropped on 2026-09-29. Keep current decoding defaults. The historical method is below.
 
 **Modify:** benchmark harness only; exercise the installed faster-whisper API with beam 1/2/5 after checking its real signature/version. **Reference/tests:** `backend/transcription/faster_whisper_transcriber.py`, `backend/transcription/mlx_whisper_transcriber.py`, `tests/python/test_transcriber_helpers.py`.
 
@@ -87,7 +91,9 @@ Measure unmodified production behavior first. Candidate API runs must preserve a
 
 **Validation:** `python -m pytest tests/python/test_transcriber_helpers.py -q`, reference transcripts/WER, names/numbers, timestamps and beginning/middle/end completeness, CPU/CUDA admission and actual-device results. Record whether a candidate merits a separate product-mode design or is rejected.
 
-### Task 4: Summary context qualification and conditional promotion
+### Task 4: Summary context qualification — closed for v2.10
+
+Dropped on 2026-09-29. Keep 32,768 tokens. The historical method is below.
 
 **Possible modify:** `backend/summaries/llama_runtime.py` for bounded per-call context selection; `backend/summaries/summary_runner.py` to select using each final prompt and its output budget. Preserve the base runtime's context used by existing chunk budgeting. **Tests:** `tests/python/test_summary_llama_runtime.py`, `tests/python/test_summary_runner.py`, `tests/python/test_summary_pipeline.py`.
 
