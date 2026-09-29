@@ -225,6 +225,10 @@ def _unavailable_device() -> dict:
     return {"device": "cpu", "deviceAvailable": False}
 
 
+def _running_on_windows() -> bool:
+    return os.name == "nt"
+
+
 def preload_windows_cuda_dlls(runtime_dir: str, *, loader=None, add_directory=None) -> List[str]:
     """Load pinned NVIDIA DLLs before ONNX Runtime imports its CUDA provider.
 
@@ -233,7 +237,7 @@ def preload_windows_cuda_dlls(runtime_dir: str, *, loader=None, add_directory=No
     mapped. Missing files are skipped so a partial tree still fails closed in
     the CUDA session check.
     """
-    if os.name != "nt" or not runtime_dir:
+    if not _running_on_windows() or not runtime_dir:
         return []
     import ctypes
 

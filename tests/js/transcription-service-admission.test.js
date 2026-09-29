@@ -1596,7 +1596,7 @@ test('request-based Whisper jobs commit a candidate and retain the prior transcr
   assert.equal(passed.queued, null);
   assert.equal(passed.commits.length, 1);
   assert.equal(passed.commits[0].payload.candidatePath,
-    '/tmp/avanevis-test/recordings/whisper-retry.transcript-' + request.attemptId + '.md');
+    path.join('/tmp/avanevis-test/recordings', `whisper-retry.transcript-${request.attemptId}.md`));
   assert.equal(passed.commits[0].payload.result.engine, 'whisper');
   assert.equal(passed.commits[0].payload.result.attemptId, request.attemptId);
   assert.equal(passed.files.get(passed.meeting.transcriptPath), '# Old committed transcript\n');

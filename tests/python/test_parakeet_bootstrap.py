@@ -100,7 +100,7 @@ def test_windows_cuda_dlls_preload_in_dependency_order(tmp_path: Path, monkeypat
         dll.write_bytes(b"")
     loaded = []
     directories = []
-    monkeypatch.setattr("transcription.parakeet_bootstrap.os.name", "nt")
+    monkeypatch.setattr("transcription.parakeet_bootstrap._running_on_windows", lambda: True)
 
     result = preload_windows_cuda_dlls(
         str(tmp_path),
@@ -119,7 +119,7 @@ def test_windows_cuda_preload_skips_missing_files(tmp_path: Path, monkeypatch):
     dll = tmp_path / "nvidia" / "cublas" / "bin" / "cublasLt64_12.dll"
     dll.parent.mkdir(parents=True)
     dll.write_bytes(b"")
-    monkeypatch.setattr("transcription.parakeet_bootstrap.os.name", "nt")
+    monkeypatch.setattr("transcription.parakeet_bootstrap._running_on_windows", lambda: True)
 
     assert preload_windows_cuda_dlls(
         str(tmp_path),
@@ -254,7 +254,7 @@ def test_startup_flags_skip_ambient_sitecustomize(tmp_path: Path):
         encoding="utf-8",
     )
     env = {**os.environ, "PYTHONPATH": str(ambient)}
-    python = venv / "bin" / ("python.exe" if os.name == "nt" else "python")
+    python = venv / "Scripts" / "python.exe" if os.name == "nt" else venv / "bin" / "python"
     plain = subprocess.run([str(python), "-c", "print('ran')"], capture_output=True, text=True, env=env)
     isolated = subprocess.run(
         [str(python), "-S", "-P", "-c", "import sys; print('sitecustomize' in sys.modules)"],

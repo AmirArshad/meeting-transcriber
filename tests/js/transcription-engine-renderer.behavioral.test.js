@@ -189,6 +189,10 @@ test('Whisper retry dismisses its dialog while the job continues and does not st
     'whisper-retry-cancel-btn',
     'retry-whisper-transcription-btn',
     'history-tab',
+    'parakeet-engine-row',
+    'use-parakeet-engine-toggle',
+    'parakeet-status-text',
+    'whisper-preferences-summary',
   ];
   const nodes = new Map(ids.map((id) => [id, createNode({
     hidden: id === 'whisper-retry-error',

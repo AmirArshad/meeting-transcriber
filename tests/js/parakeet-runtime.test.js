@@ -235,9 +235,16 @@ function repoPython() {
   return candidates.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
-test('a site-enabled ._pth is replaced by a private interpreter that does not import site', () => {
+test('a site-enabled ._pth is replaced by a private interpreter that does not import site', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('the copied interpreter fixture uses a Unix prefix layout');
+    return;
+  }
   const sourcePython = repoPython();
-  assert.ok(sourcePython, 'expected a repo Python 3.11 interpreter');
+  if (!sourcePython) {
+    t.skip('repo .venv Python is not installed');
+    return;
+  }
   const realPython = fs.realpathSync(sourcePython);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'parakeet-pth-'));
   try {
