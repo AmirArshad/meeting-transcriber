@@ -212,10 +212,15 @@ def normalize_transcript_segments(segments: Iterable[Dict[str, Any]]) -> List[Di
 
 
 def estimate_token_count(text: str) -> int:
-    """Conservative token estimate for chunking without tokenizer dependencies."""
+    """Estimate chunk tokens from UTF-8 bytes without tokenizer dependencies.
+
+    Character counts badly underbudget CJK text. Bytes preserve the existing
+    ASCII estimate while allowing more room for multilingual tokenization.
+    This is still a heuristic, not an exact tokenizer/context guarantee.
+    """
     if not text:
         return 0
-    return max(1, (len(text) + 3) // 4)
+    return max(1, (len(text.encode("utf-8")) + 3) // 4)
 
 
 def is_topic_boundary_segment(segment: Dict[str, Any]) -> bool:

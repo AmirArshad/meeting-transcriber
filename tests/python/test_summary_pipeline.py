@@ -109,6 +109,29 @@ def test_chunk_transcript_respects_token_budget_and_timestamps():
     assert chunks[2]['end'] == 15.0
 
 
+def test_multilingual_chunk_estimate_counts_utf8_bytes():
+    from backend.summaries.summary_pipeline import estimate_token_count
+
+    assert estimate_token_count('Launch approved.') == 4
+    assert estimate_token_count('讨论项目进展') == 5
+    assert estimate_token_count('') == 0
+
+
+def test_original_near_full_chinese_fixture_is_split():
+    import json
+    from pathlib import Path
+
+    fixture_path = Path(__file__).parents[1] / 'manual' / 'summary-language-fixtures.json'
+    prose = json.loads(fixture_path.read_text(encoding='utf-8'))['zh']
+    # Original --long-only reproduction: 25,590 character-estimated tokens.
+    segments = [{'text': prose}] * 853
+    chunks = chunk_transcript(segments, max_tokens=25868, overlap_segments=1)
+
+    assert len(chunks) > 1
+    assert all(chunk['estimatedTokens'] <= 25868 for chunk in chunks)
+    assert sum(len(chunk['segments']) for chunk in chunks) - (len(chunks) - 1) == len(segments)
+
+
 def test_chunk_transcript_supports_segment_overlap():
     segments = [
         {'start': 0, 'end': 1, 'text': 'short a'},

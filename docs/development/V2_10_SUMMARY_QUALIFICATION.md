@@ -6,8 +6,9 @@ or per-OS language-quality campaign. This is not universal language-quality or
 packaged/hardware acceptance evidence.
 
 - Original implementation: `c59b4370073869b82f654e2743eee65743da3f6c`, based on
-  `1673ea431086305c1234abcb66de905104c9661e`; review corrections remain uncommitted
-  on `codex/qwen-summary-languages`.
+  `1673ea431086305c1234abcb66de905104c9661e`; review corrections are included in
+  `02061112c6a76f9b334dbcd5ae9fd52e6149bc70` on `codex/qwen-summary-languages`.
+  The chunk-budget follow-up below remains uncommitted.
 - Host: Windows x64, NVIDIA RTX 4070; installed Windows CUDA llama.cpp `b9173`
   (`49d1701bd24e4cedf6dfec9e50e185111203946b`) runtime,
   unchanged 32,768 context, existing generation parameters.
@@ -155,9 +156,9 @@ The requested `--long-only` probe failed at 25,590 estimated tokens against a
 25,868-token Concise budget (100,653 characters of repeated public Chinese prose).
 Generation and its one JSON repair both failed with no JSON object. It exercises
 no sidecar writer, so prior files remain untouched. This establishes an existing
-large non-Latin chunk limitation; it does not establish the exact tokenizer cause
-or useful quality on repetitive data. Context/chunk-estimator redesign remains
-outside this slice. Apple Silicon/Linux functional smokes remain unrun.
+large non-Latin chunk limitation; that initial run did not establish the exact
+tokenizer cause or useful quality on repetitive data. The targeted follow-up
+below investigates this failure. Apple Silicon/Linux functional smokes remain unrun.
 
 Final focused regressions passed; `npm run test:all` exited 0 with **1,079 JS
 passed / 4 skipped** and **814 Python passed / 8 skipped**, plus both syntax gates.
@@ -177,3 +178,70 @@ Report SHA-256 fingerprints (public synthetic reports retained locally):
 - Corrected paths: `e9f65682ffe3ab05b15bbe2e3e54a86e15e400c0423b2d759bbc3ba920bd8675`.
 - Predominant Spanish/Hindi generation: `fe63137be3a8b3e00e47d4b5c4944650a95d9a9edfd5b044e8d46cc35aadc487` / `49794bfff6ba763a508bed1efd4340bfa5cd6a266e6cfa693bdd151477f49f9f`.
 - Failed long probe: `e4937d21c558db7e348456e5ed6ce1642a1249ec3c54015eee69180ddb275cf1`.
+
+## Targeted Chinese chunk-budget fix — 2026-09-30
+
+Continued inline from `02061112c6a76f9b334dbcd5ae9fd52e6149bc70`, with changes
+left uncommitted. The installed model and CLI were rehashed and match the hashes
+above. No downloads, dependency/runtime changes or context increase.
+
+The unmodified `scripts/check-summary-languages.py --long-only` reproduced the
+same failure and report fingerprint: 853 repetitions of the public `zh` fixture,
+100,653 normalized characters, 25,590 estimated tokens versus a 25,868 budget.
+The installed `llama-tokenize --file --ids --show-count --log-disable` counted
+**55,802** tokens in the complete chunk prompt. An invocation using the ordinary
+production CLI arguments reported **55,814** input tokens exceeding **32,768**.
+The CLI exited 0 despite its request error, so generation returned no summary
+JSON; the one repair also failed. The constructed repair had **56,451** raw
+tokens. This establishes character undercounting as the demonstrated cause.
+Standalone counts exclude CLI template overhead; the CLI's count is the direct
+overflow evidence. No change to CLI error handling is included in this fix.
+
+The small fix uses `ceil(UTF-8 bytes / 4)` for chunk estimates, preserving ASCII
+behavior and accounting for multibyte text. Quoted invalid repair output is capped
+at **12,000 UTF-8 bytes**, with an incomplete final code point dropped; the complete
+grounded source and language instructions remain. The existing 6,000-token prompt
+reserve, profile output allowances, 32,768 context and one shared retry remain.
+Three new regressions failed before the fix and pass afterwards: multibyte
+estimation, splitting the original fixture, and multilingual repair-output size.
+
+Bounded results on the same Windows CUDA runtime:
+
+- `--long-only`: **pass**, 25,604 estimated tokens / 40,827 characters (346 fixture
+  repetitions) against the same 25,868 budget. Equivalent complete prompt raw
+  count: **22,847**. Generation and the local Chinese prose check passed. The first
+  successful run saved its report but hit Windows cp1252 printing; rerunning with
+  `PYTHONIOENCODING=utf-8` exited **0**.
+- Original 853-repetition input through the ordinary pipeline: **pass**, three
+  chunks with estimates **25,826 / 25,826 / 11,618**, one-segment overlap and raw
+  prompt counts **23,042 / 23,042 / 10,562**. All chunk language checks and the final
+  merge/check passed; the merge raw prompt had **1,963** tokens.
+- Near-budget JSON repair: **pass**. A probe injected 12,000 Chinese invalid-output
+  characters into the first attempt; the byte cap retained 4,000 characters.
+  Real Qwen repair used the full grounded near-budget source, with **27,168** raw
+  prompt tokens and the unchanged 900-token output allowance. It returned valid
+  Chinese JSON and passed the local language check within **one** corrective call.
+
+Manual inspection of these synthetic summaries found the Monday pilot, unchanged
+budget, Mira's Friday checklist, unresolved supplier delivery and no assigned
+supplier follow-up owner. This is bounded content inspection, not independent
+fluent-reviewer or general long-meeting quality evidence. Repetition is an overflow
+probe; Qwen's language checks remain self-classification. Byte estimates remain
+heuristic and can undercount other text. Arbitrarily oversized individual segments
+and large merge prompts retain their existing limitations and were not qualified.
+No model comparisons, performance/memory study or per-OS quality campaign.
+
+Fresh focused regressions passed **146/146**. `npm run test:all` exited **0**:
+**1,079 JS passed / 4 skipped**, **817 Python passed / 8 skipped**, both syntax
+gates passed. Existing queue, cancellation, finalization, admission, language
+propagation and prior-summary regressions remain passing. These long probes use
+no sidecar writer and do not modify prior summaries. Apple Silicon and Linux CUDA
+English/non-English functional smokes are **unrun**: no such host is available in
+this session. No packaged/hardware acceptance claim is added.
+
+Report SHA-256 fingerprints (synthetic reports retained outside the repository):
+
+- Reproduced failure: `e4937d21c558db7e348456e5ed6ce1642a1249ec3c54015eee69180ddb275cf1`.
+- Successful first long check (console encoding failure): `233e36a163dae28efb4703d41c2f7822b40788bd346440f8731c4f375d1bb2e9`.
+- Verified UTF-8 `--long-only`: `d1352364ce664c60d735b00709cd74d4393955701a65f2620ea0aa574dd8a0af`.
+- Original-input merge and forced-repair report: `59ce8dae11e8aee45423114552c1aba1abf2773f3b30de2733c15988a3d6f6dd`.

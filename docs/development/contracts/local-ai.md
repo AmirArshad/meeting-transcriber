@@ -47,6 +47,12 @@ No cloud transcription. No telemetry or analytics. No background uploads. No net
   prose. These are model judgments, not an independent detector. Localized
   absence-of-transcript denials are rejected before output-language checking,
   using the shared retry budget.
+  Chunk estimates use UTF-8 byte count divided by four (rounded up), retaining
+  ASCII behavior while reserving more space for multilingual text. JSON repair
+  keeps the complete grounded prompt and quotes at most 12,000 UTF-8 bytes of
+  invalid output, dropping any incomplete final code point. The context remains
+  32,768 tokens and the retry budget remains one. This heuristic is not exact
+  tokenizer admission or a guarantee that arbitrary prompts fit the context.
   JSON schema keys, sentinels, names and timestamps remain stable; Markdown labels
   are localized. Language evidence is separate from platform runtime admission.
 

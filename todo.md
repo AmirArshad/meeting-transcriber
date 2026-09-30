@@ -184,9 +184,16 @@ Alternative-model evaluation (slice B) remains out of v2.10.
   814 Python passed (4/8 existing skips), both syntax gates passed.
   Evidence now distinguishes pipeline
   self-classification from manual content inspection and Windows-only coverage.
-  The near-full Chinese chunk probe failed generation/JSON repair safely;
-  chunk-estimator/context work and unavailable Apple/Linux functional smokes
-  remain limitations, not completed qualification. See the evidence document.
+  The near-full Chinese chunk failure was reproduced and traced to character
+  undercounting: 55,814 runtime input tokens exceeded the unchanged 32,768
+  context. The targeted uncommitted fix estimates UTF-8 bytes and bounds quoted
+  repair output to 12,000 bytes. The near-budget Chinese check, the original
+  input through three chunks/merge, and a forced near-budget JSON repair passed.
+  `test:all`: 1,079 JS / 817 Python passed, with 4 / 8 existing skips and both
+  syntax gates passing. Estimates remain heuristic; arbitrary oversized segments
+  and large merges are not qualified. Apple Silicon/Linux CUDA English and
+  non-English functional smokes remain explicitly unrun because those hosts are
+  unavailable here. See the evidence document for report hashes and limits.
 
 ### Settings and navigation UX
 

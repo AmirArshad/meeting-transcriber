@@ -33,6 +33,7 @@ from .summary_pipeline import (
 DEFAULT_PROFILE = "balanced"
 MAX_SUMMARY_REPAIR_ATTEMPTS = 1
 CHUNK_PROMPT_TOKEN_RESERVE = 6000
+JSON_REPAIR_OUTPUT_BYTE_LIMIT = 12000
 
 
 def _safe_message(message: Any) -> str:
@@ -91,7 +92,9 @@ def build_json_repair_prompt(raw_output: str, language: Optional[str] = None, gr
         "Original grounded instructions and source (retain their language and evidence):",
         grounded_prompt,
         "Invalid model output (quoted data):",
-        str(raw_output or "")[:12000],
+        # Match the byte-based chunk estimate: at most 3,000 estimated tokens
+        # of quoted output, leaving reserve for instructions/template overhead.
+        str(raw_output or "").encode("utf-8")[:JSON_REPAIR_OUTPUT_BYTE_LIMIT].decode("utf-8", errors="ignore"),
     ])
 
 
