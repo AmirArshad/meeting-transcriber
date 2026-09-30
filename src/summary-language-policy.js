@@ -2,7 +2,7 @@
 
 // Enabled only after the bounded local checks recorded in
 // docs/development/V2_10_SUMMARY_QUALIFICATION.md. Runtime admission is separate.
-const SUMMARY_LANGUAGE_POLICY_VERSION = 'qwen-language-v1';
+const SUMMARY_LANGUAGE_POLICY_VERSION = 'qwen-language-v2';
 const SUMMARY_LANGUAGE_NAMES = Object.freeze({
   en: 'English', es: 'Spanish', fr: 'French', de: 'German',
   zh: 'Chinese', ja: 'Japanese', it: 'Italian', pa: 'Panjabi',

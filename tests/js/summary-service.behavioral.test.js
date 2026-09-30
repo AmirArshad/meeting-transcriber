@@ -62,7 +62,7 @@ function createHarness({
       generatedAt: '2026-07-10T00:00:00.000Z',
       sourceTranscriptHash: confirmedHash,
       language: 'en', languageSource: 'userConfirmed',
-      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'qwen-language-v1',
+      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'qwen-language-v2',
       ...summaryMetadata,
     },
     summary: { overview: 'new summary' },
@@ -341,7 +341,7 @@ test('language and source hash propagate to Python and committed metadata', asyn
   assert.equal(args[args.indexOf('--source-transcript-hash') + 1], confirmedHash);
   assert.equal(result.meeting.ai.summary.language, 'en');
   assert.equal(result.meeting.ai.summary.languageSource, 'userConfirmed');
-  assert.equal(result.meeting.ai.summary.languagePolicyVersion, 'qwen-language-v1');
+  assert.equal(result.meeting.ai.summary.languagePolicyVersion, 'qwen-language-v2');
 });
 
 test('imported CRLF transcripts use the same hash as Python and hydrated renderer text', async () => {

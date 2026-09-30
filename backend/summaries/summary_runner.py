@@ -113,7 +113,7 @@ def run_summary_prompt_with_repair(
     for attempt in range(0, MAX_SUMMARY_REPAIR_ATTEMPTS + 1):
         try:
             summary = repair_summary_json(raw_output)
-            summary = assert_summary_grounded_in_transcript(summary, chunk_text)
+            summary = assert_summary_grounded_in_transcript(summary, chunk_text, language=language)
             if language:
                 check_summary_language(summary, language, runtime, run_prompt, work_path, repair_name)
             return summary
@@ -178,7 +178,7 @@ def generate_summary_from_segments(
         work_path = Path(work_dir)
         if language:
             emit_progress(meeting_id, "language-check", "Checking the confirmed transcript language locally.")
-            check_summary_language({"summary": "\n".join(str(segment.get("text") or "") for segment in segments)}, language, runtime, run_prompt, work_path, "transcript")
+            check_summary_language({"summary": "\n".join(str(segment.get("text") or "") for segment in segments)}, language, runtime, run_prompt, work_path, "transcript", transcript=True)
         for chunk in chunks:
             emit_progress(meeting_id, "chunk-summary", "Summarizing transcript chunk.", chunk_index=chunk["index"], chunk_total=len(chunks))
             prompt_path = work_path / f"chunk-{chunk['index']}.prompt.txt"

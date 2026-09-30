@@ -31,14 +31,22 @@ No cloud transcription. No telemetry or analytics. No background uploads. No net
 - Stale summaries are detected through `sourceTranscriptHash`.
 - Summary generation requires a retained, locally checked `transcriptLanguage`
   and matching `sourceTranscriptHash`; meeting language is only a UI hint.
-  Successful confirmation is reusable only for the unchanged hash, model and
-  language policy revision. Legacy summaries remain readable and unconfirmed.
+  Successful confirmation prefills an editable dialog only for the unchanged
+  hash, model and language policy revision; every regeneration requires explicit
+  submission. Legacy summaries remain readable and unconfirmed.
   Main freezes language/model/artifact identity, rechecks queued installation
   readiness, and verifies language provenance and the transcript hash before
   finalization. Chunk, merge, JSON repair and grounded regeneration preserve the
   confirmed language. Local Qwen checks bounded samples of input and substantive
   output prose inside the tracked compute job; wrong/indeterminate language fails
   closed with at most the existing one-repair budget per generation stage.
+  Input admission requires a matching actual language code, confidence and a
+  reported predominant-language share of at least 0.6; missing/invalid shares
+  reject. Valid region/script tags retain their primary language (zh-HK → zh),
+  never a neighboring language. Output checks still reject substantially mixed
+  prose. These are model judgments, not an independent detector. Localized
+  absence-of-transcript denials are rejected before output-language checking,
+  using the shared retry budget.
   JSON schema keys, sentinels, names and timestamps remain stable; Markdown labels
   are localized. Language evidence is separate from platform runtime admission.
 

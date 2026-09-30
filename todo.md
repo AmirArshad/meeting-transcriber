@@ -172,6 +172,21 @@ Alternative-model evaluation (slice B) remains out of v2.10.
   Real two-chunk/merge, repair/retry, sidecar and negative checks passed. Focused
   regressions and `npm run test:all` passed; prior-summary, queue/cancel/quit and
   finalization protections remain covered.
+  Adversarial-review follow-up (2026-09-30): localized denial guards now reject
+  all 13 retained-language/script examples with one shared retry and prior-file
+  protection. Policy v2 uses unrestricted actual-language classification and
+  explicit predominant-share admission; Marathi was a demonstrated v1 false
+  positive. Five neighbor controls reject closest supported confirmations;
+  balanced input fails admission, and the above-floor names-only control is
+  indeterminate. Every regeneration opens an editable confirmation dialog.
+  Short Chinese/Hindi and predominant Spanish/Hindi Concise checks pass;
+  corrected chunk/merge/repair/sidecar paths pass 9/9. `test:all`: 1,079 JS and
+  814 Python passed (4/8 existing skips), both syntax gates passed.
+  Evidence now distinguishes pipeline
+  self-classification from manual content inspection and Windows-only coverage.
+  The near-full Chinese chunk probe failed generation/JSON repair safely;
+  chunk-estimator/context work and unavailable Apple/Linux functional smokes
+  remain limitations, not completed qualification. See the evidence document.
 
 ### Settings and navigation UX
 

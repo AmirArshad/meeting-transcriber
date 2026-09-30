@@ -12,6 +12,7 @@ import re
 
 from .summary_language import language_instruction
 from .language_labels import LANGUAGE_LABELS, PROFILE_LABELS
+from .summary_grounding import LOCALIZED_DENIAL_RES
 from typing import Any, Dict, Iterable, List, Optional
 
 
@@ -435,15 +436,21 @@ def transcript_chunk_has_speech(chunk_text: str) -> bool:
         cleaned,
         flags=re.IGNORECASE,
     )
-    return bool(re.search(r"[^\W\d_]{3,}", without_labels))
+    # Combining vowel signs can separate alphabetic characters in Hindi/Panjabi
+    # words. Count letters within a whitespace-delimited word, not consecutive
+    # regex letters, so real speech still activates the denial guard.
+    return any(sum(character.isalpha() for character in word) >= 3 for word in without_labels.split())
 
 
-def assert_summary_grounded_in_transcript(summary: Dict[str, Any], chunk_text: str) -> Dict[str, Any]:
+def assert_summary_grounded_in_transcript(summary: Dict[str, Any], chunk_text: str, *, language: Optional[str] = None) -> Dict[str, Any]:
     """Reject summaries that deny transcript content when speech was provided."""
     normalized = validate_summary_json(summary)
     if not transcript_chunk_has_speech(chunk_text):
         return normalized
-    if UNGROUNDED_SUMMARY_RE.search(normalized["summary"]):
+    localized_denial = LOCALIZED_DENIAL_RES.get(language)
+    if UNGROUNDED_SUMMARY_RE.search(normalized["summary"]) or (
+        localized_denial and localized_denial.search(normalized["summary"])
+    ):
         raise SummaryValidationError(
             "summary denied transcript content even though speech was provided"
         )

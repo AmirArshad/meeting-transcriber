@@ -101,3 +101,41 @@ test('real dialog accepts only explicit supported submission and traps focus', a
   elements['summary-language-form'].dispatch('submit');
   assert.equal(await pending, 'es');
 });
+
+test('regeneration shows the prior confirmation as an editable default', async () => {
+  const { context, elements } = createDialogHarness();
+  const pending = context.confirmSummaryTranscriptLanguage({ language: 'en' }, policy, 'es');
+  assert.equal(elements['summary-language-modal'].hidden, false);
+  assert.equal(elements['summary-transcript-language'].value, 'es');
+  elements['summary-transcript-language'].value = 'pt';
+  elements['summary-transcript-language'].dispatch('change');
+  elements['summary-language-form'].dispatch('submit');
+  assert.equal(await pending, 'pt');
+});
+
+test('real regeneration cannot bypass the dialog for a reusable language', async () => {
+  const { context, elements } = createDialogHarness();
+  Object.assign(context, {
+    summaryGenerationMeetingId: null, summaryGenerationCancelling: false,
+    rendererQuitCommitted: false, currentMeetingId: null,
+    addLog() {}, updateSummaryGenerationButtons() {},
+    shouldAbortSummaryGenerationAfterPreflight: () => false,
+    meetingIdsEqual: (a, b) => a === b, hashSummaryTranscript: async () => 'hash',
+    window: { summaryLanguageHelpers: { reusableSummaryLanguage }, electronAPI: {
+      getAiAddonStatus: async () => ({ features: { summary: { setupComplete: true, status: 'ready', languagePolicy: policy } } }),
+      getMeeting: async () => ({ language: 'en', transcript: 'speech', ai: { summary: {
+        language: 'es', languageSource: 'userConfirmed', sourceTranscriptHash: 'hash', modelId, languagePolicyVersion: policy.version,
+      } } }),
+      generateSummary: () => assert.fail('Cancelling the dialog must not start inference'),
+    } },
+  });
+  const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
+  vm.runInContext(extractTopLevelFunctionSource(source, 'generateSummaryForMeeting'), context);
+  const pending = context.generateSummaryForMeeting('meeting');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(elements['summary-language-modal'].hidden, false);
+  assert.equal(elements['summary-transcript-language'].value, 'es');
+  elements['summary-language-cancel'].dispatch('click');
+  await pending;
+  assert.equal(context.summaryGenerationMeetingId, null);
+});

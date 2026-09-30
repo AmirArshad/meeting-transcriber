@@ -4398,7 +4398,7 @@ function updateSummaryLanguageCaptions(meeting) {
   }
 }
 
-function confirmSummaryTranscriptLanguage(meeting, policy) {
+function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = null) {
   const modal = document.getElementById('summary-language-modal');
   const select = document.getElementById('summary-transcript-language');
   const form = document.getElementById('summary-language-form');
@@ -4417,7 +4417,8 @@ function confirmSummaryTranscriptLanguage(meeting, policy) {
     option.textContent = `${name}${policy.languages.includes(id) ? '' : ' — summaries unavailable'}`;
     select.appendChild(option);
   }
-  select.value = Object.hasOwn(policy.names || {}, meeting.language) ? meeting.language : '';
+  const defaultLanguage = preferredLanguage || meeting.language;
+  select.value = Object.hasOwn(policy.names || {}, defaultLanguage) ? defaultLanguage : '';
   const update = () => {
     const name = policy.names?.[select.value];
     const available = policy.languages.includes(select.value);
@@ -4539,8 +4540,8 @@ async function generateSummaryForMeeting(meetingId) {
     const meeting = await window.electronAPI.getMeeting(normalizedMeetingId);
     const sourceTranscriptHash = await hashSummaryTranscript(meeting?.transcript);
     if (summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) throw new Error('Summary generation cancelled.');
-    const transcriptLanguage = window.summaryLanguageHelpers.reusableSummaryLanguage(meeting, sourceTranscriptHash, policy)
-      || await confirmSummaryTranscriptLanguage(meeting, policy);
+    const preferredLanguage = window.summaryLanguageHelpers.reusableSummaryLanguage(meeting, sourceTranscriptHash, policy);
+    const transcriptLanguage = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage);
     if (!transcriptLanguage || summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) {
       if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
         const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
