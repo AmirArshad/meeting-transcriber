@@ -1,5 +1,10 @@
 # Inference Performance Implementation Plan
 
+**User scope update — 2026-09-30:** The remaining recording and encoding
+assessment is dropped from v2.10. Retain current defaults. Historical evidence
+below remains valid; no additional performance work is required for this
+release. Linux microphone volume remains a separate task.
+
 > Design and file-level plan. Implementation is not authorized by this document. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md).
 
 **Goal:** Reduce local recording-finalization and inference waits through measured, independently qualified changes, without sacrificing saved audio or transcript/summary quality.

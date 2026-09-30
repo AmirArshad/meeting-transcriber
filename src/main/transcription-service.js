@@ -1479,10 +1479,16 @@ function createTranscriptionService(deps) {
       ];
       if (vadPath) commandArgs.push('--vad-dir', vadPath);
       if (speakerTurnsPath) commandArgs.push('--speaker-turns-json', speakerTurnsPath);
+      const executable = resolveParakeetPythonExecutable({
+        pythonExe: pythonConfig.pythonExe, backendPath: pythonConfig.backendPath,
+        runtimeDir: runtimePath,
+        cacheRoot: parakeetInterpreterCacheRoot(app.getPath('userData'), path),
+      });
       const child = spawnParakeetPython(
         getBackendModuleArgs('transcription.parakeet_bootstrap',
           buildParakeetBootstrapArgs({ backendPath: pythonConfig.backendPath,
-            runtimeDir: runtimePath, commandArgs })),
+            runtimeDir: runtimePath, pthFile: resolveEmbeddedPythonPth(executable, fs),
+            commandArgs })),
         { runtimeDir: runtimePath, cwd: pythonConfig.backendPath },
       );
       if (typeof registerProcess === 'function') registerProcess(child);

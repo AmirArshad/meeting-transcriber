@@ -163,6 +163,10 @@ test('production Parakeet setup probes through the isolated launcher', () => {
   assert.equal(source.includes('probeDevice: probeParakeetDevice'), true);
   assert.equal(source.includes('materializeRuntime: materializeParakeetRuntime'), true);
   assert.equal(source.includes("launchParakeet(['--probe-device', expectedDevice]"), true);
+  const inference = source.slice(source.indexOf('function runParakeetProcess('),
+    source.indexOf('function runParakeetProcess(') + 2200);
+  assert.match(inference, /resolveParakeetPythonExecutable\(/);
+  assert.match(inference, /pthFile: resolveEmbeddedPythonPth\(executable, fs\)/);
 });
 
 test('canceling an isolated setup child escalates termination and waits for close', async () => {
@@ -343,6 +347,34 @@ test('a site-enabled ._pth is replaced by a private interpreter that does not im
       fs.readFileSync(launchedPth, 'utf8').split(/\r?\n/).some((line) => line.split('#')[0].trim() === 'import site'),
       false,
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('private Windows embedded Python can import native stdlib without importing site', (t) => {
+  const embedded = path.resolve(__dirname, '../../build/resources/python');
+  const pythonExe = path.join(embedded, 'python.exe');
+  if (process.platform !== 'win32' || !fs.existsSync(path.join(embedded, '_ctypes.pyd'))) {
+    t.skip('prepared Windows embedded Python is unavailable');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'parakeet-embedded-'));
+  try {
+    const isolated = resolveParakeetPythonExecutable({
+      pythonExe,
+      backendPath: path.resolve(__dirname, '../../backend'),
+      runtimeDir: path.join(root, 'runtime'),
+      cacheRoot: path.join(root, 'cache'),
+    });
+    assert.notEqual(isolated, pythonExe);
+    const child = spawnSync(isolated, ['-S', '-P', '-c',
+      'import ctypes, ssl, sqlite3, sys; assert "site" not in sys.modules; assert not any("site-packages" in p for p in sys.path); print(ctypes.sizeof(ctypes.c_void_p), ssl.OPENSSL_VERSION, sqlite3.sqlite_version)',
+    ], { encoding: 'utf8' });
+    assert.equal(child.status, 0, child.stderr);
+    assert.match(child.stdout, /^8 /);
+    const unchanged = fs.readFileSync(path.join(embedded, 'python311._pth'), 'utf8');
+    assert.match(unchanged, /^import site$/m);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -16,6 +16,12 @@ Keep aligned when bundled runtime locations or prepared-resource inputs change: 
 
 Windows packaged Python relies on `python311._pth` containing `../backend`; dev relies on `PYTHONPATH` set in `src/main.js`. Packaged macOS/Linux python-build-standalone **does** honor `PYTHONPATH`.
 
+Parakeet's private Windows interpreter disables `import site` and must retain
+the embedded Python directory as a standard-library import root when it
+contains `_ctypes.pyd`. Embedded stdlib extensions live beside `python.exe`,
+unlike the dev interpreter's `DLLs` layout. Keep bundled site-packages excluded
+and the shared packaged `python311._pth` unchanged.
+
 **Packaged-only path hardening.** Packaged apps set `process.env.AVANEVIS_PACKAGED=1` at main-process startup (so worker threads inherit it) and inject it via `buildPythonEnv()` for every Python child. Packaged `buildPythonEnv()` must not inherit ambient `PYTHONPATH`, `PYTHONHOME`, or `PYTHONUSERBASE`, must set `PYTHONNOUSERSITE=1`, and must force `PYTHONDONTWRITEBYTECODE=1` so normal recorder/transcriber/add-on subprocesses cannot mutate the signed app bundle with `__pycache__`. Caller-supplied `PYTHONPATH` extras (managed add-on site-packages) may still prepend the bundled backend path. When set, `backend/audio/swift_audio_capture.py` must **not** call `shutil.which("audiocapture-helper")` — only the bundled `Resources/bin/audiocapture-helper` or explicit dev build paths are valid. Summary tar extraction (`resolvePreferredTarExecutable`) likewise prefers absolute system tar over PATH. Dev/`npm start` leaves the var unset so PATH lookup still works.
 
 **Release asset naming.** `src/updater.js` identifies installers by filename pattern. Change artifact naming in `package.json` or `.github/workflows/build-release.yml` and you must update `src/updater.js` too.

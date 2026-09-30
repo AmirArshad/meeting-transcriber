@@ -10,16 +10,31 @@ implementation or acceptance evidence.
 
 ## Status
 
+### User scope update — 2026-09-30
+
+Whisper Large v3 needs a quick functional smoke before exposure, not a
+per-platform quality, timing, or memory qualification campaign. Users decide
+whether Large suits their machine. Qwen language behavior needs practical
+checks with the current model on one runtime, without repeating language-quality
+evaluation per OS. These decisions supersede the qualification depth in the
+older designs and status prose below. Keep existing runtime integrity/admission,
+explicit downloads, cancellation, and preservation of recordings and prior output.
+
+Recording and post-stop encoding assessment is dropped from v2.10. Keep the
+Linux microphone-volume investigation. The four deferred Parakeet lifecycle
+checks remain release work; this scope update does not waive them.
+
 v2.10 is partly implemented. No-hardware UX and Whisper choice policy Slice A
-have shipped. Parakeet is merged on `master`. Its checkbox stays open until
-the Windows packaged smoke and the four deferred lifecycle checks are recorded.
+have shipped. Parakeet is merged on `master`; its Windows packaged lifecycle
+passed on 2026-09-30. Its checkbox stays open until the four deferred lifecycle
+checks are recorded.
 
 - Designs exist for inference performance, optional Parakeet, Whisper
   language/model policy, summarisation languages/models, and Settings /
   navigation / shortcuts.
 - Whisper choice policy Slice A shipped in PR #102: Persian is off new
   choices; Tiny/Base are retired; Small is the floor; pending jobs keep their
-  saved language/model. Slice B (Large) still needs qualification. Slice C
+  saved language/model. Slice B (Large) needs a quick functional smoke. Slice C
   (other language removals) was dropped on 2026-09-29.
 - Settings, navigation, keyboard shortcuts, and click-away meeting rename
   shipped in PR #103. The AvaNevis rail logo shipped in PR #104.
@@ -61,23 +76,25 @@ the Windows packaged smoke and the four deferred lifecycle checks are recorded.
   `float32` for Parakeet, `mps` / `float16` for the explicit Whisper Small
   retry, and the same exceptions. Network disconnect, memory pressure,
   live recording recovery, and packaged update survival were not run. The
-  Windows packaged smoke remains open before the v2.10 release. Details
-  are in the plan.
+  Windows packaged lifecycle passed on 2026-09-30 after two embedded-Python
+  launch fixes, covering setup/activation, restart, quit/resume, cancellation,
+  seams, guided work/fallback, runtime loss, explicit Whisper retry, and removal.
+  The four deferred checks remain open. Details are in the plan.
 - On 2026-09-29, v2.10 dropped extra transcription-language removals,
   alternative summary-model evaluation, and further inference-default changes.
   Apple Silicon already rejected lower Opus effort, MLX decode changes, and a
   smaller summary context. Windows and Linux inference defaults are not being
   pursued.
-- Remaining committed work: Parakeet acceptance gates, Whisper Large, Qwen
-  summary-language qualification and output-language matching, a recording
-  and encoding performance assessment, and the Linux microphone-volume
-  investigation.
+- Remaining committed work: Parakeet acceptance gates, Whisper Large with a
+  quick functional smoke, practical Qwen summary-language checks and
+  output-language matching, and the Linux microphone-volume investigation.
 
 ## How to sequence the work
 
 Settings, click-away rename, and the transcription **policy** change (Persian /
 Tiny / Base off new choices) did not wait on hardware investigations. Whisper
-Large and summary-language claims still do. Extra language removals,
+Large now needs a quick functional smoke; Qwen languages need practical checks
+on one runtime without repeated quality evaluation per OS. Extra language removals,
 alternative summary models, and inference-default changes were dropped on
 2026-09-29. The approved Parakeet plan allows implementation before the
 remaining host checks while retaining live GPU admission.
@@ -88,14 +105,16 @@ remaining host checks while retaining live GPU admission.
    activation and recovery UI, packaging/legal/contracts, and the remaining
    lifecycle checks in the approved three-platform plan. The CachyOS, Mac, and
    Windows dev-electron lifecycles and the packaged Mac lifecycle have passed.
-   The Windows packaged smoke remains before the v2.10 release. Other independent
+   The Windows packaged lifecycle passed on 2026-09-30; the four deferred
+   Parakeet release checks remain. Other independent
    investigations remain on their matching
    release machines:
    Whisper Large, Qwen summary languages, a local output-language check,
-   recording and encoding performance, and Linux mic volume. Details and hosts
+   and Linux mic volume. Details and hosts
    are in the [plan index](docs/superpowers/plans/2026-09-06-v2.10.md).
-3. **Implement after their own results:** Large and summary-language gating.
-   Recording or encoding changes ship only if that assessment qualifies one.
+3. **Implement with focused checks:** Large after a quick v3 identity/download/
+   transcription smoke; summary-language support after practical language checks
+   on one runtime.
 
 Keep recordings, transcripts, tokens, scratch reports, and user paths out of
 git. Public qualification notes should identify hardware class, OS, app
@@ -107,13 +126,13 @@ revision, and artifact hashes — not home directories or meeting content.
 
 Design: [Language/model policy and Whisper Large](docs/superpowers/plans/2026-09-07-language-model-policy-whisper-large.md).
 Slice A (curated choices) shipped in PR #102 without Large. Slice B (Large)
-needs qualification first. Slice C (other language removals) was dropped from
+needs a quick functional smoke before exposure. Slice C (other language removals) was dropped from
 v2.10 on 2026-09-29; the languages still listed stay.
 
 - [x] Remove Farsi/Persian from the language list because of poor observed performance.
 - [ ] Add Whisper Large as a transcription model option.
 - [x] Remove Tiny and Base model options; Small becomes the smallest available Whisper model.
-- [ ] Add optional English-only Parakeet transcription in Settings for Windows CUDA, Apple Silicon Metal, and Linux managed CUDA. The approved [three-platform plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) governs implementation. The Mac service-level smoke, the CachyOS, Mac, and Windows dev-electron lifecycles, and the packaged Mac lifecycle passed. Network disconnect, memory pressure, live recording recovery, packaged update survival, and the Windows packaged smoke remain open before the v2.10 release. Do not claim a speed, memory, or accuracy win from these runs.
+- [ ] Add optional English-only Parakeet transcription in Settings for Windows CUDA, Apple Silicon Metal, and Linux managed CUDA. The approved [three-platform plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) governs implementation. The Mac service-level smoke, the CachyOS, Mac, and Windows dev-electron lifecycles, and the packaged Mac lifecycle passed. The Windows packaged lifecycle passed on 2026-09-30. Network disconnect, memory pressure, live recording recovery, and packaged update survival remain open before the v2.10 release. Do not claim a speed, memory, or accuracy win from these runs.
 
 ### Summarisation
 
@@ -146,9 +165,8 @@ Pyannote removal.
 - [x] Save a meeting rename when the user clicks away while editing. Shipped in PR #103; not part of the Settings/shortcuts plan.
 - [x] Add cross-platform keyboard shortcuts that avoid system shortcut conflicts, including start recording, stop recording, and navigation to Record, History, and Settings. Design is in the Settings/shortcuts plan; packaged conflict checks remain on each OS.
 
-### Performance
+### Linux microphone volume
 
-- [ ] Assess recording and post-stop encoding performance. Apple Silicon already measured backend finalization and direct Opus effort 5, 6, and 10 on 2026-09-14 and kept effort 10. Live capture cost and UI Stop-to-ready were not measured. Do not reopen Whisper beam, MLX batch, summary context, or Windows/Linux inference defaults. Design context: [Inference performance](docs/superpowers/plans/2026-09-06-inference-performance.md). Evidence: [V2_10_INFERENCE_PERFORMANCE.md](docs/development/V2_10_INFERENCE_PERFORMANCE.md).
 - [ ] Investigate Linux input-volume defaults: determine why some PipeWire/PulseAudio setups reset the microphone to 50%, measure capture/transcription impact, and assess a safe app-side or setup-side remedy without unexpectedly changing user device settings. Linux desktop session only.
 
 ## Deferred beyond v2.10

@@ -1,5 +1,14 @@
 # Language/model policy and Whisper Large — Design and Implementation Plan
 
+## User scope update — 2026-09-30
+
+Whisper Large v3 is authorized for implementation after a quick functional
+smoke. Confirm canonical v3 identity, working download/cache reuse, and real
+transcription. Do not gate exposure on per-platform quality, timing, memory,
+or long-meeting studies. Users decide whether it suits their machine. Preserve
+existing runtime admission, explicit downloads, cancellation, and recovery.
+This supersedes the qualification depth and platform-exposure gates below.
+
 > Design and file-level plan. Implementation is not authorized by this document. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md). Slice A shipped in PR #102. Slice B (Large) still needs qualification. Slice C (further language removals) was dropped from v2.10 on 2026-09-29.
 
 **Status:** Design only, 2026-09-07. No implementation, downloads, benchmarks, or platform acceptance performed.

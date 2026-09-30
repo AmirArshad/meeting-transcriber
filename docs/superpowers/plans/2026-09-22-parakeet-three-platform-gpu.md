@@ -10,14 +10,15 @@
 
 ## Execution status — 2026-09-22
 
-Implementation is in progress on `codex/parakeet-three-platform-gpu`. Catalog,
+Implementation is merged on `master`. Catalog,
 locks, durable selection, capture snapshot/recovery, pinned setup, guided
 transcription, Settings activation/recovery UI, and packaging/legal/contracts
 are in place. Automated regression coverage and the Mac service smoke have
 been run. Manual acceptance continues below. The CachyOS, Mac, and Windows
 dev-electron lifecycles are recorded. The packaged Mac lifecycle passed on
-2026-09-29. Network disconnect, memory pressure, live recording recovery,
-packaged update survival, and the Windows packaged smoke remain open.
+2026-09-29. The Windows packaged lifecycle passed on 2026-09-30 after the
+embedded-Python launch fixes below. Network disconnect, memory pressure,
+live recording recovery, and packaged update survival remain open.
 
 On an Apple M4 Pro (macOS 26.7), explicit setup installed the pinned model and
 47-wheel isolated runtime under Electron userData. A live Metal probe and
@@ -103,6 +104,70 @@ Host: Apple M4 Pro (48 GB, macOS 26.7, MacBook Pro Mac16,8). Packaged arm64 app 
 Passed: cancel at the first download progress event (0 of 2,603,193,609 bytes) returned `AI_ADDON_SETUP_CANCELLED` and left Parakeet `not-installed`, with Whisper English Small still saved across restart; repair and validate reached `ready` for `parakeet-mlx-metal-v1`, model revision `8ae155301e23d820d82aa60d24817c900e69e487`, and runtime lock `943ea4b3c51a193ea5459a21e3c74171ce6d43965ad898215eee5fa14aa911dc`; a pending Parakeet job survived quit and resumed to `mps` / `float32`; a second quit while the isolated runtime Python was running `transcription.parakeet_bootstrap` also resumed to `mps` / `float32`. Both retained WAVs are 455,230 bytes, decode, last 14.22 seconds, and match fixture SHA-256 `1eed9687badcdd0d554638c8229fdb48d5c80e21ed1393c3bb5621f0c83bd998`. Changing the settings store to Whisper Medium did not rewrite a queued Parakeet request. An 85.35-second fixture made by repeating that clip six times produced 37 timestamped segments from `00:00` through `01:25`, with the opening and closing words present and the repeated clip's segment texts appearing six times, plus one extra short fragment. Its retained audio is `mps` / `float32`. Cancel of an active job returned `cancelled: true` and the meeting stayed `failed`. Deleting a still-pending queued meeting while another Parakeet job was pending left that job to finish `mps` / `float32`. Hiding the runtime failed the retry with `PARAKEET_ARTIFACT_INVALID`, kept the prior transcript bytes, and left the row's `mps` / `float32` provenance in place. An explicit Whisper Small retry then completed `mps` / `float16` on the same fixture audio. Restoring the runtime validated `ready`. Guided Speakrs completed `mps` / `float32` with a Speaker 1 label and diarization `speakerCount` 1. Removing `wespeaker-voxceleb-resnet34-tail.mlmodelc` still completed Parakeet `mps` / `float32` with diarization error `Speakrs model pack is not installed.` Relaunch stayed `ready` with Whisper English Small. Remove returned `not-installed` and left those Whisper preferences.
 
 The stored packaged-Mac cancel error is `Meeting lookup was terminated because the app is quitting.` That is the same quit terminator recorded on CachyOS and Windows. Memory pressure, a live interrupted recording, a disconnected network, and packaged update survival were not run.
+
+### Windows packaged lifecycle — 2026-09-30
+
+Host: Windows 11 x64 (`10.0.26300.0`), NVIDIA GeForce RTX 4070,
+driver 617.14, 12,282 MiB VRAM. Folder package from `npm run build:dir`,
+based on `381b0c8` plus the local fixes in
+`codex/windows-parakeet-packaged-smoke`. `app.isPackaged` was true; Electron
+44.1.0, embedded Python 3.11.9, packaged FFmpeg 8.0.1. The package still carries
+version 2.9.0; this is acceptance of current source, not a published 2.10 release.
+Final `resources/app.asar` SHA-256:
+`8d65d53deffe56c59bc039e33e29f4e7de7ce8230ce56cd77ddd507b3c7b6901`.
+The test used an isolated profile and production preload/IPC paths; Settings
+activation used the renderer's toggle after Settings and startup hydration.
+The network stayed connected.
+
+The smoke found two related embedded-Python defects. The private interpreter
+omitted the source directory containing stdlib `.pyd` modules, so setup's CUDA
+probe could not import `_ctypes`. Transcription also omitted the private
+interpreter's `._pth` argument, so its bootstrap could not retain the zipped
+stdlib. The fixes retain the embedded stdlib directory without enabling
+site-packages and pass the same private path file during inference. A real
+embedded-Python regression checks ctypes/SSL/sqlite imports, excludes `site`
+and site-packages, and leaves the shared packaged path configuration unchanged.
+An earlier CDN connection reset failed closed; a subsequent complete setup
+downloaded and verified the pinned 4,468,275,139-byte payload successfully.
+
+Passed: initial setup cancellation returned `AI_ADDON_SETUP_CANCELLED` and
+left Parakeet not installed; repair and full validation reached `ready` for
+`parakeet-onnx-win-cuda-v1`, model revision
+`0bbb45a3365852604aef28b538a8f066f4ccaa85`, runtime lock
+`f7a3e6ef1876e2932d7d4f7d63df9b3bf2c04268634d0d3d916146172c91c3e9`.
+The Settings toggle activated Parakeet and survived restart with Whisper
+English Small retained. The preference check allowed the renderer storage write
+to settle before forced termination; it does not establish immediate Settings
+write crash durability.
+
+A pending job survived forced app termination and resumed to `cuda` /
+`float32`; a second termination while the isolated Python bootstrap was running
+also resumed to `cuda` / `float32`. The 14.2245-second fixture produced six
+timestamped segments. Repeating it six times produced 36 segments with the
+opening and closing phrases present six times. Changing saved Whisper settings
+to Medium did not rewrite the queued Parakeet request. Active-job cancellation
+returned `cancelled: true` and left the meeting failed. Deleting another queued
+meeting allowed the running job to complete. Hiding the Parakeet runtime failed
+closed with `PARAKEET_ARTIFACT_INVALID`, preserving the previous transcript
+bytes and audio. An explicit Whisper Small retry completed `cuda` / `float16`;
+restoring the runtime validated `ready`.
+
+Guided Speakrs completed with a Speaker 1 label and diarization speaker count 1.
+Hiding the Speakrs ResNet file still completed Parakeet `cuda` / `float32`, with
+diarization error `Speakrs model pack is not installed.` Relaunch remained
+`ready`; removal returned `not-installed` and preserved Whisper English Small.
+All eight retained test WAVs decoded with the packaged FFmpeg. The short source
+remained 455,230 bytes with SHA-256
+`1eed9687badcdd0d554638c8229fdb48d5c80e21ed1393c3bb5621f0c83bd998`;
+the repeated source remained 2,731,148 bytes with SHA-256
+`62a37dd5579d48eaf643e5810fb0b84c27004d206db1d9ac6add6c21602e492c`.
+
+Fresh `npm run test:all` passed using CI's Node 24: 1,058 JS passed, 4 skipped;
+725 Python passed, 8 skipped; JS/Python syntax checks passed. The folder package
+build passed. No installer install/upgrade, disconnected network, memory
+pressure, or live interrupted recording was tested. The four deferred lifecycle
+checks remain release work. This bounded fixture run establishes no performance
+or accuracy comparison.
 
 ## Global constraints and authority
 
