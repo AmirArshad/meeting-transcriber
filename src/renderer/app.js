@@ -1947,7 +1947,7 @@ function saveTranscriptionEnginePreferences(preferences) {
   saveSettings({ ...preferences, language: undefined, modelSize: undefined });
 }
 
-// v2.10 Slice A transcription policy (curated Small/Medium + 11 languages).
+// v2.10 transcription policy (Small/Medium/Large v3 + 11 languages).
 // Loaded from src/transcription-policy.js via script tag; falls back to the
 // same curated defaults when the global is unavailable (e.g. syntax checks).
 function resolveTranscriptionPolicy() {
@@ -2057,25 +2057,14 @@ function applySavedSettings(devices = {}, hostFamily = 'unknown') {
     languageSelect.value = normalized.language;
   }
 
-  if (normalized.normalizedLarge) {
-    // Saved Large normalizes to canonical large-v3, still gated in Slice A:
-    // park new work on Small and explain instead of leaving no selection.
-    modelSelect.value = (policy && policy.DEFAULT_MODEL_SIZE) || 'small';
+  modelSelect.value = normalized.modelSize || 'small';
+  if (normalized.migrated) {
+    // Tiny/Base retire once to Small with a visible explanation.
     persistTranscriptionEnginePreferences({ whisper: {
       language: transcriptionEnginePreferences.whisper.language,
-      modelSize: modelSelect.value,
+      modelSize: 'small',
     } });
-    addLog('Large Whisper model is unavailable in this release; using Small for new transcriptions.', 'warning');
-  } else {
-    modelSelect.value = normalized.modelSize || 'small';
-    if (normalized.migrated) {
-      // Tiny/Base retire once to Small with a visible explanation.
-      persistTranscriptionEnginePreferences({ whisper: {
-        language: transcriptionEnginePreferences.whisper.language,
-        modelSize: 'small',
-      } });
-      addLog('Tiny/Base Whisper models retired; migrated saved preference to Small.', 'warning');
-    }
+    addLog('Tiny/Base Whisper models retired; migrated saved preference to Small.', 'warning');
   }
 
   // A retired language remains an explicit choice for Whisper even while
@@ -2138,10 +2127,7 @@ async function init() {
           modelSize: startupEnginePreferences.preferences.whisper.modelSize,
           normalizedLarge: false,
         };
-      // Slice A offers Small/Medium only; never auto-download a retired/gated model.
-      const modelSize = startupNormalized.normalizedLarge
-        ? (startupPolicy.DEFAULT_MODEL_SIZE || 'small')
-        : (startupNormalized.modelSize || 'small');
+      const modelSize = startupNormalized.modelSize || 'small';
 
       addLog('Checking system setup...');
       const modelCheck = await window.electronAPI.checkModelDownloaded(modelSize);

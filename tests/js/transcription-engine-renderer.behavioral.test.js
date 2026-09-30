@@ -68,6 +68,36 @@ function createNode({ hidden = false, value = '' } = {}) {
   };
 }
 
+test('saved Large aliases hydrate the v3 control and survive restart without a download', () => {
+  const policy = require('../../src/transcription-policy');
+  const { normalizeTranscriptionEnginePreferences } = require('../../src/renderer/transcription-engine-helpers');
+  for (const modelSize of ['large', 'large-v3']) {
+    let saved = { schemaVersion: 1, activeEngine: 'whisper', whisper: { language: 'fr', modelSize } };
+    const logs = [];
+    const context = {
+      loadSettings: () => saved,
+      resolveTranscriptionPolicy: () => policy,
+      normalizeTranscriptionEnginePreferences,
+      saveTranscriptionEnginePreferences: (next) => { saved = next; },
+      transcriptionEnginePreferences: null,
+      micSelect: createNode(), desktopSelect: createNode(), languageSelect: createNode(), modelSelect: createNode(),
+      resolveInitialDeviceSelection: () => 'none',
+      decorateDesktopDevices: () => [],
+      renderRecordingEngineControls() {}, renderTranscriptionEngineSettings() {},
+      document: { getElementById: () => null },
+      addLog: (message) => logs.push(message),
+    };
+    vm.createContext(context);
+    vm.runInContext(extractBalancedSource(appSource, 'function applySavedSettings('), context);
+    context.applySavedSettings();
+    assert.equal(context.modelSelect.value, 'large-v3');
+    assert.equal(saved.whisper.modelSize, 'large-v3');
+    context.applySavedSettings();
+    assert.equal(context.modelSelect.value, 'large-v3');
+    assert.equal(logs.length, 0);
+  }
+});
+
 test('renderTranscriptionEngineSettings reads and displays saved Whisper preferences', () => {
   const nodes = new Map([
     ['parakeet-engine-row', createNode()],

@@ -5,13 +5,13 @@ const assert = require('node:assert/strict');
 
 const policy = require('../../src/transcription-policy');
 
-test('selectable lists exclude Persian, Tiny, Base and unqualified Large', () => {
+test('selectable lists offer canonical Large v3 and exclude Persian, Tiny and Base', () => {
   assert.deepEqual([...policy.SELECTABLE_LANGUAGES], ['en', 'es', 'fr', 'de', 'zh', 'ja', 'it', 'pa', 'hi', 'ko', 'pt']);
   assert.ok(!policy.SELECTABLE_LANGUAGES.includes('fa'));
-  assert.deepEqual([...policy.SELECTABLE_MODEL_SIZES], ['small', 'medium']);
+  assert.deepEqual([...policy.SELECTABLE_MODEL_SIZES], ['small', 'medium', 'large-v3']);
   assert.ok(!policy.SELECTABLE_MODEL_SIZES.includes('tiny'));
   assert.ok(!policy.SELECTABLE_MODEL_SIZES.includes('base'));
-  assert.ok(!policy.SELECTABLE_MODEL_SIZES.includes('large-v3'));
+  assert.ok(!policy.SELECTABLE_MODEL_SIZES.includes('large'));
 });
 
 test('legacy compatibility retains pending-job values', () => {
@@ -39,10 +39,11 @@ test('saved large normalizes to canonical large-v3', () => {
   assert.equal(result.normalizedLarge, true);
 });
 
-test('persisted canonical large-v3 stays gated via normalizedLarge', () => {
+test('persisted canonical large-v3 stays selectable without migration', () => {
   const result = policy.normalizePreferences({ language: 'en', modelSize: 'large-v3' });
   assert.equal(result.modelSize, 'large-v3');
-  assert.equal(result.normalizedLarge, true);
+  assert.equal(result.normalizedLarge, false);
+  assert.equal(result.migrated, false);
 });
 
 test('removed Persian requires choice instead of silent English', () => {
@@ -63,7 +64,8 @@ test('new-selection validation rejects legacy and unknown values', () => {
   assert.equal(policy.validateNewSelection({ language: 'en', modelSize: 'small' }).ok, true);
   assert.equal(policy.validateNewSelection({ language: 'fa', modelSize: 'small' }).ok, false);
   assert.equal(policy.validateNewSelection({ language: 'en', modelSize: 'tiny' }).ok, false);
-  assert.equal(policy.validateNewSelection({ language: 'en', modelSize: 'large-v3' }).ok, false);
+  assert.equal(policy.validateNewSelection({ language: 'en', modelSize: 'large-v3' }).ok, true);
+  assert.equal(policy.validateNewSelection({ language: 'en', modelSize: 'large' }).ok, false);
   assert.equal(policy.validateNewSelection({ language: 'xx', modelSize: 'small' }).ok, false);
   assert.equal(policy.isSelectableModelSize('parakeet'), false);
   assert.equal(policy.validateNewSelection({ language: 'en', modelSize: 'parakeet' }).ok, false);

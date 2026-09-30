@@ -767,7 +767,9 @@ function waitUntil(predicate, timeoutMs = 1000) {
   });
 }
 
-test('Linux CUDA install timeout during download does not promote after the lock is released', async () => {
+test('Linux CUDA install timeout during download does not promote after the lock is released', async (t) => {
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
   await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
     let releaseDownload;
     const downloadGate = new Promise((resolve) => {
@@ -825,7 +827,9 @@ test('Linux CUDA install timeout during download does not promote after the lock
   });
 });
 
-test('Linux CUDA install timeout during post-install hashing does not promote after the lock is released', async () => {
+test('Linux CUDA install timeout during post-install hashing does not promote after the lock is released', async (t) => {
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
   await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
     let releaseIntegrity;
     const integrityGate = new Promise((resolve) => {

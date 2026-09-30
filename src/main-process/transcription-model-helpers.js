@@ -58,7 +58,7 @@ function getMacMLXModelStorageDirs(modelSize = 'small') {
 }
 
 function getModelDownloadPatterns(platform, arch, modelSize = 'small') {
-  const size = modelSize || 'small';
+  const size = modelSize === 'large' ? 'large-v3' : (modelSize || 'small');
   const isMacArm = platform === 'darwin' && arch === 'arm64';
 
   if (isMacArm) {

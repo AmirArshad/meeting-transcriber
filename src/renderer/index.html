@@ -99,9 +99,10 @@
             </div>
             <div class="ai-addon-field compact">
               <label for="whisper-retry-model">Model</label>
-              <select id="whisper-retry-model" class="device-select">
+              <select id="whisper-retry-model" class="device-select" title="Large (v3) requires more download space, memory and processing time.">
                 <option value="small">Small</option>
                 <option value="medium">Medium</option>
+                <option value="large-v3">Large (v3)</option>
               </select>
             </div>
           </div>
@@ -256,10 +257,11 @@
             </div>
 
             <div class="setup-item small-select transcription-whisper-control" id="whisper-model-setup">
-              <label for="model-select">Model</label>
-              <select id="model-select" class="device-select">
+              <label for="model-select">Whisper model</label>
+              <select id="model-select" class="device-select" title="Large (v3) requires more download space, memory and processing time.">
                 <option value="small" selected>Small</option>
                 <option value="medium">Medium</option>
+                <option value="large-v3">Large (v3)</option>
               </select>
             </div>
 

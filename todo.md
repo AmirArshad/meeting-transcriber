@@ -34,7 +34,9 @@ checks are recorded.
   navigation / shortcuts.
 - Whisper choice policy Slice A shipped in PR #102: Persian is off new
   choices; Tiny/Base are retired; Small is the floor; pending jobs keep their
-  saved language/model. Slice B (Large) needs a quick functional smoke. Slice C
+  saved language/model. Slice B (Large v3) is implemented in the workspace and
+  passed a quick Windows download/offline transcription smoke on 2026-09-30;
+  [results](docs/development/V2_10_LANGUAGE_MODEL_QUALIFICATION.md). Slice C
   (other language removals) was dropped on 2026-09-29.
 - Settings, navigation, keyboard shortcuts, and click-away meeting rename
   shipped in PR #103. The AvaNevis rail logo shipped in PR #104.
@@ -85,15 +87,19 @@ checks are recorded.
   Apple Silicon already rejected lower Opus effort, MLX decode changes, and a
   smaller summary context. Windows and Linux inference defaults are not being
   pursued.
-- Remaining committed work: Parakeet acceptance gates, Whisper Large with a
-  quick functional smoke, practical Qwen summary-language checks and
+- Remaining committed work: Parakeet acceptance gates, practical Qwen summary-language checks and
   output-language matching, and the Linux microphone-volume investigation.
+- CI audit repair — 2026-09-30: the latest pre-Large CI run failed npm audits
+  on vulnerable override pins. Updated only brace-expansion, fast-uri and undici
+  patch pins and regenerated the lockfile. Clean `npm ci`, zero-vulnerability
+  `npm audit --audit-level=high`, `test:all`, Windows `build:dir` and packaged
+  Speakrs/layout checks passed locally before commit/push.
 
 ## How to sequence the work
 
 Settings, click-away rename, and the transcription **policy** change (Persian /
 Tiny / Base off new choices) did not wait on hardware investigations. Whisper
-Large now needs a quick functional smoke; Qwen languages need practical checks
+Large passed its quick functional smoke on 2026-09-30; Qwen languages need practical checks
 on one runtime without repeated quality evaluation per OS. Extra language removals,
 alternative summary models, and inference-default changes were dropped on
 2026-09-29. The approved Parakeet plan allows implementation before the
@@ -109,11 +115,12 @@ remaining host checks while retaining live GPU admission.
    Parakeet release checks remain. Other independent
    investigations remain on their matching
    release machines:
-   Whisper Large, Qwen summary languages, a local output-language check,
+   Qwen summary languages, a local output-language check,
    and Linux mic volume. Details and hosts
    are in the [plan index](docs/superpowers/plans/2026-09-06-v2.10.md).
-3. **Implement with focused checks:** Large after a quick v3 identity/download/
-   transcription smoke; summary-language support after practical language checks
+3. **Implement with focused checks:** Large v3 is implemented and its Windows
+   download/cache reuse and ordinary/guided-window smoke passed on 2026-09-30;
+   summary-language support follows practical language checks
    on one runtime.
 
 Keep recordings, transcripts, tokens, scratch reports, and user paths out of
@@ -125,12 +132,19 @@ revision, and artifact hashes — not home directories or meeting content.
 ### Transcription and language support
 
 Design: [Language/model policy and Whisper Large](docs/superpowers/plans/2026-09-07-language-model-policy-whisper-large.md).
-Slice A (curated choices) shipped in PR #102 without Large. Slice B (Large)
-needs a quick functional smoke before exposure. Slice C (other language removals) was dropped from
+Slice A (curated choices) shipped in PR #102 without Large. Slice B (Large v3)
+is implemented in the workspace with a passing Windows functional smoke and
+regressions; [evidence and limits](docs/development/V2_10_LANGUAGE_MODEL_QUALIFICATION.md).
+Slice C (other language removals) was dropped from
 v2.10 on 2026-09-29; the languages still listed stay.
 
 - [x] Remove Farsi/Persian from the language list because of poor observed performance.
-- [ ] Add Whisper Large as a transcription model option.
+- [x] Add Whisper Large (v3) as a transcription model option, keeping Small default.
+  Implemented inline on 2026-09-30: canonical v3 runtime/cache/lock identity for
+  `large` and `large-v3`, explicit preload, offline ordinary/guided compute and
+  saved-preference restoration. Windows 11 / RTX 4070 short-fixture smoke passed
+  on CUDA/float16. `npm run test:all` passed (1,062 JS / 734 Python; 4 / 8 skips).
+  No performance/memory studies or per-OS qualification campaign.
 - [x] Remove Tiny and Base model options; Small becomes the smallest available Whisper model.
 - [ ] Add optional English-only Parakeet transcription in Settings for Windows CUDA, Apple Silicon Metal, and Linux managed CUDA. The approved [three-platform plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) governs implementation. The Mac service-level smoke, the CachyOS, Mac, and Windows dev-electron lifecycles, and the packaged Mac lifecycle passed. The Windows packaged lifecycle passed on 2026-09-30. Network disconnect, memory pressure, live recording recovery, and packaged update survival remain open before the v2.10 release. Do not claim a speed, memory, or accuracy win from these runs.
 

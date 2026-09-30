@@ -770,14 +770,13 @@ test('delete-meeting still clears tombstone when meeting_manager delete fails', 
 
 // --- v2.10 Slice A policy wiring -------------------------------------------
 // New work (finalize, transcribe-audio*, explicit retry) accepts curated
-// Small/Medium + 11-language lists only; resume keeps legacy compat.
+// Small/Medium/Large v3 + 11-language lists only; resume keeps legacy compat.
 
 const SLICE_A_REJECTIONS = [
   [{ language: 'fa', modelSize: 'small' }, 'UNSUPPORTED_LANGUAGE'],
   [{ language: 'en', modelSize: 'tiny' }, 'UNSUPPORTED_MODEL'],
   [{ language: 'en', modelSize: 'base' }, 'UNSUPPORTED_MODEL'],
   [{ language: 'en', modelSize: 'large' }, 'UNSUPPORTED_MODEL'],
-  [{ language: 'en', modelSize: 'large-v3' }, 'UNSUPPORTED_MODEL'],
   [{ language: '', modelSize: 'small' }, 'UNSUPPORTED_LANGUAGE'],
   [{ language: 'en', modelSize: '' }, 'UNSUPPORTED_MODEL'],
   [{ language: 'xx', modelSize: 'small' }, 'UNSUPPORTED_LANGUAGE'],
@@ -1286,10 +1285,10 @@ test('Slice A: legacy resolver returns canonical normalized values', () => {
   );
 });
 
-test('Slice A: model setup IPC serves Small/Medium only', async () => {
+test('model setup IPC serves Small/Medium/Large v3 and canonicalizes the Large alias', async () => {
   const harness = createServiceHarness();
   const handlers = registerHandlers(harness);
-  for (const size of ['tiny', 'base', 'large', 'large-v3']) {
+  for (const size of ['tiny', 'base', 'large-v2', 'large-v3-turbo']) {
     await assert.rejects(
       handlers['check-model-downloaded']({}, size),
       (error) => error && error.code === 'UNSUPPORTED_MODEL',
@@ -1304,6 +1303,69 @@ test('Slice A: model setup IPC serves Small/Medium only', async () => {
   const check = await handlers['check-model-downloaded']({}, 'small');
   assert.equal(check.modelSize, 'small');
   assert.equal(typeof check.downloaded, 'boolean');
+  for (const size of ['large', 'large-v3']) {
+    const largeCheck = await handlers['check-model-downloaded']({}, size);
+    assert.equal(largeCheck.modelSize, 'large-v3');
+    assert.equal(harness.service.requireSelectableModelSize(size), 'large-v3');
+  }
+});
+
+test('Large aliases share preload admission, parked cancellation and explicit download retry', async () => {
+  const resourceQueue = createParkableComputeQueue();
+  const spawns = [];
+  const harness = createServiceHarness({
+    enqueueGpuResourceAction: (action) => resourceQueue.enqueue(action),
+    spawnTrackedPython: (args, options) => {
+      spawns.push({ args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+  const handlers = registerHandlers(harness);
+  const parked = handlers['download-model']({}, 'large');
+  const parkedOutcome = parked.then(() => null, (error) => error);
+  await assert.rejects(handlers['download-model']({}, 'large-v3'), /already in progress/);
+  await handlers['cancel-download-model']({});
+  await resourceQueue.flush();
+  assert.match((await parkedOutcome).message, /canceled/);
+  assert.equal(spawns.length, 0);
+  const retry = handlers['download-model']({}, 'large-v3');
+  await resourceQueue.runNext();
+  assert.equal((await retry).success, true);
+  assert.equal(spawns.length, 1);
+  assert.equal(spawns[0].args[spawns[0].args.indexOf('--model') + 1], 'large-v3');
+  assert.ok(spawns[0].args.includes('--preload'));
+  assert.equal(spawns[0].options.env.AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY, undefined);
+  assert.equal(spawns[0].options.env.HF_HUB_OFFLINE, undefined);
+  assert.equal(harness.computeQueue.pendingCount, 0);
+});
+
+test('Large v3 admission and ordinary/guided environments forbid implicit downloads', async () => {
+  const harness = createServiceHarness();
+  assert.equal(harness.service.rejectUnsupportedNewSelection({ language: 'fr', modelSize: 'large-v3' }).modelSize, 'large-v3');
+  for (const size of ['large', 'large-v3']) {
+    const ordinary = harness.service.getTranscriptionRuntimeEnv(size);
+    const guided = harness.service.buildDiarizationChildEnv({ engine: 'speakrs', modelSize: size, includeTranscriptionRuntime: true });
+    assert.equal(ordinary.HF_HUB_OFFLINE, '1');
+    // Speakrs clears ambient HF variables; Whisper's dedicated local-only
+    // flag survives and enforces the same compute boundary in Python.
+    for (const env of [ordinary, guided]) {
+      assert.equal(env.AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY, '1');
+      assert.equal(env.AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR, harness.service.getTranscriptionModelDownloadCheck('large-v3').cacheDir);
+    }
+    const args = harness.service.buildManagedDiarizationGuidedTranscriptionArgs({
+      audioPath: '/tmp/a.opus', outputTranscript: '/tmp/a.md', language: 'fr', modelSize: size, engine: 'speakrs',
+    });
+    assert.equal(args[args.indexOf('--model') + 1], size);
+  }
+  const handlers = registerHandlers(harness);
+  const queued = handlers['transcribe-audio']({}, { audioFile: '/tmp/a.opus', language: 'fr', modelSize: 'large-v3' });
+  assert.equal(harness.computeQueue.pendingCount, 1);
+  harness.computeQueue.rejectAll(new Error('test teardown'));
+  await assert.rejects(queued);
 });
 
 test('Parakeet finalization queues its saved request and commits a candidate through the compute queue', async () => {

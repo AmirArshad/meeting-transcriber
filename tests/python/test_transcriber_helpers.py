@@ -31,6 +31,62 @@ def test_mlx_transcriber_rejects_unknown_language():
         MLXWhisperTranscriber(language='xx')
 
 
+def test_mlx_transcriber_rejects_unknown_model():
+    with pytest.raises(ValueError, match='Unsupported Whisper model size'):
+        MLXWhisperTranscriber(model_size='unknown')
+
+
+def test_mlx_compute_refuses_missing_large_without_downloading(tmp_path, monkeypatch):
+    monkeypatch.setattr(MLXWhisperTranscriber, '_get_cache_dir', lambda _self: tmp_path)
+    monkeypatch.setenv('AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY', '1')
+    service = MLXWhisperTranscriber(model_size='large-v3')
+    with pytest.raises(RuntimeError, match='Download the selected model'):
+        service._download_model_files()
+
+
+@pytest.mark.parametrize('language', ['en', 'fr'])
+def test_large_aliases_share_mlx_identity_and_lock(language, tmp_path, monkeypatch):
+    monkeypatch.setattr(MLXWhisperTranscriber, '_get_cache_dir', lambda _self: tmp_path)
+    alias = MLXWhisperTranscriber(model_size='large', language=language)
+    canonical = MLXWhisperTranscriber(model_size='large-v3', language=language)
+    assert alias.model_size == canonical.model_size == 'large-v3'
+    assert alias.model_key == canonical.model_key == 'large-v3'
+    assert alias.model_repo == canonical.model_repo == 'mlx-community/whisper-large-v3-mlx'
+    assert alias.model_dir == canonical.model_dir
+    assert alias._get_download_lock_path() == canonical._get_download_lock_path()
+
+
+def test_large_aliases_share_faster_whisper_cache_lock_and_runtime(tmp_path, monkeypatch):
+    monkeypatch.setenv('AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR', str(tmp_path / 'hub'))
+    assert fw_transcriber.get_transcription_download_lock_path('large') == fw_transcriber.get_transcription_download_lock_path('large-v3')
+    for decoy in ['large', 'large-v2', 'large-v3-turbo', 'large-v3-extra']:
+        snapshot = tmp_path / 'hub' / f'models--Systran--faster-whisper-{decoy}' / 'snapshots' / 'revision'
+        snapshot.mkdir(parents=True)
+        for filename in ['config.json', 'model.bin', 'tokenizer.json', 'vocabulary.json']:
+            (snapshot / filename).write_text('data')
+    for size in ['large', 'large-v3']:
+        assert not fw_transcriber.has_cached_faster_whisper_model(size)
+    snapshot = tmp_path / 'hub' / 'models--Systran--faster-whisper-large-v3' / 'snapshots' / 'revision'
+    snapshot.mkdir(parents=True)
+    for filename in ['config.json', 'model.bin', 'tokenizer.json', 'vocabulary.json']:
+        (snapshot / filename).write_text('data')
+    captured = []
+
+    class WhisperModel:
+        def __init__(self, model_size, **kwargs):
+            captured.append((model_size, kwargs))
+
+    for size in ['large', 'large-v3']:
+        assert fw_transcriber.has_cached_faster_whisper_model(size)
+        service = TranscriberService(model_size=size)
+        service._create_whisper_model(WhisperModel, device='cpu', compute_type='int8', local_files_only=True)
+    assert [size for size, _kwargs in captured] == ['large-v3', 'large-v3']
+    assert all(kwargs['local_files_only'] for _size, kwargs in captured)
+    (snapshot / 'model.bin').write_bytes(b'')
+    assert not fw_transcriber.has_cached_faster_whisper_model('large')
+    assert not fw_transcriber.has_cached_faster_whisper_model('large-v3')
+
+
 def test_faster_whisper_linux_core_beta_stays_on_cpu():
     assert resolve_faster_whisper_device('auto', platform='linux') == 'cpu'
     assert resolve_faster_whisper_device('cuda', platform='linux') == 'cpu'

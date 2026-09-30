@@ -11,7 +11,13 @@ This supersedes the qualification depth and platform-exposure gates below.
 
 > Design and file-level plan. Implementation is not authorized by this document. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md). Slice A shipped in PR #102. Slice B (Large) still needs qualification. Slice C (further language removals) was dropped from v2.10 on 2026-09-29.
 
-**Status:** Design only, 2026-09-07. No implementation, downloads, benchmarks, or platform acceptance performed.
+**Execution update — 2026-09-30:** Slice B is implemented in the workspace after
+an explicit Windows Large v3 download and offline ordinary/guided-window
+transcription smoke. Small remains default; aliases share v3 caches and locks;
+compute cannot download missing weights. Evidence and limits are recorded in
+[functional results](../../development/V2_10_LANGUAGE_MODEL_QUALIFICATION.md).
+The September 30 scope supersedes the older per-platform and measurement gates
+below. Slice A shipped in PR #102; Slice C remains dropped.
 
 **Goal:** Offer a curated language list and Small/Medium/Large Whisper choices without changing saved jobs or weakening local runtime guarantees.
 

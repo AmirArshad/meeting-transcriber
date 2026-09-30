@@ -52,11 +52,26 @@ Whisper caches are **separate** from the diarization HF cache under `userData/ai
 
 **Locations.** faster-whisper (Windows / Intel Mac): `~/.cache/huggingface/hub`, as `models--Systran--faster-whisper-<size>` or legacy `models--guillaumekln--faster-whisper-<size>`. MLX (Apple Silicon): `~/Library/Caches/avanevis/mlx_models/<model-dir>/`.
 
+**Large identity.** New choices use `large-v3` (Small remains default). The saved
+`large` alias resolves to v3 at runtime without rewriting historical meeting
+metadata. Both aliases share the faster-whisper v3 cache patterns and download
+lock, or MLX's `mlx-community/whisper-large-v3-mlx` directory and lock. Never
+accept `large`, v2, turbo, or substring folder names as a faster-whisper v3 cache.
+
 **Completeness — keep JS and Python aligned.** faster-whisper snapshot needs non-empty `config.json`, `model.bin`, `tokenizer.json`, plus `vocabulary.txt` **or** `vocabulary.json`. MLX needs non-empty `weights.npz` and `config.json`.
 
 Implemented in `cacheContainsCompleteTranscriptionModel` / `buildTranscriptionRuntimeEnv` (`src/main-process-helpers.js`), `getTranscriptionRuntimeEnv` (`src/main/transcription-service.js`), `has_cached_faster_whisper_model` (`backend/transcription/faster_whisper_transcriber.py`), and `_required_model_files_cached` (`backend/transcription/mlx_whisper_transcriber.py`). Changing the required files or the env var names means updating all four plus `tests/js/main-process-helpers.test.js` and `tests/python/test_transcriber_helpers.py`.
 
-**Offline behavior.** Set HF offline / `local_files_only` only when the cache is **complete** (`AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY=1`; Python may also auto-detect). Model download / `--preload` must keep `modelCached: false` so an incomplete cache can still finish downloading. Diarization loads pyannote with `local_files_only=True`; summary generation uses `buildHuggingFaceOfflineEnv()` when artifacts are installed.
+**Offline behavior.** Ordinary and guided compute always set
+`AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY=1`, including when files disappear after
+recording starts: a missing cache fails recoverably instead of downloading.
+Speakrs clears HF environment variables but retains this dedicated Whisper flag;
+faster-whisper applies `local_files_only` and MLX rejects incomplete files before
+calling the downloader. Cache completeness still controls downloaded UI status.
+Explicit model download / `--preload` keeps `modelCached: false` and does not set
+the compute-only flag, so an incomplete cache can finish downloading. Diarization
+loads pyannote with `local_files_only=True`; summary generation uses
+`buildHuggingFaceOfflineEnv()` when artifacts are installed.
 
 **Windows CUDA profile.** Packaged transcription supports a CUDA 12 profile (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`) and probes matching DLLs before GPU use. If only a newer CUDA major is present (CUDA 13 DLL names), surface a runtime-major mismatch and stay on CPU. Install/repair/uninstall/ensure are serialized through a main-process lock with a wall-clock timeout, separate from `aiAddonActionQueue` and `aiComputeActionQueue`.
 

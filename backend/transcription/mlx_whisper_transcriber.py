@@ -223,7 +223,7 @@ class MLXWhisperTranscriber(BaseTranscriber):
             device: Ignored for MLX (always uses Metal GPU), kept for API compatibility
             compute_type: Ignored for MLX (always uses float16), kept for API compatibility
         """
-        self.model_size = model_size
+        self.model_size = "large-v3" if model_size == "large" else model_size
         self.language = language
         self.device = "metal"  # MLX uses Metal GPU
         self.compute_type = "float16"  # MLX uses float16
@@ -249,7 +249,9 @@ class MLXWhisperTranscriber(BaseTranscriber):
     def _resolve_model_spec(self, model_size: str) -> Tuple[str, str, str]:
         """Resolve the backend model key, download repo, and storage directory."""
         specs = self.MODEL_SPECS if self.language == 'en' else self.MULTILINGUAL_MODEL_SPECS
-        spec = specs.get(model_size, specs['base'])
+        if model_size not in specs:
+            raise ValueError(f"Unsupported Whisper model size: {model_size}")
+        spec = specs[model_size]
         return spec['model_key'], spec['repo_id'], spec['storage_dir']
 
     def _get_cache_dir(self) -> Path:
@@ -273,6 +275,9 @@ class MLXWhisperTranscriber(BaseTranscriber):
         if self._required_model_files_cached():
             print("MLX model files already cached.", file=sys.stderr)
             return
+
+        if os.environ.get('AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY', '').strip().lower() in {'1', 'true', 'yes'}:
+            raise RuntimeError('Whisper model cache is incomplete. Download the selected model, then retry transcription.')
 
         from huggingface_hub import hf_hub_download  # type: ignore[import-not-found]
 

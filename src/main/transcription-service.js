@@ -18,6 +18,7 @@ const {
   buildWhisperPreloadArgs,
   buildTranscriberArgs,
   buildTranscriptionRuntimeEnv,
+  buildHuggingFaceOfflineEnv,
   cacheContainsCompleteTranscriptionModel,
   isSafeRecordingsJsonPath,
   isSafeRecordingsMarkdownPath,
@@ -101,7 +102,7 @@ const transcriptionPolicy = require('../transcription-policy');
 const { runDiarizationOnlyProcess } = require('../main-process/transcription-runtime-helpers');
 
 /**
- * v2.10 Slice A: curated Small/Medium + 11-language lists for NEW work.
+ * v2.10: curated Small/Medium/Large v3 + 11-language lists for NEW work.
  * Pending-job resume keeps legacy compat (Tiny/Base/Large + Persian) via
  * isCompatible* below and must not pass through validateNewSelection.
  */
@@ -142,12 +143,13 @@ function resolveNewSelectionField(options, key, fallback) {
   return fallback;
 }
 
-// Renderer-facing model setup (check/download) offers Small/Medium only.
+// Renderer-facing model setup (check/download) uses canonical selectable IDs.
 // Legacy cached models stay usable internally by pending-job execution, which
 // never passes through here.
 function requireSelectableModelSize(modelSize) {
   const raw = modelSize == null ? 'small' : modelSize;
-  const normalized = String(raw).trim().toLowerCase() || 'small';
+  const value = String(raw).trim().toLowerCase() || 'small';
+  const normalized = value === 'large' ? 'large-v3' : value;
   if (!transcriptionPolicy.isSelectableModelSize(normalized)) {
     const error = new Error('Choose a supported Whisper model.');
     error.code = 'UNSUPPORTED_MODEL';
@@ -298,13 +300,18 @@ function createTranscriptionService(deps) {
   function getTranscriptionRuntimeEnv(modelSize, cudaOptions = {}) {
     const downloadCheck = getTranscriptionModelDownloadCheck(modelSize);
     const linuxCudaRequired = cudaOptions && cudaOptions.linuxCudaEnabled === true;
-    return buildTranscriptionRuntimeEnv({
-      cacheDir: downloadCheck.cacheDir,
-      modelCached: isTranscriptionModelCached(modelSize, downloadCheck),
-      baseEnv: buildScopedCudaRuntimeEnv(
-        linuxCudaRequired ? { AVANEVIS_LINUX_CUDA_REQUIRED: '1' } : {},
-        cudaOptions,
-      ),
+    // Compute never authorizes a transfer, including cache loss after recording
+    // starts. Explicit preload builds its own online-capable environment below.
+    return buildHuggingFaceOfflineEnv({
+      ...buildTranscriptionRuntimeEnv({
+        cacheDir: downloadCheck.cacheDir,
+        modelCached: isTranscriptionModelCached(modelSize, downloadCheck),
+        baseEnv: buildScopedCudaRuntimeEnv(
+          linuxCudaRequired ? { AVANEVIS_LINUX_CUDA_REQUIRED: '1' } : {},
+          cudaOptions,
+        ),
+      }),
+      AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY: '1',
     });
   }
 
@@ -3479,7 +3486,7 @@ function createTranscriptionService(deps) {
       const request = options || {};
       let { audioFile } = request;
 
-      // NEW work: curated Small/Medium + 11-language lists only. Present
+      // NEW work: curated Small/Medium/Large v3 + 11-language lists only. Present
       // fields validate raw ('' must reject, not fall back to English).
       const validated = rejectUnsupportedNewSelection({
         language: resolveNewSelectionField(request, 'language', 'en'),
@@ -3518,7 +3525,7 @@ function createTranscriptionService(deps) {
 
       const request = options || {};
       let { audioFile, speakerCount } = request;
-      // NEW work: curated Small/Medium + 11-language lists only. Present
+      // NEW work: curated Small/Medium/Large v3 + 11-language lists only. Present
       // fields validate raw ('' must reject, not fall back to English).
       const validatedSpeakers = rejectUnsupportedNewSelection({
         language: resolveNewSelectionField(request, 'language', 'en'),

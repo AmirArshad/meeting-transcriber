@@ -67,10 +67,12 @@ def get_transcription_download_lock_path(model_size: str) -> Path:
     """Return a user-private lock file path for Whisper model downloads."""
     lock_dir = get_hugging_face_hub_cache_dir().parent / ".locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
-    return lock_dir / f"whisper_model_{model_size}.lock"
+    size = "large-v3" if model_size == "large" else model_size
+    return lock_dir / f"whisper_model_{size}.lock"
 
 
 def has_cached_faster_whisper_model(model_size: str) -> bool:
+    model_size = "large-v3" if model_size == "large" else model_size
     cache_dir = get_hugging_face_hub_cache_dir()
     if not cache_dir.exists() or not cache_dir.is_dir():
         return False
@@ -256,7 +258,7 @@ class TranscriberService(BaseTranscriber):
             device: "cpu", "cuda", or "auto" (auto-detect GPU)
             compute_type: "int8", "float16", "float32", or "default" (auto-select best)
         """
-        self.model_size = model_size
+        self.model_size = "large-v3" if model_size == "large" else model_size
         self.language = language
         self.device = resolve_faster_whisper_device(device)
         self.compute_type = compute_type

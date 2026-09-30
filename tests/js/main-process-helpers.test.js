@@ -771,6 +771,32 @@ test('getMacMLXModelStorageDirs returns expected per-model cache directories', (
   assert.deepEqual(getMacMLXModelStorageDirs('small'), ['whisper-small-mlx']);
   assert.deepEqual(getMacMLXModelStorageDirs('medium'), ['whisper-medium-mlx']);
   assert.deepEqual(getMacMLXModelStorageDirs('large'), ['whisper-large-v3-mlx']);
+  assert.deepEqual(getMacMLXModelStorageDirs('large-v3'), ['whisper-large-v3-mlx']);
+});
+
+test('Large aliases check only complete v3 snapshots across faster-whisper platforms', (t) => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-large-cache-'));
+  t.after(() => fs.rmSync(cacheDir, { recursive: true, force: true }));
+  const writeSnapshot = (size, empty = null) => {
+    const dir = path.join(cacheDir, `models--Systran--faster-whisper-${size}`, 'snapshots', 'revision');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const name of ['config.json', 'model.bin', 'tokenizer.json', 'vocabulary.json']) {
+      fs.writeFileSync(path.join(dir, name), name === empty ? '' : 'data');
+    }
+  };
+  for (const size of ['large', 'large-v2', 'large-v3-turbo', 'large-v3-extra']) writeSnapshot(size);
+  for (const platform of ['win32', 'linux']) {
+    assert.deepEqual(getModelDownloadPatterns(platform, 'x64', 'large'), getModelDownloadPatterns(platform, 'x64', 'large-v3'));
+    for (const size of ['large', 'large-v3']) {
+      const options = { cacheDir, modelPatterns: getModelDownloadPatterns(platform, 'x64', size), platform, arch: 'x64' };
+      assert.equal(cacheContainsCompleteTranscriptionModel(options), false);
+      writeSnapshot('large-v3', 'model.bin');
+      assert.equal(cacheContainsCompleteTranscriptionModel(options), false);
+      writeSnapshot('large-v3');
+      assert.equal(cacheContainsCompleteTranscriptionModel(options), true);
+      fs.rmSync(path.join(cacheDir, 'models--Systran--faster-whisper-large-v3'), { recursive: true });
+    }
+  }
 });
 
 
@@ -1014,7 +1040,10 @@ test('runWallClockComputeAction no-timeout path passes an identity registerProce
   assert.equal(seen, proc);
 });
 
-test('runWallClockComputeAction aborts its signal when the wall-clock limit is exceeded', async () => {
+test('runWallClockComputeAction aborts its signal when the wall-clock limit is exceeded', async (t) => {
+  // The production timeout is unref'd; keep this isolated test alive to observe it.
+  const keepAlive = setInterval(() => {}, 1000);
+  t.after(() => clearInterval(keepAlive));
   let seenSignal = null;
   await assert.rejects(runWallClockComputeAction({
     timeoutMs: 20,

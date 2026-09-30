@@ -7,11 +7,10 @@
 }(typeof globalThis !== 'undefined' ? globalThis : this, function buildTranscriptionPolicy() {
   'use strict';
 
-  // v2.10 slice A curated choices. Large v3 exposure waits on slice B
-  // qualification; retained-language evaluation (slice C) has not removed
-  // anything beyond Persian yet. Pending-job resume keeps legacy compat.
+  // v2.10 curated choices. New Large work uses the explicit v3 identity;
+  // pending-job resume keeps legacy values without rewriting metadata.
   var SELECTABLE_LANGUAGES = Object.freeze(['en', 'es', 'fr', 'de', 'zh', 'ja', 'it', 'pa', 'hi', 'ko', 'pt']);
-  var SELECTABLE_MODEL_SIZES = Object.freeze(['small', 'medium']);
+  var SELECTABLE_MODEL_SIZES = Object.freeze(['small', 'medium', 'large-v3']);
   var LEGACY_MODEL_SIZES = Object.freeze(['tiny', 'base', 'small', 'medium', 'large', 'large-v3']);
   var LEGACY_LANGUAGES = Object.freeze(['en', 'es', 'fr', 'de', 'zh', 'ja', 'fa', 'it', 'pa', 'hi', 'ko', 'pt']);
   var DEFAULT_LANGUAGE = 'en';
@@ -41,7 +40,7 @@
   // their saved values via isCompatible* above and must not pass through here.
   // Returns { language, modelSize, migrated, requiresChoice, normalizedLarge }.
   // - Tiny/Base migrate to Small once with migrated=true + visible explanation.
-  // - Saved `large` normalizes to canonical `large-v3` (still gated by slice B).
+  // - Saved `large` normalizes to canonical `large-v3`.
   // - Removed/unknown language yields requiresChoice=true (no silent English).
   // - Failed/empty inputs fall back to safe in-memory defaults, never blanks.
   function normalizePreferences(preferences) {
@@ -77,11 +76,6 @@
       normalizedLarge = true;
     } else if (isSelectableModelSize(rawModel)) {
       modelSize = rawModel;
-    } else if (rawModel === 'large-v3') {
-      // Canonical Large identity preserved but still gated in Slice A: park
-      // new work on Small via normalizedLarge like saved `large`.
-      modelSize = 'large-v3';
-      normalizedLarge = true;
     } else if (!rawModel) {
       modelSize = DEFAULT_MODEL_SIZE;
     } else {

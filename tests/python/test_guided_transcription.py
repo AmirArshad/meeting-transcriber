@@ -5,6 +5,13 @@ import pytest
 from backend.diarization import guided_transcription as guided
 
 
+@pytest.mark.parametrize('backend', ['faster', 'mlx'])
+@pytest.mark.parametrize('size', ['large', 'large-v3'])
+def test_guided_large_uses_canonical_v3_transcriber(backend, size):
+    transcriber = guided.create_transcriber(backend=backend, model_size=size, language='en', device='cpu')
+    assert transcriber.model_size == 'large-v3'
+
+
 def test_build_diarization_guided_windows_merges_same_speaker_and_pads():
     windows = guided.build_diarization_guided_windows(
         [
