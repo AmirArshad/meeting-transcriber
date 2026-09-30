@@ -29,6 +29,18 @@ No cloud transcription. No telemetry or analytics. No background uploads. No net
 - Transcription metadata records `transcriptionDevice` / `transcriptionComputeType` (`cpu`/`cuda`/`mps`). MLX may report `metal` in result JSON; `meeting_manager` normalizes that alias to `mps`. Guided transcription reports the Whisper runtime separately from `diarization.device` (Speakrs `cuda`/`coreml`, or pyannote `mps`/`cuda`).
 - Add-on caches live under `userData/ai-addons/models/...` so app updates preserve installed artifacts.
 - Stale summaries are detected through `sourceTranscriptHash`.
+- Summary generation requires a retained, locally checked `transcriptLanguage`
+  and matching `sourceTranscriptHash`; meeting language is only a UI hint.
+  Successful confirmation is reusable only for the unchanged hash, model and
+  language policy revision. Legacy summaries remain readable and unconfirmed.
+  Main freezes language/model/artifact identity, rechecks queued installation
+  readiness, and verifies language provenance and the transcript hash before
+  finalization. Chunk, merge, JSON repair and grounded regeneration preserve the
+  confirmed language. Local Qwen checks bounded samples of input and substantive
+  output prose inside the tracked compute job; wrong/indeterminate language fails
+  closed with at most the existing one-repair budget per generation stage.
+  JSON schema keys, sentinels, names and timestamps remain stable; Markdown labels
+  are localized. Language evidence is separate from platform runtime admission.
 
 **Accepted tradeoff — summary checksum skip.** `generate-summary` calls `checkAiAddonSetupStatus({ verifyChecksums: true, verifyChecksumsIfChanged: true })`. After the first full SHA-256 match in a process, later generates skip re-hashing when the `path`/`size`/`mtimeMs` fingerprint is unchanged. A local attacker preserving size and mtime could bypass it. This is deliberate for an already-locally-trusted file. **Setup and validate paths still full-hash — do not weaken those gates.**
 

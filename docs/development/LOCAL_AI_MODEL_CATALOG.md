@@ -4,6 +4,21 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 
 ## Rules
 
+### v2.10 summary language policy
+
+The installed `qwen3.5-9b-q4-k-m` model has bounded local synthetic evidence for
+`en/es/fr/de/zh/ja/it/pa/hi/ko/pt`, including Chinese and Panjabi script cases.
+See [the recorded checks and limits](V2_10_SUMMARY_QUALIFICATION.md).
+`src/summary-language-policy.js` owns eligibility and policy revision; add-on
+status exposes it without inference or downloads. Replacement catalog entries
+have no enabled language policy. Existing platform runtime admission still applies.
+Generation requires transcript-language confirmation tied to its hash; chunk,
+merge and repair share that language, and a separate local Qwen prose check
+rejects wrong or indeterminate language before committing sidecars. No detector
+package, alternative model or translation feature was added.
+
+### Artifact and setup rules
+
 - Keep AvaNevis local-only: no cloud diarization, cloud summarization, telemetry, or background uploads.
 - Summary model and runtime downloads must be explicit user-triggered setup actions.
 - Speaker diarization setup must be explicit and stays under Electron `userData`. Speakrs uses a self-hosted model-pack archive plus a Windows or Linux ONNX Runtime closure; pyannote uses its managed Python dependencies and Hugging Face cache.

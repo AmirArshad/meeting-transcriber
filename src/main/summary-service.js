@@ -1,6 +1,14 @@
 'use strict';
 
 const pathModule = require('path');
+const { createHash } = require('crypto');
+const { getSummaryLanguagePolicy } = require('../summary-language-policy');
+
+function transcriptHash(text) {
+  // Match Python text reads (and the hydrated renderer transcript), including
+  // universal newline conversion for imported Windows transcripts.
+  return `sha256:${createHash('sha256').update(text.replace(/\r\n?/g, '\n'), 'utf8').digest('hex')}`;
+}
 
 /**
  * Summary generation IPC service for the AvaNevis main process.
@@ -163,7 +171,7 @@ function createSummaryService(deps) {
     ipcMain.handle('generate-summary', async (event, options = {}) => {
       assertTrustedRendererSender(event);
 
-      const { meetingId, profile, modelId } = options;
+      const { meetingId, profile, modelId, transcriptLanguage, sourceTranscriptHash } = options;
       if (!meetingId) {
         throw new Error('generate-summary requires a meetingId');
       }
@@ -345,6 +353,15 @@ function createSummaryService(deps) {
         clearActiveSummaryGeneration();
         throw new Error('Summary model selection is managed by local setup. Validate or reinstall the selected model in Settings.');
       }
+      const languagePolicy = getSummaryLanguagePolicy(selectedModelId, platform, arch);
+      if (!languagePolicy.languages.includes(transcriptLanguage)) {
+        clearActiveSummaryGeneration();
+        throw new Error('Summaries are not available for this transcript language with the installed model. Confirm a supported predominant transcript language.');
+      }
+      if (!/^sha256:[a-f0-9]{64}$/.test(sourceTranscriptHash || '')) {
+        clearActiveSummaryGeneration();
+        throw new Error('Confirm the transcript language before generating a summary.');
+      }
       const artifact = getSummaryArtifactForPlatform(selectedModelId, platform, arch);
       if (!artifact) {
         clearActiveSummaryGeneration();
@@ -358,6 +375,9 @@ function createSummaryService(deps) {
         modelPath = getSummaryArtifactPath(app.getPath('userData'), artifact);
         runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
         transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
+        if (transcriptHash(await fs.promises.readFile(transcriptPath, 'utf8')) !== sourceTranscriptHash) {
+          throw new Error('Transcript changed. Confirm the transcript language again.');
+        }
       } catch (error) {
         clearActiveSummaryGeneration();
         throw error;
@@ -400,6 +420,19 @@ function createSummaryService(deps) {
           return terminateProcessBestEffort(proc);
         },
         action: async (registerProcess) => {
+        if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
+        const admittedStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+          verifyChecksums: true, verifyChecksumsIfChanged: true,
+        }));
+        if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
+        if (admittedStatus.features.summary.modelId !== selectedModelId
+          || admittedStatus.features.summary.artifactId !== aiStatus.features.summary.artifactId
+          || (platform !== 'linux' && (admittedStatus.features.summary.status !== 'ready'
+            || !admittedStatus.features.summary.setupComplete))
+          || (platform === 'linux' && (admittedStatus.features.summary.cache?.valid !== true
+            || admittedStatus.features.summary.runtimeCache?.valid !== true))) {
+          throw new Error('Summary installation changed while queued. Check Settings and retry.');
+        }
         let summaryEnv = buildClearedHuggingFaceTokenEnv(buildHuggingFaceOfflineEnv());
         if (platform === 'linux') {
           if (typeof resolveCudaStatusForTranscription !== 'function') {
@@ -467,6 +500,9 @@ function createSummaryService(deps) {
           speakersJsonPath,
           profile: profile || 'balanced',
           modelLabel: artifact.modelLabel || artifact.modelId,
+          modelId: selectedModelId,
+          transcriptLanguage,
+          sourceTranscriptHash,
         }), { cwd: pythonConfig.backendPath, env: summaryEnv });
         activeSummaryGeneration.process = python;
         registerProcess(python);
@@ -553,6 +589,15 @@ function createSummaryService(deps) {
               throw new Error('Summary generation returned an invalid result payload.');
             }
 
+            if (result.metadata.language !== transcriptLanguage
+              || result.metadata.languageSource !== 'userConfirmed'
+              || result.metadata.modelId !== selectedModelId
+              || result.metadata.languagePolicyVersion !== languagePolicy.version
+              || result.metadata.sourceTranscriptHash !== sourceTranscriptHash
+              || transcriptHash(await fs.promises.readFile(transcriptPath, 'utf8')) !== sourceTranscriptHash) {
+              throw new Error('Summary language provenance or transcript changed. Confirm the transcript language and retry.');
+            }
+
             // Enter metadata phase before renames so quit/cancel cannot abort
             // during finalization and then delete sidecars after meetings.json
             // has already been updated (or leave inconsistent state).
@@ -578,6 +623,10 @@ function createSummaryService(deps) {
 
             const summaryMetadata = {
               status: 'completed',
+              language: transcriptLanguage,
+              languageSource: 'userConfirmed',
+              languagePolicyVersion: languagePolicy.version,
+              modelId: selectedModelId,
               modelProfile: result.metadata.profile,
               model: result.metadata.model,
               generatedAt: result.metadata.generatedAt,

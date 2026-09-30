@@ -104,6 +104,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getTranscriptionQueueState: () => ipcRenderer.invoke('get-transcription-queue-state'),
   transcribeAudioWithSpeakers: (options) => ipcRenderer.invoke('transcribe-audio-with-speakers', options),
   diarizeTranscript: (options) => ipcRenderer.invoke('diarize-transcript', options),
+  // Requires meetingId, transcriptLanguage and sourceTranscriptHash (confirmed snapshot).
   generateSummary: (options) => ipcRenderer.invoke('generate-summary', options),
   cancelSummaryGeneration: (options) => ipcRenderer.invoke('cancel-summary-generation', options),
 

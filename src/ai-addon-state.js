@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { getSummaryLanguagePolicy } = require('./summary-language-policy');
 
 const {
   PYANNOTE_DIARIZATION_MODEL_ID,
@@ -1126,7 +1127,10 @@ function buildAiAddonStatus({
     models: catalog,
     features: {
       diarization: applyAvailability(diarizationState, diarizationAvailability),
-      summary: applyAvailability(normalizedManifest.features.summary, summaryAvailability),
+      summary: {
+        ...applyAvailability(normalizedManifest.features.summary, summaryAvailability),
+        languagePolicy: getSummaryLanguagePolicy(normalizedManifest.features.summary.modelId, platform, arch),
+      },
     },
   };
 }

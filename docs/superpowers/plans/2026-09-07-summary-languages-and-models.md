@@ -10,7 +10,7 @@ runtime admission, local-only processing, queues, cancellation, and prior-output
 protection. This supersedes qualification depth below; it makes no universal
 model-quality claim. Alternative models remain out of v2.10.
 
-**Status:** Design proposal only, 2026-09-07. No implementation, model benchmark, upstream capability verification, or platform acceptance performed. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md). Qualify languages (slice A) before claiming support. Slice B (alternative models) was dropped from v2.10 on 2026-09-29; keep the current Qwen model.
+**Status:** Slice A implemented inline in the workspace on 2026-09-30, with practical checks on the installed Qwen3.5 9B model and one Windows CUDA runtime. [Results and limits](../../development/V2_10_SUMMARY_QUALIFICATION.md). No new per-platform acceptance or universal quality claim. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md). Qualify languages (slice A) before claiming support. Slice B (alternative models) was dropped from v2.10 on 2026-09-29; keep the current Qwen model.
 
 **Goal:** Summarise retained, qualified transcript languages in that same language with the installed Qwen model.
 

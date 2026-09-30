@@ -577,6 +577,10 @@ def test_update_meeting_ai_persists_derived_artifact_references(tmp_path):
         summary={
             'status': 'completed',
             'modelProfile': 'balanced',
+            'language': 'es',
+            'languageSource': 'userConfirmed',
+            'languagePolicyVersion': 'qwen-language-v1',
+            'modelId': 'qwen3.5-9b-q4-k-m',
             'model': 'Qwen3.5-9B-Q4_K_M',
             'generatedAt': '2026-05-16T00:05:00Z',
             'sourceTranscriptHash': source_hash,
@@ -599,6 +603,10 @@ def test_update_meeting_ai_persists_derived_artifact_references(tmp_path):
     assert meeting['ai']['summary'] == {
         'status': 'completed',
         'modelProfile': 'balanced',
+        'language': 'es',
+        'languageSource': 'userConfirmed',
+        'languagePolicyVersion': 'qwen-language-v1',
+        'modelId': 'qwen3.5-9b-q4-k-m',
         'model': 'Qwen3.5-9B-Q4_K_M',
         'generatedAt': '2026-05-16T00:05:00Z',
         'sourceTranscriptHash': source_hash,

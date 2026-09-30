@@ -51,6 +51,7 @@ const EXPECTED_RENDERER_GLOBALS = [
   'historyDetailHelpers',
   'formatters',
   'summaryUiHelpers',
+  'summaryLanguageHelpers',
   'aiAddonUiHelpers',
   'domHelpers',
   'meetingHelpers',
@@ -72,6 +73,7 @@ const EXPECTED_SCRIPT_ORDER = [
   'history-detail-helpers.js',
   'formatters.js',
   'summary-ui-helpers.js',
+  'summary-language-helpers.js',
   'ai-addon-ui-helpers.js',
   'dom-helpers.js',
   'meeting-helpers.js',
@@ -479,6 +481,7 @@ test('recording shortcut dispatcher admits only hydrated idle/record states and 
     recoveryPromptOpen: false,
     recordingHydrated: false,
     rendererQuitCommitted: false,
+    closeSummaryLanguageConfirmation: null,
     isInitializing: false,
     recordModeMenu: { hidden: true },
     getRecordButtonAction,
@@ -598,6 +601,7 @@ function createHydrationCompositionContext({ mainProbe, recoveryProbe } = {}) {
     recordingHydrated: false,
     recordingHydrationFailed: false,
     rendererQuitCommitted: false,
+    closeSummaryLanguageConfirmation: null,
     isInitializing: false,
     recoveryPromptOpen: false,
     recordingState: 'idle',
@@ -765,9 +769,12 @@ test('real quit-progress wiring closes and reopens admission with UI transitions
   assert.equal(context.recordBtn.disabled, false);
   assert.equal(admitted.call(context, 'start'), true);
 
+  let closedConfirmation = false;
+  context.closeSummaryLanguageConfirmation = (value) => { closedConfirmation = value === null; };
   // QUIT_RECORDING (emitted by the async recording-quit path) closes admission.
   onQuitProgress({ message: 'Stopping and saving the current recording before quitting...', code: 'QUIT_RECORDING' });
   assert.equal(context.rendererQuitCommitted, true);
+  assert.equal(closedConfirmation, true);
   assert.equal(context.recordBtn.disabled, true);
   assert.equal(context.micSelect.disabled, true);
   assert.equal(admitted.call(context, 'start'), false);

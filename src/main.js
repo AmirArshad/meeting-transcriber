@@ -985,7 +985,7 @@ function buildManagedPythonModuleArgs(moduleName, extraArgs = [], managedSitePac
   ];
 }
 
-function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel, validateRuntime = false }) {
+function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel, modelId, transcriptLanguage, sourceTranscriptHash, validateRuntime = false }) {
   const args = [
     '--meeting-id', meetingId,
     '--runtime-dir', runtimeDir,
@@ -999,7 +999,8 @@ function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, ou
   if (validateRuntime) {
     args.push('--validate-runtime');
   } else {
-    args.push('--transcript', transcriptPath);
+    args.push('--transcript', transcriptPath, '--language', transcriptLanguage,
+      '--source-transcript-hash', sourceTranscriptHash, '--model-id', modelId);
   }
 
   if (outputJson) {

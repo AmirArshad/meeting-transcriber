@@ -36,6 +36,16 @@ Not inferable from the tree, and the highest-risk surface in the repo. Renaming 
 
 Phase 0 source-scan tests treat `src/main.js` + `src/main/**/*.js` as one combined surface, so channel names and payloads stay pinned across the split.
 
+### Summary language payload
+
+`generate-summary` requires `{ meetingId, transcriptLanguage,
+sourceTranscriptHash, profile? }`, with optional `modelId` constrained to the
+installed model. Main validates eligibility and the current on-disk transcript;
+it passes `--language`, `--source-transcript-hash` and `--model-id` to the local
+runner. Successful `ai.summary` metadata may add `language`, `languageSource`
+(`userConfirmed`), `modelId`, and `languagePolicyVersion`. Missing fields mean
+legacy/unconfirmed output. Channel names and preload export shape are unchanged.
+
 ### Facades whose export shape is pinned
 
 `src/main-process-helpers.js` (re-exports `src/main-process/`) and `src/ai-addon-setup.js` (re-exports `src/ai-addon/`) have characterization tests over their `module.exports` key sets. Keep the key sets stable, plus the `AI_ADDON_PROGRESS_CHANNEL` / `AI_ADDON_CANCEL_CODE` string values.

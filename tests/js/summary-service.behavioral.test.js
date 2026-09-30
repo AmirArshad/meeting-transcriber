@@ -6,6 +6,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
+const { createHash } = require('node:crypto');
+const confirmedHash = `sha256:${createHash('sha256').update('# Meeting\n').digest('hex')}`;
+const confirmedOptions = { meetingId: 'meeting_1', transcriptLanguage: 'en', sourceTranscriptHash: confirmedHash };
 
 const { createSummaryService } = require('../../src/main/summary-service');
 const { createAiAddonCancelErrorStandalone } = require('../../src/main/ai-addon-ipc');
@@ -25,6 +28,9 @@ function createHarness({
   previousSummary = null,
   checkAiAddonSetupStatus,
   platform = 'win32',
+  enqueueAiComputeAction = (action) => action(),
+  summaryMetadata = {},
+  onGenerate = () => {},
 } = {}) {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-summary-service-'));
   const recordingsDir = path.join(userData, 'recordings');
@@ -52,9 +58,12 @@ function createHarness({
   const summaryResult = {
     metadata: {
       profile: 'balanced',
-      model: 'test-model',
+      model: 'qwen3.5-9b-q4-k-m',
       generatedAt: '2026-07-10T00:00:00.000Z',
-      sourceTranscriptHash: `sha256:${'a'.repeat(64)}`,
+      sourceTranscriptHash: confirmedHash,
+      language: 'en', languageSource: 'userConfirmed',
+      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'qwen-language-v1',
+      ...summaryMetadata,
     },
     summary: { overview: 'new summary' },
   };
@@ -85,6 +94,7 @@ function createHarness({
         });
       } else {
         setImmediate(() => {
+          onGenerate(transcriptPath);
           if (summaryExitCode === 0) {
             const outputJsonIndex = args.indexOf('--output-json');
             const outputMarkdownIndex = args.indexOf('--output-markdown');
@@ -102,13 +112,16 @@ function createHarness({
       return proc;
     },
     getBackendModuleArgs: (moduleName, extraArgs = []) => ['-m', moduleName, ...extraArgs],
-    enqueueAiComputeAction: (action) => action(),
+    enqueueAiComputeAction,
     createAiAddonCancelError: createAiAddonCancelErrorStandalone,
     getAiAddonRuntimeOptions: () => ({}),
     buildSummaryArgs: (options) => [
       '-m', 'summaries.summary_runner',
       '--output-json', options.outputJson,
       '--output-markdown', options.outputMarkdown,
+      '--language', options.transcriptLanguage,
+      '--source-transcript-hash', options.sourceTranscriptHash,
+      '--model-id', options.modelId,
     ],
     collectPythonProcessOutput(python) {
       let stdout = '';
@@ -131,9 +144,9 @@ function createHarness({
     summarizeSummaryValidationError: (value) => value || 'summary failed',
     platform,
     checkAiAddonSetupStatus: checkAiAddonSetupStatus || (async () => ({
-      features: { summary: { status: 'ready', setupComplete: true, modelId: 'test-model' } },
+      features: { summary: { status: 'ready', setupComplete: true, modelId: 'qwen3.5-9b-q4-k-m', cache: { valid: true }, runtimeCache: { valid: true } } },
     })),
-    getSummaryArtifactForPlatform: () => ({ modelId: 'test-model', modelLabel: 'Test', filename: 'model.gguf' }),
+    getSummaryArtifactForPlatform: () => ({ modelId: 'qwen3.5-9b-q4-k-m', modelLabel: 'Test', filename: 'model.gguf' }),
     getSummaryArtifactPath: () => path.join(userData, 'model.gguf'),
     getSummaryRuntimeDir: () => path.join(userData, 'runtime'),
   });
@@ -168,7 +181,7 @@ test('generate-summary stays fail-closed before spawning preflight when the feat
   });
 
   await assert.rejects(
-    handlers['generate-summary']({ sender: {} }, { meetingId: 'meeting_1' }),
+    handlers['generate-summary']({ sender: {} }, confirmedOptions),
     /managed CUDA 12 runtime and an NVIDIA GPU/,
   );
   assert.deepEqual(getSpawnedArgs(), []);
@@ -179,7 +192,7 @@ test('Linux summary generation fails closed when the live CUDA resolver is unava
   fs.mkdirSync(path.join(path.dirname(harness.recordingsDir), 'ai-addons', 'cuda', 'python'), { recursive: true });
 
   await assert.rejects(
-    harness.handlers['generate-summary']({ sender: {} }, { meetingId: 'meeting_1' }),
+    harness.handlers['generate-summary']({ sender: {} }, confirmedOptions),
     /live CUDA runtime resolver/,
   );
 });
@@ -190,7 +203,7 @@ test('failed summary regeneration preserves the previously committed sidecars', 
   fs.writeFileSync(outputMarkdown, '# Old summary\n');
 
   await assert.rejects(
-    handlers['generate-summary']({ sender: {} }, { meetingId: 'meeting_1' }),
+    handlers['generate-summary']({ sender: {} }, confirmedOptions),
     /summary generation failed/,
   );
 
@@ -203,7 +216,7 @@ test('successful metadata commit remains successful when update-ai stdout is mal
   fs.writeFileSync(outputJson, '{"overview":"old summary"}');
   fs.writeFileSync(outputMarkdown, '# Old summary\n');
 
-  const result = await handlers['generate-summary']({ sender: {} }, { meetingId: 'meeting_1' });
+  const result = await handlers['generate-summary']({ sender: {} }, confirmedOptions);
 
   const generated = getGeneratedPaths();
   assert.equal(fs.readFileSync(generated.outputJson, 'utf8'), '{"overview":"new summary"}');
@@ -236,7 +249,7 @@ test('successful summary cleanup removes only same-meeting summary sidecars', as
   fs.writeFileSync(orphanMarkdown, 'orphan markdown');
   const meeting = await harness.handlers['generate-summary'](
     { sender: {} },
-    { meetingId: 'meeting_1' },
+    confirmedOptions,
   );
 
   assert.equal(fs.existsSync(harness.transcriptPath), true);
@@ -282,7 +295,7 @@ for (const hostilePathKind of ['transcript', 'other-meeting', 'outside']) {
       preflightProcMeeting.markdownPath = hostileHarness.transcriptPath;
     }
 
-    await hostileHarness.handlers['generate-summary']({ sender: {} }, { meetingId: 'meeting_1' });
+    await hostileHarness.handlers['generate-summary']({ sender: {} }, confirmedOptions);
     const protectedPath = hostilePathKind === 'transcript'
       ? hostileHarness.transcriptPath
       : hostilePathKind === 'other-meeting'
@@ -291,3 +304,60 @@ for (const hostilePathKind of ['transcript', 'other-meeting', 'outside']) {
     assert.equal(fs.existsSync(protectedPath), true);
   });
 }
+
+for (const language of [undefined, 'fa', 'unknown', 'ES', 'en;--model']) {
+  test(`unavailable language ${language} rejects before inference and preserves prior output`, async () => {
+    const harness = createHarness();
+    fs.writeFileSync(harness.outputMarkdown, 'prior summary');
+    await assert.rejects(harness.handlers['generate-summary']({}, { ...confirmedOptions, transcriptLanguage: language }), /not available/);
+    assert.equal(harness.getSpawnedArgs().length, 1);
+    assert.equal(fs.readFileSync(harness.outputMarkdown, 'utf8'), 'prior summary');
+  });
+}
+
+test('missing or stale transcript confirmation rejects before inference', async () => {
+  for (const sourceTranscriptHash of [undefined, `sha256:${'0'.repeat(64)}`]) {
+    const harness = createHarness();
+    await assert.rejects(harness.handlers['generate-summary']({}, { ...confirmedOptions, sourceTranscriptHash }), /Confirm|changed/);
+    assert.equal(harness.getSpawnedArgs().length, 1);
+  }
+});
+
+test('queued model change rejects the frozen attempt without inference', async () => {
+  let calls = 0;
+  const harness = createHarness({ checkAiAddonSetupStatus: async () => ({ features: { summary: {
+    status: 'ready', setupComplete: true,
+    modelId: ++calls === 1 ? 'qwen3.5-9b-q4-k-m' : 'qwen3.5-4b-q4-k-m',
+  } } }) });
+  await assert.rejects(harness.handlers['generate-summary']({}, confirmedOptions), /installation changed while queued/);
+  assert.equal(harness.getSpawnedArgs().length, 1);
+});
+
+test('language and source hash propagate to Python and committed metadata', async () => {
+  const harness = createHarness();
+  const result = await harness.handlers['generate-summary']({}, confirmedOptions);
+  const args = harness.getSpawnedArgs()[1];
+  assert.equal(args[args.indexOf('--language') + 1], 'en');
+  assert.equal(args[args.indexOf('--source-transcript-hash') + 1], confirmedHash);
+  assert.equal(result.meeting.ai.summary.language, 'en');
+  assert.equal(result.meeting.ai.summary.languageSource, 'userConfirmed');
+  assert.equal(result.meeting.ai.summary.languagePolicyVersion, 'qwen-language-v1');
+});
+
+test('imported CRLF transcripts use the same hash as Python and hydrated renderer text', async () => {
+  const harness = createHarness();
+  fs.writeFileSync(harness.transcriptPath, '# Meeting\r\n');
+  const result = await harness.handlers['generate-summary']({}, confirmedOptions);
+  assert.equal(result.meeting.ai.summary.sourceTranscriptHash, confirmedHash);
+});
+
+test('incorrect provenance or transcript change before finalization keeps prior summary', async () => {
+  for (const options of [{ summaryMetadata: { language: 'es' } }, { onGenerate: (file) => fs.writeFileSync(file, 'changed') }]) {
+    const harness = createHarness(options);
+    fs.writeFileSync(harness.outputMarkdown, 'prior summary');
+    await assert.rejects(harness.handlers['generate-summary']({}, confirmedOptions), /provenance or transcript changed/);
+    assert.equal(fs.readFileSync(harness.outputMarkdown, 'utf8'), 'prior summary');
+    assert.equal(harness.getSpawnedArgs().some((args) => args.includes('update-ai')), false);
+    assert.equal(fs.readdirSync(harness.recordingsDir).some((file) => file.endsWith('.tmp')), false);
+  }
+});

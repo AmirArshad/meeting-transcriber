@@ -87,8 +87,9 @@ checks are recorded.
   Apple Silicon already rejected lower Opus effort, MLX decode changes, and a
   smaller summary context. Windows and Linux inference defaults are not being
   pursued.
-- Remaining committed work: Parakeet acceptance gates, practical Qwen summary-language checks and
-  output-language matching, and the Linux microphone-volume investigation.
+- Remaining committed work: Parakeet acceptance gates and the Linux
+  microphone-volume investigation. Qwen summary-language support is implemented
+  in the workspace with bounded one-runtime evidence (2026-09-30).
 - CI audit repair — 2026-09-30: the latest pre-Large CI run failed npm audits
   on vulnerable override pins. Updated only brace-expansion, fast-uri and undici
   patch pins and regenerated the lockfile. Clean `npm ci`, zero-vulnerability
@@ -112,15 +113,14 @@ remaining host checks while retaining live GPU admission.
    lifecycle checks in the approved three-platform plan. The CachyOS, Mac, and
    Windows dev-electron lifecycles and the packaged Mac lifecycle have passed.
    The Windows packaged lifecycle passed on 2026-09-30; the four deferred
-   Parakeet release checks remain. Other independent
-   investigations remain on their matching
-   release machines:
-   Qwen summary languages, a local output-language check,
-   and Linux mic volume. Details and hosts
+   Parakeet release checks remain. The Linux microphone-volume investigation
+   remains on its matching release machine. Qwen summary-language checks and
+   matching are complete in the workspace, with bounded evidence recorded
+   separately. Details and hosts
    are in the [plan index](docs/superpowers/plans/2026-09-06-v2.10.md).
 3. **Implement with focused checks:** Large v3 is implemented and its Windows
    download/cache reuse and ordinary/guided-window smoke passed on 2026-09-30;
-   summary-language support follows practical language checks
+   summary-language support is implemented with passing practical checks
    on one runtime.
 
 Keep recordings, transcripts, tokens, scratch reports, and user paths out of
@@ -151,13 +151,27 @@ v2.10 on 2026-09-29; the languages still listed stay.
 ### Summarisation
 
 Design: [Qwen language support and alternative summarisation models](docs/superpowers/plans/2026-09-07-summary-languages-and-models.md).
-Language qualification (slice A) remains. Alternative-model evaluation (slice B)
-was dropped from v2.10 on 2026-09-29; keep the current Qwen model. Do not claim
-supported languages until the language results exist.
+Slice A is implemented in the workspace with practical checks on the installed
+Qwen3.5 9B model and one Windows CUDA runtime;
+[evidence and limits](docs/development/V2_10_SUMMARY_QUALIFICATION.md).
+Alternative-model evaluation (slice B) remains out of v2.10.
 
-- [ ] Explore which languages the current Qwen summarisation model actually supports.
-- [ ] Enable summarisation only for the supported languages retained by the product.
-- [ ] Ensure Qwen summary output matches the language of the transcript.
+- [x] Explore which languages the current Qwen summarisation model actually supports.
+  15/15 synthetic generation fixtures passed for the 11 retained IDs, including
+  Chinese/Panjabi script cases and Portuguese variants. Local classifier controls
+  passed 15/15 language cases and 2/2 indeterminate short/mixed cases.
+- [x] Enable summarisation only for the supported languages retained by the product.
+  `en/es/fr/de/zh/ja/it/pa/hi/ko/pt` are enabled for the installed 9B model under
+  the existing runtime gates. Replacement entries and removed/unknown IDs are
+  unavailable; no model selector, downloads or new runtime policy.
+- [x] Ensure Qwen summary output matches the language of the transcript.
+  Confirm transcript language against its hash; propagate it through chunk,
+  merge, JSON repair and grounded regeneration. Local input/prose checks fail
+  closed with the existing bounded repair budget. Localized Markdown and
+  language/model/policy provenance are saved without changing meeting language.
+  Real two-chunk/merge, repair/retry, sidecar and negative checks passed. Focused
+  regressions and `npm run test:all` passed; prior-summary, queue/cancel/quit and
+  finalization protections remain covered.
 
 ### Settings and navigation UX
 
