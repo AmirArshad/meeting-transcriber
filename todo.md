@@ -27,6 +27,15 @@ passed 1,080 JS / 816 Python, with 4 / 9 existing platform/environment skips.
 Regeneration confirmation/cancel and restart preservation passed.
 [Evidence and limits](docs/development/V2_10_SUMMARY_QUALIFICATION.md).
 
+### Mac dependency audit repair — 2026-10-01
+
+PR #108 exposed three urllib3 2.7.0 advisories inherited from `master` in the
+packaged Mac requirements. Updated the pin to 2.8.0 and regenerated the legal
+inventory. Pinned-requirements audit, full regressions, fresh Mac package/build
+verification, packaged English/Spanish generation and post-execution signatures
+passed. Installed Qwen/Parakeet runtime pins stay unchanged. See the summary
+evidence for the rebuilt artifact/report hashes.
+
 ### User scope update — 2026-09-30
 
 Whisper Large v3 needs a quick functional smoke before exposure, not a

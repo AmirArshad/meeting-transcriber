@@ -306,3 +306,32 @@ by the October 1 scope update and do not block this branch's merge. No repeated
 per-OS language-quality campaign, alternative-model evaluation, performance or
 memory study is added. The separate four Parakeet lifecycle checks and Linux
 microphone-volume investigation remain release work.
+
+## Inherited macOS dependency-audit repair — 2026-10-01
+
+PR #108 CI found three urllib3 2.7.0 advisories in the packaged Mac requirements
+already present on `master`: CVE-2026-97687, CVE-2026-97688 and CVE-2026-97689.
+The packaged pin is now 2.8.0, as specified by the audit and
+[upstream security release](https://urllib3.readthedocs.io/en/stable/changelog.html).
+The generated direct-pin legal inventory was refreshed. Source commit: `c1aeffa`.
+Installed Qwen/model/runtime pins and Parakeet locks were unchanged.
+
+- `.venv/bin/python -m pip_audit -r requirements-macos-build.txt`: exited 0,
+  no known vulnerabilities found. The GitHub macOS Python audit also passed. All eight PR CI checks
+  passed for source commit `c1aeffa`, including Mac/Windows/Linux packaging.
+- Fresh `npm run test:all`: exited 0, 1,080 JS / 816 Python passed, 4 / 9 existing
+  skips and both syntax gates passing. Focused legal/resource checks passed 17/17.
+- The requirements change invalidated prepared resources and rebuilt the Mac
+  runtime through the normal build script. A PyPI read timeout on the first
+  attempt was resolved by retrying with a longer pip timeout. The rebuild and
+  packaged verification exited 0; bundled Python reports urllib3 2.8.0.
+- The newly signed packaged UI again generated English/Spanish summaries 2/2,
+  preserved Spanish regeneration prefill, disabled invalid submission and kept
+  the prior summary on cancel. Post-execution strict signatures passed.
+
+Updated packaged UI report SHA-256:
+`ca1878edcf439d7d3ddfeea3122a7265f1547d4d6b6360b53605901fc289490a`.
+Updated packaged `app.asar` SHA-256:
+`f6d4a87d7ef146c686d5b4ad995867480c9e9c2c8f658641346a4803cce8d73a`.
+Earlier fingerprints remain the evidence for the pre-audit build. Linux hardware
+and the separate Parakeet release checks remain deferred as recorded above.
