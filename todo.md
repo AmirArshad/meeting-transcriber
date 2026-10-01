@@ -10,6 +10,23 @@ implementation or acceptance evidence.
 
 ## Status
 
+### Merge scope update — 2026-10-01
+
+Complete available Mac validation and merge the Qwen language branch to `master`.
+Linux runtime/hardware checks are deferred until before the v2.10 release and
+do not block this merge. The four deferred Parakeet lifecycle checks and Linux
+microphone-volume investigation remain release work.
+
+### Mac Qwen validation — 2026-10-01
+
+English/Spanish full-runner and packaged-UI summaries passed on Apple M4 Pro /
+macOS 26.7.1. Integration paths passed 9/9 and the near-budget Chinese probe
+passed. Packaged build/verification and post-execution signatures passed. Fixed
+Windows/Linux test fixtures that inherited the Mac architecture; `test:all`
+passed 1,080 JS / 816 Python, with 4 / 9 existing platform/environment skips.
+Regeneration confirmation/cancel and restart preservation passed.
+[Evidence and limits](docs/development/V2_10_SUMMARY_QUALIFICATION.md).
+
 ### User scope update — 2026-09-30
 
 Whisper Large v3 needs a quick functional smoke before exposure, not a
@@ -186,14 +203,16 @@ Alternative-model evaluation (slice B) remains out of v2.10.
   self-classification from manual content inspection and Windows-only coverage.
   The near-full Chinese chunk failure was reproduced and traced to character
   undercounting: 55,814 runtime input tokens exceeded the unchanged 32,768
-  context. The targeted uncommitted fix estimates UTF-8 bytes and bounds quoted
+  context. The fix committed as `7496cfb` estimates UTF-8 bytes and bounds quoted
   repair output to 12,000 bytes. The near-budget Chinese check, the original
   input through three chunks/merge, and a forced near-budget JSON repair passed.
   `test:all`: 1,079 JS / 817 Python passed, with 4 / 8 existing skips and both
   syntax gates passing. Estimates remain heuristic; arbitrary oversized segments
-  and large merges are not qualified. Apple Silicon/Linux CUDA English and
-  non-English functional smokes remain explicitly unrun because those hosts are
-  unavailable here. See the evidence document for report hashes and limits.
+  and large merges are not qualified. Apple Silicon English/Spanish functional
+  smokes passed on 2026-10-01.
+  Linux CUDA functional smokes are deferred until before the v2.10 release;
+  they do not block merging this branch. See the evidence document for report
+  hashes and limits.
 
 ### Settings and navigation UX
 

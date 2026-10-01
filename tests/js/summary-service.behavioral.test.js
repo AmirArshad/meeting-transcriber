@@ -28,6 +28,7 @@ function createHarness({
   previousSummary = null,
   checkAiAddonSetupStatus,
   platform = 'win32',
+  arch = platform === 'darwin' ? 'arm64' : 'x64',
   enqueueAiComputeAction = (action) => action(),
   summaryMetadata = {},
   onGenerate = () => {},
@@ -143,6 +144,7 @@ function createHarness({
     terminateProcessBestEffort: async (proc) => proc?.kill(),
     summarizeSummaryValidationError: (value) => value || 'summary failed',
     platform,
+    arch,
     checkAiAddonSetupStatus: checkAiAddonSetupStatus || (async () => ({
       features: { summary: { status: 'ready', setupComplete: true, modelId: 'qwen3.5-9b-q4-k-m', cache: { valid: true }, runtimeCache: { valid: true } } },
     })),
@@ -333,16 +335,18 @@ test('queued model change rejects the frozen attempt without inference', async (
   assert.equal(harness.getSpawnedArgs().length, 1);
 });
 
-test('language and source hash propagate to Python and committed metadata', async () => {
-  const harness = createHarness();
-  const result = await harness.handlers['generate-summary']({}, confirmedOptions);
-  const args = harness.getSpawnedArgs()[1];
-  assert.equal(args[args.indexOf('--language') + 1], 'en');
-  assert.equal(args[args.indexOf('--source-transcript-hash') + 1], confirmedHash);
-  assert.equal(result.meeting.ai.summary.language, 'en');
-  assert.equal(result.meeting.ai.summary.languageSource, 'userConfirmed');
-  assert.equal(result.meeting.ai.summary.languagePolicyVersion, 'qwen-language-v2');
-});
+for (const platform of ['win32', 'darwin']) {
+  test(`${platform}: language and source hash propagate to Python and committed metadata`, async () => {
+    const harness = createHarness({ platform });
+    const result = await harness.handlers['generate-summary']({}, confirmedOptions);
+    const args = harness.getSpawnedArgs()[1];
+    assert.equal(args[args.indexOf('--language') + 1], 'en');
+    assert.equal(args[args.indexOf('--source-transcript-hash') + 1], confirmedHash);
+    assert.equal(result.meeting.ai.summary.language, 'en');
+    assert.equal(result.meeting.ai.summary.languageSource, 'userConfirmed');
+    assert.equal(result.meeting.ai.summary.languagePolicyVersion, 'qwen-language-v2');
+  });
+}
 
 test('imported CRLF transcripts use the same hash as Python and hydrated renderer text', async () => {
   const harness = createHarness();

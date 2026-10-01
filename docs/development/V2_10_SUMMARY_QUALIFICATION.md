@@ -8,7 +8,7 @@ packaged/hardware acceptance evidence.
 - Original implementation: `c59b4370073869b82f654e2743eee65743da3f6c`, based on
   `1673ea431086305c1234abcb66de905104c9661e`; review corrections are included in
   `02061112c6a76f9b334dbcd5ae9fd52e6149bc70` on `codex/qwen-summary-languages`.
-  The chunk-budget follow-up below remains uncommitted.
+  The chunk-budget follow-up below was committed as `7496cfb`.
 - Host: Windows x64, NVIDIA RTX 4070; installed Windows CUDA llama.cpp `b9173`
   (`49d1701bd24e4cedf6dfec9e50e185111203946b`) runtime,
   unchanged 32,768 context, existing generation parameters.
@@ -182,7 +182,7 @@ Report SHA-256 fingerprints (public synthetic reports retained locally):
 ## Targeted Chinese chunk-budget fix — 2026-09-30
 
 Continued inline from `02061112c6a76f9b334dbcd5ae9fd52e6149bc70`, with changes
-left uncommitted. The installed model and CLI were rehashed and match the hashes
+subsequently committed as `7496cfb`. The installed model and CLI were rehashed and match the hashes
 above. No downloads, dependency/runtime changes or context increase.
 
 The unmodified `scripts/check-summary-languages.py --long-only` reproduced the
@@ -245,3 +245,64 @@ Report SHA-256 fingerprints (synthetic reports retained outside the repository):
 - Successful first long check (console encoding failure): `233e36a163dae28efb4703d41c2f7822b40788bd346440f8731c4f375d1bb2e9`.
 - Verified UTF-8 `--long-only`: `d1352364ce664c60d735b00709cd74d4393955701a65f2620ea0aa574dd8a0af`.
 - Original-input merge and forced-repair report: `59ce8dae11e8aee45423114552c1aba1abf2773f3b30de2733c15988a3d6f6dd`.
+
+## Apple Silicon functional validation — 2026-10-01
+
+Host: Apple M4 Pro, 48 GB, macOS 26.7.1, arm64. Runtime/application code is
+`7496cfb`; this follow-up changes test fixtures and evidence only. Installed
+Qwen3.5 9B Q4_K_M and the pinned darwin-arm64 Metal llama.cpp `b9173` runtime
+passed the application's full-checksum setup-status path (`ready`). The model
+hash matches the Windows evidence above. Extracted `llama-cli` SHA-256:
+`eec00d923f7f1307ca01691e86c7cb8e98fe5ded327cd1352559bca8fac3992d`.
+The CLI lists Apple M4 Pro as `MTL0`; production arguments retain all-GPU-layer
+selection, the 32,768 context and existing generation settings.
+
+- English and Spanish public fixtures passed the full Python runner (**2/2**),
+  including input/prose language checks, JSON/Markdown sidecars and hash-bound
+  language/model/policy metadata. Manual inspection found the Monday pilot,
+  unchanged budget, Mira's Friday checklist and unresolved supplier delivery.
+  No new supplier follow-up owner was invented.
+- `--paths-only` passed **9/9**: real Spanish chunk/merge, French Detailed,
+  Japanese Action items, Spanish JSON repair, German localized-denial retry,
+  wrong-language regeneration, wrong-confirmation and balanced-input rejection,
+  and full Spanish sidecar generation.
+- `--long-only` passed the Chinese overflow probe at **25,604 estimated tokens**,
+  **40,827 characters**, against the unchanged **25,868** Concise chunk budget.
+  Manual inspection found the same pilot/checklist/budget/supplier facts.
+  Repetition remains a context-sizing probe, not general long-meeting quality
+  evidence; UTF-8 estimates remain heuristic.
+- `npm run build:mac:dir` and `npm run verify:mac:packaged` exited **0**. The app is
+  ad-hoc signed, not notarized; packaged Python/MLX imports, arm64 helpers,
+  FFmpeg/Opus encoding, fixture layout and strict bundle signatures passed.
+- The packaged renderer/preload/main/Python pipeline generated English and
+  Spanish summaries (**2/2**) in an isolated profile using the installed cache.
+  Every generation displayed an editable confirmation dialog. Spanish
+  regeneration prefilled Spanish; an empty choice disabled submission. Cancel
+  preserved the prior summary and restored focus to the Regenerate button.
+  Restart retained both completed summaries and checksum-verified cache readiness.
+  Strict bundle signatures still passed after execution. This is restart/cache
+  evidence, not packaged update-survival or recording-hardware acceptance.
+
+The first Mac regression gate found **12** JS failures: Windows/Linux service
+fixtures overrode the platform but inherited the host's `arm64` architecture,
+creating unsupported platform/architecture pairs. Fixtures now specify their
+matching architecture, and propagation is covered for Windows and Apple Silicon.
+No production behavior changed in this correction. Fresh `npm run test:all`
+exited **0**: **1,080 JS passed / 4 skipped**, **816 Python passed / 9 skipped**,
+with both syntax gates passing (Node 26.10.0, Python 3.11.17). The additional
+Mac Python skip is the existing CachyOS `/proc` telemetry check.
+
+Synthetic reports remain outside git. SHA-256 fingerprints:
+
+- Full runner: `2b0139c1bb10647b3426b7bc2d85cf16e3b05719b67c2cb76fd5ba8c046068e2`.
+- Integration paths: `494db18572526d1bbaab585d9d57a8a8ce185ddf431a28335e3d1f42dec8d65c`.
+- Chinese near-budget: `14b61d030da0a1703e0418fa5e33d11e1e2b8c1a2c1d86dbca71ddc4fc6b19dc`.
+- Packaged UI/persistence: `3ebd25ba768ddd085525f60111d9fb07ea743a348e2b43aa1d091c77cd622e07`.
+- Packaged `app.asar`: `2673c26c51f19da40428db755a35e6e400eff3612760fe204708a2b56af3620c`.
+
+This closes the Apple Silicon English/non-English functional smoke. Linux CUDA
+functional/hardware checks are explicitly deferred until before the v2.10 release
+by the October 1 scope update and do not block this branch's merge. No repeated
+per-OS language-quality campaign, alternative-model evaluation, performance or
+memory study is added. The separate four Parakeet lifecycle checks and Linux
+microphone-volume investigation remain release work.

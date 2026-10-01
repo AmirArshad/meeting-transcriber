@@ -726,6 +726,7 @@ test('F2: generate-summary enters metadata before update-ai; quit abort cannot k
     },
     summarizeSummaryValidationError: (text) => text || 'summary error',
     platform: 'win32',
+    arch: 'x64',
     isQuitCommitted: () => false,
     checkAiAddonSetupStatus: async () => ({
       features: {
