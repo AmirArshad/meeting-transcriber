@@ -26,7 +26,8 @@ regex==2026.7.19
 requests==2.34.2
 charset-normalizer==3.5.1
 idna==3.19
-urllib3==2.7.0
+# 2.8.0 fixes CVE-2026-97687/97688/97689 reported by the Mac build audit.
+urllib3==2.8.0
 certifi==2026.7.22
 huggingface-hub==1.29.0
 hf-xet==1.6.0
