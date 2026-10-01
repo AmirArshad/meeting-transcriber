@@ -29,6 +29,32 @@ No cloud transcription. No telemetry or analytics. No background uploads. No net
 - Transcription metadata records `transcriptionDevice` / `transcriptionComputeType` (`cpu`/`cuda`/`mps`). MLX may report `metal` in result JSON; `meeting_manager` normalizes that alias to `mps`. Guided transcription reports the Whisper runtime separately from `diarization.device` (Speakrs `cuda`/`coreml`, or pyannote `mps`/`cuda`).
 - Add-on caches live under `userData/ai-addons/models/...` so app updates preserve installed artifacts.
 - Stale summaries are detected through `sourceTranscriptHash`.
+- Summary generation requires a retained, locally checked `transcriptLanguage`
+  and matching `sourceTranscriptHash`; meeting language is only a UI hint.
+  Successful confirmation prefills an editable dialog only for the unchanged
+  hash, model and language policy revision; every regeneration requires explicit
+  submission. Legacy summaries remain readable and unconfirmed.
+  Main freezes language/model/artifact identity, rechecks queued installation
+  readiness, and verifies language provenance and the transcript hash before
+  finalization. Chunk, merge, JSON repair and grounded regeneration preserve the
+  confirmed language. Local Qwen checks bounded samples of input and substantive
+  output prose inside the tracked compute job; wrong/indeterminate language fails
+  closed with at most the existing one-repair budget per generation stage.
+  Input admission requires a matching actual language code, confidence and a
+  reported predominant-language share of at least 0.6; missing/invalid shares
+  reject. Valid region/script tags retain their primary language (zh-HK → zh),
+  never a neighboring language. Output checks still reject substantially mixed
+  prose. These are model judgments, not an independent detector. Localized
+  absence-of-transcript denials are rejected before output-language checking,
+  using the shared retry budget.
+  Chunk estimates use UTF-8 byte count divided by four (rounded up), retaining
+  ASCII behavior while reserving more space for multilingual text. JSON repair
+  keeps the complete grounded prompt and quotes at most 12,000 UTF-8 bytes of
+  invalid output, dropping any incomplete final code point. The context remains
+  32,768 tokens and the retry budget remains one. This heuristic is not exact
+  tokenizer admission or a guarantee that arbitrary prompts fit the context.
+  JSON schema keys, sentinels, names and timestamps remain stable; Markdown labels
+  are localized. Language evidence is separate from platform runtime admission.
 
 **Accepted tradeoff — summary checksum skip.** `generate-summary` calls `checkAiAddonSetupStatus({ verifyChecksums: true, verifyChecksumsIfChanged: true })`. After the first full SHA-256 match in a process, later generates skip re-hashing when the `path`/`size`/`mtimeMs` fingerprint is unchanged. A local attacker preserving size and mtime could bypass it. This is deliberate for an already-locally-trusted file. **Setup and validate paths still full-hash — do not weaken those gates.**
 

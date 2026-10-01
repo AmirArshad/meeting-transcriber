@@ -10,7 +10,7 @@ runtime admission, local-only processing, queues, cancellation, and prior-output
 protection. This supersedes qualification depth below; it makes no universal
 model-quality claim. Alternative models remain out of v2.10.
 
-**Status:** Design proposal only, 2026-09-07. No implementation, model benchmark, upstream capability verification, or platform acceptance performed. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md). Qualify languages (slice A) before claiming support. Slice B (alternative models) was dropped from v2.10 on 2026-09-29; keep the current Qwen model.
+**Status:** Slice A implemented inline in the workspace on 2026-09-30, with practical checks on the installed Qwen3.5 9B model and one Windows CUDA runtime. [Results and limits](../../development/V2_10_SUMMARY_QUALIFICATION.md). No new per-platform acceptance or universal quality claim. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md). Qualify languages (slice A) before claiming support. Slice B (alternative models) was dropped from v2.10 on 2026-09-29; keep the current Qwen model.
 
 **Goal:** Summarise retained, qualified transcript languages in that same language with the installed Qwen model.
 
@@ -31,7 +31,7 @@ v2.10 keeps slice **A — current-model language qualification and enforcement**
 
 ## 2. User-facing change
 
-**Slice A:** Show “Transcript language” beside Generate/Regenerate, prefilled from meeting metadata, and “Summary will use [language]”. Confirm the language before the first generation under this policy; metadata is a hint, not detected-language evidence. Subsequent generation can reuse the confirmation only for the unchanged transcript hash. The user identifies the transcript's language; this is not a translation target. Unknown or mixed-language content requires an explicit choice of the predominant transcript language; genuinely balanced multilingual meetings remain unavailable in the initial slice.
+**Slice A:** Show “Transcript language” beside Generate/Regenerate, prefilled from meeting metadata, and “Summary will use [language]”. Confirm the language before each generation; metadata is a hint, not detected-language evidence. Subsequent generation prefills the prior confirmation only for the unchanged transcript hash, model and policy revision, while allowing correction. The user identifies the transcript's language; this is not a translation target. Unknown or mixed-language content requires an explicit choice of the predominant transcript language; genuinely balanced multilingual meetings remain unavailable in the initial slice.
 
 Enable generation only for the intersection of product-retained languages and the selected model/platform's qualified languages. Explain “Summaries are not available for [language] with this model”; do not redirect a language failure to model repair. Keep old summaries readable, copyable, and exportable even when regeneration is unavailable.
 

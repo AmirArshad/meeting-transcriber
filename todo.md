@@ -10,6 +10,32 @@ implementation or acceptance evidence.
 
 ## Status
 
+### Merge scope update — 2026-10-01
+
+Complete available Mac validation and merge the Qwen language branch to `master`.
+Linux runtime/hardware checks are deferred until before the v2.10 release and
+do not block this merge. The four deferred Parakeet lifecycle checks and Linux
+microphone-volume investigation remain release work.
+
+### Mac Qwen validation — 2026-10-01
+
+English/Spanish full-runner and packaged-UI summaries passed on Apple M4 Pro /
+macOS 26.7.1. Integration paths passed 9/9 and the near-budget Chinese probe
+passed. Packaged build/verification and post-execution signatures passed. Fixed
+Windows/Linux test fixtures that inherited the Mac architecture; `test:all`
+passed 1,080 JS / 816 Python, with 4 / 9 existing platform/environment skips.
+Regeneration confirmation/cancel and restart preservation passed.
+[Evidence and limits](docs/development/V2_10_SUMMARY_QUALIFICATION.md).
+
+### Mac dependency audit repair — 2026-10-01
+
+PR #108 exposed three urllib3 2.7.0 advisories inherited from `master` in the
+packaged Mac requirements. Updated the pin to 2.8.0 and regenerated the legal
+inventory. Pinned-requirements audit, full regressions, fresh Mac package/build
+verification, packaged English/Spanish generation and post-execution signatures
+passed. Installed Qwen/Parakeet runtime pins stay unchanged. See the summary
+evidence for the rebuilt artifact/report hashes.
+
 ### User scope update — 2026-09-30
 
 Whisper Large v3 needs a quick functional smoke before exposure, not a
@@ -87,8 +113,9 @@ checks are recorded.
   Apple Silicon already rejected lower Opus effort, MLX decode changes, and a
   smaller summary context. Windows and Linux inference defaults are not being
   pursued.
-- Remaining committed work: Parakeet acceptance gates, practical Qwen summary-language checks and
-  output-language matching, and the Linux microphone-volume investigation.
+- Remaining committed work: Parakeet acceptance gates and the Linux
+  microphone-volume investigation. Qwen summary-language support is implemented
+  in the workspace with bounded one-runtime evidence (2026-09-30).
 - CI audit repair — 2026-09-30: the latest pre-Large CI run failed npm audits
   on vulnerable override pins. Updated only brace-expansion, fast-uri and undici
   patch pins and regenerated the lockfile. Clean `npm ci`, zero-vulnerability
@@ -112,15 +139,14 @@ remaining host checks while retaining live GPU admission.
    lifecycle checks in the approved three-platform plan. The CachyOS, Mac, and
    Windows dev-electron lifecycles and the packaged Mac lifecycle have passed.
    The Windows packaged lifecycle passed on 2026-09-30; the four deferred
-   Parakeet release checks remain. Other independent
-   investigations remain on their matching
-   release machines:
-   Qwen summary languages, a local output-language check,
-   and Linux mic volume. Details and hosts
+   Parakeet release checks remain. The Linux microphone-volume investigation
+   remains on its matching release machine. Qwen summary-language checks and
+   matching are complete in the workspace, with bounded evidence recorded
+   separately. Details and hosts
    are in the [plan index](docs/superpowers/plans/2026-09-06-v2.10.md).
 3. **Implement with focused checks:** Large v3 is implemented and its Windows
    download/cache reuse and ordinary/guided-window smoke passed on 2026-09-30;
-   summary-language support follows practical language checks
+   summary-language support is implemented with passing practical checks
    on one runtime.
 
 Keep recordings, transcripts, tokens, scratch reports, and user paths out of
@@ -151,13 +177,51 @@ v2.10 on 2026-09-29; the languages still listed stay.
 ### Summarisation
 
 Design: [Qwen language support and alternative summarisation models](docs/superpowers/plans/2026-09-07-summary-languages-and-models.md).
-Language qualification (slice A) remains. Alternative-model evaluation (slice B)
-was dropped from v2.10 on 2026-09-29; keep the current Qwen model. Do not claim
-supported languages until the language results exist.
+Slice A is implemented in the workspace with practical checks on the installed
+Qwen3.5 9B model and one Windows CUDA runtime;
+[evidence and limits](docs/development/V2_10_SUMMARY_QUALIFICATION.md).
+Alternative-model evaluation (slice B) remains out of v2.10.
 
-- [ ] Explore which languages the current Qwen summarisation model actually supports.
-- [ ] Enable summarisation only for the supported languages retained by the product.
-- [ ] Ensure Qwen summary output matches the language of the transcript.
+- [x] Explore which languages the current Qwen summarisation model actually supports.
+  15/15 synthetic generation fixtures passed for the 11 retained IDs, including
+  Chinese/Panjabi script cases and Portuguese variants. Local classifier controls
+  passed 15/15 language cases and 2/2 indeterminate short/mixed cases.
+- [x] Enable summarisation only for the supported languages retained by the product.
+  `en/es/fr/de/zh/ja/it/pa/hi/ko/pt` are enabled for the installed 9B model under
+  the existing runtime gates. Replacement entries and removed/unknown IDs are
+  unavailable; no model selector, downloads or new runtime policy.
+- [x] Ensure Qwen summary output matches the language of the transcript.
+  Confirm transcript language against its hash; propagate it through chunk,
+  merge, JSON repair and grounded regeneration. Local input/prose checks fail
+  closed with the existing bounded repair budget. Localized Markdown and
+  language/model/policy provenance are saved without changing meeting language.
+  Real two-chunk/merge, repair/retry, sidecar and negative checks passed. Focused
+  regressions and `npm run test:all` passed; prior-summary, queue/cancel/quit and
+  finalization protections remain covered.
+  Adversarial-review follow-up (2026-09-30): localized denial guards now reject
+  all 13 retained-language/script examples with one shared retry and prior-file
+  protection. Policy v2 uses unrestricted actual-language classification and
+  explicit predominant-share admission; Marathi was a demonstrated v1 false
+  positive. Five neighbor controls reject closest supported confirmations;
+  balanced input fails admission, and the above-floor names-only control is
+  indeterminate. Every regeneration opens an editable confirmation dialog.
+  Short Chinese/Hindi and predominant Spanish/Hindi Concise checks pass;
+  corrected chunk/merge/repair/sidecar paths pass 9/9. `test:all`: 1,079 JS and
+  814 Python passed (4/8 existing skips), both syntax gates passed.
+  Evidence now distinguishes pipeline
+  self-classification from manual content inspection and Windows-only coverage.
+  The near-full Chinese chunk failure was reproduced and traced to character
+  undercounting: 55,814 runtime input tokens exceeded the unchanged 32,768
+  context. The fix committed as `7496cfb` estimates UTF-8 bytes and bounds quoted
+  repair output to 12,000 bytes. The near-budget Chinese check, the original
+  input through three chunks/merge, and a forced near-budget JSON repair passed.
+  `test:all`: 1,079 JS / 817 Python passed, with 4 / 8 existing skips and both
+  syntax gates passing. Estimates remain heuristic; arbitrary oversized segments
+  and large merges are not qualified. Apple Silicon English/Spanish functional
+  smokes passed on 2026-10-01.
+  Linux CUDA functional smokes are deferred until before the v2.10 release;
+  they do not block merging this branch. See the evidence document for report
+  hashes and limits.
 
 ### Settings and navigation UX
 

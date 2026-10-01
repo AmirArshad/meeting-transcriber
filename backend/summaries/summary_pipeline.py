@@ -9,6 +9,10 @@ from __future__ import annotations
 
 import json
 import re
+
+from .summary_language import language_instruction
+from .language_labels import LANGUAGE_LABELS, PROFILE_LABELS
+from .summary_grounding import LOCALIZED_DENIAL_RES
 from typing import Any, Dict, Iterable, List, Optional
 
 
@@ -208,10 +212,15 @@ def normalize_transcript_segments(segments: Iterable[Dict[str, Any]]) -> List[Di
 
 
 def estimate_token_count(text: str) -> int:
-    """Conservative token estimate for chunking without tokenizer dependencies."""
+    """Estimate chunk tokens from UTF-8 bytes without tokenizer dependencies.
+
+    Character counts badly underbudget CJK text. Bytes preserve the existing
+    ASCII estimate while allowing more room for multilingual tokenization.
+    This is still a heuristic, not an exact tokenizer/context guarantee.
+    """
     if not text:
         return 0
-    return max(1, (len(text) + 3) // 4)
+    return max(1, (len(text.encode("utf-8")) + 3) // 4)
 
 
 def is_topic_boundary_segment(segment: Dict[str, Any]) -> bool:
@@ -312,12 +321,13 @@ def no_thinking_instruction() -> str:
     return "Do not use a thinking or reasoning section. Do not output <think> tags. Return the JSON object directly."
 
 
-def build_chunk_summary_prompt(chunk: Dict[str, Any], *, profile: str = "balanced") -> str:
+def build_chunk_summary_prompt(chunk: Dict[str, Any], *, profile: str = "balanced", language: Optional[str] = None) -> str:
     """Build the local LLM prompt for one transcript chunk."""
     profile_config = get_summary_profile(profile)
     return "\n\n".join([
         "You are AvaNevis, a local-only meeting summarizer. The transcript never leaves this device.",
         no_thinking_instruction(),
+        language_instruction(language) if language else "Write summary prose in the transcript language.",
         profile_config["instructions"],
         summary_json_schema_instruction(),
         "The transcript chunk below is the only meeting content. Summarize that speech.",
@@ -327,13 +337,14 @@ def build_chunk_summary_prompt(chunk: Dict[str, Any], *, profile: str = "balance
     ])
 
 
-def build_final_merge_prompt(chunk_summaries: Iterable[Dict[str, Any]], *, profile: str = "balanced") -> str:
+def build_final_merge_prompt(chunk_summaries: Iterable[Dict[str, Any]], *, profile: str = "balanced", language: Optional[str] = None) -> str:
     """Build the local LLM prompt that merges validated chunk summaries."""
     profile_config = get_summary_profile(profile)
     normalized_summaries = [validate_summary_json(summary) for summary in chunk_summaries]
     return "\n\n".join([
         "You are AvaNevis, a local-only meeting summarizer. Merge these chunk summaries into one final meeting summary.",
         no_thinking_instruction(),
+        language_instruction(language) if language else "Write summary prose in the transcript language.",
         profile_config["instructions"],
         summary_json_schema_instruction(),
         "Validated chunk summaries JSON:",
@@ -430,46 +441,53 @@ def transcript_chunk_has_speech(chunk_text: str) -> bool:
         cleaned,
         flags=re.IGNORECASE,
     )
-    return bool(re.search(r"[^\W\d_]{3,}", without_labels))
+    # Combining vowel signs can separate alphabetic characters in Hindi/Panjabi
+    # words. Count letters within a whitespace-delimited word, not consecutive
+    # regex letters, so real speech still activates the denial guard.
+    return any(sum(character.isalpha() for character in word) >= 3 for word in without_labels.split())
 
 
-def assert_summary_grounded_in_transcript(summary: Dict[str, Any], chunk_text: str) -> Dict[str, Any]:
+def assert_summary_grounded_in_transcript(summary: Dict[str, Any], chunk_text: str, *, language: Optional[str] = None) -> Dict[str, Any]:
     """Reject summaries that deny transcript content when speech was provided."""
     normalized = validate_summary_json(summary)
     if not transcript_chunk_has_speech(chunk_text):
         return normalized
-    if UNGROUNDED_SUMMARY_RE.search(normalized["summary"]):
+    localized_denial = LOCALIZED_DENIAL_RES.get(language)
+    if UNGROUNDED_SUMMARY_RE.search(normalized["summary"]) or (
+        localized_denial and localized_denial.search(normalized["summary"])
+    ):
         raise SummaryValidationError(
             "summary denied transcript content even though speech was provided"
         )
     return normalized
 
 
-def _item_text(item: Dict[str, Any], keys: Iterable[str]) -> str:
+def _item_text(item: Dict[str, Any], keys: Iterable[str], untitled="Untitled") -> str:
     for key in keys:
         value = _clean_text(item.get(key))
         if value:
             return value
-    return "Untitled"
+    return untitled
 
 
-def _item_metadata(item: Dict[str, Any], keys: Iterable[str]) -> str:
+def _item_metadata(item: Dict[str, Any], keys: Iterable[str], labels=None) -> str:
     parts = []
     for key in keys:
         value = _clean_text(item.get(key))
         if value:
-            parts.append(f"{key}: {value}")
+            parts.append(f"{(labels or {}).get(key, key)}: {value}")
     return f" ({'; '.join(parts)})" if parts else ""
 
 
-def _render_items(title: str, items: List[Dict[str, Any]], text_keys: Iterable[str], metadata_keys: Iterable[str]) -> List[str]:
+def _render_items(title: str, items: List[Dict[str, Any]], text_keys: Iterable[str], metadata_keys: Iterable[str], labels=None) -> List[str]:
+    labels = labels or {}
     lines = [f"## {title}", ""]
     if not items:
-        lines.extend(["None captured.", ""])
+        lines.extend([labels.get("empty", "None captured."), ""])
         return lines
 
     for item in items:
-        lines.append(f"- {_item_text(item, text_keys)}{_item_metadata(item, metadata_keys)}")
+        lines.append(f"- {_item_text(item, text_keys, labels.get('untitled', 'Untitled'))}{_item_metadata(item, metadata_keys, labels)}")
     lines.append("")
     return lines
 
@@ -482,22 +500,37 @@ def render_summary_markdown(summary: Dict[str, Any], metadata: Optional[Dict[str
     model = _clean_text(metadata.get("model"))
     generated_at = _clean_text(metadata.get("generatedAt"))
 
-    lines = ["# Meeting Summary", "", validated["summary"], ""]
+    table = LANGUAGE_LABELS
+    language = metadata.get("language", "en")
+    # Match the generated script for languages with two retained writing systems.
+    prose = validated["summary"]
+    if language == "pa" and re.search(r"[\u0600-\u06ff]", prose):
+        language = "pa-Arab"
+    elif language == "zh" and re.search(r"[會議們週準備預還設備問題負責試驗擴]", prose):
+        language = "zh-Hant"
+    row = table.get(language, table["en"])
+    labels = dict(zip(("title", "topics", "decisions", "action_items", "risks", "open_questions", "empty", "untitled", "profile", "model", "generated", "owner", "due", "timestamp", "timestamps"), row))
+    if "language" in metadata:
+        profiles = dict(zip(("concise", "balanced", "detailed", "action-items"), PROFILE_LABELS.get(language, PROFILE_LABELS["en"])))
+        profile = profiles.get(profile, profile)
+    if "language" not in metadata:
+        labels.update({key: key for key in ("owner", "due", "timestamp", "timestamps")})
+    lines = [f"# {labels['title']}", "", validated["summary"], ""]
     if profile or model or generated_at:
         lines.append("---")
         lines.append("")
         if profile:
-            lines.append(f"**Profile:** {profile}")
+            lines.append(f"**{labels['profile']}:** {profile}")
         if model:
-            lines.append(f"**Model:** {model}")
+            lines.append(f"**{labels['model']}:** {model}")
         if generated_at:
-            lines.append(f"**Generated:** {generated_at}")
+            lines.append(f"**{labels['generated']}:** {generated_at}")
         lines.append("")
 
-    lines.extend(_render_items("Topics", validated["topics"], ("title", "topic"), ("timestamps",)))
-    lines.extend(_render_items("Decisions", validated["decisions"], ("decision",), ("owner", "timestamp")))
-    lines.extend(_render_items("Action Items", validated["action_items"], ("task", "action"), ("owner", "due", "timestamp")))
-    lines.extend(_render_items("Risks", validated["risks"], ("risk",), ("timestamp",)))
-    lines.extend(_render_items("Open Questions", validated["open_questions"], ("question",), ("timestamp",)))
+    lines.extend(_render_items(labels["topics"], validated["topics"], ("title", "topic"), ("timestamps",), labels))
+    lines.extend(_render_items(labels["decisions"], validated["decisions"], ("decision",), ("owner", "timestamp"), labels))
+    lines.extend(_render_items(labels["action_items"], validated["action_items"], ("task", "action"), ("owner", "due", "timestamp"), labels))
+    lines.extend(_render_items(labels["risks"], validated["risks"], ("risk",), ("timestamp",), labels))
+    lines.extend(_render_items(labels["open_questions"], validated["open_questions"], ("question",), ("timestamp",), labels))
 
     return "\n".join(lines).rstrip() + "\n"

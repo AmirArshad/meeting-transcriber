@@ -9,6 +9,8 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
+const { createHash } = require('node:crypto');
+const summaryConfirmation = (transcriptPath) => ({ transcriptLanguage: 'en', sourceTranscriptHash: `sha256:${createHash('sha256').update(fs.readFileSync(transcriptPath, 'utf8')).digest('hex')}` });
 const { EventEmitter } = require('node:events');
 
 const { createRecorderService } = require('../../src/main/recorder-service');
@@ -637,9 +639,11 @@ test('F2: generate-summary enters metadata before update-ai; quit abort cannot k
   const summaryResult = {
     metadata: {
       profile: 'balanced',
-      model: 'test-model',
+      model: 'qwen3.5-9b-q4-k-m',
       generatedAt: new Date().toISOString(),
-      sourceTranscriptHash: 'abc',
+      ...summaryConfirmation(transcriptPath),
+      language: 'en', languageSource: 'userConfirmed',
+      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'qwen-language-v2',
     },
     summary: { overview: 'ok' },
   };
@@ -722,18 +726,19 @@ test('F2: generate-summary enters metadata before update-ai; quit abort cannot k
     },
     summarizeSummaryValidationError: (text) => text || 'summary error',
     platform: 'win32',
+    arch: 'x64',
     isQuitCommitted: () => false,
     checkAiAddonSetupStatus: async () => ({
       features: {
         summary: {
           status: 'ready',
           setupComplete: true,
-          modelId: 'test-model',
+          modelId: 'qwen3.5-9b-q4-k-m',
         },
       },
     }),
     getSummaryArtifactForPlatform: () => ({
-      modelId: 'test-model',
+      modelId: 'qwen3.5-9b-q4-k-m',
       modelLabel: 'Test',
       filename: 'model.gguf',
       runtime: 'llama.cpp',
@@ -751,7 +756,7 @@ test('F2: generate-summary enters metadata before update-ai; quit abort cannot k
 
   const resultPromise = handlers['generate-summary'](
     { sender: {} },
-    { meetingId: 'meeting_1', profile: 'balanced' },
+    { meetingId: 'meeting_1', profile: 'balanced', ...summaryConfirmation(transcriptPath) },
   );
 
   // Wait until update-ai is held open in metadata phase.
@@ -853,14 +858,14 @@ test('summary quit abort terminates an active Linux CUDA probe', async () => {
         summary: {
           status: 'ready',
           setupComplete: true,
-          modelId: 'test-model',
+          modelId: 'qwen3.5-9b-q4-k-m',
           cache: { valid: true },
           runtimeCache: { valid: true },
         },
       },
     }),
     getSummaryArtifactForPlatform: () => ({
-      modelId: 'test-model',
+      modelId: 'qwen3.5-9b-q4-k-m',
       modelLabel: 'Test',
       filename: 'model.gguf',
       runtime: 'llama.cpp',
@@ -878,7 +883,7 @@ test('summary quit abort terminates an active Linux CUDA probe', async () => {
 
   const resultPromise = handlers['generate-summary'](
     { sender: {} },
-    { meetingId: 'meeting_1', profile: 'balanced' },
+    { meetingId: 'meeting_1', profile: 'balanced', ...summaryConfirmation(transcriptPath) },
   );
   for (let i = 0; i < 50 && !probeStarted; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -972,14 +977,14 @@ test('queued summary cancellation does not start Linux CUDA admission after quit
         summary: {
           status: 'ready',
           setupComplete: true,
-          modelId: 'test-model',
+          modelId: 'qwen3.5-9b-q4-k-m',
           cache: { valid: true },
           runtimeCache: { valid: true },
         },
       },
     }),
     getSummaryArtifactForPlatform: () => ({
-      modelId: 'test-model',
+      modelId: 'qwen3.5-9b-q4-k-m',
       modelLabel: 'Test',
       filename: 'model.gguf',
       runtime: 'llama.cpp',
@@ -997,7 +1002,7 @@ test('queued summary cancellation does not start Linux CUDA admission after quit
 
   const resultPromise = handlers['generate-summary'](
     { sender: {} },
-    { meetingId: 'meeting_1', profile: 'balanced' },
+    { meetingId: 'meeting_1', profile: 'balanced', ...summaryConfirmation(transcriptPath) },
   );
   for (let i = 0; i < 50 && !queuedAction; i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 10));

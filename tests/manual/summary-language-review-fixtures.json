@@ -1,0 +1,48 @@
+{
+  "denials": {
+    "en": "No meeting transcript was provided, so the discussion cannot be summarized.",
+    "es": "No se proporcionó ninguna transcripción de la reunión, por lo que no es posible resumir la discusión.",
+    "fr": "Aucune transcription de la réunion n'a été fournie, il est donc impossible de résumer les échanges.",
+    "de": "Es wurde kein Transkript der Besprechung bereitgestellt, daher kann die Diskussion nicht zusammengefasst werden.",
+    "zh": "未提供会议转录文本，因此无法总结会议讨论内容。由于缺少会议记录，无法提取任何决定、行动事项或待解决的问题。",
+    "zh-Hant": "未提供會議轉錄文本，因此無法總結會議討論內容。由於缺少會議記錄，無法提取任何決定、行動事項或待解決的問題。",
+    "ja": "会議の文字起こしが提供されていないため、議論を要約できません。会議内容がないため、決定事項や作業項目を抽出できません。",
+    "it": "Non è stata fornita alcuna trascrizione della riunione, quindi non è possibile riassumere la discussione.",
+    "pa": "ਮੀਟਿੰਗ ਦੀ ਕੋਈ ਪ੍ਰਤੀਲਿਪੀ ਪ੍ਰਦਾਨ ਨਹੀਂ ਕੀਤੀ ਗਈ ਹੈ, ਇਸ ਲਈ ਚਰਚਾ ਦਾ ਸਾਰ ਤਿਆਰ ਨਹੀਂ ਕੀਤਾ ਜਾ ਸਕਦਾ।",
+    "pa-Arab": "میٹنگ دی کوئی نقل فراہم نہیں کیتی گئی، ایس لئی گل بات دا خلاصہ تیار نہیں کیتا جا سکدا۔",
+    "hi": "बैठक का कोई प्रतिलेख प्रदान नहीं किया गया है, इसलिए चर्चा का सारांश तैयार नहीं किया जा सकता।",
+    "ko": "회의 녹취록이 제공되지 않았으므로 논의 내용을 요약할 수 없습니다. 회의 내용이 없어 결정 사항이나 작업 항목을 추출할 수 없습니다.",
+    "pt": "Não foi fornecida nenhuma transcrição da reunião, portanto não é possível resumir a discussão."
+  },
+  "affirmative": {
+    "en": "The team reviewed the transcript provided by the vendor and approved the pilot.",
+    "es": "El equipo revisó la transcripción proporcionada por el proveedor y aprobó la prueba piloto.",
+    "fr": "L'équipe a examiné la transcription fournie par le prestataire et a approuvé le projet pilote.",
+    "de": "Das Team prüfte das vom Lieferanten bereitgestellte Transkript und genehmigte den Pilotversuch.",
+    "zh": "团队审阅了供应商提供的会议转录文本，并批准了周一开始的试点。",
+    "zh-Hant": "團隊審閱了供應商提供的會議轉錄文本，並批准了週一開始的試點。",
+    "ja": "チームは供給業者が提供した会議の文字起こしを確認し、試験の開始を承認しました。",
+    "it": "Il gruppo ha esaminato la trascrizione fornita dal fornitore e ha approvato la prova pilota.",
+    "pa": "ਟੀਮ ਨੇ ਸਪਲਾਇਰ ਵੱਲੋਂ ਦਿੱਤੀ ਗਈ ਮੀਟਿੰਗ ਦੀ ਪ੍ਰਤੀਲਿਪੀ ਦੀ ਸਮੀਖਿਆ ਕੀਤੀ ਅਤੇ ਅਜ਼ਮਾਇਸ਼ੀ ਪ੍ਰੋਜੈਕਟ ਨੂੰ ਮਨਜ਼ੂਰੀ ਦਿੱਤੀ।",
+    "pa-Arab": "ٹیم نے سپلائر ولوں دتی گئی میٹنگ دی نقل دا جائزہ لیا تے آزمائشی منصوبے نوں منظور کیتا۔",
+    "hi": "टीम ने आपूर्तिकर्ता द्वारा प्रदान किए गए बैठक के प्रतिलेख की समीक्षा की और परीक्षण को मंजूरी दी।",
+    "ko": "팀은 공급업체가 제공한 회의 녹취록을 검토하고 시범 사업을 승인했습니다.",
+    "pt": "A equipe analisou a transcrição fornecida pelo fornecedor e aprovou o projeto piloto."
+  },
+  "neighbors": {
+    "mr": "आम्ही सोमवारपासून एक छोटा प्रायोगिक प्रकल्प सुरू करण्याचा निर्णय घेतला आहे. मीरा शुक्रवारपर्यंत तपासणी यादी तयार करेल. अर्थसंकल्पात कोणताही बदल होणार नाही. पुरवठादार उपकरणे वेळेवर देऊ शकेल का याची अजून खात्री करायची आहे.",
+    "ne": "हामीले सोमबारदेखि एउटा सानो परीक्षण परियोजना सुरु गर्ने निर्णय गरेका छौँ। मीराले शुक्रबारसम्म जाँच सूची तयार गर्नेछिन्। बजेटमा कुनै परिवर्तन हुने छैन। आपूर्तिकर्ताले उपकरणहरू समयमा पुर्‍याउन सक्छ कि सक्दैन भनेर अझै पुष्टि गर्नुपर्छ।",
+    "ur": "ہم نے پیر کے دن ایک چھوٹا آزمائشی منصوبہ شروع کرنے کا فیصلہ کیا ہے۔ میرا جمعہ تک جانچ کی فہرست تیار کرے گی۔ بجٹ میں کوئی تبدیلی نہیں ہوگی۔ ہمیں ابھی تصدیق کرنی ہے کہ سپلائر سامان وقت پر پہنچا سکتا ہے یا نہیں۔",
+    "ca": "Hem aprovat una petita prova pilot per a dilluns. La Mira prepararà la llista de verificació abans de divendres. El pressupost es manté sense canvis. Encara hem de confirmar si el proveïdor pot lliurar els equips a temps.",
+    "gl": "Aprobamos unha pequena proba piloto para o luns. Mira preparará a lista de comprobación antes do venres. O orzamento permanece sen cambios. Aínda temos que confirmar se o provedor pode entregar os equipos a tempo."
+  },
+  "predominant": {
+    "es": "Aprobamos una prueba piloto para el lunes y el presupuesto no cambia. Mira preparará la lista de verificación antes del viernes. Debemos confirmar la entrega del proveedor y todavía no hay un responsable. Primero vamos a revisar los riesgos y luego decidiremos si ampliar la prueba. Hay que comprobar que el equipo esté listo antes de empezar. Revisaremos los resultados el martes para decidir los siguientes pasos. We should run the integration tests before deployment. The dashboard needs a clear error message. Let's check the API logs and review the pull request.",
+    "hi": "हमने सोमवार को एक छोटा परीक्षण शुरू करने का निर्णय लिया है और बजट में कोई बदलाव नहीं होगा। Mira शुक्रवार तक जाँच सूची तैयार करेगी। हमें आपूर्तिकर्ता से उपकरणों की समय पर उपलब्धता की पुष्टि करनी है। इस प्रश्न के लिए अभी कोई जिम्मेदार व्यक्ति नियुक्त नहीं किया गया है। पहले हम उपकरणों की जाँच करेंगे और उसके बाद परीक्षण का विस्तार करने पर चर्चा करेंगे। अगले सप्ताह परिणामों की समीक्षा होगी। We should run the integration tests before deployment. The dashboard needs a clear error message. Let's check the API logs and review the pull request."
+  },
+  "shortAboveFloor": "Mira Tomas Elena Victor Sophie Daniel Oliver Friday Monday",
+  "shortMeetings": {
+    "zh": "我们决定周一开始试点。Mira周五前准备检查清单。预算不变。供应商是否按时交货仍待确认，暂时没有指定负责人。",
+    "hi": "सोमवार को परीक्षण होगा। Mira शुक्रवार तक जाँच सूची बनाएगी। बजट नहीं बदलेगा। उपकरणों की आपूर्ति की पुष्टि अभी बाकी है।"
+  }
+}

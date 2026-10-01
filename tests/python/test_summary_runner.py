@@ -27,6 +27,19 @@ def test_hash_transcript_text_is_stable_and_prefixed():
     assert digest != hash_transcript_text('hello!')
 
 
+def test_json_repair_bounds_invalid_output_in_utf8_bytes():
+    from backend.summaries.summary_runner import build_json_repair_prompt
+
+    for raw in ['x' * 13000, '错' * 12000, '🙂' * 12000]:
+        prompt = build_json_repair_prompt(raw, 'zh', 'Complete grounded source 讨论项目')
+        quoted = prompt.split('Invalid model output (quoted data):\n\n', 1)[1]
+        assert len(quoted.encode('utf-8')) <= 12000
+        assert quoted == raw[:len(quoted)]
+        assert '\ufffd' not in quoted
+        assert 'Complete grounded source 讨论项目' in prompt
+    assert len(quoted) > 0
+
+
 def test_load_summary_segments_prefers_speaker_sidecar(tmp_path):
     transcript_path = tmp_path / 'meeting.md'
     speakers_path = tmp_path / 'meeting.speakers.json'

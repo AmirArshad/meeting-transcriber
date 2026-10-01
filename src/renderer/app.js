@@ -1452,6 +1452,8 @@ function updateSummaryGenerationButtons() {
   }
 }
 
+let closeSummaryLanguageConfirmation = null;
+
 async function cancelSummaryGeneration(meetingId) {
   if (!summaryGenerationMeetingId || summaryGenerationCancelling) {
     return;
@@ -1460,6 +1462,10 @@ async function cancelSummaryGeneration(meetingId) {
   summaryGenerationCancelling = true;
   updateSummaryGenerationButtons();
   addLog('Cancelling summary generation...');
+  if (closeSummaryLanguageConfirmation) {
+    closeSummaryLanguageConfirmation(null);
+    return;
+  }
 
   try {
     const result = await window.electronAPI.cancelSummaryGeneration({ meetingId: meetingId || summaryGenerationMeetingId });
@@ -2565,6 +2571,7 @@ async function selectMeeting(meetingId) {
 
   currentMeetingId = targetId;
   pendingMeetingTranscriptId = targetId;
+  updateSummaryLanguageCaptions(meeting);
 
   // Show meeting details
   document.getElementById('meeting-title').textContent = meeting.title;
@@ -2610,6 +2617,7 @@ async function selectMeeting(meetingId) {
     if (!fullMeeting || currentMeetingId !== targetId || pendingMeetingTranscriptId !== targetId) {
       return;
     }
+    updateSummaryLanguageCaptions(fullMeeting);
 
     if (fullMeeting.transcript) {
       transcriptEl.dataset.markdown = fullMeeting.transcript;
@@ -3023,6 +3031,7 @@ function setupEventListeners() {
       return;
     }
     rendererQuitCommitted = true;
+    if (closeSummaryLanguageConfirmation) closeSummaryLanguageConfirmation(null);
       updateButtonUI();
       updateControlsState();
       const message = typeof payload === 'string' ? payload : payload && payload.message;
@@ -4371,6 +4380,91 @@ function handleSummaryGenerationButtonClick(meetingId, button) {
   generateSummaryForMeeting(meetingId);
 }
 
+async function hashSummaryTranscript(text) {
+  const digest = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode((text || '').replace(/\r\n?/g, '\n')));
+  return `sha256:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+
+function updateSummaryLanguageCaptions(meeting) {
+  const names = aiAddonStatusSnapshot?.features?.summary?.languagePolicy?.names || {};
+  const confirmed = meeting?.summaryStale === false && meeting?.ai?.summary?.languageSource === 'userConfirmed';
+  const language = confirmed ? meeting.ai.summary.language : meeting?.language;
+  const name = names[language] || language;
+  const text = name ? `Transcript language: ${name}${confirmed ? `. Summary will use ${name}.` : ' (confirm when generating).'}`
+    : 'Transcript language: confirm when generating';
+  for (const id of ['transcript-summary-language-caption', 'summary-language-caption']) {
+    const caption = document.getElementById(id);
+    if (caption) caption.textContent = text;
+  }
+}
+
+function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = null) {
+  const modal = document.getElementById('summary-language-modal');
+  const select = document.getElementById('summary-transcript-language');
+  const form = document.getElementById('summary-language-form');
+  const cancel = document.getElementById('summary-language-cancel');
+  const submit = document.getElementById('summary-language-confirm');
+  const message = document.getElementById('summary-language-message');
+  const previousFocus = document.activeElement;
+  select.replaceChildren();
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Choose transcript language…';
+  select.appendChild(placeholder);
+  for (const [id, name] of Object.entries(policy.names || {})) {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = `${name}${policy.languages.includes(id) ? '' : ' — summaries unavailable'}`;
+    select.appendChild(option);
+  }
+  const defaultLanguage = preferredLanguage || meeting.language;
+  select.value = Object.hasOwn(policy.names || {}, defaultLanguage) ? defaultLanguage : '';
+  const update = () => {
+    const name = policy.names?.[select.value];
+    const available = policy.languages.includes(select.value);
+    submit.disabled = !available;
+    message.textContent = !name ? 'Confirm the predominant transcript language.'
+      : available ? `Summary will use ${name}.`
+        : `Summaries are not available for ${name} with this model.`;
+  };
+  update();
+  modal.classList.remove('hidden');
+  select.focus();
+  return new Promise((resolve) => {
+    const close = (language) => {
+      modal.classList.add('hidden');
+      form.removeEventListener('submit', onSubmit);
+      select.removeEventListener('change', update);
+      cancel.removeEventListener('click', onCancel);
+      modal.removeEventListener('keydown', onKey);
+      closeSummaryLanguageConfirmation = null;
+      if (previousFocus?.isConnected) previousFocus.focus();
+      resolve(language);
+    };
+    const onSubmit = (event) => {
+      event.preventDefault();
+      if (policy.languages.includes(select.value)) close(select.value);
+    };
+    const onCancel = () => close(null);
+    const onKey = (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(null); }
+      if (event.key !== 'Tab') return;
+      const elements = [select, cancel, submit].filter((element) => !element.disabled);
+      const index = elements.indexOf(document.activeElement);
+      const next = event.shiftKey ? index - 1 : index + 1;
+      if (next < 0 || next >= elements.length) {
+        event.preventDefault();
+        elements[event.shiftKey ? elements.length - 1 : 0].focus();
+      }
+    };
+    closeSummaryLanguageConfirmation = close;
+    form.addEventListener('submit', onSubmit);
+    select.addEventListener('change', update);
+    cancel.addEventListener('click', onCancel);
+    modal.addEventListener('keydown', onKey);
+  });
+}
+
 async function generateSummaryForMeeting(meetingId) {
   if (!meetingId) {
     addLog('Save a transcript before generating a summary.', 'warning');
@@ -4388,6 +4482,7 @@ async function generateSummaryForMeeting(meetingId) {
   summaryGenerationCancelling = false;
   updateSummaryGenerationButtons();
 
+  addLog('Checking summary availability…');
   let aiStatus;
   try {
     aiStatus = await window.electronAPI.getAiAddonStatus({
@@ -4439,20 +4534,34 @@ async function generateSummaryForMeeting(meetingId) {
     return;
   }
 
-  if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
-    showSummaryMessage('Generating local summary...');
-  }
-
   try {
-    addLog('Generating local summary...');
+    const policy = summaryStatus.languagePolicy;
+    if (!policy || !policy.languages?.length) throw new Error('No transcript languages have been checked for the installed model.');
+    const meeting = await window.electronAPI.getMeeting(normalizedMeetingId);
+    const sourceTranscriptHash = await hashSummaryTranscript(meeting?.transcript);
+    if (summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) throw new Error('Summary generation cancelled.');
+    const preferredLanguage = window.summaryLanguageHelpers.reusableSummaryLanguage(meeting, sourceTranscriptHash, policy);
+    const transcriptLanguage = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage);
+    if (!transcriptLanguage || summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) {
+      if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
+        const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
+        if (!restored) showSummaryMessage('Summary generation cancelled. Transcript is unchanged.');
+      }
+      return;
+    }
+    if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) showSummaryMessage(`Generating local summary in ${policy.names[transcriptLanguage]}…`);
+    addLog(`Generating local summary in ${policy.names[transcriptLanguage]}...`);
     const summaryProfileSelect = document.getElementById('summary-profile-select');
     const result = await window.electronAPI.generateSummary({
       meetingId: normalizedMeetingId,
+      transcriptLanguage,
+      sourceTranscriptHash,
       profile: (summaryProfileSelect && summaryProfileSelect.value) || summaryStatus.profile || DEFAULT_SUMMARY_PROFILE,
     });
 
     if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
       const fullMeeting = await window.electronAPI.getMeeting(normalizedMeetingId);
+      updateSummaryLanguageCaptions(fullMeeting);
       renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '', { stale: fullMeeting && fullMeeting.summaryStale });
       syncMeetingInList((result && result.meeting) || fullMeeting);
       activateHistoryDetailTab('summary');
