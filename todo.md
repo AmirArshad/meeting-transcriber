@@ -10,6 +10,39 @@ implementation or acceptance evidence.
 
 ## Status
 
+### Manual acceptance and review handoff — 2026-10-03
+
+The user confirmed all remaining checks were completed manually and good.
+Parakeet release acceptance and the last Linux microphone-volume bullet are
+closed by user sign-off, retaining current gain behavior. Release preparation is
+complete pending adversarial code review. Commit and push on `master` are now
+authorized; tag/release publication is not. See the
+[manual acceptance record](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md).
+
+### Initial automated Linux release preparation — 2026-10-03
+
+Version metadata was prepared as 2.10.0 on `master` for review.
+Linux AppImage/pacman/deb builds and packaged verification passed. Baseline/final
+regression gates passed; final source gate is 1,085 JS / 818 Python with 2 / 7
+skips. Fixed Parakeet memory-error classification before stderr truncation and
+persisted actionable guidance without changing runtime/fallback policy.
+
+Real packaged-backend checks passed Qwen English/Spanish and prior-output
+preservation, disconnected-network Parakeet CUDA short/repeated inference,
+bounded allocation failure preservation, live backend capture recovery, and
+controlled capture. Scoped package/profile upgrade evidence is bounded separately.
+These are not packaged-renderer UI acceptance. Native desktop control is disabled,
+and noninteractive sudo cannot perform a normal system-package upgrade. Source
+volume stayed 48%; the reported reset cause remains unresolved, so no gain remedy
+was added. Affected acceptance checkboxes were initially left open; the later user
+manual sign-off above supersedes that status.
+
+The initial automated pass left the candidate awaiting manual acceptance. See the
+[dated Linux evidence and blockers](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md)
+and [candidate release notes](docs/releases/v2.10.0.md). Windows/macOS historical
+results remain unchanged; their deferred checks are not qualified by CachyOS.
+No staging, commits, pushes, tags, publication or workflow dispatch occurred.
+
 ### Merge scope update — 2026-10-01
 
 Complete available Mac validation and merge the Qwen language branch to `master`.
@@ -122,7 +155,13 @@ checks are recorded.
   `npm audit --audit-level=high`, `test:all`, Windows `build:dir` and packaged
   Speakrs/layout checks passed locally before commit/push.
 
-## How to sequence the work
+## Current next step
+
+Release implementation and remaining manual acceptance are complete as of the
+2026-10-03 user sign-off. Run adversarial code review in a fresh session. The
+sequencing below records the earlier implementation order.
+
+## How to sequence the work (historical)
 
 Settings, click-away rename, and the transcription **policy** change (Persian /
 Tiny / Base off new choices) did not wait on hardware investigations. Whisper
@@ -172,7 +211,7 @@ v2.10 on 2026-09-29; the languages still listed stay.
   on CUDA/float16. `npm run test:all` passed (1,062 JS / 734 Python; 4 / 8 skips).
   No performance/memory studies or per-OS qualification campaign.
 - [x] Remove Tiny and Base model options; Small becomes the smallest available Whisper model.
-- [ ] Add optional English-only Parakeet transcription in Settings for Windows CUDA, Apple Silicon Metal, and Linux managed CUDA. The approved [three-platform plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) governs implementation. The Mac service-level smoke, the CachyOS, Mac, and Windows dev-electron lifecycles, and the packaged Mac lifecycle passed. The Windows packaged lifecycle passed on 2026-09-30. Network disconnect, memory pressure, live recording recovery, and packaged update survival remain open before the v2.10 release. Do not claim a speed, memory, or accuracy win from these runs.
+- [x] Add optional English-only Parakeet transcription in Settings for Windows CUDA, Apple Silicon Metal, and Linux managed CUDA. The approved [three-platform plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) governs implementation. The Mac service-level smoke, the CachyOS, Mac, and Windows dev-electron lifecycles, and the packaged Mac lifecycle passed. The Windows packaged lifecycle passed on 2026-09-30. Network disconnect, memory pressure, live recording recovery, and packaged update survival were closed by user-reported manual acceptance on 2026-10-03; see the dated Linux qualification record. Do not claim a speed, memory, or accuracy win from these runs.
 
 ### Summarisation
 
@@ -241,11 +280,11 @@ Pyannote removal.
 ### Meeting and keyboard UX
 
 - [x] Save a meeting rename when the user clicks away while editing. Shipped in PR #103; not part of the Settings/shortcuts plan.
-- [x] Add cross-platform keyboard shortcuts that avoid system shortcut conflicts, including start recording, stop recording, and navigation to Record, History, and Settings. Design is in the Settings/shortcuts plan; packaged conflict checks remain on each OS.
+- [x] Add cross-platform keyboard shortcuts that avoid system shortcut conflicts, including start recording, stop recording, and navigation to Record, History, and Settings. Design is in the Settings/shortcuts plan; remaining packaged acceptance was confirmed manually by the user on 2026-10-03.
 
 ### Linux microphone volume
 
-- [ ] Investigate Linux input-volume defaults: determine why some PipeWire/PulseAudio setups reset the microphone to 50%, measure capture/transcription impact, and assess a safe app-side or setup-side remedy without unexpectedly changing user device settings. Linux desktop session only.
+- [x] Investigate Linux input-volume defaults: determine why some PipeWire/PulseAudio setups reset the microphone to 50%, measure capture/transcription impact, and assess a safe app-side or setup-side remedy without unexpectedly changing user device settings. Linux desktop session only. Investigation recorded on 2026-10-03: measured source volume stayed 48%, reset attribution was not established, and current gain behavior was retained. The user confirmed manual checks were good and accepted closure; no device-gain remedy was added.
 
 ## Deferred beyond v2.10
 

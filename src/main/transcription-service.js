@@ -76,6 +76,7 @@ const {
 } = require('./parakeet-setup');
 const {
   buildParakeetBootstrapArgs,
+  buildParakeetProcessError,
   launchParakeetBootstrap,
   parakeetInterpreterCacheRoot,
   parseDeviceProbeStdout,
@@ -1510,12 +1511,7 @@ function createTranscriptionService(deps) {
           output.assertStdoutWithinLimit();
           if (spawnError) throw spawnError;
           if (code !== 0) {
-            const message = sanitizeTranscriptionError(output.getStderr()) || 'Parakeet failed.';
-            const error = new Error(message);
-            const reportedCode = String(message).match(/\b(PARAKEET_[A-Z0-9_]+)\b/);
-            error.code = reportedCode ? reportedCode[1]
-              : (/out of memory/i.test(message) ? 'PARAKEET_OUT_OF_MEMORY' : 'PARAKEET_RUNTIME_INVALID');
-            throw error;
+            throw buildParakeetProcessError(output.getStderr(), sanitizeTranscriptionError);
           }
           const result = JSON.parse(output.getStdout());
           const expectedDevice = getAdapterSpec(request.adapterId).device;
@@ -1863,7 +1859,8 @@ function createTranscriptionService(deps) {
       if (!completed && !isQuitCommitted() && !isTranscriptionJobDeleted(transcriptionQueueState, meetingId)
           && error?.code !== 'TRANSCRIPTION_QUIT_SKIPPED' && typeof failTranscriptionAttempt === 'function') {
         try { await failTranscriptionAttempt(meetingId, jobRequest.attemptId,
-          sanitizeTranscriptionError(error.code || error.message)); } catch (_) { /* Stale/deleted attempt. */ }
+          sanitizeTranscriptionError(error.code === 'PARAKEET_OUT_OF_MEMORY'
+            ? error.message : error.code || error.message)); } catch (_) { /* Stale/deleted attempt. */ }
       }
       if (error?.code === 'TRANSCRIPTION_DELETED') {
         removeQueueJob(transcriptionQueueState, meetingId, { clearCancelFlag: false });

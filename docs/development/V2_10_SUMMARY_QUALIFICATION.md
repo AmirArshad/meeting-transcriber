@@ -335,3 +335,27 @@ Updated packaged `app.asar` SHA-256:
 `f6d4a87d7ef146c686d5b4ad995867480c9e9c2c8f658641346a4803cce8d73a`.
 Earlier fingerprints remain the evidence for the pre-audit build. Linux hardware
 and the separate Parakeet release checks remain deferred as recorded above.
+
+## Linux packaged-backend functional smoke — 2026-10-03
+
+The 2.10.0 candidate based on `278aa204` plus the unstaged release-preparation
+changes passed English/Spanish full-runner generation with installed Linux
+Qwen3.5 9B Q4_K_M and managed CUDA. Actual prose inspection confirmed the Monday
+pilot, unchanged budget, Mira's Friday checklist and unresolved supplier delivery
+in the respective language. Live packaged CUDA admission and full-checksum setup
+status returned `ready`. Wrong confirmation and process cancellation preserved
+previous sidecars/transcript/audio bytes.
+
+This closes the bounded Linux backend English/non-English functional smoke;
+it does not close packaged renderer confirmation/edit/regeneration/cancel/restart
+acceptance. Native desktop input APIs were unavailable. No language-quality or
+performance campaign was added. Artifact/report hashes, exact execution scope
+and remaining gates are in the [Linux release evidence](V2_10_LINUX_RELEASE_QUALIFICATION.md).
+Historical Windows/Mac reports above remain unchanged.
+
+## Subsequent manual acceptance — 2026-10-03
+
+The user confirmed all remaining checks were completed manually and good. This
+closes packaged confirmation/edit/regeneration/cancel/restart acceptance by user
+sign-off; it does not expand the agent-measured backend smoke above. See the
+[manual acceptance record](V2_10_LINUX_RELEASE_QUALIFICATION.md).

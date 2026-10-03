@@ -169,6 +169,41 @@ pressure, or live interrupted recording was tested. The four deferred lifecycle
 checks remain release work. This bounded fixture run establishes no performance
 or accuracy comparison.
 
+### Linux release candidate follow-up — 2026-10-03
+
+Candidate-packaged Python/backend/FFmpeg on CachyOS RTX 4070 passed real CUDA
+short/repeated inference in a scoped network namespace with no route. An 8 GiB
+child address-space cap reproduced an ORT encoder allocation failure, preserving
+source/prior transcript bytes with no fallback. Main now classifies complete
+stderr before truncation and persists actionable memory guidance; focused
+regressions and full gate passed. A killed real recorder was recovered by the
+packaged backend with playable audio and all capture-time selection fields.
+Scoped pacman package/profile upgrade checks are recorded separately.
+
+These checks do not establish renderer/IPC/UI recovery or failure/retry flows,
+normal system-package upgrade, or the remaining Windows/macOS matrix. Native
+desktop input APIs are unavailable and noninteractive sudo requires a password.
+The initial automated pass left the complete four deferred lifecycle gates and
+Parakeet scope checkbox open (subsequently closed by user manual sign-off).
+Linux offline runtime execution is demonstrated; the other evidence has
+explicit limits. See [dated evidence and hashes](../../development/V2_10_LINUX_RELEASE_QUALIFICATION.md).
+
+## User manual acceptance — 2026-10-03
+
+The user confirmed: “i have done it all manually and its all good” and asked to
+close the last scope bullet, update the plan, commit and push. This closes the
+remaining release acceptance gates by user sign-off: packaged UI shortcuts,
+navigation, rename/tray/quit/restart, capture/playback/transcription, Qwen
+confirmation/edit/regeneration/cancel/restart, and the deferred Parakeet
+offline/memory-failure/recovery/update checks. The Linux microphone investigation
+is closed with the retain-current decision accepted; no gain change was added.
+
+This is user-reported manual acceptance, not additional agent-measured evidence.
+No new per-platform measurements or artifact reports were supplied. Historical
+Windows/macOS reports and the bounded automated Linux results above retain their
+original scope. Adversarial code review is the next step; no release publication
+or tag is authorized.
+
 ## Global constraints and authority
 
 - Design baseline: branch `qualification/linux-parakeet-v2.10`, commit `ee1674cadbedf3d3dc03cc671df0de3edbb81222`.
@@ -663,7 +698,9 @@ the bounded CachyOS packaged smoke, the CachyOS, Mac, and Windows
 dev-electron lifecycles, and the packaged Mac lifecycle are recorded above.
 Each lifecycle covered the Section 12 behaviors listed in its note, except
 network disconnect, memory pressure, live recording recovery, and packaged
-update survival. The Windows packaged smoke is still open. Mocked GPU tests
+update survival. The Windows packaged lifecycle passed on 2026-09-30. The complete deferred
+lifecycle gates were subsequently closed by user manual acceptance on 2026-10-03,
+with bounded agent-measured Linux follow-up recorded above. Mocked GPU tests
 prove contracts/routing, not hardware execution.
 
 ## Out of scope

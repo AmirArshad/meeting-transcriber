@@ -1663,3 +1663,37 @@ test('request-based Whisper jobs commit a candidate and retain the prior transcr
   assert.equal(passed.commits[0].payload.result.attemptId, request.attemptId);
   assert.equal(passed.files.get(passed.meeting.transcriptPath), '# Old committed transcript\n');
 });
+
+test('a failed Parakeet allocation attempt persists actionable retry guidance without committing output', async () => {
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const { buildParakeetProcessError } = require('../../src/main/parakeet-runtime');
+  const request = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+    platform: process.platform, arch: process.arch, osRelease: '24.0.0',
+  }).request;
+  const meeting = { id: 'allocation-failure', audioPath: '/tmp/avanevis-test/recordings/source.opus',
+    transcriptPath: '/tmp/avanevis-test/recordings/prior.md', transcriptionRequest: request };
+  const failures = [];
+  let commits = 0;
+  const harness = createServiceHarness({
+    runWallClockComputeAction: async ({ label, action }) => (
+      String(label).startsWith('Meeting lookup') ? meeting : action((proc) => proc, { signal: undefined })
+    ),
+    getGuidedDiarizationStatusForJob: async () => null,
+    getParakeetStatusForJob: () => ({ status: 'ready', artifactRevision: request.artifactRevision,
+      runtimeLockId: request.runtimeLockId }),
+    probeParakeetRuntime: async () => ({ deviceAvailable: true, device: request.adapterId.includes('metal') ? 'metal' : 'cuda' }),
+    runParakeetProcessForJob: async () => {
+      throw buildParakeetProcessError('BFCArena Failed to allocate memory for requested buffer of size 16777216', String);
+    },
+    failTranscriptionAttempt: async (id, attemptId, message) => { failures.push({ id, attemptId, message }); },
+    commitTranscriptionAttempt: async () => { commits += 1; },
+  });
+  const job = harness.service.admitMeetingTranscriptionJob({ meetingId: meeting.id, request });
+  await assert.rejects(harness.computeQueue.runNext(), { code: 'PARAKEET_OUT_OF_MEMORY' });
+  await assert.rejects(job, { code: 'PARAKEET_OUT_OF_MEMORY' });
+  assert.equal(commits, 0);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].attemptId, request.attemptId);
+  assert.match(failures[0].message, /Close other applications and retry/);
+  assert.equal(harness.getQueueState().jobs[0].status, 'failed');
+});

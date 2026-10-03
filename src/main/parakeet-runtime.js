@@ -185,6 +185,22 @@ async function verifyRuntimeHashes(runtimeDir, lock, fsModule = fs, cancelSignal
   }
 }
 
+// Classify the complete captured diagnostic before the display sanitizer truncates
+// startup warnings. ORT allocation errors do not always say "out of memory".
+function buildParakeetProcessError(stderr, sanitizeError) {
+  const diagnostic = String(stderr || '');
+  const reportedCode = diagnostic.match(/\b(PARAKEET_[A-Z0-9_]+)\b/);
+  const memoryFailure = /out of memory|failed to allocate memory|cannot allocate memory|std::bad_alloc|\bMemoryError\b/i.test(diagnostic);
+  const code = reportedCode ? reportedCode[1]
+    : (memoryFailure ? 'PARAKEET_OUT_OF_MEMORY' : 'PARAKEET_RUNTIME_INVALID');
+  const message = code === 'PARAKEET_OUT_OF_MEMORY'
+    ? 'Parakeet ran out of memory. Close other applications and retry. Your recording and previous transcript are preserved.'
+    : sanitizeError(diagnostic) || 'Parakeet failed.';
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
 function buildParakeetChildEnv({
   backendPath,
   runtimeDir,
@@ -711,6 +727,7 @@ module.exports = {
   STARTUP_ISOLATION_FLAGS,
   buildParakeetBootstrapArgs,
   buildParakeetChildEnv,
+  buildParakeetProcessError,
   expectedRuntimeFiles,
   hashFileSha256,
   isLibraryName,

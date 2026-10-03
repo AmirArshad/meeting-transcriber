@@ -412,3 +412,29 @@ test('an interpreter without a site-enabled ._pth is launched unchanged', () => 
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Parakeet allocation failures after startup warnings retain an actionable memory error', () => {
+  const { buildParakeetProcessError } = require('../../src/main/parakeet-runtime');
+  const sanitize = (value) => String(value).replace(/\s+/g, ' ').trim().slice(0, 300);
+  for (const detail of [
+    'onnxruntime BFCArena::AllocateRawInternal Failed to allocate memory for requested buffer of size 16777216',
+    'CUDA error: out of memory',
+    'std::bad_alloc',
+    'MemoryError: Unable to allocate array',
+  ]) {
+    const error = buildParakeetProcessError(`${'startup warning '.repeat(40)}\n${detail}`, sanitize);
+    assert.equal(error.code, 'PARAKEET_OUT_OF_MEMORY');
+    assert.match(error.message, /Close other applications.*retry/);
+    assert.match(error.message, /recording and previous transcript are preserved/);
+  }
+});
+
+test('Parakeet process errors retain explicit runtime codes and do not misclassify missing libraries', () => {
+  const { buildParakeetProcessError } = require('../../src/main/parakeet-runtime');
+  const sanitize = (value) => String(value).slice(0, 300);
+  const unavailable = buildParakeetProcessError('PARAKEET_GPU_UNAVAILABLE: CUDA admission failed.', sanitize);
+  assert.equal(unavailable.code, 'PARAKEET_GPU_UNAVAILABLE');
+  const missing = buildParakeetProcessError('Failed to load libcudnn.so: file not found.', sanitize);
+  assert.equal(missing.code, 'PARAKEET_RUNTIME_INVALID');
+  assert.match(missing.message, /libcudnn/);
+});
