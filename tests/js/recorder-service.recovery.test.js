@@ -688,3 +688,49 @@ test('recovery timeout remains classified when terminator waits for child close'
   const state = service.getRecordingRecoveryState();
   assert.ok(state.failed.some((entry) => entry.code === 'RECOVERY_TIMEOUT'));
 });
+
+test('restart replays multiple durable handoffs and retries an ack without restaging a completed attempt', async () => {
+  const first = recoveredSelection();
+  const second = { ...first, attemptId: '22222222-2222-4222-8222-222222222222', language: 'en' };
+  const items = [
+    { audioPath: '/tmp/restart-a.wav', transcriptionSelection: first, recoveryHandoff: true },
+    { audioPath: '/tmp/restart-b.wav', transcriptionSelection: second, recoveryHandoff: true },
+  ];
+  const meetings = [
+    { id: 'first', audioPath: items[0].audioPath },
+    { id: 'second', audioPath: items[1].audioPath, transcriptionRequest: second, transcriptionStatus: 'completed' },
+  ];
+  const events = [];
+  let failAck = true;
+  const { service } = createRecoveryService({
+    spawnTrackedPython: (args) => {
+      if (args.includes('--list')) return createProc({ success: true, candidates: [], handoffs: items });
+      assert.ok(args.includes('--ack-handoff'));
+      const audio = args[args.indexOf('--ack-handoff') + 1];
+      events.push(`ack:${audio}`);
+      if (audio === items[1].audioPath && failAck) return createProc({ success: false }, { exitCode: 1 });
+      return createProc({ success: true });
+    },
+    listMeetings: async () => meetings,
+    stageTranscriptionRequest: async (id, request) => {
+      events.push(`stage:${id}`);
+      const meeting = meetings.find((item) => item.id === id);
+      meeting.transcriptionRequest = request;
+      return meeting;
+    },
+    scanRecordings: async ({ beforeAutoResume }) => {
+      await beforeAutoResume();
+      events.push('resume');
+    },
+  });
+  await service.discoverInterruptedCaptures();
+  assert.equal(service.getRecordingRecoveryState().status, 'available');
+  assert.equal(service.getRecordingRecoveryState().totals.count, 2);
+  assert.equal((await service.recoverInterruptedCaptures()).success, false);
+  assert.deepEqual(events, ['stage:first', 'ack:/tmp/restart-a.wav', 'ack:/tmp/restart-b.wav']);
+  assert.equal(service.getRecordingRecoveryState().scanImportPending, true);
+  failAck = false;
+  assert.equal((await service.recoverInterruptedCaptures()).success, true);
+  assert.deepEqual(events.slice(3), ['ack:/tmp/restart-b.wav', 'resume']);
+  assert.equal(meetings[1].transcriptionStatus, 'completed');
+});

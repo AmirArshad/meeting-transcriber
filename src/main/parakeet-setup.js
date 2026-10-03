@@ -296,6 +296,51 @@ function getStatus({
   });
 }
 
+// Successful catalog hashes belong to this process, never install.json.
+const computeHashEvidence = new Map();
+
+async function getComputeStatus(options = {}) {
+  const fsModule = options.fsModule || fs;
+  const status = getStatus(options);
+  if (status.status !== 'ready') return status;
+  const target = resolveTarget(options);
+  const runtimePath = runtimeDir(options.userDataDir, target.adapterId, target.lock.lockDigest);
+  try {
+    const runtimeFiles = verifyRuntimeTree(runtimePath, target.lock, fsModule);
+    const groups = [
+      [runtimePath, runtimeFiles.map((file) => ({ ...file, path: file.relativePath })), 'PARAKEET_RUNTIME_INVALID'],
+      [modelDir(options.userDataDir, target.artifactRevision), target.lock.model.files, 'PARAKEET_ARTIFACT_INVALID'],
+      [target.lock.vad && vadDir(options.userDataDir, target.lock.vad.revision),
+        target.lock.vad && target.lock.vad.files || [], 'PARAKEET_ARTIFACT_INVALID'],
+    ];
+    for (const [root, files, code] of groups) {
+      for (const file of files) {
+        const filePath = path.resolve(root, ...file.path.split('/'));
+        const stat = fsModule.lstatSync(filePath);
+        if (!stat.isFile() || stat.size !== Number(file.sizeBytes)) {
+          throw fail(code, 'Parakeet pinned file is invalid.');
+        }
+        const fingerprint = `${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${file.sha256}`;
+        if (computeHashEvidence.get(filePath) === fingerprint) continue;
+        computeHashEvidence.delete(filePath);
+        const actual = await hashFileSha256(filePath, fsModule);
+        const after = fsModule.lstatSync(filePath);
+        if (actual !== file.sha256 || !after.isFile() || after.size !== stat.size
+            || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) {
+          throw fail(code, 'Parakeet file content does not match the pinned lock.');
+        }
+        computeHashEvidence.set(filePath, fingerprint);
+      }
+    }
+    return status;
+  } catch (error) {
+    return publicStatus('repair-required', {
+      adapterId: target.adapterId, installed: true,
+      code: error.code && error.code.startsWith('PARAKEET_') ? error.code : 'PARAKEET_ARTIFACT_INVALID',
+    });
+  }
+}
+
 async function receiveDownload({
   file,
   stagingRoot,
@@ -701,6 +746,7 @@ async function removeParakeet({
 
 module.exports = {
   downloadPlan,
+  getComputeStatus,
   getStatus,
   modelDir,
   removeParakeet,

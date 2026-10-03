@@ -44,3 +44,15 @@ Platform recorders always spill raw capture to durable `{stem}.capture/` track s
 Preserve: 48 kHz, stereo, mono-compatible stereo for transcription downmixes, Opus via ffmpeg, gentle mic enhancement, faithful desktop audio, and mic-only degradation rather than discarding the microphone recording. Final mix duration on `windows-v1`, `macos-v1`, and `linux-v1` is bounded by the microphone timeline — desktop leading-pad/trim alignment must not extend the finished file past the mic track.
 
 **Temp-file gotchas:** post-processing temps use a deliberately non-scanned `.pcm.tmp` extension (`backend/audio/recorder_temp_paths.py`). Scan-import recovers orphan temps into `{stem}.wav`, or deletes them when a final Opus/WAV already exists. Temps at or below WAV-header size are **dropped, not promoted**. macOS recovery must promote a leftover `.pcm.tmp` to a stable `{stem}.wav` before emitting `outputPath` — never hand Electron the volatile temp path.
+
+### Recovery transcription handoff
+
+Recovery writes a per-capture `<outputStem>.recovery-request.json` atomically and
+flushes it before deleting the capture manifest. It contains the promoted audio
+path and the exact capture-time transcription selection. Startup discovery
+returns unacknowledged handoffs even after the `.capture` directory is gone.
+Recovery scan stages those requests before auto-resume, then acknowledges each
+handoff only after the backend verifies the matching request in meeting metadata.
+A lost response or failed staging/ack remains replayable; a matching completed
+attempt is acknowledged without resetting it to pending. Audio and prior outputs
+remain intact on failed recovery or transcription.

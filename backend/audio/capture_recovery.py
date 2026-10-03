@@ -295,6 +295,69 @@ def list_interrupted_captures(recordings_dir: PathLike) -> List[Dict[str, Any]]:
     return candidates
 
 
+HANDOFF_SUFFIX = ".recovery-request.json"
+
+
+def write_recovery_handoff(root: Path, stem: str, audio_path: str, duration: float, selection: Any) -> None:
+    if not isinstance(selection, dict):
+        return
+    target = _resolve_output_beside_root(root, stem, HANDOFF_SUFFIX)
+    temporary = target.with_name(target.name + ".tmp")
+    payload = {"audioPath": str(audio_path), "duration": duration,
+               "transcriptionSelection": selection}
+    with temporary.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, target)
+    if os.name != "nt":
+        descriptor = os.open(root, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
+def list_recovery_handoffs(recordings_dir: PathLike) -> List[Dict[str, Any]]:
+    root = resolve_recordings_root(recordings_dir)
+    handoffs = []
+    for target in sorted(root.glob(f"*{HANDOFF_SUFFIX}")):
+        if target.is_symlink():
+            raise CaptureRecoveryError("Recovery handoff must not be a symlink")
+        stem = _safe_output_stem(target.name[:-len(HANDOFF_SUFFIX)])
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+            audio = Path(payload["audioPath"]).resolve(strict=False)
+            if (audio.parent != root or audio.stem != stem or audio.suffix not in (".opus", ".wav")
+                    or not audio.is_file() or not isinstance(payload.get("transcriptionSelection"), dict)):
+                raise ValueError("Invalid recovery handoff")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise CaptureRecoveryError(f"Invalid recovery handoff: {target.name}") from exc
+        handoffs.append({**payload, "recoveryHandoff": True})
+    return handoffs
+
+
+def acknowledge_recovery_handoff(recordings_dir: PathLike, audio_path: str) -> None:
+    from meeting_manager import MeetingManager
+
+    root = resolve_recordings_root(recordings_dir)
+    audio = Path(audio_path).resolve(strict=False)
+    if audio.parent != root or audio.suffix not in (".opus", ".wav"):
+        raise CaptureRecoveryError("Recovery audio must stay under recordings")
+    target = _resolve_output_beside_root(root, _safe_output_stem(audio.stem), HANDOFF_SUFFIX)
+    if not target.exists():
+        return
+    handoff = next((item for item in list_recovery_handoffs(root) if item["audioPath"] == str(audio)), None)
+    if handoff is None:
+        raise CaptureRecoveryError("Recovery handoff does not match the audio")
+    manager = MeetingManager(recordings_dir=str(root))
+    saved = next((meeting for meeting in manager.list_meetings()
+                  if meeting.get("audioPath") == str(audio)), None)
+    if not saved or saved.get("transcriptionRequest") != handoff["transcriptionSelection"]:
+        raise CaptureRecoveryError("Recovered transcription request is not durable")
+    target.unlink()
+
+
 def recover_capture(
     recordings_dir: PathLike,
     capture_dir: PathLike,
@@ -361,6 +424,7 @@ def recover_capture(
             ) from exc
         try:
             try:
+                write_recovery_handoff(root, stem, str(preexisting_final), duration, peek.get("transcriptionSelection"))
                 coordinator.set_final_relative_path(preexisting_final.name)
                 coordinator.set_state("complete")
             except CaptureManifestError:
@@ -386,6 +450,7 @@ def recover_capture(
         selection = peek.get("transcriptionSelection")
         if isinstance(selection, dict):
             result["transcriptionSelection"] = selection
+            result["recoveryHandoff"] = True
         return result
 
     # Stage to a non-meeting name so a failed compress cannot delete a sibling
@@ -399,6 +464,8 @@ def recover_capture(
             progress_callback=progress_callback,
             recovered=True,
             promote_to_path=output_opus,
+            before_cleanup=lambda audio, duration: write_recovery_handoff(
+                root, stem, audio, duration, peek.get("transcriptionSelection")),
         )
     except Timeout as exc:
         raise CaptureRecoveryError(
@@ -427,6 +494,7 @@ def recover_capture(
     selection = peek.get("transcriptionSelection")
     if isinstance(selection, dict):
         recovered["transcriptionSelection"] = selection
+        recovered["recoveryHandoff"] = True
     return recovered
 
 
@@ -480,12 +548,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         metavar="CAPTURE_DIR",
         help="Recover one capture directory under the recordings root",
     )
+    group.add_argument("--ack-handoff", metavar="AUDIO_PATH", help="Acknowledge a durably staged recovery request")
     args = parser.parse_args(argv)
 
     try:
         if args.list:
             candidates = list_interrupted_captures(args.recordings_dir)
-            _emit_json({"success": True, "candidates": candidates})
+            _emit_json({"success": True, "candidates": candidates,
+                        "handoffs": list_recovery_handoffs(args.recordings_dir)})
+            return 0
+
+        if args.ack_handoff:
+            acknowledge_recovery_handoff(args.recordings_dir, args.ack_handoff)
+            _emit_json({"success": True})
             return 0
 
         result = recover_captures(

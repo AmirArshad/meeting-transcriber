@@ -1116,6 +1116,7 @@ def finalize_capture(
     coordinator: Optional[CaptureManifestCoordinator] = None,
     recovered: bool = False,
     promote_to_path: Optional[PathLike] = None,
+    before_cleanup: Optional[Callable] = None,
 ) -> FinalizationResult:
     """Finalize a capture session with bounded memory.
 
@@ -1125,7 +1126,8 @@ def finalize_capture(
     When ``promote_to_path`` is set (recovery staging), the verified meeting
     output is atomically renamed to that canonical path **before** the manifest
     is marked complete and the capture session is deleted. Promotion failure
-    retains the ``.capture`` session for retry.
+    retains the ``.capture`` session for retry. ``before_cleanup`` persists a
+    durable recovery handoff after promotion and before manifest deletion.
     """
     if chunk_frames <= 0:
         raise ValueError("chunk_frames must be positive")
@@ -1169,6 +1171,8 @@ def finalize_capture(
                     and final_duration_matches_expectation(actual, expected)
                 ):
                     duration = float(actual) if actual is not None else 0.0
+                    if before_cleanup is not None:
+                        before_cleanup(str(final_candidate), duration)
                     session_path = coordinator.session_dir
                     # Close/release the lock before cleanup so Windows can unlink.
                     if owns_coordinator:
@@ -1413,6 +1417,10 @@ def finalize_capture(
                     f"Failed to promote recovered audio to canonical path: {exc}",
                     recoverable_path=str(staged) if staged.is_file() else None,
                 ) from exc
+
+        # Persist the recovery request before any irreversible manifest cleanup.
+        if before_cleanup is not None:
+            before_cleanup(final_path, duration)
 
         # Mark complete + store basename only (same directory as output).
         coordinator.set_final_relative_path(Path(final_path).name)

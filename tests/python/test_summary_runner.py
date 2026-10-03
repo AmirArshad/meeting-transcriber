@@ -44,7 +44,7 @@ def test_load_summary_segments_prefers_speaker_sidecar(tmp_path):
     transcript_path = tmp_path / 'meeting.md'
     speakers_path = tmp_path / 'meeting.speakers.json'
     transcript_path.write_text('**[00:01 - 00:02]**\nPlain transcript', encoding='utf-8')
-    speakers_path.write_text(json.dumps({'segments': [{'start': 1, 'end': 2, 'speaker': 'Speaker 1', 'text': 'Labeled'}]}), encoding='utf-8')
+    speakers_path.write_text(json.dumps({'sourceTranscriptHash': hash_transcript_text(transcript_path.read_text()), 'segments': [{'start': 1, 'end': 2, 'speaker': 'Speaker 1', 'text': 'Labeled'}]}), encoding='utf-8')
 
     segments = load_summary_segments(str(transcript_path), str(speakers_path))
 
@@ -329,3 +329,16 @@ def test_summary_runner_help_exits_successfully():
 
     assert result.returncode == 0, result.stderr
     assert 'Generate a local AvaNevis meeting summary' in result.stdout
+
+
+@pytest.mark.parametrize('binding', [None, hash_transcript_text('Superseded facts')])
+def test_summary_ignores_unbound_or_superseded_speaker_text(tmp_path, binding):
+    transcript = tmp_path / 'new.md'
+    transcript.write_text('**[00:01 - 00:02]**\nCurrent facts', encoding='utf-8')
+    speakers = tmp_path / 'old.speakers.json'
+    speakers.write_text(json.dumps({'sourceTranscriptHash': binding, 'segments': [
+        {'start': 1, 'end': 2, 'speaker': 'Speaker 1', 'text': 'Superseded facts'},
+    ]}))
+    segments = load_summary_segments(str(transcript), str(speakers))
+    assert 'Current facts' in str(segments)
+    assert 'Superseded facts' not in str(segments)

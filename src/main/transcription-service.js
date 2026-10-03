@@ -70,6 +70,7 @@ const { getAdapterSpec } = require('./transcription-engine-catalog');
 const { isLinuxCudaStatusReadyForAdmission } = require('../main-process/linux-cuda-runtime-helpers');
 const {
   getStatus: getParakeetStatus,
+  getComputeStatus: getParakeetComputeStatus,
   removeParakeet,
   setupParakeet,
   validateParakeet,
@@ -246,7 +247,7 @@ function createTranscriptionService(deps) {
     failTranscriptionAttempt = null,
     spawnParakeetPython = null,
     runParakeetDiarizationProcessForJob = null,
-    getParakeetStatusForJob = getParakeetStatus,
+    getParakeetStatusForJob = getParakeetComputeStatus,
     getGuidedDiarizationStatusForJob = null,
     probeParakeetRuntime = null,
     runParakeetProcessForJob = null,
@@ -1263,6 +1264,10 @@ function createTranscriptionService(deps) {
       audioPath: meeting.audioPath,
       segmentsPath: speakerSidecarPath,
     });
+    // Bind the speaker text to the exact committed Markdown used by summaries.
+    const transcriptText = await fs.promises.readFile(meeting.transcriptPath, 'utf8');
+    sidecarPayload.sourceTranscriptHash = `sha256:${crypto.createHash('sha256')
+      .update(transcriptText.replace(/\r\n/g, '\n').replace(/\r/g, '\n'), 'utf8').digest('hex')}`;
     await fs.promises.writeFile(
       path.resolve(speakerSidecarPath),
       `${JSON.stringify(sidecarPayload, null, 2)}\n`,
@@ -1739,6 +1744,15 @@ function createTranscriptionService(deps) {
             };
 
             if (!canRunGuided) return runAttempt();
+
+            // Reject invalid Parakeet content before starting even the speaker pass.
+            // runAttempt re-admits afterward in case files changed during that pass.
+            try {
+              await admitParakeetForAttempt(jobRequest, registerProcess);
+            } catch (error) {
+              error.parakeetStage = 'admission';
+              throw error;
+            }
 
             try {
               throwIfInterrupted();

@@ -10,6 +10,22 @@ implementation or acceptance evidence.
 
 ## Status
 
+### Adversarial v2.10 RC review fixes — 2026-10-03
+
+All three findings and their regression recommendations are addressed: Parakeet
+compute verifies catalog hashes before probing/execution with trusted fingerprint
+caching; transcript commit invalidates obsolete speaker metadata and summary
+loading requires speaker-sidecar hash provenance; capture recovery durably retains
+and replays exact selections until metadata acknowledgement. Failed retries keep
+previous outputs. Added 12 JS and 7 Python regression cases, including real FFmpeg
+promotion followed by process-response loss and restart discovery.
+
+`npm run test:all` passed with repo-local Python 3.11.16; final JS evidence is
+1,097 passed / 2 skipped. After installing the existing Linux pulsectl dependency,
+the refreshed full Python suite passed 825 / 7 skipped. Syntax and diff checks
+passed. Native GPU, real Speakrs/model and platform-specific acceptance were not
+repeated; prior user-confirmed hardware evidence remains the acceptance basis.
+
 ### Manual acceptance and review handoff — 2026-10-03
 
 The user confirmed all remaining checks were completed manually and good.

@@ -807,6 +807,10 @@ class MeetingManager:
                 raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
 
             previous_transcript = meeting.get('transcriptPath')
+            # Invalidate speakers in the same transaction as transcript replacement.
+            # Failed attempts never reach this point; their prior AI outputs survive.
+            if isinstance(meeting.get('ai'), dict):
+                meeting['ai'].pop('diarization', None)
             meeting['transcriptPath'] = str(candidate.resolve(strict=False))
             meeting['transcriptionResult'] = normalized_result
             meeting['transcriptionStatus'] = 'completed'

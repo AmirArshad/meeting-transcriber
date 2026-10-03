@@ -903,3 +903,95 @@ def test_recovery_refuses_a_contradictory_desktop_primary_manifest(tmp_path, mon
     assert session.exists()
     assert (session / name).is_file()
     assert not output.is_file()
+
+
+def test_recovery_handoffs_survive_lost_response_and_ack_individually(tmp_path, monkeypatch):
+    from backend.audio.capture_recovery import list_recovery_handoffs, acknowledge_recovery_handoff
+    from backend.meeting_manager import MeetingManager
+    _patch_finalize_io(monkeypatch)
+    selections = []
+    recovered = []
+    for index in range(2):
+        session = _build_interrupted_session(
+            tmp_path, stem=f'recording_handoff_{index}',
+            started_at_iso='2026-07-13T10:00:00.000Z', desktop_frames=None, mic_frames=4800,
+        )
+        manifest = session / MANIFEST_FILENAME
+        data = json.loads(manifest.read_text())
+        selection = {
+            'schemaVersion': 1, 'attemptId': f'{index + 1:08d}-1111-4111-8111-111111111111',
+            'engine': 'parakeet', 'language': 'en', 'modelId': 'parakeet-tdt-0.6b-v2',
+            'artifactRevision': '0bbb45a3365852604aef28b538a8f066f4ccaa85',
+            'adapterId': 'parakeet-onnx-linux-cuda-v1', 'runtimeLockId': 'a' * 64,
+            'boundaryPolicy': 'parakeet-boundaries-v1',
+        }
+        data['transcriptionSelection'] = selection
+        manifest.write_text(json.dumps(data))
+        selections.append(selection)
+        recovered.append(recover_capture(tmp_path, session))
+    # Simulate losing all returned process output, then restart discovery.
+    assert list_interrupted_captures(tmp_path) == []
+    handoffs = list_recovery_handoffs(tmp_path)
+    assert len(handoffs) == 2
+    assert [item['transcriptionSelection'] for item in handoffs] == selections
+    manager = MeetingManager(recordings_dir=str(tmp_path))
+    for index, item in enumerate(handoffs):
+        with pytest.raises(CaptureRecoveryError, match='durable'):
+            acknowledge_recovery_handoff(tmp_path, item['audioPath'])
+        transcript = Path(item['audioPath']).with_suffix('.md')
+        transcript.write_text('# Recovered pending transcription')
+        meeting = manager._add_meeting_direct(meeting_id=f'recovered-{index}', audio_path=item['audioPath'],
+            transcript_path=str(transcript), duration=1, language='unknown', model='unknown',
+            title='Recovered', transcription_status='pending')
+        saved = manager.stage_transcription_request(meeting['id'], item['transcriptionSelection'])
+        assert saved['transcriptionRequest'] == selections[index]
+        acknowledge_recovery_handoff(tmp_path, item['audioPath'])
+        assert len(list_recovery_handoffs(tmp_path)) == 1 - index
+        acknowledge_recovery_handoff(tmp_path, item['audioPath'])  # Idempotent ack.
+
+
+def test_handoff_write_failure_keeps_manifest_and_promoted_audio(tmp_path, monkeypatch):
+    import backend.audio.capture_recovery as recovery
+    _patch_finalize_io(monkeypatch)
+    session = _build_interrupted_session(tmp_path, stem='handoff_failure',
+        started_at_iso='2026-07-13T10:00:00.000Z', desktop_frames=None, mic_frames=4800)
+    manifest = session / MANIFEST_FILENAME
+    data = json.loads(manifest.read_text())
+    data['transcriptionSelection'] = {'schemaVersion': 1, 'attemptId': '11111111-1111-4111-8111-111111111111',
+        'engine': 'whisper', 'language': 'fr', 'modelSize': 'small', 'artifactRevision': None}
+    manifest.write_text(json.dumps(data))
+    def fail(*args, **kwargs):
+        raise OSError('handoff write interrupted')
+    monkeypatch.setattr(recovery, 'write_recovery_handoff', fail)
+    with pytest.raises(spp.FinalizationError, match='handoff write interrupted'):
+        recover_capture(tmp_path, session)
+    assert manifest.exists()
+    assert (tmp_path / 'handoff_failure.wav').exists()
+
+
+def test_real_ffmpeg_recovery_retains_selection_for_restart_cli(tmp_path):
+    import shutil
+    import subprocess
+    import sys
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        pytest.skip('ffmpeg is required for real recovery promotion')
+    session = _build_interrupted_session(tmp_path, stem='recording_real_handoff',
+        started_at_iso='2026-07-13T10:00:00.000Z', desktop_frames=None, mic_frames=4800)
+    manifest = session / MANIFEST_FILENAME
+    data = json.loads(manifest.read_text())
+    selection = {'schemaVersion': 1, 'attemptId': '11111111-1111-4111-8111-111111111111',
+        'engine': 'whisper', 'language': 'fr', 'modelSize': 'small', 'artifactRevision': None}
+    data['transcriptionSelection'] = selection
+    manifest.write_text(json.dumps(data))
+    recover_capture(tmp_path, session, ffmpeg_path=ffmpeg)  # Discard returned response.
+    assert not manifest.exists()
+    restarted = subprocess.run([sys.executable, '-m', 'audio.capture_recovery',
+        '--recordings-dir', str(tmp_path), '--list'], cwd=Path(__file__).resolve().parents[2] / 'backend',
+        capture_output=True, text=True, check=True)
+    payload = json.loads(restarted.stdout)
+    assert payload['candidates'] == []
+    assert payload['handoffs'][0]['transcriptionSelection'] == selection
+    audio = Path(payload['handoffs'][0]['audioPath'])
+    assert audio.is_file()
+    assert spp.ffmpeg_can_decode(audio, ffmpeg)

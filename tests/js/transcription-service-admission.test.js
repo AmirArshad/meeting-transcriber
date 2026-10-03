@@ -1697,3 +1697,111 @@ test('a failed Parakeet allocation attempt persists actionable retry guidance wi
   assert.match(failures[0].message, /Close other applications and retry/);
   assert.equal(harness.getQueueState().jobs[0].status, 'failed');
 });
+
+for (const guided of [false, true]) {
+  for (const component of ['runtime', 'model', 'vad']) {
+    test(`same-size ${component} corruption rejects ${guided ? 'guided' : 'ordinary'} Parakeet before execution`, async () => {
+      const fs = require('node:fs');
+      const crypto = require('node:crypto');
+      const setup = require('../../src/main/parakeet-setup');
+      const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+      const request = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+        platform: process.platform, arch: process.arch, osRelease: '24.0.0',
+      }).request;
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-integrity-'));
+      const recordings = path.join(root, 'recordings');
+      fs.mkdirSync(recordings);
+      const meeting = { id: 'integrity', audioPath: path.join(recordings, 'a.opus'),
+        transcriptPath: path.join(recordings, 'old.md'), transcriptionRequest: request };
+      fs.writeFileSync(meeting.audioPath, 'previous audio');
+      fs.writeFileSync(meeting.transcriptPath, 'previous transcript');
+      const bytes = Buffer.from('pass');
+      const record = { path: 'fixture.bin', sizeBytes: bytes.length,
+        sha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+      const lock = { lockDigest: request.runtimeLockId, model: { revision: request.artifactRevision, files: [record] },
+        vad: { revision: 'vad', files: [record] }, wheels: [{ extractedFiles: [record] }] };
+      const dirs = { runtime: setup.runtimeDir(root, request.adapterId, lock.lockDigest),
+        model: setup.modelDir(root, lock.model.revision), vad: setup.vadDir(root, 'vad') };
+      for (const dir of Object.values(dirs)) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, record.path), bytes);
+      }
+      const device = request.adapterId.includes('metal') ? 'metal' : 'cuda';
+      fs.writeFileSync(path.join(dirs.runtime, 'device.json'), JSON.stringify({ device, deviceAvailable: true }));
+      const options = { userDataDir: root, adapterId: request.adapterId, device, lock };
+      assert.equal((await setup.getComputeStatus(options)).status, 'ready');
+      fs.writeFileSync(path.join(dirs[component], record.path), 'exit');
+      const calls = [];
+      const harness = createServiceHarness({
+        fs, app: { getPath: () => root }, getRecordingsDir: () => recordings,
+        runWallClockComputeAction: async ({ label, action }) => String(label).startsWith('Meeting lookup')
+          ? meeting : action((proc) => proc, {}),
+        getGuidedDiarizationStatusForJob: async () => guided ? { engine: 'speakrs' } : null,
+        getParakeetStatusForJob: () => setup.getComputeStatus(options),
+        spawnTrackedPython: () => { calls.push('python'); throw new Error('unexpected Python fallback'); },
+        probeParakeetRuntime: () => { calls.push('probe'); throw new Error('unexpected probe'); },
+        runParakeetProcessForJob: () => { calls.push('ASR'); throw new Error('unexpected ASR'); },
+        runParakeetDiarizationProcessForJob: () => { calls.push('speaker'); throw new Error('unexpected speaker child'); },
+        commitTranscriptionAttempt: () => { calls.push('commit'); },
+        failTranscriptionAttempt: async () => {},
+      });
+      try {
+        const code = component === 'runtime' ? 'PARAKEET_RUNTIME_INVALID' : 'PARAKEET_ARTIFACT_INVALID';
+        const job = harness.service.admitMeetingTranscriptionJob({ meetingId: meeting.id, request });
+        await assert.rejects(harness.computeQueue.runNext(), { code });
+        await assert.rejects(job, { code });
+        assert.deepEqual(calls, []);
+        assert.equal(fs.readFileSync(meeting.audioPath, 'utf8'), 'previous audio');
+        assert.equal(fs.readFileSync(meeting.transcriptPath, 'utf8'), 'previous transcript');
+      } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    });
+  }
+}
+
+test('successful guided Parakeet retry binds its replacement speaker text to committed Markdown', async () => {
+  const crypto = require('node:crypto');
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const request = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+    platform: process.platform, arch: process.arch, osRelease: '24.0.0',
+  }).request;
+  const meeting = { id: 'guided-binding', audioPath: '/tmp/avanevis-test/recordings/a.opus',
+    transcriptPath: '/tmp/avanevis-test/recordings/old.md', transcriptionRequest: request };
+  const markdown = '# Meeting Transcription\r\n\r\n## Transcript\r\n\r\nnew facts';
+  const device = request.adapterId.includes('metal') ? 'metal' : 'cuda';
+  const writes = new Map();
+  let committed;
+  const harness = createServiceHarness({
+    runWallClockComputeAction: async ({ label, action }) => String(label).startsWith('Meeting lookup')
+      ? meeting : action((proc) => proc, {}),
+    getGuidedDiarizationStatusForJob: async () => ({ engine: 'speakrs', modelId: 'speakrs-community1-vbx' }),
+    getParakeetStatusForJob: () => ({ status: 'ready', artifactRevision: request.artifactRevision,
+      runtimeLockId: request.runtimeLockId }),
+    probeParakeetRuntime: async () => ({ deviceAvailable: true, device }),
+    runParakeetDiarizationProcessForJob: async () => ({ hasUsableWindows: true,
+      speakerSegments: [{ start: 0, end: 1, speaker: 'Speaker 1' }] }),
+    runParakeetProcessForJob: async ({ candidatePath }) => ({
+      text: 'new facts', segments: [{ start: 0, end: 1, text: 'new facts' }], duration: 1,
+      engine: 'parakeet', device, computeType: 'float32', language: 'en',
+      modelId: request.modelId, adapterId: request.adapterId, boundaryPolicy: request.boundaryPolicy,
+      artifactRevision: request.artifactRevision, runtimeLockId: request.runtimeLockId, output_file: candidatePath,
+      diarization: { status: 'completed', segments: [{ start: 0, end: 1, speaker: 'Speaker 1', text: 'new facts' }] },
+    }),
+    commitTranscriptionAttempt: async (_id, payload) => {
+      committed = { ...meeting, transcriptPath: payload.candidatePath, transcriptionStatus: 'completed' };
+      return committed;
+    },
+    updateMeetingAiMetadata: async (_id, ai) => ({ ...committed, ai }),
+    fs: { ...createMinimalFs(), promises: { ...createMinimalFs().promises,
+      readFile: async () => markdown, writeFile: async (file, text) => writes.set(file, text),
+    } },
+  });
+  const job = harness.service.admitMeetingTranscriptionJob({ meetingId: meeting.id, request });
+  await harness.computeQueue.runNext();
+  const result = await job;
+  assert.equal(result.diarizationError, null);
+  const payload = JSON.parse(writes.get('/tmp/avanevis-test/recordings/a.speakers.json'));
+  assert.equal(payload.sourceTranscriptHash, `sha256:${crypto.createHash('sha256')
+    .update(markdown.replace(/\r\n/g, '\n')).digest('hex')}`);
+  assert.equal(payload.segments[0].text, 'new facts');
+  assert.equal(result.meeting.ai.diarization.status, 'completed');
+});

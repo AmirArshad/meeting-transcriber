@@ -379,9 +379,10 @@ function createRecorderService(deps) {
     const displayCandidates = recoveryInternalCandidates.map(toDisplayCandidate);
     let totals = computeRecoveryTotals(displayCandidates);
     // Scan-import-only pending: keep a non-zero count so Dismiss cannot hide the banner.
-    if (totals.count === 0 && recoveryScanImportPending && recoveryLastSuccessCount > 0) {
+    if (totals.count === 0 && recoveryScanImportPending
+        && (recoveryLastSuccessCount > 0 || pendingRecoveredSelections.length > 0)) {
       totals = {
-        count: recoveryLastSuccessCount,
+        count: Math.max(recoveryLastSuccessCount, pendingRecoveredSelections.length),
         approxBytes: null,
       };
     }
@@ -554,6 +555,8 @@ function createRecorderService(deps) {
             || `Discovery exited with code ${code}`,
         );
       }
+      pendingRecoveredSelections = mergeRecoveredSelections(pendingRecoveredSelections,
+        Array.isArray(result.handoffs) ? result.handoffs : []);
       const candidates = Array.isArray(result.candidates) ? result.candidates : [];
       recoveryInternalCandidates = candidates
         .filter((item) => item && typeof item.captureDir === 'string' && item.captureDir)
@@ -1739,6 +1742,10 @@ function createRecorderService(deps) {
   }
 
   async function recoveredSelectionIsDurable(meeting, selection) {
+    // A replay after metadata commit must not reset a completed attempt to pending.
+    if (meeting.transcriptionRequest && Object.keys(selection).every(
+      (key) => meeting.transcriptionRequest[key] === selection[key],
+    )) return true;
     let stagedMeeting = null;
     try {
       stagedMeeting = await stageTranscriptionRequest(meeting.id, selection);
@@ -1791,9 +1798,17 @@ function createRecorderService(deps) {
     const stillPending = [];
     for (const item of selected) {
       const meeting = meetingsByAudioName.get(path.basename(item.audioPath));
-      const saved = meeting
+      let saved = meeting
         ? await recoveredSelectionIsDurable(meeting, item.transcriptionSelection)
         : false;
+      if (saved && item.recoveryHandoff) {
+        try {
+          const { code, result } = await runCaptureRecoveryPython(['--ack-handoff', item.audioPath]);
+          saved = code === 0 && result?.success === true;
+        } catch (_) {
+          saved = false;
+        }
+      }
       if (!saved) {
         stillPending.push(item);
       }

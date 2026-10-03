@@ -722,3 +722,64 @@ test('child env drops ambient libraries and a late child is terminated after tim
   assert.equal(terminated.exitCode, null);
   assert.equal(terminateLateRuntimeChild({ exitCode: 0 }, { timedOut: true, terminate() {} }).terminated, false);
 });
+
+for (const component of ['runtime', 'model', 'vad']) {
+  test(`compute admission rehashes same-size changed ${component} content`, async () => {
+    const { getComputeStatus, modelDir, runtimeDir, vadDir } = require('../../src/main/parakeet-setup');
+    const root = userData();
+    const lock = fixtureLock();
+    lock.bytes.vadBytes = Buffer.from('vad!');
+    lock.vad = { repository: lock.model.repository, revision: 'vad-revision', files: [
+      { path: 'silero_vad.onnx', sizeBytes: 4, sha256: sha256(lock.bytes.vadBytes) },
+    ] };
+    const options = setupOptions(root, lock);
+    try {
+      await setupParakeet(options);
+      assert.equal((await getComputeStatus(options)).status, 'ready');
+      const target = component === 'runtime'
+        ? path.join(runtimeDir(root, options.adapterId, lock.lockDigest), 'pkg/model.bin')
+        : component === 'model' ? path.join(modelDir(root, lock.model.revision), 'config.json')
+          : path.join(vadDir(root, lock.vad.revision), 'silero_vad.onnx');
+      const original = fs.readFileSync(target);
+      fs.writeFileSync(target, Buffer.alloc(original.length, 120));
+      const future = new Date(Date.now() + 2000);
+      fs.utimesSync(target, future, future);
+      const rejected = await getComputeStatus(options);
+      assert.equal(rejected.status, 'repair-required');
+      assert.equal(rejected.code, component === 'runtime' ? 'PARAKEET_RUNTIME_INVALID' : 'PARAKEET_ARTIFACT_INVALID');
+      fs.writeFileSync(target, original);
+      assert.equal((await getComputeStatus(options)).status, 'ready');
+      fs.writeFileSync(path.join(runtimeDir(root, options.adapterId, lock.lockDigest), 'extra.py'), 'exit');
+      assert.equal((await getComputeStatus(options)).status, 'repair-required');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test('compute caches only successful catalog hashes while explicit validation always full-hashes', async () => {
+  const { getComputeStatus, modelDir } = require('../../src/main/parakeet-setup');
+  const root = userData();
+  const lock = fixtureLock();
+  let hashes = 0;
+  const fsModule = { ...fs, createReadStream(...args) { hashes += 1; return fs.createReadStream(...args); } };
+  const options = setupOptions(root, lock, { fsModule });
+  try {
+    await setupParakeet(options);
+    hashes = 0;
+    assert.equal((await getComputeStatus(options)).status, 'ready');
+    assert.equal(hashes, 2);
+    assert.equal((await getComputeStatus(options)).status, 'ready');
+    assert.equal(hashes, 2);
+    fs.writeFileSync(path.join(modelDir(root, lock.model.revision), 'config.json'), 'no');
+    assert.equal((await getComputeStatus(options)).status, 'repair-required');
+    assert.equal(hashes, 3);
+    assert.equal((await getComputeStatus(options)).status, 'repair-required');
+    assert.equal(hashes, 4, 'failed hash evidence must never be reused');
+    fs.writeFileSync(path.join(modelDir(root, lock.model.revision), 'config.json'), lock.bytes.modelBytes);
+    assert.equal((await getComputeStatus(options)).status, 'ready');
+    hashes = 0;
+    assert.equal((await validateParakeet(options)).status, 'ready');
+    assert.equal(hashes, 2);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});

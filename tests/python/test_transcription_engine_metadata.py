@@ -326,3 +326,27 @@ def test_cancelled_attempt_cannot_commit_candidate(tmp_path):
     saved = manager.get_meeting(meeting['id'])
     assert saved['transcriptionStatus'] == 'failed'
     assert Path(saved['transcriptPath']).read_text(encoding='utf-8') == '# Transcript\n\nhello'
+
+
+@pytest.mark.parametrize('succeeds', [True, False])
+def test_parakeet_retry_invalidates_speakers_only_on_transcript_commit(tmp_path, succeeds):
+    manager, meeting = _seed_meeting(tmp_path)
+    sidecar = Path(meeting['audioPath']).with_suffix('.speakers.json')
+    sidecar.write_text(json.dumps({'segments': [{'text': 'superseded facts'}]}))
+    manager.update_meeting_ai(meeting['id'], diarization={
+        'status': 'completed', 'segmentsPath': str(sidecar), 'speakerCount': 1,
+    })
+    manager.stage_transcription_request(meeting['id'], _request('parakeet'), cancel_generation=1, delete_generation=1)
+    if succeeds:
+        candidate = _write_candidate(meeting, ATTEMPT_ID, '# Transcript\n\nnew facts')
+        updated = manager.commit_transcription_attempt(
+            meeting['id'], attempt_id=ATTEMPT_ID, candidate_path=str(candidate),
+            result=_result('parakeet'), cancel_generation=1, delete_generation=1,
+        )
+        assert not (updated.get('ai') or {}).get('diarization')
+        assert Path(updated['transcriptPath']).read_text() == '# Transcript\n\nnew facts'
+    else:
+        updated = manager.fail_transcription_attempt(meeting['id'], ATTEMPT_ID, 'PARAKEET_GPU_UNAVAILABLE')
+        assert updated['ai']['diarization']['status'] == 'completed'
+        assert Path(updated['transcriptPath']).read_text() == '# Transcript\n\nhello'
+    assert sidecar.exists()

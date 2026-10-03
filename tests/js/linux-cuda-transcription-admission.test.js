@@ -724,12 +724,12 @@ test('guided Parakeet failure settles before a same-engine fallback under one de
     const result = await service.admitMeetingTranscriptionJob({ meetingId: meeting.id, request });
 
     assert.equal(parakeetRuns, 2);
-    assert.equal(statusChecks, 2);
-    assert.equal(liveProbes, 2);
+    assert.equal(statusChecks, 3);
+    assert.equal(liveProbes, 3);
     assert.equal(committed.result.device, 'cuda');
     assert.deepEqual(events, [
-      'diarization-start', 'diarization-settled', 'parakeet-probe-1',
-      'guided-child-start', 'guided-child-settled', 'parakeet-probe-2',
+      'parakeet-probe-1', 'diarization-start', 'diarization-settled', 'parakeet-probe-2',
+      'guided-child-start', 'guided-child-settled', 'parakeet-probe-3',
       'ordinary-child-start', 'commit',
     ]);
     const guidedDeadlines = admissionTimeouts.filter((item) => item.label === 'Speaker-guided transcription');

@@ -2,7 +2,7 @@
 
 No cloud transcription, diarization, summaries, telemetry, or background downloads. Pyannote uses only the user's safeStorage-protected token: never log, proxy, persist, or pass it except via stdin; clear all HF token environment variables and set `HF_TOKEN_PATH` to `os.devNull`, never an empty string. Speakrs and Pyannote are exclusive; Linux permits Speakrs only, CUDA-only, with no CPU fallback.
 
-Catalogs own model refs, URLs, names, checksums, and runtime pins. Downloads are HTTPS and explicitly host-allowlisted; archives are hash-checked and traversal-guarded. Setup/validate full-hash catalog pins, compute rehashes changed fingerprints, and neither trusts user-writable `install.json`. Summary sidecars are never removed after metadata commit.
+Catalogs own model refs, URLs, names, checksums, and runtime pins. Downloads are HTTPS and explicitly host-allowlisted; archives are hash-checked and traversal-guarded. Setup/validate full-hash catalog pins, compute rehashes changed fingerprints, and neither trusts user-writable `install.json`. Parakeet compute checks model, VAD and runtime catalog hashes before its live runtime probe (and before the guided speaker pass), reusing only process-local evidence for unchanged absolute path, size, mtime and ctime. Runtime tree checks remain live on every admission. Summary sidecars are never removed after metadata commit.
 
 Live Linux CUDA admission always re-scans managed loader directories and required library paths. It may reuse SHA-256 evidence when `path + size + mtimeMs` is unchanged in the current process. A local attacker preserving size and mtime could bypass that hash skip, but an extra `.so` still fails the directory scan. Setup, repair, and install still full-hash; driver presence is still live-probed. GPU runtime timeout invalidates mutation authority before promotion. Passive `get-ai-addon-status` returns cached CUDA status and must not wait behind compute.
 
@@ -28,7 +28,7 @@ No cloud transcription. No telemetry or analytics. No background uploads. No net
 - Meeting AI metadata accepts only `diarization` and `summary`, keeps sidecar paths under recordings, and stores only concise sanitized strings.
 - Transcription metadata records `transcriptionDevice` / `transcriptionComputeType` (`cpu`/`cuda`/`mps`). MLX may report `metal` in result JSON; `meeting_manager` normalizes that alias to `mps`. Guided transcription reports the Whisper runtime separately from `diarization.device` (Speakrs `cuda`/`coreml`, or pyannote `mps`/`cuda`).
 - Add-on caches live under `userData/ai-addons/models/...` so app updates preserve installed artifacts.
-- Stale summaries are detected through `sourceTranscriptHash`.
+- Stale summaries are detected through `sourceTranscriptHash`. Transcript attempt commit clears obsolete diarization metadata in the same atomic transaction; failed attempts retain prior speaker outputs. Newly persisted speaker sidecars carry `sourceTranscriptHash` for the committed Markdown. Summary loading uses speaker text only when that hash matches; unbound legacy or mismatched sidecars fall back to current Markdown.
 - Summary generation requires a retained, locally checked `transcriptLanguage`
   and matching `sourceTranscriptHash`; meeting language is only a UI hint.
   Successful confirmation prefills an editable dialog only for the unchanged

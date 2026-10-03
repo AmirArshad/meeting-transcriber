@@ -64,14 +64,15 @@ def read_transcript_text(transcript_path: str) -> str:
 
 
 def load_summary_segments(transcript_path: str, speakers_json_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    transcript_text = read_transcript_text(transcript_path)
     if speakers_json_path and Path(speakers_json_path).exists():
         with open(speakers_json_path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
         segments = payload.get("segments") if isinstance(payload, dict) else None
-        if isinstance(segments, list) and segments:
+        if (isinstance(segments, list) and segments
+                and payload.get('sourceTranscriptHash') == hash_transcript_text(transcript_text)):
             return [dict(segment) for segment in segments if isinstance(segment, dict)]
 
-    transcript_text = read_transcript_text(transcript_path)
     segments = parse_markdown_transcript(transcript_text)
     if segments:
         return segments
