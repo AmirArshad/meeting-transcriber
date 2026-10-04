@@ -1,8 +1,11 @@
 # v2.10.0 Linux release candidate qualification — 2026-10-03
 
-**Review status:** Release preparation and manual acceptance complete; pending
-adversarial code review. No release was published. Historical Windows/macOS
-qualification remains in its original documents.
+**Release status — 2026-10-04:** Manual acceptance is complete. Adversarial
+review findings were addressed in `94c043d`; the CI correction in `d168284`
+passed all eight [CI jobs](https://github.com/AmirArshad/meeting-transcriber/actions/runs/37193783409).
+No in-scope acceptance gate remains. The user authorized tagging/building v2.10.0;
+publication is performed by the tag-driven release workflow. Historical
+Windows/macOS qualification remains in its original documents.
 
 ## User manual acceptance — 2026-10-03
 
@@ -17,8 +20,9 @@ is closed with the retain-current decision accepted; no gain change was added.
 This is user-reported manual acceptance, not additional agent-measured evidence.
 No new per-platform measurements or artifact reports were supplied. Historical
 Windows/macOS reports and the bounded automated Linux results below retain their
-original scope. Adversarial code review is the next step; no release publication
-or tag is authorized.
+original scope. At that sign-off, adversarial code review was the next step and
+publication was not authorized. The 2026-10-04 release authorization supersedes
+that historical restriction; review findings and CI failures are now addressed.
 
 ## Automated-pass baseline and candidate identity
 

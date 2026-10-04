@@ -11,7 +11,7 @@
 
 AvaNevis (formerly Meeting Transcriber) records your microphone *and* desktop audio at the same time, then transcribes everything on-device with Whisper. No cloud, no telemetry, no account.
 
-**Current release:** v2.9.0 is released. v2.10 designs are captured; qualification and implementation are still open. See the [product roadmap](docs/initiatives/ROADMAP.md) and [v2.10 status](todo.md).
+**Current release:** [v2.10.0](docs/releases/v2.10.0.md) — optional English-only Parakeet, Whisper Large v3, checked transcript-language summaries, and Settings/navigation improvements. Tagged installers are published by the [release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/workflows/build-release.yml). See the [product roadmap](docs/initiatives/ROADMAP.md) and [release status](todo.md).
 
 ## Why
 
@@ -23,6 +23,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - **Durable long recordings** — capture spills to on-disk track spools (not whole-session RAM). Stop uses bounded multi-pass finalization; interrupted sessions can be recovered after relaunch.
 - **Recording awareness** — always-visible in-app recording pill + elapsed clock; macOS menu-bar `REC` / Dock badge; Windows taskbar overlay; Linux StatusNotifierItem tray (`setContextMenu` only) with a taskbar-visible fallback when tray creation fails; hourly best-effort reminders; single-instance relaunch focuses the existing window.
 - **Local transcription** — `faster-whisper` on Windows and Linux, `lightning-whisper-mlx` on Apple Silicon. Linux defaults to CPU; managed CUDA 12 is an explicit, verified x86_64 NVIDIA setup path. A broken installed Linux runtime fails closed until repaired or removed.
+- **Transcription choices** — Whisper Small (default), Medium and Large v3; optional English-only Parakeet v2 on Windows CUDA, Apple Silicon Metal and Linux managed CUDA 12. Setup is explicit; queued and recovered work retains its captured selection.
 - **Premium dark UI** — vertical icon rail, top-bar app pane, dense waveform visualizer with peak-hold and DPR-aware rendering, and a stutter-free custom audio scrubber driven by `requestAnimationFrame`.
 - **Markdown transcripts** — saved transcripts are real Markdown (timestamps, headings, lists), and the in-app viewer renders them inline with chip-style timestamp pills.
 - **Editable meetings** — rename meetings inline (history *and* immediately after recording) without renaming any files; metadata stays anchored to the meeting ID.
@@ -129,8 +130,8 @@ See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS
 
 AI Add-ons are optional and live under Settings. They are not required for recording or transcription.
 
-- **Speaker Identification:** Settings lets you install **one** engine: **Speakrs** (token-free; default for new users; Windows CUDA / macOS Apple Silicon CoreML) or **Pyannote** (`pyannote/speaker-diarization-community-1` with the user's own Hugging Face token; Windows CUDA / macOS Apple Silicon MPS). Switching uninstalls the other engine's models; a saved Hugging Face token is kept across a switch and removed only with Remove. When setup is ready, AvaNevis runs diarization before transcription and uses padded speaker turns to create speaker-guided Whisper chunks; if that guided path fails, it saves a normal transcript and records the speaker-label failure. The main process uses catalog-resolved model refs, validates the required accelerator, refuses CPU fallback, and serializes GPU-heavy work (transcription, diarization, guided transcription, summaries) through one compute queue with wall-clock timeouts so a hung job cannot block the app for the rest of the session.
-- **Meeting Summaries:** Uses a pinned local `llama.cpp` runtime and pinned GGUF model artifacts stored under Electron `userData`. Hugging Face-hosted public GGUF downloads use the bundled `huggingface_hub`/`hf_xet` path without reusing the speaker token. Summary setup verifies HTTPS artifact hosts, SHA-256 checksums, and safe runtime extraction. Summary generation is always user-triggered from Home or History.
+- **Speaker Identification:** Settings lets you install **one** engine: **Speakrs** (token-free; default for new users; Windows CUDA / macOS Apple Silicon CoreML) or **Pyannote** (`pyannote/speaker-diarization-community-1` with the user's own Hugging Face token; Windows CUDA / macOS Apple Silicon MPS). Switching uninstalls the other engine's models; a saved Hugging Face token is kept across a switch and when removing Speakrs; token deletion applies to Pyannote removal. When setup is ready, AvaNevis runs diarization before transcription and uses padded speaker turns to create speaker-guided Whisper chunks; if that guided path fails, it saves a normal transcript and records the speaker-label failure. The main process uses catalog-resolved model refs, validates the required accelerator, refuses CPU fallback, and serializes GPU-heavy work (transcription, diarization, guided transcription, summaries) through one compute queue with wall-clock timeouts so a hung job cannot block the app for the rest of the session.
+- **Meeting Summaries:** Uses a pinned local `llama.cpp` runtime and pinned GGUF model artifacts stored under Electron `userData`. Hugging Face-hosted public GGUF downloads use the bundled `huggingface_hub`/`hf_xet` path without reusing the speaker token. Summary setup verifies HTTPS artifact hosts, SHA-256 checksums, and safe runtime extraction. Summary generation is always user-triggered from Home or History. The current Qwen model supports English, Spanish, French, German, Chinese, Japanese, Italian, Panjabi, Hindi, Korean and Portuguese. Each generation asks for transcript-language confirmation and checks input/output language locally; failed checks preserve the previous summary.
 - **Expected size:** the default summary model is about 5.7 GB plus platform runtime archives. CUDA setup remains separate and can add several GB.
 - **Outputs:** derived files are saved beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; raw transcripts remain the source of truth.
 
@@ -187,7 +188,7 @@ Codex, Claude Code, OpenCode and Cursor share root AGENTS.md and canonical on-de
 
 ## Languages
 
-The UI exposes 12 commonly used languages: English, Spanish, French, German, Italian, Portuguese, Mandarin/Cantonese, Japanese, Korean, Farsi/Persian, Punjabi, Hindi. Whisper itself supports 99 — extending the list is a one-line UI change. See [docs/guides/TRANSCRIPTION_GUIDE.md](docs/guides/TRANSCRIPTION_GUIDE.md) for tips.
+Whisper exposes 11 language choices: English, Spanish, French, German, Italian, Portuguese, Chinese (Mandarin/Cantonese), Japanese, Korean, Panjabi and Hindi. Persian is retired from new choices; pending jobs retain their saved language. Parakeet is English-only. See [docs/guides/TRANSCRIPTION_GUIDE.md](docs/guides/TRANSCRIPTION_GUIDE.md) for tips.
 
 ## Requirements
 
@@ -212,7 +213,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 
 - **Frontend:** Electron 44, plain HTML / CSS / JavaScript (no UI framework)
 - **Backend:** Python 3.11, bundled with the installer
-- **Transcription:** `faster-whisper` (Windows, CUDA optional), `lightning-whisper-mlx` (macOS, Metal)
+- **Transcription:** `faster-whisper` (Windows/Linux, CUDA optional), `lightning-whisper-mlx` (macOS, Metal); optional Parakeet v2 with pinned platform runtimes
 - **Local AI add-ons:** Speakrs (token-free native CLI) or `pyannote.audio` for Windows CUDA and macOS Apple Silicon speaker identification; pinned `llama.cpp` + GGUF for user-triggered summaries
 - **Audio capture:** `pyaudiowpatch` WASAPI loopback (Windows), `sounddevice` + native Swift `AudioCaptureHelper` using CoreAudio process taps on macOS 14.2+ with ScreenCaptureKit fallback
 - **Audio processing:** NumPy, soxr + ffmpeg (Opus) on Windows and macOS packaged builds; macOS also keeps scipy for the MLX stack
@@ -235,6 +236,8 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Local AI model catalog](docs/development/LOCAL_AI_MODEL_CATALOG.md)
   - [v2.9 dependency compatibility and acceptance evidence](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md)
   - [Speakrs soak / benchmarks](docs/development/SPEAKRS_BENCHMARKS.md)
+  - [v2.10.0 release notes](docs/releases/v2.10.0.md)
+  - [v2.10 Linux qualification and manual acceptance](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md)
   - [v2.9.0 release notes](docs/releases/v2.9.0.md)
   - [v2.8.0 release notes](docs/releases/v2.8.0.md)
   - [Installer implementation](docs/development/INSTALLER_IMPLEMENTATION.md)
@@ -260,6 +263,8 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 ## Roadmap (short version)
 
 **Shipped recently**
+
+- **v2.10.0 (October 2026)** — optional Parakeet with integrity/provenance protection, Whisper Large v3, checked transcript-language Qwen summaries, durable recovery selection, and Settings/navigation shortcuts. [Release notes](docs/releases/v2.10.0.md).
 - **v2.9.0 (September 2026)** — Electron 44, explicit mic-only / desktop-only capture, Omarchy-inspired visual refresh, and optional Linux CUDA 12 (fail-closed Whisper, Speakrs-only speaker labels, CUDA-only Qwen summaries). [Release notes](docs/releases/v2.9.0.md).
 - **v2.8.0 (August 2026)** — Linux x86_64 Core Beta: Omarchy 4 support, Pulse/PipeWire microphone and desktop-audio capture, CPU-only local transcription, AppImage and pacman packages plus an experimental `.deb`. AI add-ons remain unsupported on Linux. [Release notes](docs/releases/v2.8.0.md).
 - **v2.7.0 (August 2026)** — Speakrs speaker identification: exclusive Speakrs (token-free default for new users) or Pyannote selector; only one engine installed. Soak notes: [SPEAKRS_BENCHMARKS.md](docs/development/SPEAKRS_BENCHMARKS.md). [Release notes](docs/releases/v2.7.0.md).

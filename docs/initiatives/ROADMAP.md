@@ -69,30 +69,32 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ---
 
-## Current release
+## Current release: v2.10.0
 
-**v2.9.0 is released.** It delivered Electron 44.1.0, dependency and
-reliability maintenance, the Omarchy-inspired UI refresh, explicit capture
-modes, and the accepted Linux CUDA/AI lanes. The [v2.9 release notes](../releases/v2.9.0.md)
-and [compatibility matrix](../development/V2_9_DEPENDENCY_COMPATIBILITY.md)
-are the historical release records.
+The [v2.10 release notes](../releases/v2.10.0.md) cover the accepted scope:
 
-## Next release: v2.10 scope
+- optional English-only Parakeet on Windows CUDA, Apple Silicon Metal and Linux
+  managed CUDA 12, with integrity checks and durable capture/recovery selections;
+- Whisper Large v3, Small as the default/minimum new choice, and Persian removed
+  from new language selections while pending requests retain their saved choices;
+- confirmed transcript-language Qwen summaries for 11 supported languages, local
+  input/output checks and current-transcript speaker provenance;
+- Settings navigation, enable/disable wording, AI log timestamps, rail branding,
+  click-away meeting rename and app-focused recording/navigation shortcuts;
+- dependency/audit maintenance and guarded retry/recovery fixes.
 
-The v2.10 scope is committed in [`todo.md`](../../todo.md). It includes:
+Implementation, review fixes and CI are complete; remaining manual acceptance
+was confirmed by the user on 2026-10-03. See [`todo.md`](../../todo.md), the
+[v2.10 plan index](../superpowers/plans/2026-09-06-v2.10.md) and
+[qualification record](../development/V2_10_LINUX_RELEASE_QUALIFICATION.md).
+Tagged installers are built and published by the release workflow.
 
-- language/model cleanup: remove Farsi/Persian, review other poor-performing languages, add Whisper Large, and remove Tiny/Base;
-- optional English-only Parakeet transcription: target Windows, Apple Silicon macOS, and Linux, enabling only validated combinations; prioritize speed and lower resource use, with accuracy improvement optional. See the [Parakeet integration plan](../superpowers/plans/2026-09-06-parakeet-integration.md) for design, qualification, and implementation phases;
-- language-aware summarisation: constrain Qwen to supported languages, match summary language to transcript language, and explore better current models;
-- Settings and navigation UX improvements, including Linux Speakrs presentation, accurate removal warnings, clearer enable/disable terminology, AI log timestamps, and refreshed Record/app icons;
-- meeting rename click-away saving and cross-platform shortcuts for recording and navigation;
-- the existing inference-performance work from [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md), refined in the [design and implementation plan](../superpowers/plans/2026-09-06-inference-performance.md).
-
-This section records scope only. Status and checkboxes live in [`todo.md`](../../todo.md).
-Order, remaining investigations, and which machines they need live in the
-[v2.10 plan index](../superpowers/plans/2026-09-06-v2.10.md). Designs are not
-implementation or acceptance evidence. Linux microphone volume is an
-investigation, not a designed change.
+Further inference-default changes, alternative summary models and additional
+language removals were dropped from v2.10. The microphone investigation closed
+with current gain behavior retained; no reset root cause or performance win is
+claimed. The [v2.9 notes](../releases/v2.9.0.md) and
+[compatibility matrix](../development/V2_9_DEPENDENCY_COMPATIBILITY.md) remain
+historical evidence.
 
 ## Planned
 
@@ -125,7 +127,7 @@ Longer horizon, lower priority:
 - **Linux expansion.** Broader desktop/hardware validation beyond the supported Core Beta hosts, including the still-open Ubuntu desktop recording/`safeStorage` smoke. Reference: [LINUX_SUPPORT.md](LINUX_SUPPORT.md).
 - **Setup wizard.** Guided first-time configuration. Reference: [FEATURE_SETUP_WIZARD.md](FEATURE_SETUP_WIZARD.md).
 - **Optional private meeting-object sync** to user-controlled storage (never to a hosted AvaNevis backend). See [Meeting objects and private sync](MEETING_OBJECTS_AND_PRIVATE_SYNC.md); not scheduled for v2.10.
-- **Local inference performance** (recording finalization/encoding, Whisper, llama.cpp knobs and warm workers; stay on Electron + Python). See [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md); included in v2.10 scope.
+- **Local inference performance** (recording finalization/encoding, Whisper, llama.cpp knobs and warm workers; stay on Electron + Python). See [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md); further production-default changes were deferred beyond v2.10.
 - **Apple Developer signing/notarization** — deferred until a later release, likely around/after v3; ad-hoc macOS packaging checks remain the current boundary.
 - **Companion mobile apps** (iOS / Android) for remote review.
 - **Localized UI** (Spanish, French, etc.).
@@ -149,7 +151,7 @@ Longer horizon, lower priority:
 - **Minor (1.X.0)** — New features, backwards compatible.
 - **Patch (1.2.X)** — Bug fixes and minor improvements.
 
-**Current development lane:** v2.9.0. Release acceptance remains component-gated; do not infer it from this roadmap.
+**Current release version:** v2.10.0. Hardware acceptance and its limits are recorded separately from CI.
 
 The rebrand introduces a new Electron `productName`, which changes the user-data folder. Existing Meeting Transcriber installs won't see their old recordings until the user manually moves the data folder, so this release uses a major version bump.
 

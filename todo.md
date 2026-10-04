@@ -1,7 +1,9 @@
 # AvaNevis v2.10
 
-v2.9.0 is released. See the [v2.9.0 release notes](docs/releases/v2.9.0.md)
-and [compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md).
+Current release version: **v2.10.0**. See the
+[v2.10.0 release notes](docs/releases/v2.10.0.md) and
+[qualification record](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md).
+The dated entries below preserve implementation and acceptance history.
 
 This file is the **scope and status log**. It is not an implementation design.
 Sequencing, remaining investigations, and which machines they need live in the
@@ -9,6 +11,21 @@ Sequencing, remaining investigations, and which machines they need live in the
 implementation or acceptance evidence.
 
 ## Status
+
+### Release readiness and publication path — 2026-10-04
+
+v2.10.0 implementation, manual acceptance and adversarial-review fixes are
+complete. All eight jobs in [CI on d168284](https://github.com/AmirArshad/meeting-transcriber/actions/runs/37193783409)
+passed, including Windows/macOS/Linux build smoke and dependency audits.
+Package/lockfile versions agree at 2.10.0; app/updater versions use
+`app.getVersion()`. Release notes were checked against `v2.9.0..master` and
+current README/roadmap/guide pointers refreshed. No in-scope blocker remains.
+
+The user authorized an annotated `v2.10.0` tag and release build on 2026-10-04.
+Tag push triggers `build-release.yml`, which verifies Speakrs artifacts, builds
+and checks Windows/macOS/Linux installers, then publishes the GitHub Release
+with curated notes and legal assets. Publication remains dependent on that run.
+Deferred work below remains outside v2.10; no new hardware claims are added.
 
 ### Adversarial v2.10 RC review fixes — 2026-10-03
 
@@ -173,9 +190,10 @@ checks are recorded.
 
 ## Current next step
 
-Release implementation and remaining manual acceptance are complete as of the
-2026-10-03 user sign-off. Run adversarial code review in a fresh session. The
-sequencing below records the earlier implementation order.
+Release implementation and manual acceptance are complete. Adversarial findings
+were addressed in `94c043d`; CI fixes landed in `d168284`, with all CI jobs green.
+Proceed through the authorized annotated-tag release workflow. The sequencing
+below records the earlier implementation order.
 
 ## How to sequence the work (historical)
 
@@ -274,8 +292,8 @@ Alternative-model evaluation (slice B) remains out of v2.10.
   syntax gates passing. Estimates remain heuristic; arbitrary oversized segments
   and large merges are not qualified. Apple Silicon English/Spanish functional
   smokes passed on 2026-10-01.
-  Linux CUDA functional smokes are deferred until before the v2.10 release;
-  they do not block merging this branch. See the evidence document for report
+  Linux CUDA English/Spanish functional smokes passed on 2026-10-03; remaining
+  packaged UI acceptance was confirmed manually by the user. See the evidence document for report
   hashes and limits.
 
 ### Settings and navigation UX
@@ -310,6 +328,8 @@ Pyannote removal.
 - [ ] Revisit the pre-existing `run-recording-preflight` trusted-renderer-sender observation only as a separate security task.
 
 ## Release history
+
+- **v2.10.0 — release-ready; tag-driven publication:** optional Parakeet, Whisper Large v3, checked Qwen summary languages, Settings/navigation UX, integrity/provenance/recovery fixes and dependency pins.
 
 - **v2.9.0 — released:** Electron 44.1.0, dependency hygiene, reliability follow-through, Omarchy-inspired UI refresh, Linux CUDA/AI gates, and explicit Mic + Desktop / Mic Only / Desktop Only capture modes.
 - **v2.8.0 — released:** Linux Core Beta for Omarchy 4 and CachyOS x86_64 Hyprland/Wayland + PipeWire.

@@ -2,6 +2,12 @@
 
 This directory separates current guides, maintainer references, completed implementation notes, and future initiatives.
 
+## Current Release
+
+- [AvaNevis v2.10.0 release notes](releases/v2.10.0.md)
+- [v2.10 qualification and manual acceptance](development/V2_10_LINUX_RELEASE_QUALIFICATION.md)
+- [Release scope/status](../todo.md)
+
 ## Current User Guides
 
 - [Troubleshooting](guides/TROUBLESHOOTING.md)
@@ -39,13 +45,14 @@ This directory separates current guides, maintainer references, completed implem
 ## New Initiatives
 
 - [Roadmap](initiatives/ROADMAP.md)
-- **[Back-to-back recording & transcription queue](initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md)** — next big feature · [before/after SVG](architecture/background-transcription-queue-before-after.svg)
 - [Acoustic echo cancellation](initiatives/FEATURE_ECHO_CANCELLATION.md)
 - [Linux support](initiatives/LINUX_SUPPORT.md)
 - [Audio setup wizard](initiatives/FEATURE_SETUP_WIZARD.md)
 - [macOS audio architecture improvements](initiatives/MACOS_AUDIO_ARCHITECTURE.md)
 
 ## Completed Reference (kept under initiatives/)
+
+- [Back-to-back recording & transcription queue](initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) — shipped in v2.6.0 · [before/after SVG](architecture/background-transcription-queue-before-after.svg)
 
 - [AvaNevis codebase refactor](initiatives/AVANEVIS_CODEBASE_REFACTOR.md) — **complete** (2026-07-09); design + phase history for maintainers
 

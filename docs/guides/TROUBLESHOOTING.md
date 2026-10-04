@@ -320,8 +320,8 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
    - If disabled, install GPU support (if you have compatible GPU)
 
 2. **Use Smaller Model:**
-   - Settings → Model Size → Select "tiny" or "base"
-   - Smaller models are faster but slightly less accurate
+   - Settings → Transcription → choose Whisper Small, the smallest new choice
+   - Medium and Large v3 may need more time and memory; Tiny/Base are retired
 
 3. **Close Other Apps:**
    - Close GPU-intensive apps (games, video editing, etc.)

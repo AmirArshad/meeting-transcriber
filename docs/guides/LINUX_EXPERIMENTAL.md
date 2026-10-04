@@ -6,6 +6,14 @@ This is not Linux 1.0 and not Windows/macOS parity. Transcription uses CPU `fast
 
 Linux Speakrs and Qwen summaries are CUDA-only, explicit setup paths: no CPU, Vulkan, SYCL, ROCm, Pyannote, or cloud fallback is offered. They remain disabled unless the managed CUDA runtime is admitted. Task 6 packaged summary evidence is complete on the CachyOS RTX 4070 host. Linux Speakrs Task 5 is **accepted** (2026-09-04), including the Windows x64 never-installed check. The authoritative evidence and exact scope are in the [v2.9 compatibility matrix](../development/V2_9_DEPENDENCY_COMPATIBILITY.md).
 
+v2.10 adds optional English-only Parakeet with pinned runtime/model/VAD integrity
+checks and managed CUDA admission. Whisper remains the default; Parakeet has no
+CPU/cloud fallback. Current Qwen summaries support 11 checked transcript languages
+with confirmation and prior-output preservation. See the
+[v2.10 notes](../releases/v2.10.0.md) and
+[dated qualification/manual acceptance](../development/V2_10_LINUX_RELEASE_QUALIFICATION.md).
+The support tiers below are unchanged.
+
 Friend hardware evidence uses [tests/manual/linux-experimental-beta-checklist.md](../../tests/manual/linux-experimental-beta-checklist.md). Automated packaging tests do not count as distro validation.
 
 ## Support matrix

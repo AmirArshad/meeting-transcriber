@@ -53,6 +53,12 @@ If the app or recorder process dies mid-recording, durable `{stem}.capture/` tra
 - **Recover Now** — finalize the capture into meeting audio, then run the normal scan/import path so the meeting appears in History
 - **Later** — dismiss the prompt; a banner keeps the deferred count/disk estimate visible; recovery remains available next launch
 
+From v2.10, recovered recordings retain their captured engine/model/language
+selection. A durable recovery handoff survives restart until meeting metadata
+acknowledges that selection, including when finalization succeeds but its process
+response is lost. An unavailable saved engine fails recoverably instead of
+silently switching to another engine.
+
 Recovery never auto-runs, never deletes capture files on dismiss or failure, and shares one maintenance gate with scan/start so an active recording always wins. Failed recoveries keep all capture files and offer **Retry**.
 
 ## Metadata Safety
@@ -81,7 +87,7 @@ The renderer also clears the audio player first to reduce Windows file-lock issu
 
 Meetings can be renamed inline from both the history detail view and the post-recording view:
 
-- Click the pencil icon next to the title, edit, then press Enter or click Save.
+- Click the pencil icon next to the title, edit, then press Enter, click Save, or click away to save.
 - Esc cancels.
 - The rename is persisted via the `update-meeting` IPC, which calls `MeetingManager.update_meeting(meeting_id, title=...)`.
 - Filenames stay anchored to the meeting ID; only the `title` field in `meetings.json` changes. Existing audio and transcript files are not moved or rewritten.
@@ -94,6 +100,14 @@ Transcripts can be exported to disk via Electron's native save dialog:
 - The default filename is derived from the meeting title with filesystem-unsafe characters sanitized.
 - File-type filters: Markdown (`.md`), Plain Text (`.txt`), All Files.
 - Wired through the `save-transcript-as` IPC, which uses `dialog.showSaveDialog` and writes via `fs.promises.writeFile`. The raw `.md` content from disk is preserved as the export source so the user always gets the original Markdown formatting.
+
+## Transcript Retry And Derived Output (v2.10)
+
+Failed transcription retries preserve the previous transcript and source audio.
+A successful replacement clears obsolete speaker metadata. Newly generated
+speaker sidecars carry the committed transcript hash; summaries use speaker text
+only when that hash matches the current Markdown. Legacy or mismatched speaker
+sidecars are not used as the source for new summaries.
 
 ## Current Limitations
 

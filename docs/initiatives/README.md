@@ -5,7 +5,6 @@ Planned or active future work lives here. Completed designs should move to `../c
 ## Active / planned
 
 - [Roadmap](ROADMAP.md)
-- [Parakeet integration — v2.10 plan](../superpowers/plans/2026-09-06-parakeet-integration.md) — English-only optional engine; target all three platforms, ship validated combinations; speed/resource qualification and implementation pending
 - [Linux support](LINUX_SUPPORT.md) — Core Beta and the accepted v2.9 Linux-AI work are shipped; evidence is in the compatibility matrix
 - [AUR packaging and release automation](AUR_PACKAGING_AND_AUTOMATION.md)
 - [Acoustic echo cancellation](FEATURE_ECHO_CANCELLATION.md)
@@ -15,6 +14,8 @@ Planned or active future work lives here. Completed designs should move to `../c
 - [Local inference performance — future spike](LOCAL_INFERENCE_PERFORMANCE.md) — encode / Whisper / llama.cpp headroom; no implementation is scheduled for v2.9.0
 
 ## Complete (reference)
+
+- [Parakeet — v2.10 implementation and acceptance](../superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) — optional English-only Windows CUDA / Apple Silicon Metal / Linux managed CUDA engine; release scope complete, with no speed/memory/accuracy superiority claim
 
 - [Long-recording safety](LONG_RECORDING_SAFETY.md) — Release 2 shipped in **v2.5.0** (durable spools, bounded finalization, interrupted-session recovery); [before/after SVG](../architecture/long-recording-safety-before-after.svg)
 - [AvaNevis codebase refactor](AVANEVIS_CODEBASE_REFACTOR.md) — Phases 0–8 + 5B complete (2026-07-09); residual: Phase 7B macOS smoke when hardware is available

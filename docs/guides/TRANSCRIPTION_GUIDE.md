@@ -8,9 +8,10 @@ That mixed meeting file is what the app transcribes and saves to history.
 
 This design keeps the recording pipeline reliable while still producing a single playback file and a single meeting transcript.
 
-## Platform Backends
+## Whisper Platform Backends
 
 - Windows: `faster-whisper`
+- Linux: CPU `faster-whisper` by default; optional verified managed CUDA 12
 - macOS Apple Silicon: `lightning-whisper-mlx`
 - Intel Mac development fallback: `faster-whisper` CPU path (selected via `getTranscriberModule` in `src/main-process/transcription-runtime-helpers.js`; packaged macOS builds are Apple Silicon only)
 
@@ -20,11 +21,27 @@ This design keeps the recording pipeline reliable while still producing a single
 
 - `small` is the default and a good general choice.
 - `medium` usually helps with noisier meetings or heavier overlap.
-- `tiny` and `base` are faster but less resilient to real meeting audio.
+- `large-v3` is available through explicit model setup and needs more memory and
+  disk space. Choose it according to your machine and meeting needs.
+- Tiny/Base are retired from new choices. Existing preferences move to Small;
+  previously queued jobs retain their saved model.
 
 ### Pick the correct language
 
 Whisper quality drops quickly if the selected language does not match the dominant speech in the recording.
+Persian is retired from new choices; previously queued work keeps its saved language.
+
+### Optional English-only Parakeet (v2.10)
+
+Set up and activate Parakeet v2 in Settings for Windows CUDA, Apple Silicon Metal
+or Linux managed CUDA 12. Whisper remains the default. Parakeet requires its
+pinned runtime/model/VAD artifacts and a supported accelerator; it has no CPU or
+cloud fallback. Unavailable or damaged setup fails recoverably, with Repair and
+Remove paths. You can explicitly retry a meeting with Whisper.
+
+The engine/model/language selected when capture starts is retained for queued
+work and interrupted-capture recovery. Changing Settings later does not rewrite
+an existing request. No universal speed, memory or accuracy improvement is claimed.
 
 ### Keep the source audio clean
 
@@ -57,12 +74,20 @@ Whisper is much better on clean, turn-based speech than on several people talkin
 ### Windows
 
 - CUDA acceleration is optional.
-- If GPU packages are not installed, transcription falls back to CPU.
+- If GPU packages are not installed, Whisper can run on CPU. Parakeet requires CUDA.
 
 ### macOS
 
 - Apple Silicon packaged builds use MLX/Metal automatically.
 - MLX model files are stored in `~/Library/Caches/avanevis/mlx_models`.
+
+### Linux
+
+- Whisper uses CPU until optional managed CUDA 12 setup is admitted.
+- An installed but unusable managed runtime fails closed; use Repair or Uninstall
+  to restore an admitted GPU runtime or return Whisper to CPU.
+- Parakeet, speaker labels and Qwen summaries require their supported CUDA setup;
+  those features have no CPU/cloud fallback.
 
 ## Practical Recommendations
 
