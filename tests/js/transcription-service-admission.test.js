@@ -1799,7 +1799,9 @@ test('successful guided Parakeet retry binds its replacement speaker text to com
   await harness.computeQueue.runNext();
   const result = await job;
   assert.equal(result.diarizationError, null);
-  const payload = JSON.parse(writes.get('/tmp/avanevis-test/recordings/a.speakers.json'));
+  const speakerSidecarPath = path.resolve('/tmp/avanevis-test/recordings/a.speakers.json');
+  assert.ok(writes.has(speakerSidecarPath), 'guided retry must write the replacement speaker sidecar');
+  const payload = JSON.parse(writes.get(speakerSidecarPath));
   assert.equal(payload.sourceTranscriptHash, `sha256:${crypto.createHash('sha256')
     .update(markdown.replace(/\r\n/g, '\n')).digest('hex')}`);
   assert.equal(payload.segments[0].text, 'new facts');
