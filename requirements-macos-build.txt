@@ -51,7 +51,7 @@ anyio==4.14.2
 mlx==0.32.2
 more-itertools==11.1.0
 numba==0.67.0
-llvmlite==0.49.0
+llvmlite==0.50.0
 # Pinned for reproducible pip resolution; lightning-whisper-mlx requires torch but MLX inference
 # never imports torch_whisper.py, so prepare-resources removes torch after install.
 # torch==2.13.0 requires setuptools>=77.0.3 (no <82 cap). Keep in lockstep with Windows/Linux
