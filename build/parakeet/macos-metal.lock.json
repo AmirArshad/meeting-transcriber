@@ -7067,47 +7067,47 @@
     },
     {
       "packageName": "msgpack",
-      "version": "1.1.2",
-      "fileName": "msgpack-1.1.2-cp311-cp311-macosx_11_0_arm64.whl",
-      "url": "https://files.pythonhosted.org/packages/83/04/28a41024ccbd67467380b6fb440ae916c1e4f25e2cd4c63abe6835ac566e/msgpack-1.1.2-cp311-cp311-macosx_11_0_arm64.whl",
-      "sizeBytes": 84914,
-      "sha256": "283ae72fc89da59aa004ba147e8fc2f766647b1251500182fac0350d8af299c0",
+      "version": "1.2.3",
+      "fileName": "msgpack-1.2.3-cp311-cp311-macosx_11_0_arm64.whl",
+      "url": "https://files.pythonhosted.org/packages/50/cd/fc9e2e367e80f1493e2ec5f610dda558b344eeede296f88976db133e8f2c/msgpack-1.2.3-cp311-cp311-macosx_11_0_arm64.whl",
+      "sizeBytes": 89683,
+      "sha256": "9d7e9cbb0998bbfd363fd9a09c330520d5e9cb323c05b5a1a05865d23ccf2226",
       "license": "Apache-2.0",
       "extractedFiles": [
         {
-          "path": "msgpack-1.1.2.dist-info/METADATA",
-          "sizeBytes": 8091,
-          "sha256": "856c42ca5c61ed8b440a0e8b10b3ffcc9557397a500ee223c10d9ff9945bf80b"
+          "path": "msgpack-1.2.3.dist-info/METADATA",
+          "sizeBytes": 8273,
+          "sha256": "f47c09192e9f4f81b8b4a63979473a13f7a63c67dcdc41be2e0f97353a9dc5b4"
         },
         {
-          "path": "msgpack-1.1.2.dist-info/RECORD",
+          "path": "msgpack-1.2.3.dist-info/RECORD",
           "sizeBytes": 804,
-          "sha256": "1f441c8664aadffda3916436604a6f3968ee24672de761df3ccc7c183a65d802"
+          "sha256": "6ecc2085fd56f343d81d3eea521ad20c89ebd02d118750824e33c4b05c7d21e8"
         },
         {
-          "path": "msgpack-1.1.2.dist-info/WHEEL",
+          "path": "msgpack-1.2.3.dist-info/WHEEL",
           "sizeBytes": 136,
-          "sha256": "b2e9cc6b6ca261bacd2c678c543a840346b2c896c795ec7b4829f54d9ac4abad"
+          "sha256": "c1d6a82bcb9057badedc619d92ce47bad4fcfc4dae6fe9c4fcc8f5c493e67fac"
         },
         {
-          "path": "msgpack-1.1.2.dist-info/licenses/COPYING",
+          "path": "msgpack-1.2.3.dist-info/licenses/COPYING",
           "sizeBytes": 614,
           "sha256": "492dedba85da5872f78e6091bcd1fea474d660d35acb4dee964b8aab3f007427"
         },
         {
-          "path": "msgpack-1.1.2.dist-info/top_level.txt",
+          "path": "msgpack-1.2.3.dist-info/top_level.txt",
           "sizeBytes": 8,
           "sha256": "dadca4498d695dd880db16130d1ea33f0d2a239646c518a1ca17f84b9859c979"
         },
         {
           "path": "msgpack/__init__.py",
           "sizeBytes": 1109,
-          "sha256": "440f2072a2b5ed8a64c419cdc172556b5a1ad8bca058381f1759c0d4d3f0de6a"
+          "sha256": "422314cf8f068c7e3be9a5c3a2f8039cf133f5a2764216c09749224420ee5733"
         },
         {
           "path": "msgpack/_cmsgpack.cpython-311-darwin.so",
-          "sizeBytes": 228384,
-          "sha256": "86577343f14d4e41ed3e19b2e4f70671dd1edfb8c1443092474cab8e328ab483"
+          "sizeBytes": 226352,
+          "sha256": "889c4d376cf0800d8b7a42049ebc0df0f9787e4bcb84290df570570f912d44b8"
         },
         {
           "path": "msgpack/exceptions.py",
@@ -7116,13 +7116,13 @@
         },
         {
           "path": "msgpack/ext.py",
-          "sizeBytes": 5726,
-          "sha256": "92d789bf4de7f6d633779a28df1628a554e8e2f45a031a27050409857a21659a"
+          "sizeBytes": 6428,
+          "sha256": "eade5f893bb1d3e65335b4c9bd580fca77bf498600aaeefd17087eb2bc201e9e"
         },
         {
           "path": "msgpack/fallback.py",
-          "sizeBytes": 32390,
-          "sha256": "d20d4fce9d2fb66044989e70f45decffe24c55444ff114b81b571ce5345a02c2"
+          "sizeBytes": 33311,
+          "sha256": "47dd6573f352e62c3f45b7e915beda8e80eb00893af6cb6f281a4d492447f8a0"
         }
       ]
     },
@@ -32208,30 +32208,30 @@
     },
     {
       "packageName": "urllib3",
-      "version": "2.7.0",
-      "fileName": "urllib3-2.7.0-py3-none-any.whl",
-      "url": "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl",
-      "sizeBytes": 131087,
-      "sha256": "9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897",
+      "version": "2.8.0",
+      "fileName": "urllib3-2.8.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl",
+      "sizeBytes": 135717,
+      "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
       "license": "MIT",
       "extractedFiles": [
         {
-          "path": "urllib3-2.7.0.dist-info/METADATA",
-          "sizeBytes": 6852,
-          "sha256": "66147856d30bbb6bed01c6ce3326d0f48d84ed5f286ac177633a1486b82eace5"
+          "path": "urllib3-2.8.0.dist-info/METADATA",
+          "sizeBytes": 7389,
+          "sha256": "10898c620e8007c030e07fa5622b68358a43010025dfbd78a1cb797699de2bb4"
         },
         {
-          "path": "urllib3-2.7.0.dist-info/RECORD",
-          "sizeBytes": 3450,
-          "sha256": "4100397eb65d69ffbfcabfe99373cb59ab2b7c0261abf9a5bdfb2f263baef787"
+          "path": "urllib3-2.8.0.dist-info/RECORD",
+          "sizeBytes": 3451,
+          "sha256": "04e66961a9e3616bd8d221103dc1c9cdca4a23dc86c71bbfa9e8dc4022b3009e"
         },
         {
-          "path": "urllib3-2.7.0.dist-info/WHEEL",
+          "path": "urllib3-2.8.0.dist-info/WHEEL",
           "sizeBytes": 87,
-          "sha256": "41c708c5adba6e097513ab8ccb9f1d7865a2fb469e22491a9e01dcc64da459fc"
+          "sha256": "ccec20e2307acd7da453dd7437e70c6b08e2bc3ead3bc3445af135da37b56d59"
         },
         {
-          "path": "urllib3-2.7.0.dist-info/licenses/LICENSE.txt",
+          "path": "urllib3-2.8.0.dist-info/licenses/LICENSE.txt",
           "sizeBytes": 1093,
           "sha256": "130e3a64d5fdd5d096a752694634a7d9df284469de86e5732100268041e3d686"
         },
@@ -32247,8 +32247,8 @@
         },
         {
           "path": "urllib3/_collections.py",
-          "sizeBytes": 17522,
-          "sha256": "68e566da62a296fbaf4f579f006b6403ba62eb90b5342dc725fa45c6f6014bc0"
+          "sizeBytes": 17669,
+          "sha256": "1fac8ba8659d64d919d0b9bf7e72c4caaba59ce716eaab570a1daacf183bdf15"
         },
         {
           "path": "urllib3/_request_methods.py",
@@ -32258,17 +32258,17 @@
         {
           "path": "urllib3/_version.py",
           "sizeBytes": 520,
-          "sha256": "fa032b2a1b0f88e8f45f351ecd515ae7d7754ba4204222a0413e601a0c8cf3ec"
+          "sha256": "7b84320186a7a1805134fd8aeaa0d508e80116851aecbd23f7561042c5073bd4"
         },
         {
           "path": "urllib3/connection.py",
-          "sizeBytes": 42786,
-          "sha256": "668b37ab12835bdf8643a695a9f050551339b280742231f163fc575a925a1532"
+          "sizeBytes": 47903,
+          "sha256": "8a59dab3d7b6a0e1b38a5fd6e565ef6a49381bb995729d015e4f6440ab8523e0"
         },
         {
           "path": "urllib3/connectionpool.py",
-          "sizeBytes": 44164,
-          "sha256": "b0616775d5d8c25c7b282e0908fd602af74d18b34af984c22437460021a3dd8f"
+          "sizeBytes": 45250,
+          "sha256": "6a147869216b94449a053e869d4311cba23294551c83ee20fe5d2f1eaff50a3e"
         },
         {
           "path": "urllib3/contrib/__init__.py",
@@ -32307,13 +32307,13 @@
         },
         {
           "path": "urllib3/contrib/pyopenssl.py",
-          "sizeBytes": 19734,
-          "sha256": "5d963e433c93eecf1de37aa2b00e28f9e49960178890fc8131986d8f69242d9b"
+          "sizeBytes": 21494,
+          "sha256": "5acf2f0ae6527e023a4031da552246600f6e753581f4a2f4c19ff4d7c88a8230"
         },
         {
           "path": "urllib3/contrib/socks.py",
-          "sizeBytes": 7639,
-          "sha256": "ad2ba495f85ae3ebeda3ef2a48b8523e67f996644f218baa740c4a7bd6e0d910"
+          "sizeBytes": 7566,
+          "sha256": "81141f708d6928e021e62238fd30c090a6803f737f1f620de49e660652990691"
         },
         {
           "path": "urllib3/exceptions.py",
@@ -32337,8 +32337,8 @@
         },
         {
           "path": "urllib3/http2/connection.py",
-          "sizeBytes": 12578,
-          "sha256": "6c7307e9f36f6adc173eb2aaadc9fbe32037a5459ca8f0e9a672b52dc2826cff"
+          "sizeBytes": 12613,
+          "sha256": "9e3960af8c0b862009bed52ac44127e12f79be27db95346b9ab6911e809cbfad"
         },
         {
           "path": "urllib3/http2/probe.py",
@@ -32347,8 +32347,8 @@
         },
         {
           "path": "urllib3/poolmanager.py",
-          "sizeBytes": 23895,
-          "sha256": "734ae1d2b7140b5b79b431ae51e188800ce512b6ac3cec16c0b881ebb957f293"
+          "sizeBytes": 25026,
+          "sha256": "46654506338ff9a0e79baeef8a409af7d37aad001633150384a1eb4a5d1ff4cb"
         },
         {
           "path": "urllib3/py.typed",
@@ -32357,8 +32357,8 @@
         },
         {
           "path": "urllib3/response.py",
-          "sizeBytes": 53219,
-          "sha256": "f525f806491da0b82cc759deea1a6dfb93e772b9c3ccfcdea82d4369285273e3"
+          "sizeBytes": 54628,
+          "sha256": "0e4559c737914d4f8f941dca9ecfaf6caec6792258302bffec7b8b41dae3c71a"
         },
         {
           "path": "urllib3/util/__init__.py",
@@ -32377,8 +32377,8 @@
         },
         {
           "path": "urllib3/util/request.py",
-          "sizeBytes": 8363,
-          "sha256": "8ada670bcba0ec3e2755f0e6194091325824011510d77aff5ccc529f34f09a91"
+          "sizeBytes": 10228,
+          "sha256": "d9af3b7ae5309e3ca50777f27994b3fd5b3aeb32c6aaa44a252ddba5366c89b0"
         },
         {
           "path": "urllib3/util/response.py",
@@ -32387,13 +32387,13 @@
         },
         {
           "path": "urllib3/util/retry.py",
-          "sizeBytes": 19577,
-          "sha256": "d989d25fefc579c312843eb5331e6cebc274fdbb541d9aeb73f064155452d4fe"
+          "sizeBytes": 20151,
+          "sha256": "0fdc26b67d1ecc42b0cab3972f20bb07284d783f4dc318394fe8b99098c42925"
         },
         {
           "path": "urllib3/util/ssl_.py",
-          "sizeBytes": 17742,
-          "sha256": "3aa7b7ac88545377b7195819a1bda1c6647c43464386b84448f94f3ff18b6954"
+          "sizeBytes": 17856,
+          "sha256": "72c779c13f6e2afa22149d75f98a5fab0cdc886193515d9dae62e12354fd61c4"
         },
         {
           "path": "urllib3/util/ssl_match_hostname.py",
@@ -32412,8 +32412,8 @@
         },
         {
           "path": "urllib3/util/url.py",
-          "sizeBytes": 15205,
-          "sha256": "59187e4cc617a2c9a0a7c9bc953e07e6ca681f0e7252395c3027d4e77024a00b"
+          "sizeBytes": 19579,
+          "sha256": "6a2814d91987dd9728278d413a154ee5277b15cb262d9945425377f2a693311f"
         },
         {
           "path": "urllib3/util/util.py",
@@ -32428,5 +32428,5 @@
       ]
     }
   ],
-  "lockDigest": "943ea4b3c51a193ea5459a21e3c74171ce6d43965ad898215eee5fa14aa911dc"
+  "lockDigest": "3a1dae0f220aea948851344b9558ee524fb176549b59c7ef3138c93903a9d7eb"
 }

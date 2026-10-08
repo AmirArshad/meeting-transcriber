@@ -22,7 +22,7 @@ test('BUILD_DOWNLOADS uses pinned direct download URLs', () => {
   assert.match(BUILD_DOWNLOADS.ffmpegMac.sha256, /^[a-f0-9]{64}$/);
   assert.equal(
     BUILD_DOWNLOADS.pythonLinux.url,
-    'https://github.com/astral-sh/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz',
+    'https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.11.17+20261003-x86_64-unknown-linux-gnu-install_only.tar.gz',
   );
   assert.match(BUILD_DOWNLOADS.pythonLinux.sha256, /^[a-f0-9]{64}$/);
   assert.equal(
@@ -34,8 +34,8 @@ test('BUILD_DOWNLOADS uses pinned direct download URLs', () => {
   assert.equal(BUILD_DOWNLOADS.ffmpegSource.url, 'https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz');
   assert.equal(BUILD_DOWNLOADS.ffmpegSource.archiveFileName, 'ffmpeg-8.0.1.tar.xz');
   assert.match(BUILD_DOWNLOADS.ffmpegSource.sha256, /^[a-f0-9]{64}$/);
-  assert.equal(BUILD_DOWNLOADS.pipWheel.url, 'https://files.pythonhosted.org/packages/de/f0/c81e05b613866b76d2d1066490adf1a3dbc4ee9d9c839961c3fc8a6997af/pip-26.0.1-py3-none-any.whl');
-  assert.equal(BUILD_DOWNLOADS.pipWheel.sha256, 'bdb1b08f4274833d62c1aa29e20907365a2ceb950410df15fc9521bad440122b');
+  assert.equal(BUILD_DOWNLOADS.pipWheel.url, 'https://files.pythonhosted.org/packages/f3/6e/1736e5b4ae2b778ef2f81c47d797de9f891d4d8acb047a24ca37a60294dd/pip-26.2.1-py3-none-any.whl');
+  assert.equal(BUILD_DOWNLOADS.pipWheel.sha256, '71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e');
 });
 
 

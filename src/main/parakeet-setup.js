@@ -408,6 +408,30 @@ function commitPromotions(promoted, fsModule) {
   }
 }
 
+const RUNTIME_GENERATION_NAME = /^[a-f0-9]{64}(\.previous)?$/;
+
+// Older lock digests are unreachable after an app update; drop them so a
+// superseded (possibly vulnerable) wheel closure does not linger on disk.
+function pruneObsoleteRuntimeGenerations(userDataDir, adapterId, keepDigest, fsModule) {
+  const adapterRoot = path.dirname(runtimeDir(userDataDir, adapterId, keepDigest || 'none'));
+  let names;
+  try {
+    names = fsModule.readdirSync(adapterRoot);
+  } catch (error) {
+    return;
+  }
+  for (const name of names) {
+    if (!RUNTIME_GENERATION_NAME.test(name) || name === keepDigest || name === `${keepDigest}.previous`) {
+      continue;
+    }
+    try {
+      removeTree(path.join(adapterRoot, name), fsModule);
+    } catch (error) {
+      // Best effort: a locked obsolete tree is retried on the next setup or removal.
+    }
+  }
+}
+
 function rollbackPromotions(promoted, fsModule) {
   for (const item of [...promoted].reverse()) {
     if (fsModule.existsSync(item.destination)) {
@@ -601,6 +625,7 @@ async function setupParakeet({
           throw error;
         }
         commitPromotions(promoted, fsModule);
+        pruneObsoleteRuntimeGenerations(userDataDir, target.adapterId, target.lock.lockDigest, fsModule);
         return getStatus({
           userDataDir,
           platform,
@@ -735,6 +760,7 @@ async function removeParakeet({
     }
     removeTree(modelDir(userDataDir, target.artifactRevision), fsModule);
     removeTree(runtimeDir(userDataDir, target.adapterId, target.lock.lockDigest), fsModule);
+    pruneObsoleteRuntimeGenerations(userDataDir, target.adapterId, null, fsModule);
     if (target.lock.vad && target.lock.vad.revision) {
       removeTree(vadDir(userDataDir, target.lock.vad.revision), fsModule);
     }

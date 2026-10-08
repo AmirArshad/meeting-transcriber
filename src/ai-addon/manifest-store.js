@@ -526,6 +526,21 @@ function cleanupStaleDiarizationDependencyDirs({ userDataDir, artifact, fsModule
   }
 }
 
+function hasSupersededDiarizationDependencyInstall({ userDataDir, artifact, fsModule = fs } = {}) {
+  const dependencyRoot = getAiAddonPaths(userDataDir).diarizationDependencyCacheDir;
+  const currentDirName = safePathSegment(artifact && artifact.id);
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const readdirSync = bindFsMethod(fsModule, 'readdirSync');
+  if (!dependencyRoot || !currentDirName || !existsSync || !readdirSync || !existsSync(dependencyRoot)) {
+    return false;
+  }
+  return readdirSync(dependencyRoot).some((entryName) => (
+    entryName
+    && entryName !== currentDirName
+    && existsSync(path.join(dependencyRoot, String(entryName), 'site-packages'))
+  ));
+}
+
 function getSummaryArtifactPath(userDataDir, artifact) {
   if (!artifact || !artifact.fileName) {
     return null;
@@ -891,7 +906,9 @@ function checkDiarizationDependencyCache({
   const markerMatches = Boolean(hasSitePackages && doesDiarizationDependencyMarkerMatch(marker, artifact));
   const installed = Boolean(hasSitePackages && markerMatches);
   const partial = Boolean(dependencyDir && existsSync && existsSync(dependencyDir) && !installed);
-  const staleInstall = Boolean(hasSitePackages && marker && !markerMatches && !validationError);
+  const supersededInstall = Boolean(artifact && !hasSitePackages
+    && hasSupersededDiarizationDependencyInstall({ userDataDir, artifact, fsModule }));
+  const staleInstall = Boolean(((hasSitePackages && marker && !markerMatches) || supersededInstall) && !validationError);
 
   return {
     supported: Boolean(artifact),
