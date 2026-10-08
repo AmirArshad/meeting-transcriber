@@ -243,6 +243,7 @@ let currentRecordingTranscriptMarkdown = '';
 let pendingMeetingTranscriptId = null;
 let summaryGenerationMeetingId = null;
 let summaryGenerationCancelling = false;
+let historyLanguageCaptionMeeting = null;
 let activeHistoryDetailTab = 'transcript';
 let homePromptContext = { platform: null, arch: null, hasNvidiaGpu: false, cudaInstalled: false };
 let selectedDiarizationEngine = null;
@@ -1396,7 +1397,7 @@ function restoreSummaryGenerationButton(button) {
     return;
   }
 
-  button.textContent = button.dataset.originalLabel || button.textContent || 'Generate Summary';
+  button.textContent = button.dataset.originalLabel || button.textContent || 'Generate summary';
   button.classList.remove('is-loading', 'summary-generation-active', 'is-cancelling');
   delete button.dataset.originalLabel;
   delete button.dataset.hoverLabel;
@@ -4386,15 +4387,27 @@ async function hashSummaryTranscript(text) {
 }
 
 function updateSummaryLanguageCaptions(meeting) {
-  const names = aiAddonStatusSnapshot?.features?.summary?.languagePolicy?.names || {};
-  const confirmed = meeting?.summaryStale === false && meeting?.ai?.summary?.languageSource === 'userConfirmed';
-  const language = confirmed ? meeting.ai.summary.language : meeting?.language;
-  const name = names[language] || language;
-  const text = name ? `Transcript language: ${name}${confirmed ? `. Summary will use ${name}.` : ' (confirm when generating).'}`
-    : 'Transcript language: confirm when generating';
-  for (const id of ['transcript-summary-language-caption', 'summary-language-caption']) {
-    const caption = document.getElementById(id);
-    if (caption) caption.textContent = text;
+  historyLanguageCaptionMeeting = meeting || null;
+  const helpers = window.summaryLanguageHelpers;
+  if (!helpers) return;
+  const captions = [
+    ['transcript-summary-language-caption', helpers.formatTranscriptLanguageCaption(meeting && meeting.language)],
+    ['summary-language-caption', helpers.formatSummaryLanguageCaption(meeting)],
+  ];
+  for (const [id, caption] of captions) {
+    const element = document.getElementById(id);
+    if (!element) continue;
+    const label = element.querySelector('.history-language-label');
+    const value = element.querySelector('.history-language-value');
+    if (!caption || !caption.visible) {
+      element.hidden = true;
+      if (label) label.textContent = '';
+      if (value) value.textContent = '';
+      continue;
+    }
+    element.hidden = false;
+    if (label) label.textContent = `${caption.label}:`;
+    if (value) value.textContent = caption.value;
   }
 }
 
@@ -5867,6 +5880,9 @@ function updateAiAddonSettings(status) {
 
   updateAiAddonFootprintWarning(status);
   updateSummaryGenerationButtons();
+  if (historyLanguageCaptionMeeting) {
+    updateSummaryLanguageCaptions(historyLanguageCaptionMeeting);
+  }
 }
 
 async function refreshAiAddonSettings() {

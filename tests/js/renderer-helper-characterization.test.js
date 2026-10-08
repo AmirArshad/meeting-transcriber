@@ -282,7 +282,7 @@ test('meeting detail exposes semantic header and labelled action region without 
 test('renderer visual foundation includes responsive History and reduced-motion behavior', () => {
   const css = readUtf8(STYLES_CSS);
 
-  assert.match(css, /@media\s*\(max-width:\s*900px\)[\s\S]*?\.history-layout\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
+  assert.match(css, /@media\s*\(max-width:\s*900px\)[\s\S]*?\.history-layout\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)/);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
   assert.doesNotMatch(css, /\.recording-section::before/);
   assert.match(css, /--accent:\s*#b8a8c9/);

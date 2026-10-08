@@ -795,25 +795,22 @@
                       role="tabpanel"
                       aria-labelledby="history-transcript-tab-btn"
                     >
-                      <div class="transcript-header-row">
-                        <h3>Transcript</h3>
-                        <div class="transcript-section-actions">
-                          <span id="transcript-summary-language-caption" class="setting-description">Transcript language: confirm when generating</span>
-                          <button id="retry-transcription-btn" class="btn btn-small" style="display: none;">
-                            Retry Transcription
-                          </button>
-                          <button id="retry-whisper-transcription-btn" class="btn btn-small" type="button" hidden>
-                            Retry with Whisper…
-                          </button>
-                          <button id="generate-summary-btn" class="btn btn-small" disabled>
-                            Generate Summary
-                          </button>
-                          <button id="copy-transcript-btn" class="btn btn-small">
-                            Copy
-                          </button>
-                          <button id="save-meeting-transcript-btn" class="btn btn-small">
-                            Save
-                          </button>
+                      <div class="history-detail-toolbar">
+                        <h3 class="history-panel-title">Transcript</h3>
+                        <p id="transcript-summary-language-caption" class="history-language-meta">
+                          <span class="history-language-label">Language:</span>
+                          <span class="history-language-value">Not identified</span>
+                        </p>
+                        <div class="transcript-section-actions history-toolbar-actions">
+                          <div class="history-toolbar-group history-toolbar-processing">
+                            <button id="retry-transcription-btn" class="btn btn-small btn-secondary" type="button" style="display: none;">Retry Transcription</button>
+                            <button id="retry-whisper-transcription-btn" class="btn btn-small btn-secondary" type="button" hidden>Retry with Whisper…</button>
+                            <button id="generate-summary-btn" class="btn btn-small btn-primary" type="button" disabled>Generate summary</button>
+                          </div>
+                          <div class="history-toolbar-group history-toolbar-export">
+                            <button id="copy-transcript-btn" class="btn btn-small" type="button">Copy</button>
+                            <button id="save-meeting-transcript-btn" class="btn btn-small" type="button">Save</button>
+                          </div>
                         </div>
                       </div>
                       <div
@@ -829,19 +826,20 @@
                       aria-labelledby="history-summary-tab-btn"
                       hidden
                     >
-                      <div class="transcript-header-row">
-                        <h3>Summary</h3>
-                        <div class="transcript-section-actions">
-                          <span id="summary-language-caption" class="setting-description">Transcript language: confirm when generating</span>
-                          <button id="regenerate-summary-btn" class="btn btn-small" disabled>
-                            Generate Summary
-                          </button>
-                          <button id="copy-summary-btn" class="btn btn-small" disabled>
-                            Copy
-                          </button>
-                          <button id="save-summary-btn" class="btn btn-small" disabled>
-                            Save
-                          </button>
+                      <div class="history-detail-toolbar">
+                        <h3 class="history-panel-title">Summary</h3>
+                        <p id="summary-language-caption" class="history-language-meta" hidden>
+                          <span class="history-language-label"></span>
+                          <span class="history-language-value"></span>
+                        </p>
+                        <div class="transcript-section-actions history-toolbar-actions">
+                          <div class="history-toolbar-group history-toolbar-processing">
+                            <button id="regenerate-summary-btn" class="btn btn-small btn-primary" type="button" disabled>Generate summary</button>
+                          </div>
+                          <div class="history-toolbar-group history-toolbar-export">
+                            <button id="copy-summary-btn" class="btn btn-small" type="button" disabled>Copy</button>
+                            <button id="save-summary-btn" class="btn btn-small" type="button" disabled>Save</button>
+                          </div>
                         </div>
                       </div>
                       <div

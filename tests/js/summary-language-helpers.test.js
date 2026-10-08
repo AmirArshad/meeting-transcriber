@@ -1,8 +1,13 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { reusableSummaryLanguage } = require('../../src/renderer/summary-language-helpers');
-const { getSummaryLanguagePolicy } = require('../../src/summary-language-policy');
+const {
+  reusableSummaryLanguage,
+  resolveLanguageDisplayName,
+  formatTranscriptLanguageCaption,
+  formatSummaryLanguageCaption,
+} = require('../../src/renderer/summary-language-helpers');
+const { getSummaryLanguagePolicy, SUMMARY_LANGUAGE_NAMES } = require('../../src/summary-language-policy');
 const modelId = 'qwen3.5-9b-q4-k-m';
 const policy = getSummaryLanguagePolicy(modelId, 'win32', 'x64');
 const fs = require('node:fs');
@@ -100,6 +105,128 @@ test('real dialog accepts only explicit supported submission and traps focus', a
   assert.equal(context.document.activeElement, elements['summary-transcript-language']);
   elements['summary-language-form'].dispatch('submit');
   assert.equal(await pending, 'es');
+});
+
+test('language captions use readable names without an add-on snapshot', () => {
+  for (const [code, name] of Object.entries(SUMMARY_LANGUAGE_NAMES)) {
+    assert.equal(resolveLanguageDisplayName(code), name);
+    assert.deepEqual(formatTranscriptLanguageCaption(code), {
+      visible: true,
+      label: 'Language',
+      value: name,
+    });
+  }
+  assert.equal(formatTranscriptLanguageCaption('en').value, 'English');
+  assert.equal(formatTranscriptLanguageCaption('ES').value, 'Spanish');
+  assert.equal(formatTranscriptLanguageCaption('pa').value, 'Panjabi');
+
+  const hongKong = formatTranscriptLanguageCaption('zh-HK');
+  const simplified = formatTranscriptLanguageCaption('zh-Hans');
+  const unitedStates = formatTranscriptLanguageCaption('en_US');
+  assert.equal(hongKong.value.includes('zh-HK'), false);
+  assert.match(hongKong.value, /^Chinese\b/);
+  assert.match(hongKong.value, /Hong Kong/);
+  assert.match(simplified.value, /Simplified/);
+  assert.equal(resolveLanguageDisplayName('zh_HK'), hongKong.value);
+  assert.match(unitedStates.value, /English/);
+  assert.match(unitedStates.value, /United States/);
+  assert.notEqual(unitedStates.value, 'en_US');
+
+  for (const code of [null, undefined, '', '   ', 'auto', 'und', 'undetermined', 'unknown', 'xyz', 'not a language', 12]) {
+    assert.deepEqual(formatTranscriptLanguageCaption(code), {
+      visible: true,
+      label: 'Language',
+      value: 'Not identified',
+    });
+  }
+});
+
+test('summary captions stay distinct from transcript language and clear when absent', () => {
+  const stored = {
+    language: 'en',
+    summary: 'Decisions were recorded.',
+    summaryStale: true,
+    ai: { summary: { language: 'fr', languageSource: 'userConfirmed', markdownPath: 'summary.md' } },
+  };
+  assert.equal(formatTranscriptLanguageCaption(stored.language).value, 'English');
+  assert.deepEqual(formatSummaryLanguageCaption(stored), {
+    visible: true,
+    label: 'Summary language',
+    value: 'French',
+  });
+  assert.deepEqual(formatSummaryLanguageCaption({ language: 'en' }), {
+    visible: false,
+    label: '',
+    value: '',
+  });
+  assert.deepEqual(formatSummaryLanguageCaption({ language: 'es', summary: '   ' }), {
+    visible: false,
+    label: '',
+    value: '',
+  });
+  assert.equal(formatSummaryLanguageCaption({
+    language: 'en',
+    summary: 'Legacy summary prose.',
+    ai: { summary: { markdownPath: 'legacy.md' } },
+  }).value, 'Not recorded');
+  assert.equal(formatSummaryLanguageCaption({
+    summary: 'Legacy summary prose.',
+    ai: { summary: { language: 'nope' } },
+  }).value, 'Not recorded');
+
+  const first = formatSummaryLanguageCaption(stored);
+  const second = formatSummaryLanguageCaption({ language: 'de' });
+  assert.equal(first.value, 'French');
+  assert.equal(second.visible, false);
+});
+
+test('rendered history captions replace previous meetings and ignore add-on names', () => {
+  const elements = {};
+  for (const id of ['transcript-summary-language-caption', 'summary-language-caption']) {
+    const label = { textContent: 'Transcript language:' };
+    const value = { textContent: 'confirm when generating' };
+    elements[id] = {
+      hidden: false,
+      querySelector(selector) {
+        if (selector === '.history-language-label') return label;
+        if (selector === '.history-language-value') return value;
+        return null;
+      },
+      label,
+      value,
+    };
+  }
+  const context = vm.createContext({
+    document: { getElementById: (id) => elements[id] || null },
+    window: { summaryLanguageHelpers: require('../../src/renderer/summary-language-helpers') },
+    aiAddonStatusSnapshot: {
+      features: { summary: { languagePolicy: { names: { en: 'Should not appear', fr: 'Pas français' } } } },
+    },
+    historyLanguageCaptionMeeting: null,
+  });
+  const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
+  vm.runInContext(extractTopLevelFunctionSource(source, 'updateSummaryLanguageCaptions'), context);
+
+  context.updateSummaryLanguageCaptions({
+    language: 'en',
+    summary: 'Saved summary',
+    ai: { summary: { language: 'zh-HK', markdownPath: 'summary.md' } },
+  });
+  assert.equal(elements['transcript-summary-language-caption'].hidden, false);
+  assert.equal(elements['transcript-summary-language-caption'].label.textContent, 'Language:');
+  assert.equal(elements['transcript-summary-language-caption'].value.textContent, 'English');
+  assert.equal(elements['summary-language-caption'].hidden, false);
+  assert.equal(elements['summary-language-caption'].label.textContent, 'Summary language:');
+  assert.match(elements['summary-language-caption'].value.textContent, /Chinese/);
+  assert.match(elements['summary-language-caption'].value.textContent, /Hong Kong/);
+  assert.equal(elements['summary-language-caption'].value.textContent.includes('Should not appear'), false);
+
+  context.updateSummaryLanguageCaptions({ language: 'und' });
+  assert.equal(elements['transcript-summary-language-caption'].value.textContent, 'Not identified');
+  assert.equal(elements['summary-language-caption'].hidden, true);
+  assert.equal(elements['summary-language-caption'].label.textContent, '');
+  assert.equal(elements['summary-language-caption'].value.textContent, '');
+  assert.equal(context.historyLanguageCaptionMeeting.language, 'und');
 });
 
 test('regeneration shows the prior confirmation as an editable default', async () => {
