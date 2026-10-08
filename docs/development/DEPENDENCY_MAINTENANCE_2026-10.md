@@ -5,7 +5,8 @@ the maintenance scope in the [upgrade prompt](../superpowers/plans/2026-10-08-de
 done on the local branch `chore/dependency-maintenance-2026-10`. Evidence was refreshed on
 2026-10-08 on a Windows 11 x64 host: RTX 4070, driver 617.42, Node 24, repo `.venv` Python 3.11.
 Linux evidence comes from WSL Ubuntu (glibc 2.43). That is a real x86_64 glibc userland, but it
-is **not** an Omarchy/CachyOS desktop acceptance. No Mac was available. Nothing was staged,
+is **not** an Omarchy/CachyOS desktop acceptance. The CachyOS desktop pass is recorded under
+Remaining host gates. No Mac was available. Nothing was staged,
 committed, pushed or published. No remote repository settings were changed.
 
 ## Changes and decisions
@@ -43,7 +44,7 @@ committed, pushed or published. No remote repository settings were changed.
   - None of these change native Speakrs ORT or Parakeet GPU ORT.
 - Windows only: PyAudioWPatch 0.2.12.9 and CTranslate2 4.8.2.
   - 4.8.2 gave identical CUDA and CPU transcripts on this host. WASAPI enumeration found 23 devices, with loopback and microphone reads working.
-  - Linux stays on CTranslate2 4.8.1 until a managed-CUDA host check.
+  - Linux stayed on CTranslate2 4.8.1 for the packaged build. The 2026-10-08 CachyOS managed-CUDA check below ran 4.8.2 from an isolated directory and produced the same transcript. The Linux pin was not moved.
 - macOS only: Numba 0.68.0 and llvmlite 0.50.0 as a pair, plus charset-normalizer 3.5.2 and MarkupSafe 3.0.4.
   - The Parakeet macOS lock keeps its own numba 0.67 / llvmlite 0.49 for artifact isolation. mlx stays 0.32.2.
 - `scripts/check-build-requirements-closure.py` verifies that each build file is exactly the resolved closure for its target, and all three pass. Cross-host runs ignore Windows-marker-only colorama; CI runs each target on a matching runner.
@@ -151,11 +152,11 @@ Python 3.11 security support ends in October 2027. Target a migration decision i
   - MLX Whisper with Numba 0.68 / llvmlite 0.50.
   - `python scripts/qualify-pyannote-runtime.py --work-dir <tmp>`, expecting `device: mps`.
   - Tray, dialog and recording checks on Electron 44.7.0.
-- **Linux (Omarchy/CachyOS):**
-  - Python 3.11.17 AppImage/pacman/deb build and launch.
-  - The recording smoke checklist.
-  - Managed-CUDA transcription before moving CTranslate2 to 4.8.2.
-  - Parakeet Linux CUDA repair; its lock is unchanged.
+- **Linux (CachyOS, 2026-10-08):** done on this host with the limits below. Omarchy was not re-run. Pacman and deb were not installed onto the system.
+  - Python 3.11.17 AppImage/pacman/deb build, `verify:linux:packaged`, unpacked GUI launch, and AppImage safeStorage launch.
+  - Short PipeWire recording smoke on the Logitech C925e and HDMI monitor. Device volumes were left unchanged.
+  - Managed-CUDA transcription of that desktop capture on packaged CTranslate2 4.8.1, then the same file on isolated 4.8.2. Transcripts matched, including a packaged 4.8.1 CPU run. The Linux pin is still 4.8.1.
+  - Parakeet Linux CUDA lock is unchanged (`5e1a8d69…9e51`). The existing runtime transcribed the same capture on `cuda` / `float32`. Repair was not required.
 - **Windows:**
   - Packaged installer build and launch on Electron 44.7.0. Done 2026-10-08 on this host (Node 22.15.0, npm 10.9.2).
     - `npm run build` exit 0. A first attempt exited 1 during electron-builder's node-module collection (`spawn powershell.exe ENOENT`) because this shell had `pwsh.exe` on `PATH` and not Windows PowerShell 5.1. electron-builder 26.16.1 spawns `powershell.exe` directly. The retry prepended `C:\Windows\System32\WindowsPowerShell\v1.0` to `PATH` and exited 0. It packaged `electron=44.7.0` and wrote the NSIS installer. Signing was skipped (no certificate configured).
@@ -170,3 +171,11 @@ Python 3.11 security support ends in October 2027. Target a migration decision i
     - Packaged `resources/python/python.exe` (`ctranslate2` 4.8.2, `faster-whisper` 1.2.1, NumPy 2.4.6) transcribed that file with `--model base --device cuda` exit 0: `device: cuda`, `computeType: float16`. Transcript contains the fixture speech (Hazel, design review, testing and accessibility). `HF_HUB_OFFLINE=1` used the existing cache.
     - Installed Speakrs (`speakrs-community1-vbx`, ORT from `runtimes/speakrs-ort`, CUDA 12 cublas/cudnn from the dev venv) on that recording and on `tests/fixtures/speakrs-two-speaker-16k.wav`: both exit 0, `device: cuda`, `annotationSource: exclusive_speaker_diarization`. Both assigned only `SPEAKER_00` (`speakerCount: 1`). Speaker labels were written. This pass does not show a two-speaker split.
     - Installed Qwen3.5 9B summary, profile `balanced`, exit 0. Wrote `summary.json` and `summary.md` for that transcript. No token values in the sidecar.
+  - **CachyOS automated subset, 2026-10-08** (not the full checklists; no 15/60-minute soak, no PipeWire restart, no headphone unplug, no interrupted-capture recovery, no Qwen run, no system pacman/deb install):
+    - Host: CachyOS, kernel `7.2.9-1-cachyos`, Hyprland/Wayland, PipeWire 1.6.9, RTX 4070 12,282 MiB, driver 615.71.09. `master` `127f8db`. Node 26.10.0. The checkout's `node_modules` was still Electron 44.1.0 / electron-builder 26.15.3; `npm ci` restored the lock (44.7.0 / 26.16.1). Electron 44.7 has no install script, so `node node_modules/electron/install.js` downloaded the binary. The repo `.venv` was behind the October pins and was aligned to `requirements-linux-build.txt` (AnyIO 4.15.1, onnxruntime 1.30.0, huggingface-hub 1.33.0, tokenizers 0.23.2, CTranslate2 4.8.1).
+    - Authoritative suite after that alignment: JS 1,122 passed / 2 skipped on Electron 44.7.0; Python 837 passed / 7 skipped on the aligned 3.11.16 venv; Python syntax passed. `requirements-linux-build.txt` closure check passed. The same Python suite under packaged CPython 3.11.17 exited 0 with the same seven skips. One earlier JS run failed `history-detail-interaction` because Hyprland tiled the fixture to about 1278×1370; a temporary float rule let the requested 600×400 window through, and that rule was removed afterward.
+    - `npm run build:linux` with electron-builder 26.16.1 packaged `electron=44.7.0`, Python 3.11.17, FFmpeg n8.0.1, CTranslate2 4.8.1. `npm run verify:linux:packaged` passed for unpacked, AppImage, pacman, and deb.
+    - Artifacts: AppImage `966fa6be6a89d6d2b5b45cdb505bcc3cead7da067bac5e5d811ceddeb4609fa8`; pacman `fcc6c485d126925a9c3141997cc6937787a53888c35b7a3cc83cc4b6f04779d1`; deb `05083bb6dfc1a8ab9572602e045b09bd14525d216aacbaf8b4da5ff8796ab4f1`; `app.asar` `9e1322697501c60068d2b386c7acacc30723d5cf428ad1dbc9d69859f6ee77fa`.
+    - Unpacked GUI on an isolated userData: `app.isPackaged: true`, Wayland, `gnome_libsecret`, Python 3.11.17, FFmpeg n8.0.1, window title `AvaNevis Meeting Recorder & Transcriber`, 1200×800. The window painted the record view with the Logitech mic, HDMI monitor, English, and Small. The GPU process restarted three times at startup (`eglCreateImage` 0x3009) and then stayed up. An empty profile correctly offered CUDA setup and reported add-ons unsupported. AppImage safeStorage smoke exited 0 from the AppImage mount (`roundTrip: true`).
+    - Recorder CLI, default Logitech source and HDMI monitor, fixture `tests/fixtures/speakrs-two-speaker-16k.wav` played to that sink. Sink volume stayed 100% and source volume stayed 53%. Mic + desktop: 11.8 s, mic max 0.006, desktop max 0.575, stop stages through `post_processing_complete`. Desktop only: 8.0 s, mic max 0.000, no mic stream. Mic only: 6.0 s, desktop max 0.000, no desktop stream. Cancel left no Opus. The webcam did not pick up the HDMI playback, so microphone speech is not qualified. Packaged Whisper Small transcribed the desktop file offline: `cuda` / `float16` and `cpu` / `int8` on 4.8.1, and `cuda` / `float16` on isolated 4.8.2. All three texts were `Zyra. The design review starts at 10, and I prepared the agenda. Thanks, Hazel. I will share the schedule and confirm each action owner.`
+    - Existing Parakeet runtime, same lock digest, on that desktop file: exit 0, `cuda` / `float32`, same fixture speech. Installed Speakrs on `speakrs-two-speaker-16k.wav`: exit 0, `device: cuda`, `annotationSource: exclusive_speaker_diarization`, only `SPEAKER_00` across 6 segments. This pass does not show a two-speaker split. No token values. Qwen was not run.
