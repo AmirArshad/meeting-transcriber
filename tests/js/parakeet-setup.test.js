@@ -563,6 +563,91 @@ test('removal waits for pending work and does not delete recordings', async () =
   assert.equal(fs.readFileSync(recording, 'utf8'), 'audio');
 });
 
+test('a superseded lock digest requires repair, and repair or removal prunes old generations', async () => {
+  const root = userData();
+  const adapterId = 'parakeet-onnx-linux-cuda-v1';
+  const oldLock = fixtureLock();
+  await setupParakeet(setupOptions(root, oldLock));
+  assert.equal(getStatus({ userDataDir: root, lock: oldLock, adapterId, device: 'cuda' }).status, 'ready');
+
+  const newLock = { ...fixtureLock(), lockDigest: 'cd'.repeat(32) };
+  const adapterRoot = path.join(root, 'ai-addons', 'runtimes', 'parakeet', adapterId);
+  const unrelated = path.join(adapterRoot, 'notes');
+  fs.writeFileSync(unrelated, 'keep');
+  assert.equal(getStatus({ userDataDir: root, lock: newLock, adapterId, device: 'cuda' }).status, 'repair-required');
+
+  const repaired = await setupParakeet(setupOptions(root, newLock, { operation: 'repair', operationId: 'op-2' }));
+  assert.equal(repaired.status, 'ready');
+  assert.equal(repaired.runtimeLockId, newLock.lockDigest);
+  assert.equal(fs.existsSync(path.join(adapterRoot, oldLock.lockDigest)), false);
+  assert.equal(fs.existsSync(path.join(adapterRoot, newLock.lockDigest)), true);
+  assert.equal(fs.readFileSync(unrelated, 'utf8'), 'keep');
+
+  fs.mkdirSync(path.join(adapterRoot, oldLock.lockDigest), { recursive: true });
+  const removed = await removeParakeet({ userDataDir: root, lock: newLock, adapterId });
+  assert.equal(removed.status, 'not-installed');
+  assert.deepEqual(fs.readdirSync(adapterRoot), ['notes']);
+});
+
+function linkDirectory(target, linkPath) {
+  fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+  fs.symlinkSync(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
+test('pruning does not delete through an adapter or ancestor junction', async () => {
+  const root = userData();
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-parakeet-outside-'));
+  const adapterId = 'parakeet-onnx-linux-cuda-v1';
+  const lock = fixtureLock();
+  const foreignDigest = 'cd'.repeat(32);
+  const foreignGeneration = path.join(external, 'adapter', foreignDigest);
+  fs.mkdirSync(foreignGeneration, { recursive: true });
+  const sentinel = path.join(foreignGeneration, 'sentinel.txt');
+  fs.writeFileSync(sentinel, 'keep');
+  const adapterLink = path.join(root, 'ai-addons', 'runtimes', 'parakeet', adapterId);
+  linkDirectory(path.join(external, 'adapter'), adapterLink);
+
+  await removeParakeet({ userDataDir: root, lock, adapterId });
+  assert.equal(fs.readFileSync(sentinel, 'utf8'), 'keep');
+  assert.equal(fs.existsSync(adapterLink), false);
+
+  const ancestorGeneration = path.join(external, 'tree', 'parakeet', adapterId, foreignDigest);
+  fs.mkdirSync(ancestorGeneration, { recursive: true });
+  const ancestorSentinel = path.join(ancestorGeneration, 'sentinel.txt');
+  fs.writeFileSync(ancestorSentinel, 'keep');
+  const parakeetLink = path.join(root, 'ai-addons', 'runtimes', 'parakeet');
+  fs.rmSync(parakeetLink, { recursive: true, force: true });
+  linkDirectory(path.join(external, 'tree', 'parakeet'), parakeetLink);
+
+  await removeParakeet({ userDataDir: root, lock, adapterId });
+  assert.equal(fs.readFileSync(ancestorSentinel, 'utf8'), 'keep');
+  assert.equal(fs.lstatSync(parakeetLink).isSymbolicLink(), true);
+});
+
+test('pruning unlinks a generation junction without deleting its target', async () => {
+  const root = userData();
+  const external = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-parakeet-generation-'));
+  const adapterId = 'parakeet-onnx-linux-cuda-v1';
+  const lock = fixtureLock();
+  const adapterRoot = path.join(root, 'ai-addons', 'runtimes', 'parakeet', adapterId);
+  const foreignDigest = 'cd'.repeat(32);
+  const generationTarget = path.join(external, 'generation-target');
+  fs.mkdirSync(generationTarget, { recursive: true });
+  fs.writeFileSync(path.join(generationTarget, 'sentinel.txt'), 'keep');
+  fs.mkdirSync(adapterRoot, { recursive: true });
+  linkDirectory(generationTarget, path.join(adapterRoot, foreignDigest));
+  const obsolete = path.join(adapterRoot, 'ef'.repeat(32));
+  fs.mkdirSync(obsolete);
+  fs.writeFileSync(path.join(obsolete, 'old.txt'), 'old');
+  fs.writeFileSync(path.join(adapterRoot, 'notes'), 'keep');
+
+  await removeParakeet({ userDataDir: root, lock, adapterId });
+  assert.equal(fs.readFileSync(path.join(generationTarget, 'sentinel.txt'), 'utf8'), 'keep');
+  assert.equal(fs.existsSync(path.join(adapterRoot, foreignDigest)), false);
+  assert.equal(fs.existsSync(obsolete), false);
+  assert.equal(fs.readFileSync(path.join(adapterRoot, 'notes'), 'utf8'), 'keep');
+});
+
 test('status uses the lock inventory and requires device evidence', async () => {
   const root = userData();
   const lock = fixtureLock();

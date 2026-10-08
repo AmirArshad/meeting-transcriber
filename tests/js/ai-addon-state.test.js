@@ -149,22 +149,32 @@ test('catalog exposes managed diarization dependency artifacts for Windows CUDA 
   const windowsArtifact = getDiarizationDependencyArtifactForPlatform('win32', 'x64');
   const macArtifact = getDiarizationDependencyArtifactForPlatform('darwin', 'arm64');
 
-  assert.equal(windowsArtifact.id, 'pyannote-audio-4.0.1-win32-x64-cuda-12.6');
+  assert.equal(windowsArtifact.id, 'pyannote-audio-4.0.7-win32-x64-cuda-12.6');
   assert.equal(windowsArtifact.acceleration, 'cuda');
   assert.deepEqual(windowsArtifact.runtimeFamilies, ['pytorch-cuda']);
   assert.equal(windowsArtifact.pip.allowSourceBuilds, false);
-  assert.ok(windowsArtifact.pip.requirements.includes('torch==2.8.0+cu126'));
-  assert.ok(windowsArtifact.pip.requirements.includes('torchvision==0.23.0+cu126'));
-  assert.ok(windowsArtifact.pip.requirements.includes('torchaudio==2.8.0+cu126'));
+  assert.ok(windowsArtifact.pip.requirements.includes('torch==2.13.0+cu126'));
+  assert.ok(windowsArtifact.pip.requirements.includes('torchvision==0.28.0+cu126'));
+  assert.ok(windowsArtifact.pip.requirements.includes('torchaudio==2.11.0+cu126'));
   assert.ok(windowsArtifact.pip.sourceArtifacts.some((artifact) => artifact.package === 'julius' && artifact.sha256));
-  assert.equal(macArtifact.id, 'pyannote-audio-4.0.1-darwin-arm64-mps');
+  assert.equal(macArtifact.id, 'pyannote-audio-4.0.7-darwin-arm64-mps');
   assert.equal(macArtifact.acceleration, 'mps');
   assert.deepEqual(macArtifact.runtimeFamilies, ['pytorch-mps']);
   assert.equal(macArtifact.pip.allowSourceBuilds, false);
-  assert.ok(macArtifact.pip.requirements.includes('torch==2.8.0'));
-  assert.ok(macArtifact.pip.requirements.includes('torchcodec==0.7.0'));
+  assert.ok(macArtifact.pip.requirements.includes('torch==2.13.0'));
+  assert.ok(macArtifact.pip.requirements.includes('torchcodec==0.16.0'));
   assert.ok(macArtifact.pip.sourceArtifacts.some((artifact) => artifact.package === 'julius' && artifact.sha256));
   assert.equal(getDiarizationDependencyArtifactForPlatform('darwin', 'x64'), null);
+});
+
+test('managed pyannote runtimes stay at or above the Torch advisory fix floor and CUDA 12', () => {
+  for (const [platform, arch] of [['win32', 'x64'], ['darwin', 'arm64']]) {
+    const requirements = getDiarizationDependencyArtifactForPlatform(platform, arch).pip.requirements;
+    const torch = requirements.find((requirement) => requirement.startsWith('torch=='));
+    const [major, minor] = torch.slice('torch=='.length).split(/[.+]/).map(Number);
+    assert.ok(major > 2 || (major === 2 && minor >= 13), `${platform} pins ${torch}; Torch < 2.13.0 has published advisories`);
+    assert.equal(requirements.some((requirement) => /\+cu1[3-9]/.test(requirement)), false, 'pyannote stays on CUDA 12 wheels');
+  }
 });
 
 test('summary profiles reuse the curated default summary model', () => {

@@ -7,9 +7,16 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
-      electron-toolchain:
+      # Electron runtime patches ship to users and need tray/IPC/recording checks;
+      # keep them apart from build-time packaging tooling.
+      electron-runtime:
         patterns:
           - electron
+        update-types:
+          - minor
+          - patch
+      packaging-toolchain:
+        patterns:
           - electron-builder
         update-types:
           - minor
@@ -20,24 +27,29 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    # Re-enabled after Phases 1-4; keep numpy/scipy majors manual.
     open-pull-requests-limit: 5
     ignore:
-      # Keep major upgrades manual for coordinated ML stack validation.
+      # Python 3.11 ceilings (packaged runtime stays 3.11 until the 3.13
+      # qualification lands; see docs/development/DEPENDENCY_MAINTENANCE_2026-10.md).
+      # Revisit every ceiling below as part of that migration.
       - dependency-name: numpy
-        update-types:
-          - version-update:semver-major
+        versions: [">=2.5"]       # 2.5 requires Python >=3.12
       - dependency-name: scipy
-        update-types:
-          - version-update:semver-major
+        versions: [">=1.18"]      # 1.18 requires Python >=3.12
+      - dependency-name: av
+        versions: [">=19"]        # PyAV 19 drops Python 3.11
+      - dependency-name: networkx
+        versions: [">=3.7"]       # 3.7 requires Python >=3.12
+      - dependency-name: librosa
+        versions: [">=1"]
+      - dependency-name: huggingface-hub
+        versions: [">=2"]         # tokenizers requires huggingface-hub <2
+      - dependency-name: mpmath
+        versions: [">=1.4"]       # sympy requires mpmath <1.4
+      # lightning-whisper-mlx pins tiktoken==0.3.3. Review by 2027-01-31 or
+      # when lightning-whisper-mlx is replaced.
       - dependency-name: tiktoken
-      - dependency-name: pyobjc-framework-ScreenCaptureKit
-        update-types:
-          - version-update:semver-major
-      - dependency-name: pyobjc-framework-CoreAudio
-        update-types:
-          - version-update:semver-major
-      - dependency-name: pyobjc-framework-AVFoundation
+      - dependency-name: "pyobjc*"
         update-types:
           - version-update:semver-major
     groups:
@@ -50,3 +62,41 @@ updates:
         update-types:
           - patch
           - minor
+      # Numba pins an exact llvmlite minor; a lone llvmlite bump cannot resolve.
+      numba-llvmlite:
+        patterns:
+          - numba
+          - llvmlite
+      # PyObjC framework wheels are released and tested as one version.
+      pyobjc:
+        patterns:
+          - "pyobjc*"
+
+  - package-ecosystem: cargo
+    directory: /native/speakrs-cli
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    ignore:
+      # Speakrs and its native ONNX Runtime binding are qualified per GPU
+      # backend; upgrade them in dedicated work, not as routine version PRs.
+      - dependency-name: speakrs
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+      - dependency-name: "ort*"
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      github-actions:
+        patterns:
+          - "*"

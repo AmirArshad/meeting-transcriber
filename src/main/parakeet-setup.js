@@ -11,6 +11,10 @@ const {
   verifyRuntimeTree,
 } = require('./parakeet-runtime');
 const { isAllowedDownloadUrl } = require('../ai-addon/download-helpers');
+const {
+  isPathInsideDirectory,
+  resolveExistingRealPath,
+} = require('../main-process/path-safety-helpers');
 
 const INSTALL_RECORD = 'install.json';
 const DEVICE_RECORD = 'device.json';
@@ -408,6 +412,112 @@ function commitPromotions(promoted, fsModule) {
   }
 }
 
+const RUNTIME_GENERATION_NAME = /^[a-f0-9]{64}(\.previous)?$/;
+
+function pathIsInside(candidate, root, fsModule) {
+  try {
+    return isPathInsideDirectory(candidate, root, fsModule);
+  } catch (error) {
+    return false;
+  }
+}
+
+function isReparsePoint(target, fsModule) {
+  if (!target || typeof fsModule.lstatSync !== 'function') {
+    return false;
+  }
+  try {
+    const stat = fsModule.lstatSync(target);
+    return Boolean(stat && typeof stat.isSymbolicLink === 'function' && stat.isSymbolicLink());
+  } catch (error) {
+    return false;
+  }
+}
+
+function unlinkReparsePoint(target, fsModule) {
+  if (typeof fsModule.rmSync === 'function') {
+    fsModule.rmSync(target, { recursive: false, force: true });
+    return;
+  }
+  if (typeof fsModule.unlinkSync === 'function') {
+    fsModule.unlinkSync(target);
+  }
+}
+
+function isDirectRealChild(candidate, parent, fsModule) {
+  let realParent;
+  let realCandidate;
+  try {
+    realParent = resolveExistingRealPath(parent, fsModule);
+    realCandidate = resolveExistingRealPath(candidate, fsModule);
+  } catch (error) {
+    return false;
+  }
+  if (!realParent || !realCandidate) {
+    return false;
+  }
+  const relative = path.relative(realParent, realCandidate);
+  return Boolean(relative)
+    && relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+    && !relative.includes(path.sep);
+}
+
+// Delete a runtime generation only when its physical path is a real directory
+// inside the user-data tree. Junctions and symlinks are unlinked in place so
+// an adapter-root or ancestor link cannot prune an outside tree.
+function removeRuntimeTree(candidate, userDataDir, fsModule) {
+  if (!candidate || typeof fsModule.existsSync !== 'function' || !fsModule.existsSync(candidate)) {
+    return;
+  }
+  if (isReparsePoint(candidate, fsModule)) {
+    if (pathIsInside(path.dirname(candidate), userDataDir, fsModule)) {
+      unlinkReparsePoint(candidate, fsModule);
+    }
+    return;
+  }
+  if (!pathIsInside(candidate, userDataDir, fsModule) || !isDirectRealChild(candidate, path.dirname(candidate), fsModule)) {
+    return;
+  }
+  removeTree(candidate, fsModule);
+}
+
+// Older lock digests are unreachable after an app update; drop them so a
+// superseded (possibly vulnerable) wheel closure does not linger on disk.
+function pruneObsoleteRuntimeGenerations(userDataDir, adapterId, keepDigest, fsModule) {
+  const adapterRoot = path.dirname(runtimeDir(userDataDir, adapterId, keepDigest || 'none'));
+  if (isReparsePoint(adapterRoot, fsModule)) {
+    if (pathIsInside(path.dirname(adapterRoot), userDataDir, fsModule)) {
+      try {
+        unlinkReparsePoint(adapterRoot, fsModule);
+      } catch (error) {
+        // Best effort: a locked junction is retried on the next setup or removal.
+      }
+    }
+    return;
+  }
+  if (!pathIsInside(adapterRoot, userDataDir, fsModule)) {
+    return;
+  }
+  let names;
+  try {
+    names = fsModule.readdirSync(adapterRoot);
+  } catch (error) {
+    return;
+  }
+  for (const name of names) {
+    if (!RUNTIME_GENERATION_NAME.test(name) || name === keepDigest || name === `${keepDigest}.previous`) {
+      continue;
+    }
+    try {
+      removeRuntimeTree(path.join(adapterRoot, name), userDataDir, fsModule);
+    } catch (error) {
+      // Best effort: a locked obsolete tree is retried on the next setup or removal.
+    }
+  }
+}
+
 function rollbackPromotions(promoted, fsModule) {
   for (const item of [...promoted].reverse()) {
     if (fsModule.existsSync(item.destination)) {
@@ -601,6 +711,7 @@ async function setupParakeet({
           throw error;
         }
         commitPromotions(promoted, fsModule);
+        pruneObsoleteRuntimeGenerations(userDataDir, target.adapterId, target.lock.lockDigest, fsModule);
         return getStatus({
           userDataDir,
           platform,
@@ -734,7 +845,8 @@ async function removeParakeet({
       throw fail(target.code || 'PARAKEET_SELECTION_UNAVAILABLE', target.message);
     }
     removeTree(modelDir(userDataDir, target.artifactRevision), fsModule);
-    removeTree(runtimeDir(userDataDir, target.adapterId, target.lock.lockDigest), fsModule);
+    removeRuntimeTree(runtimeDir(userDataDir, target.adapterId, target.lock.lockDigest), userDataDir, fsModule);
+    pruneObsoleteRuntimeGenerations(userDataDir, target.adapterId, null, fsModule);
     if (target.lock.vad && target.lock.vad.revision) {
       removeTree(vadDir(userDataDir, target.lock.vad.revision), fsModule);
     }

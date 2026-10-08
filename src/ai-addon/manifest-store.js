@@ -526,6 +526,55 @@ function cleanupStaleDiarizationDependencyDirs({ userDataDir, artifact, fsModule
   }
 }
 
+function readJsonObject(filePath, fsModule) {
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const readFileSync = bindFsMethod(fsModule, 'readFileSync');
+  if (!existsSync || !readFileSync || !existsSync(filePath)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function isCompletedForeignDiarizationInstall(marker, currentArtifactId) {
+  if (!marker) {
+    return false;
+  }
+  const artifactId = typeof marker.artifactId === 'string' ? marker.artifactId.trim() : '';
+  if (!artifactId || artifactId === currentArtifactId || !artifactId.startsWith('pyannote-audio-')) {
+    return false;
+  }
+  return Array.isArray(marker.requirements)
+    && marker.requirements.length > 0
+    && typeof marker.installedAt === 'string'
+    && marker.installedAt.trim().length > 0;
+}
+
+function hasSupersededDiarizationDependencyInstall({ userDataDir, artifact, fsModule = fs } = {}) {
+  const dependencyRoot = getAiAddonPaths(userDataDir).diarizationDependencyCacheDir;
+  const currentDirName = safePathSegment(artifact && artifact.id);
+  const currentArtifactId = artifact && artifact.id;
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const readdirSync = bindFsMethod(fsModule, 'readdirSync');
+  if (!dependencyRoot || !currentDirName || !existsSync || !readdirSync || !existsSync(dependencyRoot)) {
+    return false;
+  }
+  return readdirSync(dependencyRoot).some((entryName) => {
+    if (!entryName || entryName === currentDirName) {
+      return false;
+    }
+    const entryPath = path.join(dependencyRoot, String(entryName));
+    if (!existsSync(path.join(entryPath, 'site-packages'))) {
+      return false;
+    }
+    return isCompletedForeignDiarizationInstall(readJsonObject(path.join(entryPath, 'install.json'), fsModule), currentArtifactId);
+  });
+}
+
 function getSummaryArtifactPath(userDataDir, artifact) {
   if (!artifact || !artifact.fileName) {
     return null;
@@ -891,7 +940,9 @@ function checkDiarizationDependencyCache({
   const markerMatches = Boolean(hasSitePackages && doesDiarizationDependencyMarkerMatch(marker, artifact));
   const installed = Boolean(hasSitePackages && markerMatches);
   const partial = Boolean(dependencyDir && existsSync && existsSync(dependencyDir) && !installed);
-  const staleInstall = Boolean(hasSitePackages && marker && !markerMatches && !validationError);
+  const supersededInstall = Boolean(artifact && !hasSitePackages
+    && hasSupersededDiarizationDependencyInstall({ userDataDir, artifact, fsModule }));
+  const staleInstall = Boolean(((hasSitePackages && marker && !markerMatches) || supersededInstall) && !validationError);
 
   return {
     supported: Boolean(artifact),

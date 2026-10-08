@@ -220,6 +220,87 @@ function assertWheelClosed(wheel, adapterId) {
   }
 }
 
+function parseWheelFileName(fileName) {
+  const match = /^(.+?)-([^-]+)(?:-\d[^-]*)?-([^-]+)-([^-]+)-([^-]+)\.whl$/.exec(String(fileName || ''));
+  if (!match) {
+    return null;
+  }
+  return {
+    distribution: match[1],
+    version: match[2],
+    pythonTag: match[3],
+    abiTag: match[4],
+    platformTag: match[5],
+  };
+}
+
+function cpythonTag(tag) {
+  const match = /^cp(\d)(\d+)$/.exec(tag);
+  if (!match) {
+    return null;
+  }
+  return { major: Number(match[1]), minor: Number(match[2]) };
+}
+
+function platformTagMatches(tag, platform, arch) {
+  if (tag === 'any') {
+    return true;
+  }
+  if (platform === 'darwin' && arch === 'arm64') {
+    return /^macosx_\d+_\d+_(?:arm64|universal2)$/.test(tag);
+  }
+  if (platform === 'win32' && arch === 'x64') {
+    return tag === 'win_amd64';
+  }
+  if (platform === 'linux' && arch === 'x64') {
+    return /^(?:manylinux_\d+_\d+|manylinux\d+|linux)_x86_64$/.test(tag);
+  }
+  return false;
+}
+
+function wheelTagsMatchTarget(parsed, target) {
+  const python = String(target && target.python || '');
+  const [majorText, minorText] = python.split('.');
+  const major = Number(majorText);
+  const minor = Number(minorText);
+  if (!Number.isInteger(major) || !Number.isInteger(minor)) {
+    return false;
+  }
+  const pyTags = parsed.pythonTag.split('.');
+  const abiTags = parsed.abiTag.split('.');
+  const platformTags = parsed.platformTag.split('.');
+  if (!platformTags.some((tag) => platformTagMatches(tag, target.platform, target.arch))) {
+    return false;
+  }
+  const exact = `cp${major}${minor}`;
+  if (abiTags.includes('none') && (pyTags.includes(`py${major}`) || pyTags.includes(exact))) {
+    return true;
+  }
+  if (abiTags.includes(exact) && pyTags.includes(exact)) {
+    return true;
+  }
+  if (abiTags.includes('abi3')) {
+    return pyTags.some((tag) => {
+      const version = cpythonTag(tag);
+      return version && version.major === major && version.minor <= minor;
+    });
+  }
+  return false;
+}
+
+function assertWheelTargetCompatible(fileName, target) {
+  const parsed = parseWheelFileName(fileName);
+  const python = target && target.python ? target.python : 'target';
+  const platform = target && target.platform ? target.platform : 'target';
+  const arch = target && target.arch ? target.arch : '';
+  if (!parsed || !wheelTagsMatchTarget(parsed, target || {})) {
+    throw lockFailure(
+      'LOCK_WHEEL_TARGET',
+      `Parakeet wheel ${fileName} is not compatible with CPython ${python} on ${platform} ${arch}.`,
+    );
+  }
+}
+
 function assertParakeetLockIntegrity(lock) {
   if (!lock || lock.schemaVersion !== SCHEMA_VERSION) {
     throw lockFailure('LOCK_SCHEMA', 'Parakeet lock schema is not version 1.');
@@ -236,6 +317,7 @@ function assertParakeetLockIntegrity(lock) {
   const names = new Set();
   for (const wheel of lock.wheels) {
     assertWheelClosed(wheel, lock.adapterId);
+    assertWheelTargetCompatible(wheel.fileName, lock);
     if (names.has(wheel.packageName)) {
       throw lockFailure('LOCK_WHEEL_INCOMPLETE', `Duplicate Parakeet wheel ${wheel.packageName}.`);
     }
@@ -414,7 +496,9 @@ module.exports = {
   VAD_REVISION,
   WHISPER_MANAGED_CUDA_ROOT,
   assertParakeetLockIntegrity,
+  assertWheelTargetCompatible,
   canonicalLockDigest,
+  parseWheelFileName,
   getAdapterSpec,
   listSupportedTargets,
   loadLock,

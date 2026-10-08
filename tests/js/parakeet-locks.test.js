@@ -24,6 +24,26 @@ test('shipped locks are complete closures with immutable revisions', () => {
   assert.equal(catalog.loadLock(catalog.ADAPTERS.WINDOWS_CUDA).wheels.some((wheel) => wheel.packageName === 'pyreadline3'), true);
 });
 
+test('shipped locks stay at or above published advisory fix floors', () => {
+  const floors = { msgpack: '1.2.1', urllib3: '2.8.0' };
+  const parts = (version) => version.split('.').map((part) => Number.parseInt(part, 10));
+  const atLeast = (version, floor) => {
+    const [a, b] = [parts(version), parts(floor)];
+    for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+      if ((a[index] || 0) !== (b[index] || 0)) return (a[index] || 0) > (b[index] || 0);
+    }
+    return true;
+  };
+  for (const adapterId of Object.values(catalog.ADAPTERS)) {
+    for (const wheel of catalog.loadLock(adapterId).wheels) {
+      const floor = floors[wheel.packageName.toLowerCase()];
+      if (floor) {
+        assert.ok(atLeast(wheel.version, floor), `${adapterId} pins ${wheel.packageName} ${wheel.version} below ${floor}`);
+      }
+    }
+  }
+});
+
 test('missing hashes, sdists, CUDA 13, and shared cuDNN are rejected', () => {
   const missing = cloneLock(catalog.ADAPTERS.LINUX_CUDA);
   delete missing.wheels[0].sha256;
@@ -50,6 +70,15 @@ test('missing hashes, sdists, CUDA 13, and shared cuDNN are rejected', () => {
   cudnn.fileName = whisperCudnn.fileName;
   cudnn.url = whisperCudnn.downloadUrl;
   assert.throws(() => catalog.assertParakeetLockIntegrity(shared), /cuDNN/);
+
+  const abi = cloneLock(catalog.ADAPTERS.MACOS_METAL);
+  const msgpack = abi.wheels.find((wheel) => wheel.packageName === 'msgpack');
+  msgpack.fileName = 'msgpack-1.2.3-cp312-cp312-macosx_11_0_arm64.whl';
+  assert.throws(() => catalog.assertParakeetLockIntegrity(abi), /CPython 3\.11/);
+
+  const platformWheel = cloneLock(catalog.ADAPTERS.MACOS_METAL);
+  platformWheel.wheels.find((wheel) => wheel.packageName === 'msgpack').fileName = 'msgpack-1.2.3-cp311-cp311-win_amd64.whl';
+  assert.throws(() => catalog.assertParakeetLockIntegrity(platformWheel), /darwin arm64/);
   assert.notEqual(
     catalog.loadLock(catalog.ADAPTERS.LINUX_CUDA).wheels.find((wheel) => wheel.packageName === 'nvidia-cudnn-cu12').sha256,
     whisperCudnn.sha256,

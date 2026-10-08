@@ -357,7 +357,7 @@ function createCatalogWithPinnedSummaryArtifact({ sha256 = CHECKSUM_TARGET_SHA25
 
 async function stubDiarizationDependencyInstaller({ targetDir, artifact }) {
   assert.ok(targetDir.includes(path.join('dependencies', 'diarization')));
-  assert.ok(artifact.id === 'pyannote-audio-4.0.1-win32-x64-cuda-12.6' || artifact.id === 'pyannote-audio-4.0.1-darwin-arm64-mps');
+  assert.ok(artifact.id === 'pyannote-audio-4.0.7-win32-x64-cuda-12.6' || artifact.id === 'pyannote-audio-4.0.7-darwin-arm64-mps');
 }
 
 async function stubAnyDiarizationDependencyInstaller({ targetDir }) {
@@ -1077,7 +1077,7 @@ test('diarization dependency cache uses managed userData path and pinned require
 
   assert.equal(cache.installed, false);
   assert.equal(cache.partial, false);
-  assert.equal(cache.artifactId, 'pyannote-audio-4.0.1-win32-x64-cuda-12.6');
+  assert.equal(cache.artifactId, 'pyannote-audio-4.0.7-win32-x64-cuda-12.6');
   assert.equal(cache.sitePackagesDir, path.join('/tmp/AvaNevis', 'ai-addons', 'dependencies', 'diarization', artifact.id, 'site-packages'));
   fsModule.mkdirSync(cache.dependencyDir);
   const partialCache = checkDiarizationDependencyCache({
@@ -1089,9 +1089,9 @@ test('diarization dependency cache uses managed userData path and pinned require
   });
   assert.equal(partialCache.installed, false);
   assert.equal(partialCache.partial, true);
-  assert.ok(artifact.pip.requirements.includes('pyannote.audio==4.0.1'));
-  assert.ok(artifact.pip.requirements.includes('torch==2.8.0+cu126'));
-  assert.ok(artifact.pip.requirements.includes('torchvision==0.23.0+cu126'));
+  assert.ok(artifact.pip.requirements.includes('pyannote.audio==4.0.7'));
+  assert.ok(artifact.pip.requirements.includes('torch==2.13.0+cu126'));
+  assert.ok(artifact.pip.requirements.includes('torchvision==0.28.0+cu126'));
 });
 
 test('diarization dependency cache invalidates stale pinned requirements', () => {
@@ -1134,6 +1134,50 @@ test('diarization dependency cache invalidates stale pinned requirements', () =>
   assert.match(cache.reason, /out of date/i);
 });
 
+test('diarization dependency cache reports a superseded artifact install as out of date', () => {
+  const fsModule = createMemoryFs();
+  const artifact = getDiarizationDependencyArtifactForPlatform('win32', 'x64');
+  const dependencyRoot = path.join('/tmp/AvaNevis', 'ai-addons', 'dependencies', 'diarization');
+  const retiredDir = path.join(dependencyRoot, 'pyannote-audio-0.0.0-win32-x64-retired');
+  fsModule.mkdirSync(path.join(retiredDir, 'site-packages'));
+  fsModule.writeFileSync(path.join(retiredDir, 'install.json'), `${JSON.stringify({
+    artifactId: 'pyannote-audio-0.0.0-win32-x64-retired',
+    requirements: ['pyannote.audio==0.0.0'],
+    installedAt: '2026-01-01T00:00:00.000Z',
+  })}\n`);
+  fsModule.mkdirSync(path.join(dependencyRoot, 'empty-leftover'));
+
+  const cache = checkDiarizationDependencyCache({ userDataDir: '/tmp/AvaNevis', platform: 'win32', arch: 'x64', fsModule });
+  assert.equal(cache.installed, false);
+  assert.equal(cache.valid, false);
+  assert.equal(cache.partial, false);
+  assert.match(cache.reason, /out of date/i);
+
+  fsModule.rmSync(path.join(dependencyRoot, 'pyannote-audio-0.0.0-win32-x64-retired'));
+  const fresh = checkDiarizationDependencyCache({ userDataDir: '/tmp/AvaNevis', platform: 'win32', arch: 'x64', fsModule });
+  assert.match(fresh.reason, /not installed/i);
+  assert.ok(artifact.id);
+});
+
+test('unrelated and failed diarization directories are not obsolete installations', () => {
+  const fsModule = createMemoryFs();
+  const dependencyRoot = path.join('/tmp/AvaNevis', 'ai-addons', 'dependencies', 'diarization');
+  fsModule.mkdirSync(path.join(dependencyRoot, 'unrelated-backup', 'site-packages'));
+  const failedDir = path.join(dependencyRoot, 'pyannote-audio-failed-install');
+  fsModule.mkdirSync(path.join(failedDir, 'site-packages'));
+  fsModule.writeFileSync(path.join(failedDir, 'install.json'), '{');
+  fsModule.mkdirSync(path.join(dependencyRoot, 'pyannote-audio-partial', 'site-packages'));
+  fsModule.writeFileSync(path.join(dependencyRoot, 'pyannote-audio-partial', 'install.json'), `${JSON.stringify({
+    artifactId: 'pyannote-audio-partial',
+    requirements: ['pyannote.audio==0.0.0'],
+  })}\n`);
+
+  const cache = checkDiarizationDependencyCache({ userDataDir: '/tmp/AvaNevis', platform: 'win32', arch: 'x64', fsModule });
+  assert.equal(cache.installed, false);
+  assert.equal(cache.partial, false);
+  assert.match(cache.reason, /not installed/i);
+});
+
 test('macOS diarization dependency cache uses managed MPS artifact', () => {
   const fsModule = createMemoryFs();
   const artifact = getDiarizationDependencyArtifactForPlatform('darwin', 'arm64');
@@ -1146,11 +1190,11 @@ test('macOS diarization dependency cache uses managed MPS artifact', () => {
   });
 
   assert.equal(cache.installed, false);
-  assert.equal(cache.artifactId, 'pyannote-audio-4.0.1-darwin-arm64-mps');
+  assert.equal(cache.artifactId, 'pyannote-audio-4.0.7-darwin-arm64-mps');
   assert.equal(cache.sitePackagesDir, path.join('/tmp/AvaNevis', 'ai-addons', 'dependencies', 'diarization', artifact.id, 'site-packages'));
-  assert.ok(artifact.pip.requirements.includes('pyannote.audio==4.0.1'));
-  assert.ok(artifact.pip.requirements.includes('torch==2.8.0'));
-  assert.equal(artifact.pip.requirements.includes('torch==2.8.0+cu126'), false);
+  assert.ok(artifact.pip.requirements.includes('pyannote.audio==4.0.7'));
+  assert.ok(artifact.pip.requirements.includes('torch==2.13.0'));
+  assert.equal(artifact.pip.requirements.includes('torch==2.13.0+cu126'), false);
 });
 
 test('diarization dependency cache rejects unallowed pip index hosts', () => {
@@ -1191,10 +1235,10 @@ test('diarization dependency installer builds pinned pip target args', () => {
   assert.ok(args.includes('https://download.pytorch.org/whl/cu126'));
   assert.equal(args.includes('--only-binary=:all:'), true);
   assert.equal(args.includes('--no-binary=julius'), false);
-  assert.ok(args.includes('pyannote.audio==4.0.1'));
-  assert.ok(args.includes('torch==2.8.0+cu126'));
-  assert.ok(args.includes('torchvision==0.23.0+cu126'));
-  assert.ok(args.includes('torchaudio==2.8.0+cu126'));
+  assert.ok(args.includes('pyannote.audio==4.0.7'));
+  assert.ok(args.includes('torch==2.13.0+cu126'));
+  assert.ok(args.includes('torchvision==0.28.0+cu126'));
+  assert.ok(args.includes('torchaudio==2.11.0+cu126'));
   assert.equal(args.includes('julius==0.2.7'), true);
   assert.ok(artifact.pip.sourceArtifacts.some((sourceArtifact) => sourceArtifact.package === 'julius'));
 });
@@ -1223,15 +1267,15 @@ test('macOS diarization dependency installer builds pinned MPS pip target args',
   assert.equal(args.includes('--extra-index-url'), false);
   assert.equal(args.includes('https://download.pytorch.org/whl/cu126'), false);
   assert.equal(args.includes('--only-binary=:all:'), true);
-  assert.ok(args.includes('pyannote.audio==4.0.1'));
-  assert.ok(args.includes('torch==2.8.0'));
-  assert.ok(args.includes('torchaudio==2.8.0'));
-  assert.ok(args.includes('torchcodec==0.7.0'));
+  assert.ok(args.includes('pyannote.audio==4.0.7'));
+  assert.ok(args.includes('torch==2.13.0'));
+  assert.ok(args.includes('torchaudio==2.11.0'));
+  assert.ok(args.includes('torchcodec==0.16.0'));
   assert.equal(args.includes('julius==0.2.7'), true);
 });
 
 test('pip progress summarizer returns non-sensitive install milestones', () => {
-  assert.equal(summarizePipProgress('Collecting pyannote.audio==4.0.1\n'), 'Collecting pyannote.audio==4.0.1');
+  assert.equal(summarizePipProgress('Collecting pyannote.audio==4.0.7\n'), 'Collecting pyannote.audio==4.0.7');
   assert.equal(summarizePipProgress('Downloading torch-2.8.0.whl\n'), 'Downloading torch-2.8.0.whl');
   assert.equal(summarizePipProgress('WARNING only\n'), null);
 });

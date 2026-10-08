@@ -12,6 +12,35 @@ implementation or acceptance evidence.
 
 ## Status
 
+### Dependency maintenance — 2026-10-08
+
+On branch `chore/dependency-maintenance-2026-10`. The decisions, evidence, exceptions
+and holds are in [DEPENDENCY_MAINTENANCE_2026-10.md](docs/development/DEPENDENCY_MAINTENANCE_2026-10.md).
+macOS and Linux host tests are required before the next release. They are not a gate
+for merging this branch to master.
+
+- **Security closures:**
+  - Parakeet macOS lock: msgpack 1.2.3 and urllib3 2.8.0, regenerated from real wheels. Old runtimes require repair and are pruned.
+  - Bootstrap pip 26.2.1.
+  - rustls 0.23.45.
+  - pyannote 4.0.7 with Torch 2.13.0, torchaudio 2.11.0 and TorchCodec 0.16.0; the resolved Windows closure has 0 findings. Old installs report out of date.
+- **Other updates:**
+  - Electron 44.7.0.
+  - Compatible Python pins, including Numba/llvmlite as a pair on macOS and CTranslate2 4.8.2 on Windows only.
+  - macOS and Linux CPython 3.11.17+20261003, with hashes and attestations verified.
+- **Held:**
+  - Windows embedded Python stays 3.11.9; its layout is a separate task.
+  - FFmpeg stays 8.0.1 on all platforms. Gyan has no 8.0.3 build, so the user must decide whether to move to 8.1.2.
+  - electron-builder stays 26.16.1, with a dated sprintf-js exception.
+- **Recurrence prevention:**
+  - Dependabot covers Cargo and Actions, with groups and Python 3.11 ceilings.
+  - CI adds read-only permissions and a weekly scan; Linux, Parakeet, pyannote-closure and Cargo audits; a vulnerable-fixture canary; SHA-pinned Actions; and test installs constrained to the build pins.
+  - New inventory extractor and audit wrapper, with tests.
+- **Evidence:** `npm run test:all` exited 0, with 1,114 JS passed / 4 skipped and 835 Python passed / 8 skipped.
+- **Windows host gate, 2026-10-08:** packaged Electron 44.7.0 installer built and the unpacked app launched. A short WASAPI recording transcribed on CUDA with the packaged CTranslate2 4.8.2 stack. Speakrs CUDA and a Qwen summary ran. Real pyannote diarization is still open: no user token or cached gated model on this profile. Full manual checklists were not run.
+- **Before the next release, not this merge:** macOS Python 3.11.17 package, Parakeet Metal repair, MLX with Numba 0.68, and the pyannote MPS qualification. Linux Omarchy/CachyOS packages, the recording checklist, and CTranslate2 4.8.2 on managed CUDA.
+- **Needs a repository admin:** enable the dependency graph, Dependabot alerts and Dependabot security updates.
+
 ### Release readiness and publication path — 2026-10-04
 
 v2.10.0 implementation, manual acceptance and adversarial-review fixes are

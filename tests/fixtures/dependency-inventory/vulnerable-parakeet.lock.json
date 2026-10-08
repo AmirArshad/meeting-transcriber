@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "adapterId": "fixture-intentionally-vulnerable",
+  "wheels": [
+    {
+      "packageName": "urllib3",
+      "version": "2.5.0",
+      "fileName": "urllib3-2.5.0-py3-none-any.whl"
+    },
+    {
+      "packageName": "msgpack",
+      "version": "1.2.0",
+      "fileName": "msgpack-1.2.0-cp311-cp311-macosx_11_0_arm64.whl"
+    },
+    {
+      "packageName": "annotated-doc",
+      "version": "0.0.5",
+      "fileName": "annotated_doc-0.0.5-py3-none-any.whl"
+    }
+  ]
+}
