@@ -157,6 +157,16 @@ Python 3.11 security support ends in October 2027. Target a migration decision i
   - Managed-CUDA transcription before moving CTranslate2 to 4.8.2.
   - Parakeet Linux CUDA repair; its lock is unchanged.
 - **Windows:**
-  - Packaged installer build and launch on Electron 44.7.0.
-  - pyannote 4.0.7 real diarization with a user token and the gated model. Only random-weight CUDA inference was run here.
+  - Packaged installer build and launch on Electron 44.7.0. Done 2026-10-08 on this host (Node 22.15.0, npm 10.9.2).
+    - `npm run build` exit 0. A first attempt exited 1 during electron-builder's node-module collection (`spawn powershell.exe ENOENT`) because this shell had `pwsh.exe` on `PATH` and not Windows PowerShell 5.1. electron-builder 26.16.1 spawns `powershell.exe` directly. The retry prepended `C:\Windows\System32\WindowsPowerShell\v1.0` to `PATH` and exited 0. It packaged `electron=44.7.0` and wrote the NSIS installer. Signing was skipped (no certificate configured).
+    - Installer: `D:\Projects\meeting-transcriber\dist\AvaNevis-Setup-2.10.0.exe`, 234,927,325 bytes (224.0 MiB). The NSIS installer was not run.
+    - `dist\win-unpacked\AvaNevis.exe` with `ELECTRON_RUN_AS_NODE=1` printed `process.versions`: electron `44.7.0`, chrome `152.0.7977.130`, node `24.21.0`.
+    - The same unpacked executable launched as a GUI. The visible window title was `AvaNevis Meeting Recorder & Transcriber`. File → Exit then left no `AvaNevis` process running.
+  - pyannote 4.0.7 real diarization with a user token and the gated model. Still open. Only random-weight CUDA inference was run here. On 2026-10-08 this profile had no `diarization-huggingface-token.bin`, no `HF_TOKEN` / `HUGGINGFACE_HUB_TOKEN`, and no cached `pyannote/speaker-diarization-community-1` files, so the gated model was not loaded.
 - **All hosts:** `tests/manual/recording-smoke-checklist.md` and `tests/manual/local-ai-addons-checklist.md`.
+  - **Windows automated subset, 2026-10-08** (not the full checklists; no 30–60 minute meeting, no disk-reserve test, no NSIS install):
+    - `backend/device_manager.py` exit 0. WASAPI mic `45` Logitech Webcam C925e, loopback `56` VG27AQML1A.
+    - `audio.windows_recorder --mic 45 --loopback 56 --capture-mode mic-and-desktop`, stdin `stop` after 12 s, exit 0. Opus 11.264 s, 210,064 bytes. Levels near stop: mic 0.118, desktop 0.558. Both spools opened. Stop stages were `post_processing_started`, `audio_normalizing`, `audio_mixing`, `audio_encoding`, `post_processing_complete`.
+    - Packaged `resources/python/python.exe` (`ctranslate2` 4.8.2, `faster-whisper` 1.2.1, NumPy 2.4.6) transcribed that file with `--model base --device cuda` exit 0: `device: cuda`, `computeType: float16`. Transcript contains the fixture speech (Hazel, design review, testing and accessibility). `HF_HUB_OFFLINE=1` used the existing cache.
+    - Installed Speakrs (`speakrs-community1-vbx`, ORT from `runtimes/speakrs-ort`, CUDA 12 cublas/cudnn from the dev venv) on that recording and on `tests/fixtures/speakrs-two-speaker-16k.wav`: both exit 0, `device: cuda`, `annotationSource: exclusive_speaker_diarization`. Both assigned only `SPEAKER_00` (`speakerCount: 1`). Speaker labels were written. This pass does not show a two-speaker split.
+    - Installed Qwen3.5 9B summary, profile `balanced`, exit 0. Wrote `summary.json` and `summary.md` for that transcript. No token values in the sidecar.

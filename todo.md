@@ -14,9 +14,10 @@ implementation or acceptance evidence.
 
 ### Dependency maintenance — 2026-10-08
 
-On local branch `chore/dependency-maintenance-2026-10`, which is uncommitted. Staging,
-commits, pushes and PR actions are not authorized. The decisions, evidence, exceptions
+On branch `chore/dependency-maintenance-2026-10`. The decisions, evidence, exceptions
 and holds are in [DEPENDENCY_MAINTENANCE_2026-10.md](docs/development/DEPENDENCY_MAINTENANCE_2026-10.md).
+macOS and Linux host tests are required before the next release. They are not a gate
+for merging this branch to master.
 
 - **Security closures:**
   - Parakeet macOS lock: msgpack 1.2.3 and urllib3 2.8.0, regenerated from real wheels. Old runtimes require repair and are pruned.
@@ -36,11 +37,8 @@ and holds are in [DEPENDENCY_MAINTENANCE_2026-10.md](docs/development/DEPENDENCY
   - CI adds read-only permissions and a weekly scan; Linux, Parakeet, pyannote-closure and Cargo audits; a vulnerable-fixture canary; SHA-pinned Actions; and test installs constrained to the build pins.
   - New inventory extractor and audit wrapper, with tests.
 - **Evidence:** `npm run test:all` exited 0, with 1,114 JS passed / 4 skipped and 835 Python passed / 8 skipped.
-- **Blocked on hosts:**
-  - macOS: Python 3.11.17 package, Parakeet Metal repair, MLX with Numba 0.68, and the pyannote MPS qualification.
-  - Linux: Omarchy/CachyOS packages, the recording checklist, and CTranslate2 4.8.2 on managed CUDA.
-  - Windows: packaged Electron 44.7.0 installer, and real pyannote diarization with a token.
-  - All hosts: the manual checklists.
+- **Windows host gate, 2026-10-08:** packaged Electron 44.7.0 installer built and the unpacked app launched. A short WASAPI recording transcribed on CUDA with the packaged CTranslate2 4.8.2 stack. Speakrs CUDA and a Qwen summary ran. Real pyannote diarization is still open: no user token or cached gated model on this profile. Full manual checklists were not run.
+- **Before the next release, not this merge:** macOS Python 3.11.17 package, Parakeet Metal repair, MLX with Numba 0.68, and the pyannote MPS qualification. Linux Omarchy/CachyOS packages, the recording checklist, and CTranslate2 4.8.2 on managed CUDA.
 - **Needs a repository admin:** enable the dependency graph, Dependabot alerts and Dependabot security updates.
 
 ### Release readiness and publication path — 2026-10-04
