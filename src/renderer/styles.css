@@ -2378,12 +2378,14 @@ select.device-select:disabled {
   min-width: 128px;
 }
 
-.summary-generation-active:hover:not(:disabled) {
+.history-detail-toolbar .btn-primary.summary-generation-active:hover:not(:disabled) {
   color: #ff6b6f;
   border-color: rgba(223, 107, 107, 0.42);
   background: var(--crimson-soft);
   opacity: 1;
   font-size: 0;
+  box-shadow: none;
+  transform: none;
 }
 
 .summary-generation-active::before {
@@ -2403,6 +2405,10 @@ select.device-select:disabled {
 .summary-generation-active:hover:not(:disabled)::before,
 .summary-generation-active:hover:not(:disabled)::after {
   font-size: 12px;
+}
+
+.history-detail-toolbar .summary-generation-active:not(.is-cancelling) {
+  pointer-events: auto;
 }
 
 .summary-generation-active.is-cancelling {
@@ -3498,14 +3504,16 @@ footer {
   word-break: break-all;
 }
 
-/* Spinner inside install button when processing */
-.btn-primary.is-loading {
+/* Install buttons block input and replace their label with a centered spinner.
+   Summary generation uses the same is-loading hook for its busy opacity, but
+   must keep its own spinner, hover label, and click-to-cancel behaviour. */
+.btn-primary.is-loading:not(.summary-generation-active) {
   pointer-events: none;
   position: relative;
   color: transparent;
 }
 
-.btn-primary.is-loading::after {
+.btn-primary.is-loading:not(.summary-generation-active)::after {
   content: "";
   position: absolute;
   top: 50%;
@@ -4334,8 +4342,11 @@ select.device-select,
   }
 
   .history-layout {
+    flex: none;
+    height: auto;
+    min-height: 100%;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(180px, 32vh) minmax(0, 1fr);
+    grid-template-rows: minmax(180px, 32vh) minmax(min-content, 1fr);
   }
 
   .history-sidebar {
@@ -4343,7 +4354,28 @@ select.device-select,
   }
 
   .history-content {
-    min-height: 280px;
+    height: auto;
+    min-height: max(280px, min-content);
+    overflow: hidden;
+  }
+
+  .meeting-details {
+    height: 100%;
+    min-height: min-content;
+  }
+
+  .history-detail-panels,
+  .history-detail-panel,
+  .transcript-section,
+  .summary-section {
+    flex-basis: auto;
+    min-height: min-content;
+  }
+
+  .meeting-transcript,
+  .meeting-summary {
+    flex: 1 1 auto;
+    min-height: 12rem;
   }
 
   .audio-visualizer {

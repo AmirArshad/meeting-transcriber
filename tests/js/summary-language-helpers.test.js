@@ -8,6 +8,7 @@ const {
   formatSummaryLanguageCaption,
 } = require('../../src/renderer/summary-language-helpers');
 const { getSummaryLanguagePolicy, SUMMARY_LANGUAGE_NAMES } = require('../../src/summary-language-policy');
+const { meetingIdsEqual } = require('../../src/renderer/meeting-helpers');
 const modelId = 'qwen3.5-9b-q4-k-m';
 const policy = getSummaryLanguagePolicy(modelId, 'win32', 'x64');
 const fs = require('node:fs');
@@ -203,6 +204,8 @@ test('rendered history captions replace previous meetings and ignore add-on name
       features: { summary: { languagePolicy: { names: { en: 'Should not appear', fr: 'Pas français' } } } },
     },
     historyLanguageCaptionMeeting: null,
+    currentMeetingId: null,
+    meetingIdsEqual,
   });
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
   vm.runInContext(extractTopLevelFunctionSource(source, 'updateSummaryLanguageCaptions'), context);
@@ -227,6 +230,180 @@ test('rendered history captions replace previous meetings and ignore add-on name
   assert.equal(elements['summary-language-caption'].label.textContent, '');
   assert.equal(elements['summary-language-caption'].value.textContent, '');
   assert.equal(context.historyLanguageCaptionMeeting.language, 'und');
+});
+
+function createCaptionElement(labelText, valueText) {
+  const label = { textContent: labelText };
+  const value = { textContent: valueText };
+  return {
+    hidden: false,
+    querySelector(selector) {
+      if (selector === '.history-language-label') return label;
+      if (selector === '.history-language-value') return value;
+      return null;
+    },
+    label,
+    value,
+  };
+}
+
+test('a deferred summary response cannot replace the selected meeting captions or their refresh replay', async () => {
+  const elements = {};
+  for (const id of [
+    'summary-language-modal',
+    'summary-transcript-language',
+    'summary-language-form',
+    'summary-language-cancel',
+    'summary-language-confirm',
+    'summary-language-message',
+  ]) {
+    const listeners = new Map();
+    elements[id] = {
+      value: '',
+      disabled: false,
+      children: [],
+      hidden: true,
+      textContent: '',
+      replaceChildren() { this.children = []; },
+      appendChild(child) { this.children.push(child); },
+      focus() { context.document.activeElement = this; },
+      classList: {
+        add() { elements[id].hidden = true; },
+        remove() { elements[id].hidden = false; },
+      },
+      addEventListener(event, listener) { listeners.set(event, listener); },
+      removeEventListener(event) { listeners.delete(event); },
+      dispatch(event, options = {}) {
+        listeners.get(event)?.({ preventDefault() {}, stopPropagation() {}, ...options });
+      },
+    };
+  }
+  elements['transcript-summary-language-caption'] = createCaptionElement('', '');
+  elements['summary-language-caption'] = createCaptionElement('', '');
+
+  const meetingB = {
+    id: 'meeting-b',
+    language: 'de',
+    summary: 'Legacy summary prose.',
+    ai: { summary: { markdownPath: 'legacy.md' } },
+  };
+  let releaseLateMeeting = null;
+  let meetingReads = 0;
+  let refreshStatusReads = 0;
+  const context = vm.createContext({
+    document: {
+      getElementById: (id) => elements[id] || null,
+      createElement: () => ({}),
+      activeElement: { isConnected: true, focus() {} },
+    },
+    window: {
+      summaryLanguageHelpers: require('../../src/renderer/summary-language-helpers'),
+      electronAPI: {
+        getAiAddonStatus: async (options = {}) => {
+          if (options.includeStorageSizes === false) {
+            refreshStatusReads += 1;
+            return { features: {} };
+          }
+          return {
+            features: {
+              summary: { setupComplete: true, status: 'ready', languagePolicy: policy, profile: 'meeting' },
+            },
+          };
+        },
+        getMeeting: async () => {
+          meetingReads += 1;
+          if (meetingReads === 1) {
+            return { id: 'meeting-a', language: 'en', transcript: 'speech from A' };
+          }
+          return new Promise((resolve) => {
+            releaseLateMeeting = () => resolve({
+              id: 'meeting-a',
+              language: 'en',
+              summary: 'English decisions were recorded.',
+              ai: { summary: { language: 'fr', markdownPath: 'a.md' } },
+            });
+          });
+        },
+        generateSummary: async () => ({ meeting: { id: 'meeting-a' } }),
+      },
+    },
+    currentMeetingId: 'meeting-a',
+    currentRecordingMeeting: null,
+    summaryGenerationMeetingId: null,
+    summaryGenerationCancelling: false,
+    rendererQuitCommitted: false,
+    closeSummaryLanguageConfirmation: null,
+    historyLanguageCaptionMeeting: null,
+    aiAddonStatusSnapshot: null,
+    aiAddonStatusRefreshPromise: null,
+    aiAddonDownloadState: {
+      diarization: { active: false },
+      summary: { active: false },
+    },
+    meetingIdsEqual,
+    addLog() {},
+    updateSummaryGenerationButtons() {},
+    shouldAbortSummaryGenerationAfterPreflight: () => false,
+    hashSummaryTranscript: async () => 'hash',
+    showSummaryMessage() {},
+    activateHistoryDetailTab() {},
+    renderSummaryMarkdown() {},
+    syncMeetingInList() {},
+    restoreCurrentHistorySummary: async () => false,
+    openSettingsAtAiAddons() {},
+    getSummarySetupMessage: () => '',
+    setStatusBadge() {},
+    isAiAddonSetupLockingControls: () => false,
+    renderAiAddonProgress() {},
+    updateAiAddonFootprintWarning() {},
+    updateHomeAiAddonCTA() {},
+    console,
+  });
+  const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
+  for (const name of [
+    'confirmSummaryTranscriptLanguage',
+    'updateSummaryLanguageCaptions',
+    'generateSummaryForMeeting',
+    'updateAiAddonSettings',
+    'refreshAiAddonSettings',
+  ]) {
+    vm.runInContext(extractTopLevelFunctionSource(source, name), context);
+  }
+
+  const pending = context.generateSummaryForMeeting('meeting-a');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(elements['summary-language-modal'].hidden, false);
+  elements['summary-language-form'].dispatch('submit');
+  for (let attempt = 0; attempt < 20 && !releaseLateMeeting; attempt += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(typeof releaseLateMeeting, 'function');
+
+  context.currentMeetingId = meetingB.id;
+  context.updateSummaryLanguageCaptions(meetingB);
+  assert.equal(context.historyLanguageCaptionMeeting, meetingB);
+  assert.equal(elements['transcript-summary-language-caption'].value.textContent, 'German');
+  assert.equal(elements['summary-language-caption'].value.textContent, 'Not recorded');
+
+  releaseLateMeeting();
+  await pending;
+
+  assert.equal(context.currentMeetingId, meetingB.id);
+  assert.equal(context.historyLanguageCaptionMeeting, meetingB);
+  assert.equal(context.historyLanguageCaptionMeeting.summary, 'Legacy summary prose.');
+  assert.equal(context.historyLanguageCaptionMeeting.ai.summary.markdownPath, 'legacy.md');
+  assert.equal(elements['transcript-summary-language-caption'].value.textContent, 'German');
+  assert.equal(elements['summary-language-caption'].hidden, false);
+  assert.equal(elements['summary-language-caption'].label.textContent, 'Summary language:');
+  assert.equal(elements['summary-language-caption'].value.textContent, 'Not recorded');
+
+  elements['transcript-summary-language-caption'].value.textContent = 'CLEARED';
+  elements['summary-language-caption'].value.textContent = 'CLEARED';
+  await context.refreshAiAddonSettings();
+  assert.equal(refreshStatusReads, 1);
+  assert.equal(context.historyLanguageCaptionMeeting, meetingB);
+  assert.equal(elements['transcript-summary-language-caption'].value.textContent, 'German');
+  assert.equal(elements['summary-language-caption'].value.textContent, 'Not recorded');
 });
 
 test('regeneration shows the prior confirmation as an editable default', async () => {

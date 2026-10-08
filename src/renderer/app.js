@@ -4387,6 +4387,12 @@ async function hashSummaryTranscript(text) {
 }
 
 function updateSummaryLanguageCaptions(meeting) {
+  // A summary fetch can resolve after another meeting is selected. Reject that
+  // result before it rewrites the visible captions or the refresh cache.
+  if (currentMeetingId != null && currentMeetingId !== ''
+      && !meetingIdsEqual(meeting && meeting.id, currentMeetingId)) {
+    return;
+  }
   historyLanguageCaptionMeeting = meeting || null;
   const helpers = window.summaryLanguageHelpers;
   if (!helpers) return;
