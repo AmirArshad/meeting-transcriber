@@ -1138,7 +1138,13 @@ test('diarization dependency cache reports a superseded artifact install as out 
   const fsModule = createMemoryFs();
   const artifact = getDiarizationDependencyArtifactForPlatform('win32', 'x64');
   const dependencyRoot = path.join('/tmp/AvaNevis', 'ai-addons', 'dependencies', 'diarization');
-  fsModule.mkdirSync(path.join(dependencyRoot, 'pyannote-audio-0.0.0-win32-x64-retired', 'site-packages'));
+  const retiredDir = path.join(dependencyRoot, 'pyannote-audio-0.0.0-win32-x64-retired');
+  fsModule.mkdirSync(path.join(retiredDir, 'site-packages'));
+  fsModule.writeFileSync(path.join(retiredDir, 'install.json'), `${JSON.stringify({
+    artifactId: 'pyannote-audio-0.0.0-win32-x64-retired',
+    requirements: ['pyannote.audio==0.0.0'],
+    installedAt: '2026-01-01T00:00:00.000Z',
+  })}\n`);
   fsModule.mkdirSync(path.join(dependencyRoot, 'empty-leftover'));
 
   const cache = checkDiarizationDependencyCache({ userDataDir: '/tmp/AvaNevis', platform: 'win32', arch: 'x64', fsModule });
@@ -1151,6 +1157,25 @@ test('diarization dependency cache reports a superseded artifact install as out 
   const fresh = checkDiarizationDependencyCache({ userDataDir: '/tmp/AvaNevis', platform: 'win32', arch: 'x64', fsModule });
   assert.match(fresh.reason, /not installed/i);
   assert.ok(artifact.id);
+});
+
+test('unrelated and failed diarization directories are not obsolete installations', () => {
+  const fsModule = createMemoryFs();
+  const dependencyRoot = path.join('/tmp/AvaNevis', 'ai-addons', 'dependencies', 'diarization');
+  fsModule.mkdirSync(path.join(dependencyRoot, 'unrelated-backup', 'site-packages'));
+  const failedDir = path.join(dependencyRoot, 'pyannote-audio-failed-install');
+  fsModule.mkdirSync(path.join(failedDir, 'site-packages'));
+  fsModule.writeFileSync(path.join(failedDir, 'install.json'), '{');
+  fsModule.mkdirSync(path.join(dependencyRoot, 'pyannote-audio-partial', 'site-packages'));
+  fsModule.writeFileSync(path.join(dependencyRoot, 'pyannote-audio-partial', 'install.json'), `${JSON.stringify({
+    artifactId: 'pyannote-audio-partial',
+    requirements: ['pyannote.audio==0.0.0'],
+  })}\n`);
+
+  const cache = checkDiarizationDependencyCache({ userDataDir: '/tmp/AvaNevis', platform: 'win32', arch: 'x64', fsModule });
+  assert.equal(cache.installed, false);
+  assert.equal(cache.partial, false);
+  assert.match(cache.reason, /not installed/i);
 });
 
 test('macOS diarization dependency cache uses managed MPS artifact', () => {

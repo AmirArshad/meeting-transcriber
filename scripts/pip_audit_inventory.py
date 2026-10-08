@@ -4,16 +4,18 @@ failures distinct from a clean result.
 
     python scripts/pip_audit_inventory.py <requirements.txt> [--report out.json] [--expect-findings]
 
-Exit codes: 0 clean, 1 findings, 2 the audit did not run or produced no
-report. With --expect-findings (canary mode for intentionally vulnerable
-fixtures) the meaning flips: 0 when findings were reported, 1 when the audit
-came back clean.
+Exit codes: 0 clean, 1 findings, 2 the audit did not run, the process
+failed, or the report is not the exact normalized name/version inventory.
+With --expect-findings (canary mode for intentionally vulnerable fixtures)
+the meaning flips: 0 when findings were reported, 1 when the audit came
+back clean.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +26,25 @@ AUDIT_FAILED = 2
 def strip_local_version(version: str) -> str:
     """Advisory databases key on public versions; "2.11.0+cu126" would match nothing."""
     return version.split("+", 1)[0]
+
+
+def normalize_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).strip().lower()
+
+
+def pin_identity(line: str) -> tuple[str, str]:
+    name, version = line.split("==", 1)
+    name = re.sub(r"\[.*\]", "", name).strip()
+    version = version.split(";", 1)[0].strip()
+    return normalize_name(name), strip_local_version(version)
+
+
+def dependency_identity(dependency: dict) -> tuple[str, str] | None:
+    name = dependency.get("name")
+    version = dependency.get("version")
+    if not name or version is None or version == "":
+        return None
+    return normalize_name(str(name)), strip_local_version(str(version))
 
 
 def audit_requirements(requirements: Path, report: Path | None = None):
@@ -45,25 +66,42 @@ def audit_requirements(requirements: Path, report: Path | None = None):
     )
     if report is not None:
         report.write_text(audit.stdout, encoding="utf-8")
+    if audit.returncode not in (0, 1):
+        print(audit.stderr[-4000:], file=sys.stderr)
+        print(f"pip-audit exited {audit.returncode}; this is not a clean audit.", file=sys.stderr)
+        return None
     try:
         dependencies = json.loads(audit.stdout).get("dependencies", [])
     except json.JSONDecodeError:
         print(audit.stderr[-4000:], file=sys.stderr)
         print("pip-audit did not produce a report; this is not a clean audit.", file=sys.stderr)
         return None
-    audited = {dependency.get("name", "").lower() for dependency in dependencies if not dependency.get("skip_reason")}
-    if len(audited) < len(pins):
-        skipped = [dependency for dependency in dependencies if dependency.get("skip_reason")]
-        for dependency in skipped:
+    expected = sorted(pin_identity(pin) for pin in pins)
+    audited = []
+    for dependency in dependencies:
+        if dependency.get("skip_reason"):
             print(f"pip-audit skipped {dependency.get('name')}: {dependency.get('skip_reason')}", file=sys.stderr)
-        print(f"pip-audit audited {len(audited)} of {len(pins)} pins; this is not a clean audit.", file=sys.stderr)
+            continue
+        identity = dependency_identity(dependency)
+        if identity is not None:
+            audited.append(identity)
+    audited.sort()
+    if audited != expected:
+        print(
+            f"pip-audit report does not match the pinned inventory ({len(audited)} entries for {len(expected)} pins); this is not a clean audit.",
+            file=sys.stderr,
+        )
         return None
     findings = {}
     for dependency in dependencies:
         for vuln in dependency.get("vulns", []):
             key = (dependency["name"], dependency["version"], vuln["id"])
             findings[key] = (*key, vuln.get("fix_versions") or [])
-    return sorted(findings.values())
+    reported = sorted(findings.values())
+    if audit.returncode == 1 and not reported:
+        print("pip-audit exited 1 without reporting a vulnerability; this is not a clean audit.", file=sys.stderr)
+        return None
+    return reported
 
 
 def print_findings(label: str, findings) -> None:

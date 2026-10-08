@@ -70,6 +70,15 @@ test('missing hashes, sdists, CUDA 13, and shared cuDNN are rejected', () => {
   cudnn.fileName = whisperCudnn.fileName;
   cudnn.url = whisperCudnn.downloadUrl;
   assert.throws(() => catalog.assertParakeetLockIntegrity(shared), /cuDNN/);
+
+  const abi = cloneLock(catalog.ADAPTERS.MACOS_METAL);
+  const msgpack = abi.wheels.find((wheel) => wheel.packageName === 'msgpack');
+  msgpack.fileName = 'msgpack-1.2.3-cp312-cp312-macosx_11_0_arm64.whl';
+  assert.throws(() => catalog.assertParakeetLockIntegrity(abi), /CPython 3\.11/);
+
+  const platformWheel = cloneLock(catalog.ADAPTERS.MACOS_METAL);
+  platformWheel.wheels.find((wheel) => wheel.packageName === 'msgpack').fileName = 'msgpack-1.2.3-cp311-cp311-win_amd64.whl';
+  assert.throws(() => catalog.assertParakeetLockIntegrity(platformWheel), /darwin arm64/);
   assert.notEqual(
     catalog.loadLock(catalog.ADAPTERS.LINUX_CUDA).wheels.find((wheel) => wheel.packageName === 'nvidia-cudnn-cu12').sha256,
     whisperCudnn.sha256,
