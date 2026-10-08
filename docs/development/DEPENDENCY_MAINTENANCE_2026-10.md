@@ -42,9 +42,10 @@ committed, pushed or published. No remote repository settings were changed.
 
 - Common bumps: AnyIO 4.15.1, filelock 3.32.7, tokenizers 0.23.2, protobuf 7.36.2, huggingface-hub 1.33.0, hf-xet 1.7.0, fsspec 2026.9.0, typer 0.27.3, tqdm 4.70.1, idna 3.20, and base onnxruntime 1.30.0 on Windows and Linux.
   - None of these change native Speakrs ORT or Parakeet GPU ORT.
-- Windows only: PyAudioWPatch 0.2.12.9 and CTranslate2 4.8.2.
-  - 4.8.2 gave identical CUDA and CPU transcripts on this host. WASAPI enumeration found 23 devices, with loopback and microphone reads working.
-  - Linux stayed on CTranslate2 4.8.1 for the packaged build. The 2026-10-08 CachyOS managed-CUDA check below ran 4.8.2 from an isolated directory and produced the same transcript. The Linux pin was not moved.
+- Windows only: PyAudioWPatch 0.2.12.9.
+- CTranslate2 4.8.2 on Windows and Linux.
+  - On Windows, 4.8.2 gave identical CUDA and CPU transcripts. WASAPI enumeration found 23 devices, with loopback and microphone reads working.
+  - Linux moved to 4.8.2 after the CachyOS check below. The packaged build in that pass was still 4.8.1; isolated 4.8.2 produced the same CUDA and CPU transcript, so the pin then moved.
 - macOS only: Numba 0.68.0 and llvmlite 0.50.0 as a pair, plus charset-normalizer 3.5.2 and MarkupSafe 3.0.4.
   - The Parakeet macOS lock keeps its own numba 0.67 / llvmlite 0.49 for artifact isolation. mlx stays 0.32.2.
 - `scripts/check-build-requirements-closure.py` verifies that each build file is exactly the resolved closure for its target, and all three pass. Cross-host runs ignore Windows-marker-only colorama; CI runs each target on a matching runner.
@@ -155,7 +156,7 @@ Python 3.11 security support ends in October 2027. Target a migration decision i
 - **Linux (CachyOS, 2026-10-08):** done on this host with the limits below. Omarchy was not re-run. Pacman and deb were not installed onto the system.
   - Python 3.11.17 AppImage/pacman/deb build, `verify:linux:packaged`, unpacked GUI launch, and AppImage safeStorage launch.
   - Short PipeWire recording smoke on the Logitech C925e and HDMI monitor. Device volumes were left unchanged.
-  - Managed-CUDA transcription of that desktop capture on packaged CTranslate2 4.8.1, then the same file on isolated 4.8.2. Transcripts matched, including a packaged 4.8.1 CPU run. The Linux pin is still 4.8.1.
+  - Managed-CUDA transcription of that desktop capture on packaged CTranslate2 4.8.1, then the same file on isolated 4.8.2. Transcripts matched, including a packaged 4.8.1 CPU run. The Linux pin then moved to 4.8.2.
   - Parakeet Linux CUDA lock is unchanged (`5e1a8d69…9e51`). The existing runtime transcribed the same capture on `cuda` / `float32`. Repair was not required.
 - **Windows:**
   - Packaged installer build and launch on Electron 44.7.0. Done 2026-10-08 on this host (Node 22.15.0, npm 10.9.2).

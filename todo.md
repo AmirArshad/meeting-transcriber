@@ -27,7 +27,7 @@ branch to master.
   - pyannote 4.0.7 with Torch 2.13.0, torchaudio 2.11.0 and TorchCodec 0.16.0; the resolved Windows closure has 0 findings. Old installs report out of date.
 - **Other updates:**
   - Electron 44.7.0.
-  - Compatible Python pins, including Numba/llvmlite as a pair on macOS and CTranslate2 4.8.2 on Windows only.
+  - Compatible Python pins, including Numba/llvmlite as a pair on macOS and CTranslate2 4.8.2 on Windows and Linux.
   - macOS and Linux CPython 3.11.17+20261003, with hashes and attestations verified.
 - **Held:**
   - Windows embedded Python stays 3.11.9; its layout is a separate task.
@@ -39,8 +39,8 @@ branch to master.
   - New inventory extractor and audit wrapper, with tests.
 - **Evidence:** `npm run test:all` exited 0, with 1,114 JS passed / 4 skipped and 835 Python passed / 8 skipped.
 - **Windows host gate, 2026-10-08:** packaged Electron 44.7.0 installer built and the unpacked app launched. A short WASAPI recording transcribed on CUDA with the packaged CTranslate2 4.8.2 stack. Speakrs CUDA and a Qwen summary ran. Real pyannote diarization is still open: no user token or cached gated model on this profile. Full manual checklists were not run.
-- **Linux host gate, 2026-10-08, this CachyOS machine:** `master` `127f8db`. After `npm ci` and aligning the repo venv to the Linux build pins, JS was 1,122 passed / 2 skipped on Electron 44.7.0 and Python was 837 passed / 7 skipped. Packaged CPython 3.11.17 suite exited 0. AppImage, pacman, and deb built and verified; the unpacked app and the AppImage launched. A short PipeWire recording transcribed on managed CUDA. Isolated CTranslate2 4.8.2 matched the packaged 4.8.1 CUDA and CPU transcripts; the Linux pin is still 4.8.1. The unchanged Parakeet CUDA runtime and installed Speakrs both ran on CUDA. Details and limits are in the maintenance record. Omarchy, a system package install, Qwen, and the long recording rows were not run.
-- **Before the next release, not this merge:** macOS Python 3.11.17 package, Parakeet Metal repair, MLX with Numba 0.68, and the pyannote MPS qualification. Linux CTranslate2 can move to 4.8.2 on the CachyOS evidence above; the pin was not changed here.
+- **Linux host gate, 2026-10-08, this CachyOS machine:** `master` `127f8db`. After `npm ci` and aligning the repo venv to the Linux build pins, JS was 1,122 passed / 2 skipped on Electron 44.7.0 and Python was 837 passed / 7 skipped. Packaged CPython 3.11.17 suite exited 0. AppImage, pacman, and deb built and verified; the unpacked app and the AppImage launched. A short PipeWire recording transcribed on managed CUDA. Isolated CTranslate2 4.8.2 matched the packaged 4.8.1 CUDA and CPU transcripts, so the Linux pin then moved to 4.8.2. The unchanged Parakeet CUDA runtime and installed Speakrs both ran on CUDA. Details and limits are in the maintenance record. Omarchy, a system package install, Qwen, and the long recording rows were not run.
+- **Before the next release, not this merge:** macOS Python 3.11.17 package, Parakeet Metal repair, MLX with Numba 0.68, and the pyannote MPS qualification.
 - **Needs a repository admin:** enable the dependency graph, Dependabot alerts and Dependabot security updates.
 
 ### Release readiness and publication path — 2026-10-04

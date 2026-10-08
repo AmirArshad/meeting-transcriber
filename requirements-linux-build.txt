@@ -11,8 +11,8 @@ soxr==1.1.0
 faster-whisper==1.2.1
 filelock==3.32.7
 av==18.1.0
-# 4.8.2 is qualified on Windows CUDA only; hold Linux until a managed-CUDA host check.
-ctranslate2==4.8.1
+# 4.8.2 matched packaged 4.8.1 CUDA and CPU transcripts on CachyOS managed CUDA, 2026-10-08.
+ctranslate2==4.8.2
 huggingface-hub==1.33.0
 tokenizers==0.23.2
 onnxruntime==1.30.0
