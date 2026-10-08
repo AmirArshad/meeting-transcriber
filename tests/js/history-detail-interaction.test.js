@@ -5,12 +5,25 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 
+function electronFixtureArgs(fixturePath) {
+  const args = [fixturePath];
+  if (process.platform === 'linux') {
+    // GitHub-hosted Ubuntu cannot chmod the Electron chrome-sandbox helper
+    // setuid, so the process aborts before the window exists.
+    args.unshift('--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu');
+  }
+  return args;
+}
+
 function runRendererFixture() {
   const electron = require('electron');
   const env = { ...process.env };
   delete env.ELECTRON_RUN_AS_NODE;
+  if (process.platform === 'linux') {
+    env.ELECTRON_DISABLE_SANDBOX = '1';
+  }
   return new Promise((resolve, reject) => {
-    const child = spawn(electron, [path.join(__dirname, 'history-detail-renderer-fixture.js')], {
+    const child = spawn(electron, electronFixtureArgs(path.join(__dirname, 'history-detail-renderer-fixture.js')), {
       env,
       windowsHide: true,
     });

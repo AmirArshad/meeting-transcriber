@@ -330,7 +330,7 @@ jobs:
     - name: Install package inspection tools
       run: |
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends zstd libarchive-tools libpulse0 fakeroot dpkg
+        sudo apt-get install -y --no-install-recommends zstd libarchive-tools libpulse0 fakeroot dpkg xvfb
 
     - name: Install Rust toolchain
       # dtolnay/rust-toolchain master as of 2026-08-05 (PR #182)
@@ -374,7 +374,7 @@ jobs:
       run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cli/target/x86_64-unknown-linux-gnu/release/speakrs-cli
 
     - name: Run the full automated suite
-      run: npm run test:all
+      run: xvfb-run -a npm run test:all
 
     - name: Build Linux unpacked, AppImage, pacman, and deb packages
       run: |
