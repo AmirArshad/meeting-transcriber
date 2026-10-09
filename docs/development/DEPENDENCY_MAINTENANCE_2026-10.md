@@ -6,7 +6,7 @@ done on the local branch `chore/dependency-maintenance-2026-10`. Evidence was re
 2026-10-08 on a Windows 11 x64 host: RTX 4070, driver 617.42, Node 24, repo `.venv` Python 3.11.
 Linux evidence comes from WSL Ubuntu (glibc 2.43). That is a real x86_64 glibc userland, but it
 is **not** an Omarchy/CachyOS desktop acceptance. The CachyOS desktop pass is recorded under
-Remaining host gates. No Mac was available. Nothing was staged,
+Remaining host gates. No Mac was available for the 2026-10-08 session. The macOS host gate closed on 2026-10-09 and is recorded below. Nothing from the 2026-10-08 session was staged,
 committed, pushed or published. No remote repository settings were changed.
 
 ## Changes and decisions
@@ -147,12 +147,12 @@ Python 3.11 security support ends in October 2027. Target a migration decision i
 
 ## Remaining host gates
 
-- **macOS 14+ arm64:**
-  - Python 3.11.17 packaged build and `scripts/verify-macos-packaged-app.sh`.
-  - Parakeet Metal install, smoke and repair from the old lock digest.
-  - MLX Whisper with Numba 0.68 / llvmlite 0.50.
-  - `python scripts/qualify-pyannote-runtime.py --work-dir <tmp>`, expecting `device: mps`.
-  - Tray, dialog and recording checks on Electron 44.7.0.
+- **macOS 14+ arm64 (2026-10-09):** done on this host with the limits below.
+  - Python 3.11.17 packaged build and `scripts/verify-macos-packaged-app.sh` passed.
+  - Parakeet Metal repair from the old lock digest reached `ready` on `3a1dae0f…d7eb`, then transcribed on Metal.
+  - MLX Whisper small ran on Numba 0.68.0 / llvmlite 0.50.0 / MLX 0.32.2 (`metal` / `float16`).
+  - `python scripts/qualify-pyannote-runtime.py` exited 0 with `device: mps` and 0 audit findings.
+  - Packaged Electron 44.7.0 launched, recording checks passed, and the log had no tray-creation failure. The close dialog was not clicked.
 - **Linux (CachyOS, 2026-10-08):** done on this host with the limits below. Omarchy was not re-run. Pacman and deb were not installed onto the system.
   - Python 3.11.17 AppImage/pacman/deb build, `verify:linux:packaged`, unpacked GUI launch, and AppImage safeStorage launch.
   - Short PipeWire recording smoke on the Logitech C925e and HDMI monitor. Device volumes were left unchanged.
@@ -180,3 +180,13 @@ Python 3.11 security support ends in October 2027. Target a migration decision i
     - Unpacked GUI on an isolated userData: `app.isPackaged: true`, Wayland, `gnome_libsecret`, Python 3.11.17, FFmpeg n8.0.1, window title `AvaNevis Meeting Recorder & Transcriber`, 1200×800. The window painted the record view with the Logitech mic, HDMI monitor, English, and Small. The GPU process restarted three times at startup (`eglCreateImage` 0x3009) and then stayed up. An empty profile correctly offered CUDA setup and reported add-ons unsupported. AppImage safeStorage smoke exited 0 from the AppImage mount (`roundTrip: true`).
     - Recorder CLI, default Logitech source and HDMI monitor, fixture `tests/fixtures/speakrs-two-speaker-16k.wav` played to that sink. Sink volume stayed 100% and source volume stayed 53%. Mic + desktop: 11.8 s, mic max 0.006, desktop max 0.575, stop stages through `post_processing_complete`. Desktop only: 8.0 s, mic max 0.000, no mic stream. Mic only: 6.0 s, desktop max 0.000, no desktop stream. Cancel left no Opus. The webcam did not pick up the HDMI playback, so microphone speech is not qualified. Packaged Whisper Small transcribed the desktop file offline: `cuda` / `float16` and `cpu` / `int8` on 4.8.1, and `cuda` / `float16` on isolated 4.8.2. All three texts were `Zyra. The design review starts at 10, and I prepared the agenda. Thanks, Hazel. I will share the schedule and confirm each action owner.`
     - Existing Parakeet runtime, same lock digest, on that desktop file: exit 0, `cuda` / `float32`, same fixture speech. Installed Speakrs on `speakrs-two-speaker-16k.wav`: exit 0, `device: cuda`, `annotationSource: exclusive_speaker_diarization`, only `SPEAKER_00` across 6 segments. This pass does not show a two-speaker split. No token values. Qwen was not run.
+  - **macOS automated subset, 2026-10-09** (not the full checklists; no permission denial, no 30/60/30 gap collapse, no Bluetooth or output switch, no 30-minute meeting, no browser page, no gated pyannote model):
+    - Host: macOS 26.7.1 arm64, Node 26.11.0, `master` `1b9f02d`. `npm ci` restored Electron 44.7.0 / electron-builder 26.16.1, then `node node_modules/electron/install.js` downloaded the binary. The repo `.venv` was aligned to `requirements-macos-build.txt` (Numba 0.68.0, llvmlite 0.50.0, MLX 0.32.2, lightning-whisper-mlx 0.0.10).
+    - Authoritative suite after that alignment: JS 1,120 passed / 4 skipped on Electron 44.7.0; Python 835 passed / 9 skipped; Python syntax passed. `requirements-macos-build.txt` closure check passed.
+    - `npm run build:mac` with electron-builder 26.16.1 packaged `electron=44.7.0`, Chrome `152.0.7977.130`, Node `24.21.0`, CPython 3.11.17, FFmpeg n8.0.1. `npm run verify:mac:packaged` passed (ad-hoc seal, arm64 helper and Speakrs CLI, Opus encode, MLX import, no bundled torch). App 990 MB. DMG `dist/AvaNevis-Setup-2.10.0.dmg` sha256 `3a57b65ee68da50cc6dc91cb6a02de387f50215bbc594955b89190f1095a1c42`; `app.asar` `ed56fa8d4a095c6dce003baae1ea117227acac986d47c8d7aa9aca483ba459d5`.
+    - Unpacked GUI on an isolated userData: `app.isPackaged: true`, Python 3.11.17, FFmpeg n8.0.1, 3 input devices, 1 loopback, version 2.10.0 and already up to date. The process registered as AvaNevis and exited on SIGTERM. The log has no tray-creation failure. Window title and the close dialog were not read: this shell has no assistive access.
+    - `backend/device_manager.py` exit 0. Default mic `1` MacBook Pro Microphone, loopback `-1` System Audio (ScreenCaptureKit). Packaged recorder, fixture `tests/fixtures/speakrs-two-speaker-16k.wav` played with `afplay`. Mic + desktop: 11.4 s, mic max 0.138, desktop max 0.723, `helperCaptureBackend: coreaudio_tap`, stop stages through `post_processing_complete`. Desktop only: 7.6 s, mic max 0.000, desktop max 0.653. Mic only: 5.5 s, desktop max 0.000, desktop capture disabled. Cancel returned `{ success: true, cancelled: true }` and left no Opus. SIGKILL left no `audiocapture-helper` and no Opus.
+    - Packaged MLX Whisper small, `HF_HUB_OFFLINE=1`, on the desktop file: exit 0, `device: metal`, `computeType: float16`. Transcript begins `Morning, Zyra. The design review starts at 10`.
+    - Everyday Parakeet profile stayed `repair-required` on lock `943ea4b3…911dc`. Repair in an isolated profile that linked that runtime downloaded 2,603 MB, pruned the old generation there, and reached `ready` on `3a1dae0f…d7eb` with msgpack 1.2.3, urllib3 2.8.0 and `device.json` `{ device: metal, deviceAvailable: true }`. The same desktop file transcribed exit 0, `metal` / `float32`: `Morning,Zyra. The design review starts at10, and I prepared the agenda. Thanks, Hazel. I will share the schedule and confirm each action owner.`
+    - `scripts/qualify-pyannote-runtime.py` resolved 94 distributions for `pyannote-audio-4.0.7-darwin-arm64-mps`, 0 pip-audit findings, then `device: mps`, torch 2.13.0, torchaudio 2.11.0, torchcodec 0.16.0, pyannote.audio 4.0.7, finite embeddings shape `[2, 256]`. No Hugging Face token or gated model.
+    - Installed Speakrs on `speakrs-two-speaker-16k.wav`: exit 0, `device: coreml`, `annotationSource: exclusive_speaker_diarization`, `speakerCount: 1`, only `SPEAKER_00` across 6 segments. This pass does not show a two-speaker split. Installed Qwen3.5 9B, profile `balanced`, language `en`, exit 0. Wrote `summary.json` and `summary.md`. No token values.

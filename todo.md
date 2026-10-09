@@ -16,7 +16,7 @@ implementation or acceptance evidence.
 
 On branch `chore/dependency-maintenance-2026-10`. The decisions, evidence, exceptions
 and holds are in [DEPENDENCY_MAINTENANCE_2026-10.md](docs/development/DEPENDENCY_MAINTENANCE_2026-10.md).
-macOS host tests are still required before the next release. The CachyOS Linux
+The macOS host gate passed on 2026-10-09. The CachyOS Linux
 host gate below was run on 2026-10-08. These were not a gate for merging this
 branch to master.
 
@@ -40,7 +40,7 @@ branch to master.
 - **Evidence:** `npm run test:all` exited 0, with 1,114 JS passed / 4 skipped and 835 Python passed / 8 skipped.
 - **Windows host gate, 2026-10-08:** packaged Electron 44.7.0 installer built and the unpacked app launched. A short WASAPI recording transcribed on CUDA with the packaged CTranslate2 4.8.2 stack. Speakrs CUDA and a Qwen summary ran. Real pyannote diarization is still open: no user token or cached gated model on this profile. Full manual checklists were not run.
 - **Linux host gate, 2026-10-08, this CachyOS machine:** `master` `127f8db`. After `npm ci` and aligning the repo venv to the Linux build pins, JS was 1,122 passed / 2 skipped on Electron 44.7.0 and Python was 837 passed / 7 skipped. Packaged CPython 3.11.17 suite exited 0. AppImage, pacman, and deb built and verified; the unpacked app and the AppImage launched. A short PipeWire recording transcribed on managed CUDA. Isolated CTranslate2 4.8.2 matched the packaged 4.8.1 CUDA and CPU transcripts, so the Linux pin then moved to 4.8.2. The unchanged Parakeet CUDA runtime and installed Speakrs both ran on CUDA. Details and limits are in the maintenance record. Omarchy, a system package install, Qwen, and the long recording rows were not run.
-- **Before the next release, not this merge:** macOS Python 3.11.17 package, Parakeet Metal repair, MLX with Numba 0.68, and the pyannote MPS qualification.
+- **macOS host gate, 2026-10-09, this Mac:** `master` `1b9f02d`. macOS 26.7.1 arm64, Node 26.11.0. After `npm ci` and aligning the repo venv to the macOS build pins (Numba 0.68.0, llvmlite 0.50.0, MLX 0.32.2), JS was 1,120 passed / 4 skipped on Electron 44.7.0 and Python was 835 passed / 9 skipped. The macOS build-pin closure check passed. `npm run build:mac` packaged Electron 44.7.0, CPython 3.11.17 and FFmpeg n8.0.1, and `npm run verify:mac:packaged` passed. Packaged CoreAudio-tap capture covered mic+desktop, desktop-only, mic-only, cancel and SIGKILL. MLX Whisper small transcribed the desktop file offline (`metal` / `float16`). Parakeet repair from the old lock to `3a1dae0f…` reached `ready` on Metal in an isolated profile and transcribed that file (`metal` / `float32`); the everyday profile was left on the old runtime. pyannote qualification exited 0 with `device: mps` and 0 audit findings. Speakrs CoreML and a Qwen balanced summary ran. The packaged app launched. Full manual checklists were not run. Details are in the maintenance record.
 - **Needs a repository admin:** enable the dependency graph, Dependabot alerts and Dependabot security updates.
 
 ### Release readiness and publication path — 2026-10-04
