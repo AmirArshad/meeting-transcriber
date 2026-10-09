@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -425,7 +426,9 @@ def _normalize_track_to_stereo_file(
 
     written = 0
     stats = _TrackStats()
-    resampler = StatefulResampler(sample_rate, target_rate, channels, quality="VHQ")
+    # windows-v1 microphone resampling uses HQ. Desktop and other profiles stay VHQ.
+    resample_quality = "HQ" if profile == "windows-v1" and output_name == NORMALIZED_MIC_NAME else "VHQ"
+    resampler = StatefulResampler(sample_rate, target_rate, channels, quality=resample_quality)
     downmix = (
         downmix_windows_frames_to_stereo
         if profile == "windows-v1"
@@ -1028,7 +1031,9 @@ def reference_windows_v1_process(
         mic_i16 = np.clip(mic * 32767.0, -32768, 32767).astype(np.int16).reshape(-1)
 
     if mic_rate != TARGET_RATE:
-        mic_i16 = resample(mic_i16, mic_rate, TARGET_RATE, num_channels=mic_channels)
+        mic_i16 = resample(
+            mic_i16, mic_rate, TARGET_RATE, num_channels=mic_channels, quality="HQ"
+        )
     if mic_channels > 2:
         mic_i16 = downmix_to_stereo(mic_i16, mic_channels)
     elif mic_channels == 1:
@@ -1104,6 +1109,27 @@ def reference_macos_v1_process(
     left_plan, right_plan = plan_stereo_enhance(final)
     apply_stereo_enhance_inplace(final, left_plan, right_plan)
     return _float_stereo_to_int16_interleaved(final)
+
+
+FINALIZE_STAGE_NAMES = (
+    "normalize",
+    "mix peak",
+    "post-mix stats",
+    "final WAV",
+    "verify WAV",
+    "encode",
+    "verify opus",
+    "cleanup",
+)
+
+
+def format_finalize_stage_line(stage: Dict[str, Any]) -> str:
+    """One diagnostics line: stage elapsed seconds and running total."""
+    elapsed = float(stage.get("elapsedSeconds") or 0.0)
+    total = float(stage.get("totalSeconds") or 0.0)
+    suffix = " skipped" if stage.get("skipped") else ""
+    name = stage.get("name") or "stage"
+    return f"finalize_stage {name}: {elapsed:.3f}s (total {total:.3f}s){suffix}"
 
 
 def finalize_capture(
@@ -1206,6 +1232,26 @@ def finalize_capture(
         )
 
         _emit_progress(progress_callback, "audio_normalizing", "Normalizing audio...")
+        stage_origin = time.perf_counter()
+        stage_mark = stage_origin
+        finalize_stages: list[dict[str, Any]] = []
+
+        def _mark_finalize_stage(name: str, *, skipped: bool = False) -> None:
+            nonlocal stage_mark
+            now = time.perf_counter()
+            elapsed = now - stage_mark
+            total = now - stage_origin
+            stage_mark = now
+            entry: dict[str, Any] = {
+                "name": name,
+                "elapsedSeconds": elapsed,
+                "totalSeconds": total,
+            }
+            if skipped:
+                entry["skipped"] = True
+            finalize_stages.append(entry)
+            # stderr only — stdout is the structured recorder control channel.
+            print(format_finalize_stage_line(entry), file=sys.stderr)
 
         mic_track = coordinator.get_track(primary_track_name)
         if int(mic_track.get("committedFrames") or 0) <= 0:
@@ -1277,6 +1323,7 @@ def finalize_capture(
             mic_volume = desktop_volume
             mic_boost = 1.0
 
+        _mark_finalize_stage("normalize")
         _emit_progress(progress_callback, "audio_mixing", "Mixing audio...")
         mix_peak = 0.0
         if include_desktop:
@@ -1300,6 +1347,7 @@ def finalize_capture(
                 mic_enhance=mic_enhance,
             )
         apply_mix_limit = include_desktop and mix_peak > 1.0
+        _mark_finalize_stage("mix peak")
 
         post_mix_enhance = None
         if primary_track_name == "mic" and _profile_enhances_after_mix(profile):
@@ -1334,6 +1382,7 @@ def finalize_capture(
                 _accumulate_stereo_stats(mixed_stats, mixed, include_energy=False)
             post_mix_enhance = _plan_stereo_enhance_from_stats(mixed_stats)
 
+        _mark_finalize_stage("post-mix stats")
         final_temp = coordinator.session_dir / FINAL_CAPTURE_PCM_NAME
         if final_temp.exists():
             final_temp.unlink()
@@ -1370,6 +1419,7 @@ def finalize_capture(
             ),
         )
         capture_temp_written = True
+        _mark_finalize_stage("final WAV")
         try:
             _verify_final_temp(final_temp, expected_frames=written_frames, ffmpeg_path=ffmpeg_path)
         except FinalizationError as verify_exc:
@@ -1380,6 +1430,7 @@ def finalize_capture(
 
         geometry = probe_wav_pcm_geometry(final_temp) or {}
         duration = float(geometry.get("frames", written_frames)) / float(TARGET_RATE)
+        _mark_finalize_stage("verify WAV")
 
         _emit_progress(progress_callback, "audio_encoding", "Encoding audio...")
         final_path, compress_stats = compress_and_report(
@@ -1389,8 +1440,15 @@ def finalize_capture(
             ffmpeg_path=ffmpeg_path,
             progress_message="Compressing with ffmpeg (Opus codec)...",
         )
+        _mark_finalize_stage("encode")
         # Require a real decode of the meeting output before deleting recovery inputs.
-        if not ffmpeg_can_decode(final_path, ffmpeg_path):
+        # compress_to_opus already null-decodes Opus when ffprobe is absent; do not
+        # decode that file again. WAV fallbacks and ffprobe-only checks stay gated.
+        decode_verified = bool(
+            isinstance(compress_stats, dict) and compress_stats.get("decode_verified")
+        )
+        if not decode_verified and not ffmpeg_can_decode(final_path, ffmpeg_path):
+            _mark_finalize_stage("verify opus")
             promoted = _copy_recoverable_wav(
                 final_temp, output_path, ffmpeg_path=ffmpeg_path
             )
@@ -1398,6 +1456,7 @@ def finalize_capture(
                 f"Final output failed decode verification: {final_path}",
                 recoverable_path=promoted or (final_path if Path(final_path).is_file() else None),
             )
+        _mark_finalize_stage("verify opus", skipped=decode_verified)
         recoverable = final_path
 
         # Recovery staging: promote to the canonical meeting path before any
@@ -1451,6 +1510,7 @@ def finalize_capture(
             pass
         cleanup_completed_capture_session(session_dir_path)
 
+        _mark_finalize_stage("cleanup")
         _emit_progress(progress_callback, "post_processing_complete", "Recording saved.")
         return FinalizationResult(
             final_path=final_path,
@@ -1462,6 +1522,7 @@ def finalize_capture(
                 "frames": int(geometry.get("frames", written_frames)),
                 "includeDesktop": include_desktop,
                 "compress": compress_stats,
+                "stages": finalize_stages,
             },
         )
     except FinalizationError as exc:

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Optional
 import numpy as np
 
-from .compressor import verify_recording_integrity
+from .compressor import log_recorder_ffmpeg_path, verify_recording_integrity
 from .capture_manifest import (
     CaptureManifestCoordinator,
     MANIFEST_FILENAME,
@@ -1257,6 +1257,7 @@ def main():
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
 
     args = parser.parse_args()
+    log_recorder_ffmpeg_path()
     include_mic, include_desktop = resolve_capture_mode(args.capture_mode)
 
     if include_desktop and (SWIFT_CAPTURE_AVAILABLE or SCREENCAPTURE_AVAILABLE):

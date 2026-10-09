@@ -30,6 +30,7 @@ import numpy as np
 import pyaudiowpatch as pyaudio
 
 from . import recorder_stdout as _recorder_stdout
+from .compressor import log_recorder_ffmpeg_path
 
 
 # Lock for thread-safe JSON output to stdout
@@ -1219,7 +1220,8 @@ def main():
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
     
     args = parser.parse_args()
-    
+    log_recorder_ffmpeg_path()
+
     # Ensure output directory exists
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

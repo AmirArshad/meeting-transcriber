@@ -26,6 +26,7 @@ def resample(
     original_rate: int,
     target_rate: int,
     num_channels: int = 1,
+    quality: str = "VHQ",
 ) -> np.ndarray:
     """
     Resample audio using soxr (high-quality, fast resampling).
@@ -35,6 +36,8 @@ def resample(
         original_rate: Original sample rate in Hz
         target_rate: Target sample rate in Hz
         num_channels: Number of interleaved channels in the audio data
+        quality: soxr quality. Defaults to VHQ. The windows-v1 microphone
+            path passes HQ and the characterization reference uses the same value.
 
     Returns:
         Resampled audio as int16 numpy array
@@ -61,12 +64,12 @@ def resample(
     else:
         audio_frames = audio_float.reshape(-1, num_channels)
 
-    # Resample with soxr (VHQ quality setting - best for voice)
+    # Default VHQ. Callers that characterize windows-v1 mic pass HQ.
     resampled = soxr.resample(
         audio_frames,
         original_rate,
         target_rate,
-        quality='VHQ'
+        quality=quality,
     )
 
     if num_channels > 1:

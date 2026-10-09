@@ -1106,9 +1106,10 @@ async function withProcessPlatform(platform, fn) {
  * `startOptions` is passed to `start-recording` verbatim so tests can omit
  * `captureMode` to characterize a legacy caller.
  */
-async function captureStartArgv(startOptions, { stopFileName = 'argv-probe.wav' } = {}) {
+async function captureStartArgv(startOptions, { stopFileName = 'argv-probe.wav', ffmpegPath = null } = {}) {
   const { EventEmitter } = require('node:events');
   const spawned = [];
+  const spawnedOptions = [];
   const proc = new EventEmitter();
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
@@ -1119,11 +1120,15 @@ async function captureStartArgv(startOptions, { stopFileName = 'argv-probe.wav' 
 
   const { deps } = createMinimalDeps({
     isQuitCommitted: () => false,
-    spawnTrackedPython(args) {
+    spawnTrackedPython(args, options) {
       spawned.push(args);
+      spawnedOptions.push(options);
       return proc;
     },
   });
+  if (ffmpegPath) {
+    deps.pythonConfig = { ...deps.pythonConfig, ffmpegPath };
+  }
 
   const service = createRecorderService(deps);
   const handlers = {};
@@ -1156,8 +1161,23 @@ async function captureStartArgv(startOptions, { stopFileName = 'argv-probe.wav' 
     await stopPromise;
   }
 
-  return { result, spawned, handlers, deps };
+  return { result, spawned, spawnedOptions, handlers, deps };
 }
+
+test('start-recording passes the resolved ffmpeg path to the recorder child', async () => {
+  const ffmpegPath = '/opt/AvaNevis/ffmpeg/ffmpeg';
+  const { result, spawnedOptions, deps } = await captureStartArgv({
+    micId: 0,
+    loopbackId: 2,
+    captureMode: 'mic-and-desktop',
+    isFirstRecording: false,
+  }, { stopFileName: 'ffmpeg-env.wav', ffmpegPath });
+
+  assert.equal(result.success, true);
+  assert.equal(spawnedOptions.length, 1);
+  assert.equal(spawnedOptions[0].cwd, deps.pythonConfig.backendPath);
+  assert.equal(spawnedOptions[0].env.AVANEVIS_FFMPEG, ffmpegPath);
+});
 
 test('start-recording sends the explicit mic-and-desktop default on argv', async () => {
   const { result, spawned } = await captureStartArgv({

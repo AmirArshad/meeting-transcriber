@@ -51,7 +51,8 @@ NORMALIZED_DESKTOP_NAME = "normalized_desktop.f32.part"
 
 # Compression (ffmpeg)
 OPUS_BITRATE = '128k'  # Higher bitrate for archival/transcription quality
-OPUS_COMPRESSION_LEVEL = 10  # Maximum quality (0-10)
+# 0-10 libopus effort. 7 matches level 10 size at 128k VBR (~45.1 MB/hour) and encodes ~26% faster.
+OPUS_COMPRESSION_LEVEL = 7
 OPUS_APPLICATION = 'audio'  # Audio mode (better quality than 'voip')
 
 # Watchdog

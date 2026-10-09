@@ -31,7 +31,7 @@ from .capture_manifest import (
     parse_transcription_selection_argument,
 )
 from .capture_spool_runtime import with_transcription_selection
-from .compressor import verify_recording_integrity
+from .compressor import log_recorder_ffmpeg_path, verify_recording_integrity
 from .constants import (
     DEFAULT_CHANNELS,
     DEFAULT_SAMPLE_RATE,
@@ -1257,6 +1257,7 @@ def main() -> None:
     parser.add_argument("--transcription-selection", default="", help="Capture-time transcription selection JSON")
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
     args = parser.parse_args()
+    log_recorder_ffmpeg_path()
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

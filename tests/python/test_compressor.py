@@ -17,9 +17,12 @@ def test_compress_to_opus_returns_real_wav_fallback_path_for_transcription(tmp_p
         lambda *args, **kwargs: subprocess.CompletedProcess(args=['ffmpeg'], returncode=0),
     )
 
-    result = compressor.compress_to_opus(str(input_path), str(output_path), sample_rate=48000)
+    result, decode_verified = compressor.compress_to_opus(
+        str(input_path), str(output_path), sample_rate=48000
+    )
 
     assert result == str(output_path.with_suffix('.wav'))
+    assert decode_verified is False
     assert output_path.with_suffix('.wav').read_bytes() == b'wav fallback bytes'
     assert not output_path.exists()
 
@@ -34,9 +37,12 @@ def test_compress_to_opus_falls_back_to_wav_when_ffmpeg_is_missing(tmp_path, mon
 
     monkeypatch.setattr(compressor.subprocess, 'run', raise_file_not_found)
 
-    result = compressor.compress_to_opus(str(input_path), str(output_path), sample_rate=48000)
+    result, decode_verified = compressor.compress_to_opus(
+        str(input_path), str(output_path), sample_rate=48000
+    )
 
     assert result == str(output_path.with_suffix('.wav'))
+    assert decode_verified is False
     assert output_path.with_suffix('.wav').read_bytes() == b'fake wav data'
     assert not output_path.exists()
 
@@ -51,9 +57,12 @@ def test_compress_to_opus_falls_back_to_wav_when_ffmpeg_fails(tmp_path, monkeypa
 
     monkeypatch.setattr(compressor.subprocess, 'run', raise_called_process_error)
 
-    result = compressor.compress_to_opus(str(input_path), str(output_path), sample_rate=48000)
+    result, decode_verified = compressor.compress_to_opus(
+        str(input_path), str(output_path), sample_rate=48000
+    )
 
     assert result == str(output_path.with_suffix('.wav'))
+    assert decode_verified is False
     assert output_path.with_suffix('.wav').read_bytes() == b'fake wav data'
     assert not output_path.exists()
 
@@ -71,9 +80,12 @@ def test_compress_to_opus_falls_back_to_wav_when_integrity_check_fails(tmp_path,
 
     monkeypatch.setattr(compressor.subprocess, 'run', successful_ffmpeg)
 
-    result = compressor.compress_to_opus(str(input_path), str(output_path), sample_rate=48000)
+    result, decode_verified = compressor.compress_to_opus(
+        str(input_path), str(output_path), sample_rate=48000
+    )
 
     assert result == str(output_path.with_suffix('.wav'))
+    assert decode_verified is False
     assert output_path.with_suffix('.wav').read_bytes() == b'fake wav data'
     assert not output_path.exists()
 
@@ -114,7 +126,7 @@ def test_compress_and_report_returns_stats_and_optional_verify(tmp_path, monkeyp
     input_path.write_bytes(b'x' * 1000)
     final_path.write_bytes(b'y' * 250)
 
-    monkeypatch.setattr(compressor, 'compress_to_opus', lambda *args, **kwargs: str(final_path))
+    monkeypatch.setattr(compressor, 'compress_to_opus', lambda *args, **kwargs: (str(final_path), True))
     verified = {'called': False}
 
     def fake_verify(path, **kwargs):
@@ -136,6 +148,7 @@ def test_compress_and_report_returns_stats_and_optional_verify(tmp_path, monkeyp
     assert stats['input_size'] == 1000
     assert stats['output_size'] == 250
     assert stats['ratio'] == 75.0
+    assert stats['decode_verified'] is True
     assert verified['called'] is True
 
 
@@ -147,7 +160,7 @@ def test_compress_and_report_skips_verify_when_verify_again_false(tmp_path, monk
     input_path.write_bytes(b'x' * 1000)
     final_path.write_bytes(b'y' * 250)
 
-    monkeypatch.setattr(compressor, 'compress_to_opus', lambda *args, **kwargs: str(final_path))
+    monkeypatch.setattr(compressor, 'compress_to_opus', lambda *args, **kwargs: (str(final_path), False))
     verified = {'called': False}
     monkeypatch.setattr(
         compressor,
@@ -164,6 +177,7 @@ def test_compress_and_report_skips_verify_when_verify_again_false(tmp_path, monk
 
     assert result == str(final_path)
     assert stats['ratio'] == 75.0
+    assert stats['decode_verified'] is False
     assert verified['called'] is False
 
 
@@ -180,12 +194,71 @@ def test_compress_to_opus_passes_explicit_ffmpeg_path(tmp_path, monkeypatch):
 
     monkeypatch.setattr(compressor.subprocess, 'run', fake_run)
     monkeypatch.setattr(compressor, 'verify_recording_integrity', lambda *a, **k: True)
+    monkeypatch.setattr(compressor, 'resolve_ffprobe_path', lambda *a, **k: None)
 
-    result = compressor.compress_to_opus(
+    result, decode_verified = compressor.compress_to_opus(
         str(input_path),
         str(output_path),
         sample_rate=48000,
         ffmpeg_path='/custom/bin/ffmpeg',
     )
     assert result.endswith('.opus')
+    assert decode_verified is True
     assert seen['cmd'][0] == '/custom/bin/ffmpeg'
+
+
+def test_compress_to_opus_ffprobe_success_is_not_decode_verified(tmp_path, monkeypatch):
+    input_path = tmp_path / 'input.wav'
+    output_path = tmp_path / 'meeting.opus'
+    input_path.write_bytes(b'fake wav')
+
+    def fake_run(cmd, check=True, capture_output=True):
+        Path(cmd[-1]).write_bytes(b'opus')
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(compressor.subprocess, 'run', fake_run)
+    monkeypatch.setattr(compressor, 'verify_recording_integrity', lambda *a, **k: True)
+    monkeypatch.setattr(compressor, 'resolve_ffprobe_path', lambda *a, **k: '/usr/bin/ffprobe')
+
+    result, decode_verified = compressor.compress_to_opus(
+        str(input_path),
+        str(output_path),
+        sample_rate=48000,
+        ffmpeg_path='/custom/bin/ffmpeg',
+    )
+    assert result.endswith('.opus')
+    assert decode_verified is False
+
+
+def test_compress_and_report_clears_decode_verified_when_verify_again_fails(tmp_path, monkeypatch):
+    input_path = tmp_path / 'input.wav'
+    output_path = tmp_path / 'meeting.opus'
+    final_path = tmp_path / 'meeting.opus'
+    input_path.write_bytes(b'x' * 100)
+    final_path.write_bytes(b'y' * 40)
+    monkeypatch.setattr(compressor, 'compress_to_opus', lambda *args, **kwargs: (str(final_path), True))
+    monkeypatch.setattr(compressor, 'verify_recording_integrity', lambda *a, **k: False)
+
+    _result, stats = compressor.compress_and_report(
+        str(input_path),
+        str(output_path),
+        sample_rate=48000,
+        verify_again=True,
+    )
+    assert stats['decode_verified'] is False
+
+
+def test_log_recorder_ffmpeg_path_uses_stderr(monkeypatch, capsys):
+    monkeypatch.setenv('AVANEVIS_FFMPEG', '/opt/AvaNevis/ffmpeg/ffmpeg')
+    assert compressor.log_recorder_ffmpeg_path() == '/opt/AvaNevis/ffmpeg/ffmpeg'
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err == 'Recorder ffmpeg: /opt/AvaNevis/ffmpeg/ffmpeg\n'
+
+
+def test_platform_recorders_log_ffmpeg_at_startup():
+    root = Path(__file__).resolve().parents[2] / 'backend' / 'audio'
+    for name in ('windows_recorder.py', 'macos_recorder.py', 'linux_recorder.py'):
+        source = (root / name).read_text(encoding='utf-8')
+        main = source.split('def main(', 1)[1]
+        assert 'log_recorder_ffmpeg_path()' in main[:2500]

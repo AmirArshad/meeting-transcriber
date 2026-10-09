@@ -70,6 +70,20 @@ function resolvePythonRuntimeLayout(platform = process.platform) {
 }
 
 /**
+ * Dev ffmpeg: prepared native binary under build/resources/ffmpeg when present,
+ * otherwise the PATH name `ffmpeg`. Packaged builds keep resourcesPath.
+ */
+function resolveDevFfmpegPath({ dirname, path, fs, platform = process.platform }) {
+  const layout = resolvePythonRuntimeLayout(platform);
+  const ffmpegName = layout.packagedFfmpegSegments[layout.packagedFfmpegSegments.length - 1];
+  const candidate = path.join(dirname, '..', 'build', 'resources', 'ffmpeg', ffmpegName);
+  if (fs.existsSync(candidate)) {
+    return candidate;
+  }
+  return 'ffmpeg';
+}
+
+/**
  * Create a Python runtime bound to injected Electron/Node primitives.
  *
  * @param {object} deps
@@ -139,7 +153,8 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
         virtualEnv,
         pythonArgsPrefix: [],
         backendPath: path.join(dirname, '../backend'),
-        ffmpegPath: 'ffmpeg' // Assume in PATH
+        // Prepared dev binaries are native; PATH ffmpeg may be a translated build.
+        ffmpegPath: resolveDevFfmpegPath({ dirname, path, fs, platform: process.platform }),
       };
     } else {
       // Production mode - use bundled Python
@@ -317,4 +332,9 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
   };
 }
 
-module.exports = { createPythonRuntime, resolveVirtualEnvFromPythonExe, resolvePythonRuntimeLayout };
+module.exports = {
+  createPythonRuntime,
+  resolveVirtualEnvFromPythonExe,
+  resolvePythonRuntimeLayout,
+  resolveDevFfmpegPath,
+};

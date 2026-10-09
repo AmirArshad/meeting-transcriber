@@ -20,12 +20,14 @@ from typing import Optional
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+BACKEND = ROOT / "backend"
+for entry in (str(BACKEND), str(ROOT)):
+    if entry not in sys.path:
+        sys.path.insert(0, entry)
 
 from backend.audio.capture_manifest import CaptureManifestCoordinator, MANIFEST_FILENAME
-from backend.audio.constants import DEFAULT_FINALIZATION_CHUNK_FRAMES
-from backend.audio.streaming_post_processor import finalize_capture
+from backend.audio.constants import DEFAULT_FINALIZATION_CHUNK_FRAMES, OPUS_COMPRESSION_LEVEL
+from backend.audio.streaming_post_processor import finalize_capture, format_finalize_stage_line
 
 
 def _windows_rss_bytes() -> int:
@@ -168,7 +170,7 @@ def _write_synthetic_track(
 
 
 def run_benchmark(args: argparse.Namespace) -> dict:
-    ffmpeg = args.ffmpeg or shutil.which("ffmpeg")
+    ffmpeg = args.ffmpeg or os.environ.get("AVANEVIS_FFMPEG") or shutil.which("ffmpeg")
     if not ffmpeg:
         raise RuntimeError("ffmpeg was not found; pass --ffmpeg with an explicit path")
 
@@ -247,6 +249,8 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 "schemaVersion": 1,
                 "platform": platform.platform(),
                 "python": platform.python_version(),
+                "ffmpeg": str(ffmpeg),
+                "opusCompressionLevel": OPUS_COMPRESSION_LEVEL,
                 "profile": args.profile,
                 "desktop": bool(args.desktop),
                 "audioDurationSeconds": result.duration,
@@ -261,6 +265,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                 "rawTrackBytes": raw_bytes,
                 "finalOutputBytes": final_path.stat().st_size,
                 "finalSuffix": final_path.suffix,
+                "stages": list((result.stats or {}).get("stages") or []),
             }
         finally:
             if sampler is not None:
@@ -287,6 +292,11 @@ def main() -> int:
     except Exception as exc:
         print(f"Finalization benchmark failed: {exc}", file=sys.stderr)
         return 1
+    stages = result.get("stages") or []
+    if stages:
+        print("finalization stages:", file=sys.stderr)
+        for stage in stages:
+            print(format_finalize_stage_line(stage), file=sys.stderr)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
 

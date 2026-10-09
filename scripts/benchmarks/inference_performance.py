@@ -302,7 +302,10 @@ def encode_trial(fixture: Path, ffmpeg: str, effort: int, scratch: Path) -> dict
     before_cpu = time.process_time()
     before_rss = peak_rss_bytes()
     started = time.perf_counter()
-    final_path = Path(compress_to_opus(str(source_wav), str(output), 48000, compression_level=effort, ffmpeg_path=ffmpeg))
+    final_path, _decode_verified = compress_to_opus(
+        str(source_wav), str(output), 48000, compression_level=effort, ffmpeg_path=ffmpeg
+    )
+    final_path = Path(final_path)
     encode_ms = (time.perf_counter() - started) * 1000.0
     cpu_ms = (time.process_time() - before_cpu) * 1000.0
     decoded = scratch / "decoded.wav"

@@ -2175,7 +2175,11 @@ function createRecorderService(deps) {
           recorderArgs.push('--transcription-selection', JSON.stringify(resolvedTranscriptionRequest));
         }
         activeCaptureTranscriptionRequest = resolvedTranscriptionRequest;
-        proc = spawnTrackedPython(recorderArgs, { cwd: pythonConfig.backendPath });
+        const recorderFfmpeg = pythonConfig?.ffmpegPath || 'ffmpeg';
+        proc = spawnTrackedPython(recorderArgs, {
+          cwd: pythonConfig.backendPath,
+          env: { AVANEVIS_FFMPEG: recorderFfmpeg },
+        });
         pythonProcess = proc;
 
         if (startCancelled()) {

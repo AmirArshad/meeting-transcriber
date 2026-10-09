@@ -4,6 +4,7 @@ Audio compression utilities using ffmpeg.
 Provides high-quality Opus compression with fallback to WAV.
 """
 
+import os
 import sys
 import subprocess
 import shutil
@@ -22,7 +23,7 @@ def compress_to_opus(
     application: str | None = None,
     *,
     ffmpeg_path: str | None = None,
-) -> str:
+) -> tuple[str, bool]:
     """
     Compress audio to Opus format using ffmpeg.
 
@@ -36,7 +37,9 @@ def compress_to_opus(
         ffmpeg_path: Explicit ffmpeg executable. Defaults to ``ffmpeg`` on PATH.
 
     Returns:
-        Path to the output file (`.opus` on success, `.wav` fallback on failure)
+        ``(output_path, decode_verified)``. ``decode_verified`` is true only when
+        a full ffmpeg null-decode of the Opus output succeeded. ffprobe-only
+        checks and WAV fallbacks are not decode-verified.
     """
     bitrate = bitrate or OPUS_BITRATE
     compression_level = compression_level if compression_level is not None else OPUS_COMPRESSION_LEVEL
@@ -79,29 +82,30 @@ def compress_to_opus(
     try:
         subprocess.run(cmd, check=True, capture_output=True)
 
-        # Verify recording integrity
-        if not verify_recording_integrity(opus_path, ffmpeg_path=ffmpeg_exe):
+        # Verify recording integrity. A passing ffprobe check is not a decode.
+        verified = verify_recording_integrity(opus_path, ffmpeg_path=ffmpeg_exe)
+        if not verified:
             print(f"WARNING: Recording integrity check failed", file=sys.stderr)
             print(f"Falling back to WAV format...", file=sys.stderr)
             _cleanup_bad_opus_file()
             shutil.copy(input_path, wav_path)
-            return wav_path
+            return wav_path, False
 
-        return opus_path
+        return opus_path, _output_was_decode_verified(ffmpeg_exe, verified)
 
     except FileNotFoundError:
         print(f"Warning: ffmpeg not found in PATH", file=sys.stderr)
         print(f"Falling back to WAV format (audio will be larger)...", file=sys.stderr)
         _cleanup_bad_opus_file()
         shutil.copy(input_path, wav_path)
-        return wav_path
+        return wav_path, False
 
     except subprocess.CalledProcessError as e:
         print(f"Warning: ffmpeg compression failed: {e.stderr.decode()}", file=sys.stderr)
         print(f"Falling back to WAV format...", file=sys.stderr)
         _cleanup_bad_opus_file()
         shutil.copy(input_path, wav_path)
-        return wav_path
+        return wav_path, False
 
 
 def compress_and_report(
@@ -118,9 +122,13 @@ def compress_and_report(
 
     Shared by Windows and macOS recorders after the temporary WAV is written.
     ``verify_again`` preserves the macOS post-compress integrity log when True.
+
+    ``stats['decode_verified']`` is true only when the Opus output already
+    passed a full ffmpeg decode. Callers that still need a decode gate must
+    run one when this flag is false.
     """
     print(progress_message, file=sys.stderr)
-    final_path = compress_to_opus(
+    final_path, decode_verified = compress_to_opus(
         input_path,
         output_path,
         sample_rate,
@@ -133,18 +141,38 @@ def compress_and_report(
     # zero-size input is unreachable in production. Master would ZeroDivisionError.
     ratio = (1 - output_size / input_size) * 100 if input_size else 0.0
 
+    if verify_again and not verify_recording_integrity(final_path, ffmpeg_path=ffmpeg_path):
+        print(f"WARNING: Recording integrity check failed", file=sys.stderr)
+        decode_verified = False
+
     stats = {
         'input_path': input_path,
         'final_path': final_path,
         'input_size': input_size,
         'output_size': output_size,
         'ratio': ratio,
+        'decode_verified': decode_verified,
     }
 
-    if verify_again and not verify_recording_integrity(final_path, ffmpeg_path=ffmpeg_path):
-        print(f"WARNING: Recording integrity check failed", file=sys.stderr)
-
     return final_path, stats
+
+
+def log_recorder_ffmpeg_path() -> str:
+    """Log the ffmpeg this recorder process will use. stderr only."""
+    ffmpeg_path = os.environ.get("AVANEVIS_FFMPEG") or "ffmpeg"
+    print(f"Recorder ffmpeg: {ffmpeg_path}", file=sys.stderr, flush=True)
+    return ffmpeg_path
+
+
+def _output_was_decode_verified(ffmpeg_path: str | None, verified: bool) -> bool:
+    """True when ``verified`` came from a full ffmpeg null-decode.
+
+    Packaged builds ship ffmpeg without ffprobe, so a passing integrity check
+    has already decoded the file. An ffprobe hit only reads the container.
+    """
+    if not verified:
+        return False
+    return resolve_ffprobe_path(ffmpeg_path) is None
 
 
 def resolve_ffprobe_path(ffmpeg_path: str | None = None) -> str | None:

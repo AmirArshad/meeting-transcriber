@@ -139,6 +139,39 @@ test('Python runtime layout is POSIX on Linux and does not inherit Windows paths
   assert.throws(() => resolvePythonRuntimeLayout('freebsd'), /Unsupported Python runtime platform/);
 });
 
+test('dev mode prefers build/resources/ffmpeg when the prepared binary exists', () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-dev-ffmpeg-'));
+  const srcDir = path.join(repoRoot, 'src');
+  const ffmpegDir = path.join(repoRoot, 'build', 'resources', 'ffmpeg');
+  fs.mkdirSync(ffmpegDir, { recursive: true });
+  const linuxFfmpeg = path.join(ffmpegDir, 'ffmpeg');
+  const windowsFfmpeg = path.join(ffmpegDir, 'ffmpeg.exe');
+  fs.writeFileSync(linuxFfmpeg, '');
+  fs.writeFileSync(windowsFfmpeg, '');
+
+  try {
+    const linuxRuntime = withProcessPlatform('linux', () => createPythonRuntime({
+      app: { isPackaged: false },
+      spawn: () => new EventEmitter(),
+      path,
+      fs,
+      dirname: srcDir,
+    }));
+    assert.equal(linuxRuntime.pythonConfig.ffmpegPath, linuxFfmpeg);
+
+    const windowsRuntime = withProcessPlatform('win32', () => createPythonRuntime({
+      app: { isPackaged: false },
+      spawn: () => new EventEmitter(),
+      path,
+      fs,
+      dirname: srcDir,
+    }));
+    assert.equal(windowsRuntime.pythonConfig.ffmpegPath, windowsFfmpeg);
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('dev Python resolution on Linux uses repo .venv/bin/python3', () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-pyrt-'));
   const srcDir = path.join(repoRoot, 'src');

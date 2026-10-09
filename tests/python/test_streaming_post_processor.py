@@ -1079,3 +1079,93 @@ def test_linux_v1_float32_session_finalizes(tmp_path, monkeypatch):
     got = _read_wav_int16(Path(result.final_path))
     # linux-v1 is bounded by the microphone timeline (interleaved stereo int16).
     assert abs(len(got) // 2 - 4800) <= 2
+
+
+def _finalize_with_compress_flag(tmp_path, monkeypatch, *, decode_verified, can_decode):
+    mic = np.full((480, 2), 0.1, dtype=np.float32)
+    coordinator, output = _build_session(
+        tmp_path,
+        profile="macos-v1",
+        mic=mic,
+        desktop=None,
+        dtype="<f4",
+        include_desktop=False,
+    )
+    session_dir = coordinator.session_dir
+    decode_calls = {"n": 0}
+
+    def compress_copy(input_path, output_path, sample_rate, **kwargs):
+        dest = Path(output_path).with_suffix(".opus" if decode_verified else ".wav")
+        dest.write_bytes(Path(input_path).read_bytes())
+        return str(dest), {
+            "input_size": dest.stat().st_size,
+            "output_size": dest.stat().st_size,
+            "ratio": 0.0,
+            "decode_verified": decode_verified,
+        }
+
+    def track_decode(*args, **kwargs):
+        decode_calls["n"] += 1
+        return can_decode
+
+    _patch_finalize_io(monkeypatch)
+    monkeypatch.setattr(spp, "compress_and_report", compress_copy)
+    monkeypatch.setattr(spp, "ffmpeg_can_decode", track_decode)
+    return coordinator, output, session_dir, decode_calls
+
+
+def test_finalize_skips_opus_redecode_when_compressor_already_verified(tmp_path, monkeypatch, capsys):
+    coordinator, output, session_dir, decode_calls = _finalize_with_compress_flag(
+        tmp_path, monkeypatch, decode_verified=True, can_decode=False
+    )
+    result = finalize_capture(
+        session_dir / MANIFEST_FILENAME,
+        output,
+        chunk_frames=120,
+        coordinator=coordinator,
+    )
+    assert decode_calls["n"] == 0
+    assert not session_dir.exists()
+    stages = result.stats["stages"]
+    assert [stage["name"] for stage in stages] == list(spp.FINALIZE_STAGE_NAMES)
+    verify = next(stage for stage in stages if stage["name"] == "verify opus")
+    assert verify.get("skipped") is True
+    err = capsys.readouterr().err
+    assert "finalize_stage verify opus:" in err
+    assert "skipped" in err
+    assert err.count("finalize_stage ") == len(spp.FINALIZE_STAGE_NAMES)
+
+
+def test_finalize_keeps_opus_decode_gate_when_compressor_did_not_verify(tmp_path, monkeypatch):
+    coordinator, output, session_dir, decode_calls = _finalize_with_compress_flag(
+        tmp_path, monkeypatch, decode_verified=False, can_decode=True
+    )
+    result = finalize_capture(
+        session_dir / MANIFEST_FILENAME,
+        output,
+        chunk_frames=120,
+        coordinator=coordinator,
+    )
+    assert decode_calls["n"] == 1
+    assert not session_dir.exists()
+    verify = next(stage for stage in result.stats["stages"] if stage["name"] == "verify opus")
+    assert verify.get("skipped") is not True
+    assert result.final_path.endswith(".wav")
+
+
+def test_finalize_keeps_capture_when_unverified_output_fails_decode(tmp_path, monkeypatch):
+    coordinator, output, session_dir, decode_calls = _finalize_with_compress_flag(
+        tmp_path, monkeypatch, decode_verified=False, can_decode=False
+    )
+    with pytest.raises(spp.FinalizationError, match="decode verification"):
+        finalize_capture(
+            session_dir / MANIFEST_FILENAME,
+            output,
+            chunk_frames=120,
+            coordinator=coordinator,
+        )
+    assert decode_calls["n"] >= 1
+    assert session_dir.is_dir()
+    assert (session_dir / MANIFEST_FILENAME).is_file()
+    assert (session_dir / "mic_0000.pcm.part").is_file()
+    coordinator.close()
