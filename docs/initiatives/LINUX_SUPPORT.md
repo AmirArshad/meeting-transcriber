@@ -70,7 +70,7 @@ These facts are evidence for the first target only, not assumptions to bake into
 
 ## Verified upstream artifacts (2026-08-23)
 
-Every external Linux artifact this plan needs exists upstream, mostly at the exact versions already pinned for Windows/macOS. Asset existence was verified against the live GitHub/PyPI APIs on 2026-08-23. SHA-256 values must be computed at pin time (rule 4 above).
+Every external Linux artifact this plan needs exists upstream, mostly at the exact versions already pinned for Windows/macOS. Asset existence was verified against the live GitHub/PyPI APIs on 2026-08-23. SHA-256 values must be computed at pin time (rule 4 above). The table is that date's snapshot. Current FFmpeg and CPython pins live in `build/download-manifest.js`: FFmpeg 8.1.2 and Linux/macOS CPython 3.11.17+20261003.
 
 | Purpose | Artifact | Where it gets pinned |
 |---|---|---|

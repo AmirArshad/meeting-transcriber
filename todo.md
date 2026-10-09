@@ -17,7 +17,8 @@ implementation or acceptance evidence.
 October 2026 dependency maintenance is on `master`. The decisions, evidence, exceptions
 and holds are in [DEPENDENCY_MAINTENANCE_2026-10.md](docs/development/DEPENDENCY_MAINTENANCE_2026-10.md).
 The macOS host gate passed on 2026-10-09. The CachyOS Linux
-host gate below was run on 2026-10-08. Those host gates were not a merge requirement.
+host gate below was run on 2026-10-08, and the FFmpeg 8.1.2 rebuild was
+checked on this CachyOS machine on 2026-10-09. Those host gates were not a merge requirement.
 
 - **Security closures:**
   - Parakeet macOS lock: msgpack 1.2.3 and urllib3 2.8.0, regenerated from real wheels. Old runtimes require repair and are pruned.
@@ -28,9 +29,9 @@ host gate below was run on 2026-10-08. Those host gates were not a merge require
   - Electron 44.7.0.
   - Compatible Python pins, including Numba/llvmlite as a pair on macOS and CTranslate2 4.8.2 on Windows and Linux.
   - macOS and Linux CPython 3.11.17+20261003, with hashes and attestations verified.
+  - FFmpeg 8.1.2 on Windows, macOS, and Linux, with the matching source pin. Gyan has no 8.0.3 build, and 8.1.2 is the matching newer set.
 - **Held:**
   - Windows embedded Python stays 3.11.9; its layout is a separate task.
-  - FFmpeg stays 8.0.1 on all platforms. Gyan has no 8.0.3 build, so the user must decide whether to move to 8.1.2.
   - electron-builder stays 26.16.1, with a dated sprintf-js exception.
 - **Recurrence prevention:**
   - Dependabot covers Cargo and Actions, with groups and Python 3.11 ceilings.
@@ -41,6 +42,7 @@ host gate below was run on 2026-10-08. Those host gates were not a merge require
 - **Linux host gate, 2026-10-08, this CachyOS machine:** `master` `127f8db`. After `npm ci` and aligning the repo venv to the Linux build pins, JS was 1,122 passed / 2 skipped on Electron 44.7.0 and Python was 837 passed / 7 skipped. Packaged CPython 3.11.17 suite exited 0. AppImage, pacman, and deb built and verified; the unpacked app and the AppImage launched. A short PipeWire recording transcribed on managed CUDA. Isolated CTranslate2 4.8.2 matched the packaged 4.8.1 CUDA and CPU transcripts, so the Linux pin then moved to 4.8.2. The unchanged Parakeet CUDA runtime and installed Speakrs both ran on CUDA. Details and limits are in the maintenance record. Omarchy, a system package install, Qwen, and the long recording rows were not run.
 - **macOS host gate, 2026-10-09, this Mac:** `master` `1b9f02d`. macOS 26.7.1 arm64, Node 26.11.0. After `npm ci` and aligning the repo venv to the macOS build pins (Numba 0.68.0, llvmlite 0.50.0, MLX 0.32.2), JS was 1,120 passed / 4 skipped on Electron 44.7.0 and Python was 835 passed / 9 skipped. The macOS build-pin closure check passed. `npm run build:mac` packaged Electron 44.7.0, CPython 3.11.17 and FFmpeg n8.0.1, and `npm run verify:mac:packaged` passed. Packaged CoreAudio-tap capture covered mic+desktop, desktop-only, mic-only, cancel and SIGKILL. MLX Whisper small transcribed the desktop file offline (`metal` / `float16`). Parakeet repair from the old lock to `3a1dae0f…` reached `ready` on Metal in an isolated profile and transcribed that file (`metal` / `float32`); the everyday profile was left on the old runtime. pyannote qualification exited 0 with `device: mps` and 0 audit findings. Speakrs CoreML and a Qwen balanced summary ran. The packaged app launched. Full manual checklists were not run. Details are in the maintenance record.
 - **Done 2026-10-09:** the dependency graph, Dependabot alerts, and Dependabot security updates are enabled.
+- **Linux FFmpeg 8.1.2 gate, 2026-10-09, this CachyOS machine:** `master` `a5e53ca`. Kernel `7.2.9-2-cachyos`, Hyprland 0.56.2, PipeWire 1.6.9, RTX 4070, driver 615.78.08, Node 26.11.1. The repo venv was already on the Linux build pins, including CTranslate2 4.8.2. With a temporary Electron float rule, JS was 1,126 passed / 2 skipped; Python was 848 passed / 7 skipped, and syntax passed. One combined run failed seven Python tests only because `HF_HUB_OFFLINE=1` was still set; the clean rerun passed. The Linux closure check passed. `pip-audit` on `requirements-linux-build.txt` reported 0 findings. `npm run build:linux` packaged Electron 44.7.0, CPython 3.11.17, CTranslate2 4.8.2 and FFmpeg n8.1.2, and `npm run verify:linux:packaged` passed. Unpacked and AppImage safeStorage smokes exited 0 (`gnome_libsecret`, `roundTrip: true`). Short PipeWire recordings covered mic+desktop, desktop-only, mic-only and cancel. Interrupted-capture recovery deleted the capture only after an FFmpeg 8.1.2 Opus decode; an empty capture was kept. Fixture import scan added one meeting. Packaged Whisper Small transcribed an isolated-sink fixture recording on CUDA (`float16`) and CPU (`int8`). Speakrs, Parakeet, Qwen, a visible window, a system package install, and the long recording rows were not run. Windows and macOS still need this FFmpeg 8.1.2 check. Details are in the maintenance record.
 
 ### Release readiness and publication path — 2026-10-04
 
@@ -224,11 +226,11 @@ v2.10.0 is tagged, and October dependency maintenance is on `master`. Dependabot
 alerts and security updates are enabled. No tag or release-workflow action remains.
 
 Still open, and already recorded below: AUR publishing, Apple notarization, and the
-preflight trusted-sender note; the FFmpeg 8.0.1 hold until a separate all-host
-decision; Windows embedded Python 3.11.9; the electron-builder sprintf-js exception
-through 2027-01-31; and real Windows pyannote diarization, which still needs a user
-token and the gated model. The October host gates did not repeat the full manual
-checklists. The sequencing below records the earlier implementation order.
+preflight trusted-sender note; FFmpeg 8.1.2 Opus, recovery, and import checks on
+Windows and macOS; Windows embedded Python 3.11.9; the electron-builder sprintf-js
+exception through 2027-01-31; and real Windows pyannote diarization, which still
+needs a user token and the gated model. The October host gates did not repeat the
+full manual checklists. The sequencing below records the earlier implementation order.
 
 ## How to sequence the work (historical)
 
