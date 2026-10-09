@@ -114,7 +114,7 @@ If you distribute AvaNevis installers that bundle ffmpeg:
 
 1. Include this file (or the copy installed to `resources/legal/`).
 2. Include [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt) and [legal/FFMPEG-COMPLIANCE.json](legal/FFMPEG-COMPLIANCE.json).
-3. On [GitHub Releases](https://github.com/AmirArshad/meeting-transcriber/releases), attach **`ffmpeg-8.0.1.tar.xz`** (official FFmpeg source, SHA-256 pinned in `build/download-manifest.js`) on the **same page** as the Windows/macOS installers. CI runs `node scripts/stage-release-legal-assets.js` when publishing a version tag.
+3. On [GitHub Releases](https://github.com/AmirArshad/meeting-transcriber/releases), attach **`ffmpeg-8.1.2.tar.xz`** (official FFmpeg source, SHA-256 pinned in `build/download-manifest.js`) on the **same page** as the Windows, macOS, and Linux installers. CI runs `node scripts/stage-release-legal-assets.js` when publishing a version tag.
 4. Mention FFmpeg in release notes (see `docs/development/RELEASE_FFMPEG_NOTICE.md`).
 5. Honor GPLv3 obligations for the specific ffmpeg build you ship (license text, source offer, and any notices from the third-party binary archive).
 

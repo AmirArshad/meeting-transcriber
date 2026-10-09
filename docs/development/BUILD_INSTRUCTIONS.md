@@ -263,7 +263,7 @@ Once built, you can distribute the installer:
 - Host on **GitHub Releases** (recommended — CI attaches FFmpeg source and legal files; see [RELEASE_COMPLIANCE.md](RELEASE_COMPLIANCE.md))
 - Share direct download link
 
-**Legal:** Installers bundle GPLv3 ffmpeg and the Apache-2.0 Speakrs CLI. Tagged releases must include `ffmpeg-8.0.1.tar.xz` and third-party notices on the same release page. See [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
+**Legal:** Installers bundle GPLv3 ffmpeg and the Apache-2.0 Speakrs CLI. Tagged releases must include `ffmpeg-8.1.2.tar.xz` and third-party notices on the same release page. See [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
 
 **Installer size (approximate):** Windows ~200–300 MB; macOS ~700–900 MB after arm64 ffmpeg + torch bundle trim (plus Whisper models on first use). Linux AppImage ~310 MB and pacman archive ~280 MB as built on Omarchy 2026-08-28 (installed pacman size ~850 MB); Whisper models still download on first use.
 

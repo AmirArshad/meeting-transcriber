@@ -93,9 +93,9 @@ test('native runtimes are inventoried for review, never passed to the PyPI audit
     'pythonWin=cpython@3.11.9',
     'pythonMac=cpython@3.11.17',
     'pythonLinux=cpython@3.11.17',
-    'ffmpegWin=ffmpeg@8.0.1',
-    'ffmpegMac=ffmpeg@8.0.1',
-    'ffmpegLinux=ffmpeg@8.0.1',
+    'ffmpegWin=ffmpeg@8.1.2',
+    'ffmpegMac=ffmpeg@8.1.2',
+    'ffmpegLinux=ffmpeg@8.1.2',
   ]);
   assert.throws(() => toRequirements(native), /no PyPI advisory coverage/);
 
@@ -103,6 +103,6 @@ test('native runtimes are inventoried for review, never passed to the PyPI audit
     ...BUILD_DOWNLOADS,
     ffmpegMac: { ...BUILD_DOWNLOADS.ffmpegMac, url: 'https://github.com/shaka-project/static-ffmpeg-binaries/releases/download/n8.0.3-1/ffmpeg-osx-arm64' },
   };
-  assert.throws(() => nativeInventory(skewed), /ffmpegMac: binary FFmpeg 8\.0\.3 does not match the bundled corresponding source 8\.0\.1/);
+  assert.throws(() => nativeInventory(skewed), /ffmpegMac: binary FFmpeg 8\.0\.3 does not match the bundled corresponding source 8\.1\.2/);
   assert.throws(() => nativeInventory({ ...BUILD_DOWNLOADS, pythonMac: { url: 'https://example.invalid/python.tgz' } }), /pythonMac: cannot read a version/);
 });

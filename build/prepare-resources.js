@@ -173,7 +173,7 @@ function writeFfmpegComplianceManifest(targetDir = LEGAL_DIR) {
 
   const templateProvenance = template.binaryProvenance || {};
   const compliance = {
-    ffmpegVersion: template.ffmpegVersion || '8.0.1',
+    ffmpegVersion: template.ffmpegVersion || '8.1.2',
     license: template.license || 'GPL-3.0-or-later',
     binaryProvenance: {
       win32: {
@@ -235,7 +235,7 @@ function writeFfmpegBinaryInfo(targetDir = LEGAL_DIR) {
 
 async function stageFfmpegSourceArchive(targetDir = LEGAL_DIR) {
   const download = getBuildDownload('ffmpegSource');
-  const destPath = path.join(targetDir, download.archiveFileName || 'ffmpeg-8.0.1.tar.xz');
+  const destPath = path.join(targetDir, download.archiveFileName || 'ffmpeg-8.1.2.tar.xz');
 
   if (!fs.existsSync(destPath)) {
     console.log(`Downloading ${download.label} for legal compliance...`);

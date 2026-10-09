@@ -377,7 +377,7 @@ jobs:
           name: AvaNevis ${{ github.ref_name }}
           files: |
             release-upload/*
-            release-legal/legal/ffmpeg-8.0.1.tar.xz
+            release-legal/legal/ffmpeg-8.1.2.tar.xz
             release-legal/legal/THIRD_PARTY_NOTICES.md
             release-legal/avanevis-legal-${{ steps.collect_assets.outputs.version }}.zip
           body_path: release-notes.md
