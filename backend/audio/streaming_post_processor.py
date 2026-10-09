@@ -403,12 +403,20 @@ def _read_float32_stereo_chunk(source: Any, start_frame: int, frame_count: int) 
     return samples[:usable].reshape(-1, 2).copy()
 
 
+def _resample_quality(profile: str, track_role: str) -> str:
+    """windows-v1 microphone resampling uses HQ. Desktop and other profiles stay VHQ."""
+    if profile == "windows-v1" and track_role == "mic":
+        return "HQ"
+    return "VHQ"
+
+
 def _normalize_track_to_stereo_file(
     *,
     session_dir: Path,
     track: Dict[str, Any],
     profile: str,
     output_name: str,
+    track_role: str,
     chunk_frames: int,
     target_rate: int = TARGET_RATE,
 ) -> tuple[int, _TrackStats]:
@@ -426,8 +434,7 @@ def _normalize_track_to_stereo_file(
 
     written = 0
     stats = _TrackStats()
-    # windows-v1 microphone resampling uses HQ. Desktop and other profiles stay VHQ.
-    resample_quality = "HQ" if profile == "windows-v1" and output_name == NORMALIZED_MIC_NAME else "VHQ"
+    resample_quality = _resample_quality(profile, track_role)
     resampler = StatefulResampler(sample_rate, target_rate, channels, quality=resample_quality)
     downmix = (
         downmix_windows_frames_to_stereo
@@ -1262,6 +1269,7 @@ def finalize_capture(
             track=mic_track,
             profile=profile,
             output_name=NORMALIZED_MIC_NAME,
+            track_role=primary_track_name,
             chunk_frames=chunk_frames,
         )
         desk_frames = 0
@@ -1273,6 +1281,7 @@ def finalize_capture(
                 track=desk_track,
                 profile=profile,
                 output_name=NORMALIZED_DESKTOP_NAME,
+                track_role="desktop",
                 chunk_frames=chunk_frames,
             )
             desk_path = coordinator.session_dir / NORMALIZED_DESKTOP_NAME

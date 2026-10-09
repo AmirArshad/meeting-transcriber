@@ -139,6 +139,24 @@ test('Python runtime layout is POSIX on Linux and does not inherit Windows paths
   assert.throws(() => resolvePythonRuntimeLayout('freebsd'), /Unsupported Python runtime platform/);
 });
 
+function withAvanevisFfmpeg(value, fn) {
+  const previous = process.env.AVANEVIS_FFMPEG;
+  if (value === undefined) {
+    delete process.env.AVANEVIS_FFMPEG;
+  } else {
+    process.env.AVANEVIS_FFMPEG = value;
+  }
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AVANEVIS_FFMPEG;
+    } else {
+      process.env.AVANEVIS_FFMPEG = previous;
+    }
+  }
+}
+
 test('dev mode prefers build/resources/ffmpeg when the prepared binary exists', () => {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-dev-ffmpeg-'));
   const srcDir = path.join(repoRoot, 'src');
@@ -150,25 +168,92 @@ test('dev mode prefers build/resources/ffmpeg when the prepared binary exists', 
   fs.writeFileSync(windowsFfmpeg, '');
 
   try {
-    const linuxRuntime = withProcessPlatform('linux', () => createPythonRuntime({
+    const linuxRuntime = withAvanevisFfmpeg(undefined, () => withProcessPlatform('linux', () => createPythonRuntime({
       app: { isPackaged: false },
       spawn: () => new EventEmitter(),
       path,
       fs,
       dirname: srcDir,
-    }));
+    })));
     assert.equal(linuxRuntime.pythonConfig.ffmpegPath, linuxFfmpeg);
 
-    const windowsRuntime = withProcessPlatform('win32', () => createPythonRuntime({
+    const windowsRuntime = withAvanevisFfmpeg(undefined, () => withProcessPlatform('win32', () => createPythonRuntime({
       app: { isPackaged: false },
       spawn: () => new EventEmitter(),
       path,
       fs,
       dirname: srcDir,
-    }));
+    })));
     assert.equal(windowsRuntime.pythonConfig.ffmpegPath, windowsFfmpeg);
   } finally {
     fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('dev mode honors an explicit AVANEVIS_FFMPEG override', () => {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-ffmpeg-override-'));
+  const srcDir = path.join(repoRoot, 'src');
+  const ffmpegDir = path.join(repoRoot, 'build', 'resources', 'ffmpeg');
+  fs.mkdirSync(ffmpegDir, { recursive: true });
+  fs.writeFileSync(path.join(ffmpegDir, 'ffmpeg'), '');
+  const override = '/custom/native/ffmpeg';
+
+  const emptySrc = path.join(repoRoot, 'empty', 'src');
+  fs.mkdirSync(emptySrc, { recursive: true });
+
+  try {
+    const withoutPrepared = withAvanevisFfmpeg(override, () => withProcessPlatform('linux', () => createPythonRuntime({
+      app: { isPackaged: false },
+      spawn: () => new EventEmitter(),
+      path,
+      fs,
+      dirname: emptySrc,
+    })));
+    assert.equal(withoutPrepared.pythonConfig.ffmpegPath, override);
+
+    const overPrepared = withAvanevisFfmpeg(override, () => withProcessPlatform('linux', () => createPythonRuntime({
+      app: { isPackaged: false },
+      spawn: () => new EventEmitter(),
+      path,
+      fs,
+      dirname: srcDir,
+    })));
+    assert.equal(overPrepared.pythonConfig.ffmpegPath, override);
+
+    const blank = withAvanevisFfmpeg('   ', () => withProcessPlatform('linux', () => createPythonRuntime({
+      app: { isPackaged: false },
+      spawn: () => new EventEmitter(),
+      path,
+      fs,
+      dirname: srcDir,
+    })));
+    assert.equal(blank.pythonConfig.ffmpegPath, path.join(ffmpegDir, 'ffmpeg'));
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test('packaged mode keeps the bundled ffmpeg when AVANEVIS_FFMPEG is set', () => {
+  const previousResources = process.resourcesPath;
+  Object.defineProperty(process, 'resourcesPath', { configurable: true, value: '/opt/AvaNevis/resources' });
+  try {
+    const runtime = withAvanevisFfmpeg('/custom/native/ffmpeg', () => withProcessPlatform('linux', () => createPythonRuntime({
+      app: { isPackaged: true },
+      spawn: () => new EventEmitter(),
+      path,
+      fs,
+      dirname: '/opt/AvaNevis/src',
+    })));
+    assert.equal(
+      runtime.pythonConfig.ffmpegPath,
+      path.join('/opt/AvaNevis/resources', 'ffmpeg', 'ffmpeg'),
+    );
+  } finally {
+    if (previousResources === undefined) {
+      delete process.resourcesPath;
+    } else {
+      Object.defineProperty(process, 'resourcesPath', { configurable: true, value: previousResources });
+    }
   }
 });
 
@@ -188,13 +273,13 @@ test('dev Python resolution on Linux uses repo .venv/bin/python3', () => {
   delete process.env.AVANEVIS_PYTHON;
 
   try {
-    const runtime = withProcessPlatform('linux', () => createPythonRuntime({
+    const runtime = withAvanevisFfmpeg(undefined, () => withProcessPlatform('linux', () => createPythonRuntime({
       app: { isPackaged: false },
       spawn: () => new EventEmitter(),
       path,
       fs,
       dirname: srcDir,
-    }));
+    })));
     assert.equal(runtime.pythonConfig.pythonExe, repoPython);
     assert.equal(runtime.pythonConfig.pythonSource, '.venv');
     assert.equal(runtime.pythonConfig.ffmpegPath, 'ffmpeg');

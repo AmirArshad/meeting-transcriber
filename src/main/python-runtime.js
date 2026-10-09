@@ -70,10 +70,21 @@ function resolvePythonRuntimeLayout(platform = process.platform) {
 }
 
 /**
- * Dev ffmpeg: prepared native binary under build/resources/ffmpeg when present,
- * otherwise the PATH name `ffmpeg`. Packaged builds keep resourcesPath.
+ * Dev ffmpeg: an explicit AVANEVIS_FFMPEG override, otherwise the prepared
+ * native binary under build/resources/ffmpeg when present, otherwise PATH
+ * `ffmpeg`. Packaged builds do not use this resolver.
  */
-function resolveDevFfmpegPath({ dirname, path, fs, platform = process.platform }) {
+function resolveDevFfmpegPath({
+  dirname,
+  path,
+  fs,
+  platform = process.platform,
+  env = process.env,
+}) {
+  const override = typeof env?.AVANEVIS_FFMPEG === 'string' ? env.AVANEVIS_FFMPEG.trim() : '';
+  if (override) {
+    return override;
+  }
   const layout = resolvePythonRuntimeLayout(platform);
   const ffmpegName = layout.packagedFfmpegSegments[layout.packagedFfmpegSegments.length - 1];
   const candidate = path.join(dirname, '..', 'build', 'resources', 'ffmpeg', ffmpegName);
@@ -153,8 +164,15 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
         virtualEnv,
         pythonArgsPrefix: [],
         backendPath: path.join(dirname, '../backend'),
-        // Prepared dev binaries are native; PATH ffmpeg may be a translated build.
-        ffmpegPath: resolveDevFfmpegPath({ dirname, path, fs, platform: process.platform }),
+        // Honor AVANEVIS_FFMPEG, then a prepared native binary. PATH ffmpeg may
+        // be a translated build the override is avoiding.
+        ffmpegPath: resolveDevFfmpegPath({
+          dirname,
+          path,
+          fs,
+          platform: process.platform,
+          env: process.env,
+        }),
       };
     } else {
       // Production mode - use bundled Python

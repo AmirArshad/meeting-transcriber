@@ -83,6 +83,7 @@ def _build_desktop_primary_session(
     profile: str,
     desktop: np.ndarray,
     dtype: str,
+    sample_rate: int = 48000,
 ):
     """Create the one-track manifest emitted by desktop-only capture."""
     output = tmp_path / "desktop-only.opus"
@@ -95,7 +96,7 @@ def _build_desktop_primary_session(
     coordinator.set_mix_params(mic_volume=0.25, desktop_volume=1.0, mic_boost=9.0)
     frames = desktop if desktop.ndim > 1 else desktop.reshape(-1, 1)
     coordinator.add_track(
-        "desktop", sample_rate=48000, channels=frames.shape[1], dtype=dtype
+        "desktop", sample_rate=sample_rate, channels=frames.shape[1], dtype=dtype
     )
     name = "desktop_0000.pcm.part"
     _write_segment(coordinator.session_dir / name, frames.astype(np.dtype(dtype)))
@@ -1169,3 +1170,58 @@ def test_finalize_keeps_capture_when_unverified_output_fails_decode(tmp_path, mo
     assert (session_dir / MANIFEST_FILENAME).is_file()
     assert (session_dir / "mic_0000.pcm.part").is_file()
     coordinator.close()
+
+
+def _capture_resampler_qualities(monkeypatch):
+    seen = []
+    real = spp.StatefulResampler
+
+    class RecordingResampler(real):
+        def __init__(self, *args, **kwargs):
+            seen.append(kwargs.get("quality", "VHQ"))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(spp, "StatefulResampler", RecordingResampler)
+    return seen
+
+
+def test_windows_microphone_resample_uses_hq(tmp_path, monkeypatch):
+    mic = np.full((2048, 1), 1000, dtype=np.int16)
+    coordinator, output = _build_session(
+        tmp_path,
+        profile="windows-v1",
+        mic=mic,
+        desktop=None,
+        mic_rate=44100,
+        dtype="<i2",
+        include_desktop=False,
+    )
+    qualities = _capture_resampler_qualities(monkeypatch)
+    _patch_finalize_io(monkeypatch)
+    finalize_capture(
+        coordinator.session_dir / MANIFEST_FILENAME,
+        output,
+        chunk_frames=256,
+        coordinator=coordinator,
+    )
+    assert qualities == ["HQ"]
+
+
+def test_windows_desktop_only_resample_stays_vhq(tmp_path, monkeypatch):
+    desktop = np.full((2048, 2), 1000, dtype=np.int16)
+    coordinator, output = _build_desktop_primary_session(
+        tmp_path,
+        profile="windows-v1",
+        desktop=desktop,
+        dtype="<i2",
+        sample_rate=44100,
+    )
+    qualities = _capture_resampler_qualities(monkeypatch)
+    _patch_finalize_io(monkeypatch)
+    finalize_capture(
+        coordinator.session_dir / MANIFEST_FILENAME,
+        output,
+        chunk_frames=256,
+        coordinator=coordinator,
+    )
+    assert qualities == ["VHQ"]

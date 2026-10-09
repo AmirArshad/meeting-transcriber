@@ -10,6 +10,7 @@ import subprocess
 import shutil
 import json
 from pathlib import Path
+from typing import NamedTuple
 
 from .constants import OPUS_BITRATE, OPUS_COMPRESSION_LEVEL, OPUS_APPLICATION
 
@@ -82,16 +83,17 @@ def compress_to_opus(
     try:
         subprocess.run(cmd, check=True, capture_output=True)
 
-        # Verify recording integrity. A passing ffprobe check is not a decode.
-        verified = verify_recording_integrity(opus_path, ffmpeg_path=ffmpeg_exe)
-        if not verified:
+        # Provenance comes from this check. A later ffprobe lookup must not
+        # turn a container probe into a claimed decode.
+        checked = _check_recording_integrity(opus_path, ffmpeg_path=ffmpeg_exe)
+        if not checked.ok:
             print(f"WARNING: Recording integrity check failed", file=sys.stderr)
             print(f"Falling back to WAV format...", file=sys.stderr)
             _cleanup_bad_opus_file()
             shutil.copy(input_path, wav_path)
             return wav_path, False
 
-        return opus_path, _output_was_decode_verified(ffmpeg_exe, verified)
+        return opus_path, checked.decode_verified
 
     except FileNotFoundError:
         print(f"Warning: ffmpeg not found in PATH", file=sys.stderr)
@@ -164,15 +166,15 @@ def log_recorder_ffmpeg_path() -> str:
     return ffmpeg_path
 
 
-def _output_was_decode_verified(ffmpeg_path: str | None, verified: bool) -> bool:
-    """True when ``verified`` came from a full ffmpeg null-decode.
+class _IntegrityCheck(NamedTuple):
+    """Result of one integrity operation.
 
-    Packaged builds ship ffmpeg without ffprobe, so a passing integrity check
-    has already decoded the file. An ffprobe hit only reads the container.
+    ``decode_verified`` is true only when that same call's ffmpeg null-decode
+    succeeded. An ffprobe hit never sets it, even if ffprobe later disappears.
     """
-    if not verified:
-        return False
-    return resolve_ffprobe_path(ffmpeg_path) is None
+
+    ok: bool
+    decode_verified: bool
 
 
 def resolve_ffprobe_path(ffmpeg_path: str | None = None) -> str | None:
@@ -193,6 +195,11 @@ def verify_recording_integrity(file_path: str, *, ffmpeg_path: str | None = None
     stage ffmpeg), fall back to an ffmpeg null-decode. Never treat "cannot
     check" as success when ffmpeg is also unavailable.
     """
+    return _check_recording_integrity(file_path, ffmpeg_path=ffmpeg_path).ok
+
+
+def _check_recording_integrity(file_path: str, *, ffmpeg_path: str | None = None) -> _IntegrityCheck:
+    """Run one integrity check and report whether that call decoded the file."""
     ffprobe_path = resolve_ffprobe_path(ffmpeg_path)
     if ffprobe_path:
         try:
@@ -215,14 +222,14 @@ def verify_recording_integrity(file_path: str, *, ffmpeg_path: str | None = None
 
             if result.returncode != 0:
                 print(f"  Integrity check FAILED: {result.stderr}", file=sys.stderr)
-                return False
+                return _IntegrityCheck(False, False)
 
             probe_data = json.loads(result.stdout)
 
             # Check for valid format
             if 'format' not in probe_data:
                 print(f"  Integrity check FAILED: No format info", file=sys.stderr)
-                return False
+                return _IntegrityCheck(False, False)
 
             # Check for audio stream
             streams = probe_data.get('streams', [])
@@ -230,28 +237,28 @@ def verify_recording_integrity(file_path: str, *, ffmpeg_path: str | None = None
 
             if not audio_streams:
                 print(f"  Integrity check FAILED: No audio streams", file=sys.stderr)
-                return False
+                return _IntegrityCheck(False, False)
 
             # Check duration is positive
             duration = float(probe_data['format'].get('duration', 0))
             if duration <= 0:
                 print(f"  Integrity check FAILED: Invalid duration ({duration}s)", file=sys.stderr)
-                return False
+                return _IntegrityCheck(False, False)
 
             print(f"  Integrity check: OK ({duration:.1f}s, {audio_streams[0].get('codec_name', 'unknown')})", file=sys.stderr)
-            return True
+            return _IntegrityCheck(True, False)
 
         except subprocess.TimeoutExpired:
             print(f"  Integrity check TIMEOUT", file=sys.stderr)
-            return False
+            return _IntegrityCheck(False, False)
         except Exception as e:
             print(f"  Integrity check ERROR: {e}", file=sys.stderr)
-            return False
+            return _IntegrityCheck(False, False)
 
     ffmpeg_exe = ffmpeg_path or shutil.which('ffmpeg')
     if not ffmpeg_exe:
         print(f"  Integrity check FAILED: ffprobe and ffmpeg unavailable", file=sys.stderr)
-        return False
+        return _IntegrityCheck(False, False)
 
     try:
         result = subprocess.run(
@@ -268,15 +275,15 @@ def verify_recording_integrity(file_path: str, *, ffmpeg_path: str | None = None
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
         print(f"  Integrity check ERROR: {exc}", file=sys.stderr)
-        return False
+        return _IntegrityCheck(False, False)
 
     if result.returncode != 0:
         detail = (result.stderr or b'').decode('utf-8', errors='replace')
         print(f"  Integrity check FAILED (ffmpeg decode): {detail}", file=sys.stderr)
-        return False
+        return _IntegrityCheck(False, False)
 
     print(f"  Integrity check: OK (ffmpeg decode)", file=sys.stderr)
-    return True
+    return _IntegrityCheck(True, True)
 
 
 def get_file_info(file_path: str, *, ffmpeg_path: str | None = None) -> dict:
