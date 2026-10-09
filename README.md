@@ -76,7 +76,7 @@ The AppImage is a static-pie runtime and does **not** need host `fuse2` / `libfu
 
 Transcription defaults to local CPU `faster-whisper`. On x86_64 Linux with a verified managed CUDA 12 runtime and NVIDIA GPU, CUDA transcription and local add-ons may be set up; otherwise their controls remain fail-closed. Linux support and acceptance boundaries are in [LINUX_EXPERIMENTAL.md](docs/guides/LINUX_EXPERIMENTAL.md). The [v2.9 compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) is the historical release evidence record.
 
-> **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS, `~/.config/avanevis` on Linux), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The first AvaNevis update prompt for existing Meeting Transcriber installs opens the GitHub release page in your browser instead of auto-downloading; future AvaNevis-to-AvaNevis updates restore the direct-download path.
+> **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS, `~/.config/avanevis` on Linux), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The in-app update banner opens the GitHub release page in your browser. It does not download or install the update.
 
 ## Develop
 
@@ -113,7 +113,7 @@ python3.11 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements-linux.txt -r requirements-dev.txt
 ```
 
-Linux capture uses Pulse/PipeWire (`docs/initiatives/LINUX_SUPPORT.md`). The `.venv` is for device enumeration, tests, and `npm start`. Packaged AppImage/pacman/deb builds use bundled Python 3.11 and ffmpeg (`npm run build:linux`). Linux AI features are CUDA-only and remain fail-closed without an admitted managed runtime; see the [compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) before making support claims.
+Linux capture uses Pulse/PipeWire (`docs/initiatives/LINUX_SUPPORT.md`). The `.venv` is for device enumeration, tests, and `npm start`. Packaged AppImage/pacman/deb builds use bundled Python 3.11 and ffmpeg (`npm run build:linux`). Linux AI features are CUDA-only and remain fail-closed without an admitted managed runtime. Current support boundaries are in [LINUX_EXPERIMENTAL.md](docs/guides/LINUX_EXPERIMENTAL.md) and the [v2.10 qualification record](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md). The [v2.9 compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) is historical release evidence.
 
 Then start the app from the repo root:
 
@@ -181,8 +181,8 @@ Codex, Claude Code, OpenCode and Cursor share root AGENTS.md and canonical on-de
 
 ## Audio quality
 
-- 48 kHz target sample rate end-to-end (Windows + macOS parity).
-- soxr VHQ resampling via shared `backend/audio/processor.py` (Windows capture rates and shared spool finalization on both platforms); macOS capture remains separate mix/align paths in `macos_recorder.py`.
+- 48 kHz target sample rate end-to-end on Windows, macOS, and Linux.
+- soxr VHQ resampling via shared `backend/audio/processor.py` (Windows and Linux capture rates, and shared spool finalization); macOS capture remains separate mix/align paths in `macos_recorder.py`.
 - Gentle mic enhancement (DC-offset removal, light normalization) — no aggressive denoising or compression. Desktop audio is left untouched.
 - Stereo output, Opus-compressed (≈ 95% size reduction vs WAV — a 40-minute meeting is roughly 23 MB).
 
@@ -215,8 +215,8 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
 - **Backend:** Python 3.11, bundled with the installer
 - **Transcription:** `faster-whisper` (Windows/Linux, CUDA optional), `lightning-whisper-mlx` (macOS, Metal); optional Parakeet v2 with pinned platform runtimes
 - **Local AI add-ons:** Speakrs (token-free native CLI) or `pyannote.audio` for Windows CUDA and macOS Apple Silicon speaker identification; pinned `llama.cpp` + GGUF for user-triggered summaries
-- **Audio capture:** `pyaudiowpatch` WASAPI loopback (Windows), `sounddevice` + native Swift `AudioCaptureHelper` using CoreAudio process taps on macOS 14.2+ with ScreenCaptureKit fallback
-- **Audio processing:** NumPy, soxr + ffmpeg (Opus) on Windows and macOS packaged builds; macOS also keeps scipy for the MLX stack
+- **Audio capture:** `pyaudiowpatch` WASAPI loopback (Windows), `sounddevice` + native Swift `AudioCaptureHelper` using CoreAudio process taps on macOS 14.2+ with ScreenCaptureKit fallback, Pulse/PipeWire on Linux
+- **Audio processing:** NumPy, soxr + ffmpeg (Opus) in packaged Windows, macOS, and Linux builds; macOS also keeps scipy for the MLX stack
 - **Updater:** GitHub Releases API + in-app banner (release page opens in browser)
 
 ## Documentation
@@ -234,7 +234,7 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
   - [Backend development notes](docs/development/BACKEND.md)
   - [GPU setup (CUDA)](docs/development/SETUP_GPU.md)
   - [Local AI model catalog](docs/development/LOCAL_AI_MODEL_CATALOG.md)
-  - [v2.9 dependency compatibility and acceptance evidence](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md)
+  - [v2.9 dependency compatibility and acceptance evidence](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) (historical)
   - [Speakrs soak / benchmarks](docs/development/SPEAKRS_BENCHMARKS.md)
   - [v2.10.0 release notes](docs/releases/v2.10.0.md)
   - [v2.10 Linux qualification and manual acceptance](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md)
