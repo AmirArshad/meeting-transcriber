@@ -10,7 +10,7 @@ On tag push, the publish job:
 
 1. Builds Windows `.exe` and macOS `.dmg` installers.
 2. Runs `node scripts/stage-release-legal-assets.js`, which:
-   - Verifies and attaches **`ffmpeg-8.0.1.tar.xz`** (SHA-256 pinned in `build/download-manifest.js`).
+   - Verifies and attaches **`ffmpeg-8.1.2.tar.xz`** (SHA-256 pinned in `build/download-manifest.js`).
    - Attaches **`THIRD_PARTY_NOTICES.md`** and **`avanevis-legal-<version>.zip`** (notices + legal snippets).
 3. Appends the FFmpeg section from `docs/development/RELEASE_FFMPEG_NOTICE.md` to GitHub release notes.
 
