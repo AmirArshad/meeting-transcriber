@@ -229,7 +229,8 @@ Still open, and already recorded below: AUR publishing, Apple notarization, and 
 preflight trusted-sender note; FFmpeg 8.1.2 Opus, recovery, and import checks on
 Windows and macOS; Windows embedded Python 3.11.9; the electron-builder sprintf-js
 exception through 2027-01-31; and real Windows pyannote diarization, which still
-needs a user token and the gated model. The October host gates did not repeat the
+needs a user token and the gated model. Python modernization is a separate branch,
+not work on `master`. The October host gates did not repeat the
 full manual checklists. The sequencing below records the earlier implementation order.
 
 ## How to sequence the work (historical)
@@ -363,6 +364,7 @@ Pyannote removal.
 - [ ] Claim `avanevis-bin` on the AUR and revisit AUR publishing automation later, likely around/after v3 rather than in v2.10.
 - [ ] Revisit Apple Developer signing/notarization later, likely around/after v3 and only when enrollment/timing make it worthwhile; retain ad-hoc macOS packaging checks meanwhile.
 - [ ] Revisit the pre-existing `run-recording-preflight` trusted-renderer-sender observation only as a separate security task.
+- [ ] Modernize Python to current 3.11 practice on its own branch: builtin generics, orderly imports, and a committed Ruff/basedpyright standard. Formatting and annotations first. Exception handling, file lifetime, and subprocess calls stay a later reviewed slice. Brief: [Python modernization](docs/superpowers/plans/2026-10-09-python-modernization.md).
 
 ## Release history
 
