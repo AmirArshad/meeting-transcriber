@@ -48,7 +48,7 @@ mdurl==0.1.2
 shellingham==1.5.4
 typing-extensions==4.16.0
 anyio==4.15.1
-mlx==0.32.2
+mlx==0.32.3
 # macOS-only companion of mlx. pip includes it only when the closure check runs on darwin.
 mlx-metal==0.32.2
 more-itertools==11.1.0
