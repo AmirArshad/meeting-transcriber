@@ -22,9 +22,10 @@ remains held for installer qualification. Future MLX updates are grouped.
 
 Local `npm run test:all` passed: 1,126 JS passed / 2 skipped and 848 Python
 passed / 7 skipped; syntax checks passed. Linux and Windows build-pin closure
-checks passed; all three Python inventories have zero audit findings. The
-combined update must pass Windows/macOS/Linux CI before advancing remote
-`master`. Review details and limits are in the
+checks passed; all three Python inventories have zero audit findings.
+[Combined CI on 6de9143](https://github.com/AmirArshad/meeting-transcriber/actions/runs/38381564578)
+passed all 13 jobs, including Windows/macOS/Linux packaging and audits, before
+the updates were pushed to `master`. Review details and limits are in the
 [October maintenance record](docs/development/DEPENDENCY_MAINTENANCE_2026-10.md#dependabot-follow-up--2026-10-13).
 
 ### Dependency maintenance — 2026-10-08

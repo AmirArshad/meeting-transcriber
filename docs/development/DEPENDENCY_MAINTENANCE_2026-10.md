@@ -248,6 +248,11 @@ The user authorized unattended dependency maintenance, commit and push.
   findings remain under the dated exception above.
 - `pip check`, workflow/Dependabot YAML parsing, agent setup validation and
   `git diff --check`: exit 0.
-- No hardware capture, Metal inference, managed AI-runtime upgrade or
-  installer acceptance is claimed. A temporary validation branch will run
-  the combined Windows/macOS/Linux CI before remote `master` advances.
+- [Combined CI on 6de9143](https://github.com/AmirArshad/meeting-transcriber/actions/runs/38381564578),
+  dispatched on a temporary validation branch: **all 13 jobs passed** before
+  advancing remote `master`. This includes native macOS dependency resolution,
+  Python/JS regressions, verified macOS and Windows packaged-app smokes,
+  Linux unpacked/AppImage/pacman/deb builds and verification, and all audits.
+- No hardware capture, Metal inference, managed AI-runtime upgrade or manual
+  installer acceptance is claimed. Electron-builder remains on hold. The
+  implementation commit is followed only by this documentation of CI results.
