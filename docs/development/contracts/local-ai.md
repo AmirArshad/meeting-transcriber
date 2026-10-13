@@ -1,5 +1,13 @@
 # Local AI contract
 
+**ONNX 1DS telemetry:** Every ordinary or isolated Python child forces
+`ORT_DISABLE_TELEMETRY=1` after environment overrides. Standalone transcription
+package imports set it before any optional native import. ONNX's Python disable
+API alone is too late for initialization telemetry; retain the process-start
+opt-out when changing CPU VAD or managed ONNX runtimes.
+Legacy Windows TraceLogging does not implement this environment opt-out and
+requires separate qualification before a wheel update is admitted.
+
 No cloud transcription, diarization, summaries, telemetry, or background downloads. Pyannote uses only the user's safeStorage-protected token: never log, proxy, persist, or pass it except via stdin; clear all HF token environment variables and set `HF_TOKEN_PATH` to `os.devNull`, never an empty string. Speakrs and Pyannote are exclusive; Linux permits Speakrs only, CUDA-only, with no CPU fallback.
 
 Catalogs own model refs, URLs, names, checksums, and runtime pins. Downloads are HTTPS and explicitly host-allowlisted; archives are hash-checked and traversal-guarded. Setup/validate full-hash catalog pins, compute rehashes changed fingerprints, and neither trusts user-writable `install.json`. Parakeet compute checks model, VAD and runtime catalog hashes before its live runtime probe (and before the guided speaker pass), reusing only process-local evidence for unchanged absolute path, size, mtime and ctime. Runtime tree checks remain live on every admission. Summary sidecars are never removed after metadata commit.

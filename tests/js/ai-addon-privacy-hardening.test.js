@@ -19,6 +19,43 @@ const { collectConfiguredDownloadHosts } = require('../../src/ai-addon/download-
 const { resolvePreferredTarExecutable } = require('../../src/ai-addon-archive-helpers');
 const { AI_MODEL_CATALOG } = require('../../src/ai-addon-state');
 
+test('ordinary and isolated Python children force ONNX 1DS opt-out before startup', () => {
+  const previous = process.env.ORT_DISABLE_TELEMETRY;
+  const previousResourcesPath = process.resourcesPath;
+  process.resourcesPath = os.tmpdir();
+  process.env.ORT_DISABLE_TELEMETRY = '0';
+  try {
+    for (const isPackaged of [false, true]) {
+      const captured = [];
+      const runtime = createPythonRuntime({
+        app: { isPackaged },
+        spawn(_cmd, _args, options) {
+          captured.push(options.env);
+          return new EventEmitter();
+        },
+        path,
+        fs: require('node:fs'),
+        dirname: path.join(__dirname, '..', '..', 'src'),
+      });
+      for (const override of ['0', undefined]) {
+        assert.equal(runtime.buildPythonEnv({ ORT_DISABLE_TELEMETRY: override }).ORT_DISABLE_TELEMETRY, '1');
+        for (const isolatedPythonPath of [false, true]) {
+          runtime.spawnTrackedPython(['-c', 'pass'], {
+            isolatedPythonPath,
+            env: { ORT_DISABLE_TELEMETRY: override },
+          });
+          assert.equal(captured.at(-1).ORT_DISABLE_TELEMETRY, '1');
+        }
+      }
+    }
+  } finally {
+    if (previousResourcesPath === undefined) delete process.resourcesPath;
+    else process.resourcesPath = previousResourcesPath;
+    if (previous === undefined) delete process.env.ORT_DISABLE_TELEMETRY;
+    else process.env.ORT_DISABLE_TELEMETRY = previous;
+  }
+});
+
 function createFakeValidationChild({ writeThrows = false, emitStdinError = false } = {}) {
   const proc = new EventEmitter();
   proc.stdout = new EventEmitter();

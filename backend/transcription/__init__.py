@@ -1,6 +1,11 @@
 """Transcription module with platform-specific implementations."""
 
+import os
 import platform
+
+# Apply before optional native imports for standalone CLI use as well as Electron.
+# ONNX's Python disable API alone can be too late for initialization telemetry.
+os.environ['ORT_DISABLE_TELEMETRY'] = '1'
 
 
 def _get_transcriber_class():

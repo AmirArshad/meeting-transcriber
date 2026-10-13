@@ -282,3 +282,48 @@ re-resolved to base-package versions. The second batch's refreshed local
 all three Python inventory audits (zero findings), `pip check` and diff checks
 passed. Final native CI is available through the follow-up commit's checks; the
 first batch's passing CI is recorded above.
+
+### Held-update qualification — 2026-10-13
+
+The user authorized further work on the remaining holds. The reviewed
+26.17.0 electron-builder proposal is under full native installer qualification,
+rather than treating unpacked-app CI as installer evidence. CI now has a
+`qualify_installers` manual input, default false: it builds Windows NSIS and
+macOS DMG without publishing, silently installs/verifies/uninstalls NSIS on
+its disposable runner, and verifies the sealed app mounted from the DMG
+read-only. Linux retains its unpacked/AppImage/pacman/deb checks. Installed
+Windows resources must match the hashes of the qualified unpacked build.
+
+**ONNX Runtime: admit 1.31.0 on Linux only, subject to final native CI.**
+[Upstream's process-start opt-out](https://github.com/microsoft/onnxruntime/blob/v1.31.0/docs/Privacy.md)
+is `ORT_DISABLE_TELEMETRY=1`; its Python disable API alone may be too late for
+an initialization event. The main Python runtime forces the opt-out after
+caller overrides/unsets, including isolated Parakeet children. Standalone
+transcription package initialization sets it before optional native imports.
+This suppresses 1DS initialization/uploader/device-ID creation on builds that
+implement that opt-out; it does not qualify legacy Windows TraceLogging.
+
+- The actual Linux 1.31.0 Python 3.11 wheel contains the opt-out. Using the
+  already-bundled Silero VAD model, actual 1.30.0/1.31.0 subprocesses produced
+  matching finite probabilities (rtol 1e-5 / atol 1e-6), identical speech
+  boundaries on the two-speaker fixture, and no speech on silence.
+- `strace -f -e trace=network` of both workers showed **no network syscalls**.
+  All ORT-recognized CI/unit-test environment flags were set to false inside
+  the workers, so automatic CI suppression cannot substitute for the app opt-out.
+- The actual Windows `onnxruntime-1.31.0-cp311-cp311-win_amd64.whl` has
+  TraceLogging markers in its native DLL/PYD and lacks both ASCII and UTF-16
+  `ORT_DISABLE_TELEMETRY` strings. Upstream documents that legacy TraceLogging
+  ignores this variable. **Windows stays at 1.30.0**; PR #125 remains partially
+  held until that wheel has separate privacy qualification. No claim is made
+  that the existing app uploads telemetry. Managed ORT artifact pins stay unchanged.
+- Privacy regressions cover ordinary/isolated children in dev and packaged
+  mode, hostile overrides/unsets, and standalone imports before native loading.
+- Local `npm run test:all`: **1,127 JS passed / 2 skipped**, **849 Python passed /
+  7 skipped**, both syntax gates passed. Focused privacy/packaging checks:
+  **71 passed**. Bash and actual PowerShell parser checks passed.
+- Linux/Windows closure checks and exact-inventory audits passed (zero Python
+  findings); npm's existing eight moderate sprintf-js findings remain. This
+  toolchain update does not resolve that separate dated exception.
+- Native installer qualification is required before remote master advances.
+  Hardware audio, GPU inference, Developer ID/notarization and interactive
+  installer acceptance are not inferred from the automated qualification.

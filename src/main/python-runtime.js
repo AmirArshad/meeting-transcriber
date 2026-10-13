@@ -216,6 +216,9 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
         delete env[key];
       }
     }
+    // Suppress ONNX's uploader/device identifier before native initialization.
+    // The Python disable API can run after an initialization event was emitted.
+    env.ORT_DISABLE_TELEMETRY = '1';
     // Packaged children always see AVANEVIS_PACKAGED=1; callers cannot override it.
     if (app.isPackaged) {
       env.AVANEVIS_PACKAGED = '1';
@@ -238,6 +241,7 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
    */
   function isolatedPythonEnv(env) {
     const isolated = { ...(env || {}) };
+    isolated.ORT_DISABLE_TELEMETRY = '1';
     if (app.isPackaged) {
       isolated.AVANEVIS_PACKAGED = '1';
       isolated.PYTHONNOUSERSITE = '1';
