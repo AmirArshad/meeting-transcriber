@@ -20,7 +20,7 @@ lightning-whisper-mlx==0.0.10
 scipy==1.17.1
 filelock==4.0.12
 cffi==2.1.1
-pycparser==3.0
+pycparser==3.11
 tiktoken==0.3.3
 regex==2026.9.29
 requests==2.34.2
