@@ -1,12 +1,18 @@
 # Local AI contract
 
-**ONNX 1DS telemetry:** Every ordinary or isolated Python child forces
-`ORT_DISABLE_TELEMETRY=1` after environment overrides. Standalone transcription
-package imports set it before any optional native import. ONNX's Python disable
+**ONNX telemetry:** Every ordinary or isolated Python child forces
+`ORT_DISABLE_TELEMETRY=1` and `ORT_RUNNING_UNIT_TESTS=1` after environment
+overrides. Standalone transcription package imports set both before any optional
+native import. ONNX's Python disable
 API alone is too late for initialization telemetry; retain the process-start
 opt-out when changing CPU VAD or managed ONNX runtimes.
-Legacy Windows TraceLogging does not implement this environment opt-out and
-requires separate qualification before a wheel update is admitted.
+Legacy Windows TraceLogging ignores the public 1DS opt-out. For the pinned
+base ONNX 1.31.0 wheel, the internal `ORT_RUNNING_UNIT_TESTS` signal skips ETW
+provider registration; a complete upstream source scan found only telemetry
+uses in production. Keep native Windows CI's active ETW collector, unsuppressed
+positive control and guarded real VAD run when changing that pin: this internal
+switch is a qualified implementation detail, not a stable public API. Managed
+Speakrs/Parakeet runtime pins retain their separate qualification requirements.
 
 No cloud transcription, diarization, summaries, telemetry, or background downloads. Pyannote uses only the user's safeStorage-protected token: never log, proxy, persist, or pass it except via stdin; clear all HF token environment variables and set `HF_TOKEN_PATH` to `os.devNull`, never an empty string. Speakrs and Pyannote are exclusive; Linux permits Speakrs only, CUDA-only, with no CPU fallback.
 

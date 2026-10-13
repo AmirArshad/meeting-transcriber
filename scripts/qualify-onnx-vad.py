@@ -31,7 +31,11 @@ def worker(site_packages, windows_telemetry_guard=False):
         os.environ[key] = '0'
     if windows_telemetry_guard:
         assert sys.platform == 'win32', 'Windows telemetry qualification requires Windows'
-        os.environ['ORT_RUNNING_UNIT_TESTS'] = '1'
+        # Exercise the actual standalone application boundary after hostile
+        # environment values, rather than duplicating its guard in this probe.
+        sys.path.insert(0, str(ROOT / 'backend'))
+        import transcription  # noqa: F401
+        assert os.environ['ORT_RUNNING_UNIT_TESTS'] == '1'
     if site_packages:
         sys.path.insert(0, str(Path(site_packages).resolve()))
     import numpy as np

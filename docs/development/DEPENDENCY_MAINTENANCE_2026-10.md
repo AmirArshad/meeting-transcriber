@@ -335,3 +335,37 @@ implement that opt-out; it does not qualify legacy Windows TraceLogging.
   locally with `network_checked: true`; final master CI checks the same path.
 - Hardware audio, GPU inference, Developer ID/notarization and interactive
   installer acceptance are not inferred from the automated qualification.
+
+### Windows ONNX follow-up — 2026-10-13
+
+The earlier Windows hold was incomplete investigation, not a request for user
+hardware work. The actual 1.31 wheel uses legacy ETW: the public 1DS opt-out alone
+cannot suppress it, and the Python module creates its environment before exposing
+its disable API. [The pinned Windows provider constructor](https://github.com/microsoft/onnxruntime/blob/v1.31.0/onnxruntime/core/platform/windows/telemetry.cc)
+skips ETW registration entirely when `ORT_RUNNING_UNIT_TESTS=1` is set before
+import. A complete scan of the v1.31 source archive found production uses of that
+signal only in telemetry; it does not alter inference. This is an internal,
+version-specific switch and must retain native qualification on future upgrades.
+
+- [Initial native Windows qualification on f20a0e3](https://github.com/AmirArshad/meeting-transcriber/actions/runs/38398259492)
+  recorded **20 ETW events** for the unsuppressed candidate worker and **zero** for
+  the guarded worker. The collector started before Python import and filtered
+  the actual ONNX provider GUID and worker PID. All automatic CI flags were false
+  inside both workers; the internal flag was enabled only for the guarded case.
+- Candidate 1.31.0 matched baseline 1.30.0 CPU Silero VAD probabilities and exact
+  speech boundaries on the existing two-speaker fixture; silence remained empty.
+  No model downloads or user recording data were involved.
+- Ordinary and isolated Python children now force both suppression variables
+  after overrides/unsets; standalone transcription imports do so before optional
+  native imports. Hostile-environment regressions failed before the change and
+  passed afterward. The Windows native gate now invokes that actual application
+  import boundary, retaining its unsuppressed control.
+- Adopt 1.31.0 in the Windows base build pins. Managed Speakrs/Parakeet artifacts
+  retain their separately qualified versions. CTranslate2 4.8.3 remains held.
+- Fresh local full gate passed: **1,127 JS passed / 2 skipped**, **849 Python
+  passed / 7 skipped**, syntax gates clean. Linux native VAD/network tracing and
+  PowerShell parsing passed. The first local attempt exhausted temporary storage
+  during source extraction; disposable audit files were removed and the complete
+  gate rerun successfully.
+- Final native application-boundary and installer qualification is recorded below
+  once the reviewed candidate completes CI; no release publication is performed.

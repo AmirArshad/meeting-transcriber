@@ -28,7 +28,7 @@ try {
     $env:PYTHONNOUSERSITE = '1'
     $env:PYTHONDONTWRITEBYTECODE = '1'
     $env:ORT_DISABLE_TELEMETRY = '1'
-    & (Join-Path $installDir 'resources/python/python.exe') -c "import onnxruntime, faster_whisper; print(onnxruntime.__version__)"
+    & (Join-Path $installDir 'resources/python/python.exe') -c "import os; os.environ['ORT_RUNNING_UNIT_TESTS']='0'; import transcription; assert os.environ['ORT_RUNNING_UNIT_TESTS']=='1'; import onnxruntime, faster_whisper; assert onnxruntime.__version__=='1.31.0'; print(onnxruntime.__version__)"
     if ($LASTEXITCODE -ne 0) { throw 'Installed Python runtime imports failed' }
     & (Join-Path $installDir 'resources/ffmpeg/ffmpeg.exe') -version
     if ($LASTEXITCODE -ne 0) { throw 'Installed FFmpeg failed' }

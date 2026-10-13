@@ -19,11 +19,13 @@ const { collectConfiguredDownloadHosts } = require('../../src/ai-addon/download-
 const { resolvePreferredTarExecutable } = require('../../src/ai-addon-archive-helpers');
 const { AI_MODEL_CATALOG } = require('../../src/ai-addon-state');
 
-test('ordinary and isolated Python children force ONNX 1DS opt-out before startup', () => {
+test('ordinary and isolated Python children suppress both ONNX telemetry providers before startup', () => {
   const previous = process.env.ORT_DISABLE_TELEMETRY;
+  const previousWindowsGuard = process.env.ORT_RUNNING_UNIT_TESTS;
   const previousResourcesPath = process.resourcesPath;
   process.resourcesPath = os.tmpdir();
   process.env.ORT_DISABLE_TELEMETRY = '0';
+  process.env.ORT_RUNNING_UNIT_TESTS = '0';
   try {
     for (const isPackaged of [false, true]) {
       const captured = [];
@@ -38,13 +40,17 @@ test('ordinary and isolated Python children force ONNX 1DS opt-out before startu
         dirname: path.join(__dirname, '..', '..', 'src'),
       });
       for (const override of ['0', undefined]) {
-        assert.equal(runtime.buildPythonEnv({ ORT_DISABLE_TELEMETRY: override }).ORT_DISABLE_TELEMETRY, '1');
+        const overrides = { ORT_DISABLE_TELEMETRY: override, ORT_RUNNING_UNIT_TESTS: override };
+        const env = runtime.buildPythonEnv(overrides);
+        assert.equal(env.ORT_DISABLE_TELEMETRY, '1');
+        assert.equal(env.ORT_RUNNING_UNIT_TESTS, '1');
         for (const isolatedPythonPath of [false, true]) {
           runtime.spawnTrackedPython(['-c', 'pass'], {
             isolatedPythonPath,
-            env: { ORT_DISABLE_TELEMETRY: override },
+            env: overrides,
           });
           assert.equal(captured.at(-1).ORT_DISABLE_TELEMETRY, '1');
+          assert.equal(captured.at(-1).ORT_RUNNING_UNIT_TESTS, '1');
         }
       }
     }
@@ -53,6 +59,8 @@ test('ordinary and isolated Python children force ONNX 1DS opt-out before startu
     else process.resourcesPath = previousResourcesPath;
     if (previous === undefined) delete process.env.ORT_DISABLE_TELEMETRY;
     else process.env.ORT_DISABLE_TELEMETRY = previous;
+    if (previousWindowsGuard === undefined) delete process.env.ORT_RUNNING_UNIT_TESTS;
+    else process.env.ORT_RUNNING_UNIT_TESTS = previousWindowsGuard;
   }
 });
 

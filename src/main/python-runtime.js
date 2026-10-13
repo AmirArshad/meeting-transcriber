@@ -219,6 +219,10 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
     // Suppress ONNX's uploader/device identifier before native initialization.
     // The Python disable API can run after an initialization event was emitted.
     env.ORT_DISABLE_TELEMETRY = '1';
+    // Pinned ORT 1.31's legacy Windows provider ignores the public opt-out.
+    // This telemetry-only internal switch skips ETW registration entirely;
+    // native Windows CI tests it with a collecting trace and positive control.
+    env.ORT_RUNNING_UNIT_TESTS = '1';
     // Packaged children always see AVANEVIS_PACKAGED=1; callers cannot override it.
     if (app.isPackaged) {
       env.AVANEVIS_PACKAGED = '1';
@@ -242,6 +246,7 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
   function isolatedPythonEnv(env) {
     const isolated = { ...(env || {}) };
     isolated.ORT_DISABLE_TELEMETRY = '1';
+    isolated.ORT_RUNNING_UNIT_TESTS = '1';
     if (app.isPackaged) {
       isolated.AVANEVIS_PACKAGED = '1';
       isolated.PYTHONNOUSERSITE = '1';

@@ -6,6 +6,9 @@ import platform
 # Apply before optional native imports for standalone CLI use as well as Electron.
 # ONNX's Python disable API alone can be too late for initialization telemetry.
 os.environ['ORT_DISABLE_TELEMETRY'] = '1'
+# ORT 1.31's internal telemetry-only signal prevents legacy Windows ETW
+# registration. Keep the native ETW positive-control gate when changing pins.
+os.environ['ORT_RUNNING_UNIT_TESTS'] = '1'
 
 
 def _get_transcriber_class():
