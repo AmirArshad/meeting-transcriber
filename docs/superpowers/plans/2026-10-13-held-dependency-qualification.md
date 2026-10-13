@@ -21,7 +21,7 @@
 
 **Files:** `src/main/python-runtime.js`, `backend/transcription/__init__.py`, `tests/js/ai-addon-privacy-hardening.test.js`, `tests/python/test_transcription_privacy.py`, `scripts/qualify-onnx-vad.py`, `.github/workflows/ci.yml`, `requirements-linux-build.txt`, `requirements-windows-build.txt`, `docs/development/contracts/local-ai.md`.
 
-**Implementation:** Force `ORT_DISABLE_TELEMETRY=1` for ordinary and isolated Python children, after caller overrides/unsets, and for standalone transcription package imports before optional native imports. Compare ONNX Runtime 1.30.0 and 1.31.0 VAD probabilities and speech boundaries on the real two-speaker fixture and silence, using the bundled Silero model and CPU provider. Check the actual candidate native wheels and Linux network syscalls with suppression enabled. Adopt 1.31.0 only where qualification passes. The downloaded Windows 1.31.0 wheel lacks the opt-out and retains TraceLogging, so Windows remains 1.30.0; Linux passes the opt-out and actual VAD/network checks.
+**Implementation:** Force `ORT_DISABLE_TELEMETRY=1` for ordinary and isolated Python children, after caller overrides/unsets, and for standalone transcription package imports before optional native imports. Compare ONNX Runtime 1.30.0 and 1.31.0 VAD probabilities and speech boundaries on the real two-speaker fixture and silence, using the bundled Silero model and CPU provider. Check the actual candidate native wheels and Linux network syscalls with suppression enabled. Adopt 1.31.0 only where qualification passes. The downloaded Windows 1.31.0 wheel lacks the opt-out and retains TraceLogging, so the initial stage held Windows at 1.30.0; Linux passed the opt-out and actual VAD/network checks. The Windows follow-up below supersedes that hold.
 
 **Validation:** Focused JS/Python privacy tests, actual native VAD comparisons, Linux network tracing, all target dependency closure/audits and `npm run test:all`.
 
@@ -50,7 +50,7 @@
 **Decision:** ONNX 1.31's Python module creates its native environment before
 exposing the disable API. The legacy Windows provider ignores the public 1DS
 environment opt-out. Its internal `ORT_RUNNING_UNIT_TESTS=1` signal instead skips
-ETW registration; a complete source scan finds only telemetry uses in production.
+ETW registration; a C++/Python source audit finds only telemetry uses in production.
 Qualify that exact pinned behavior with an active Windows ETW collector, a real
 unsuppressed positive control and a guarded worker running the bundled VAD model.
 Require matching baseline/candidate VAD results. Adopt the Windows pin only if

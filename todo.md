@@ -19,8 +19,11 @@ in the unsuppressed control, zero with pre-import suppression, and matching CPU
 VAD results against 1.30.0. The internal suppression signal has telemetry-only
 production uses in the pinned upstream source. Both Python spawn and standalone
 import boundaries enforce it. Hostile-environment regressions and the full local
-gate passed (1,127 JS / 849 Python; 2 / 7 skipped). Final application-boundary CI
-and installer qualification are in progress; see the
+gate passed (1,127 JS / 849 Python; 2 / 7 skipped).
+[Final native qualification](https://github.com/AmirArshad/meeting-transcriber/actions/runs/38398973062)
+passed all 13 jobs, including the actual application startup guard and Windows
+NSIS install/bundled ONNX 1.31.0 import/uninstall. This supersedes the historical
+Windows hold below. No user-side Windows task remains for this base update; see the
 [maintenance record](docs/development/DEPENDENCY_MAINTENANCE_2026-10.md#windows-onnx-follow-up--2026-10-13).
 
 ### Remaining dependency qualification — 2026-10-13

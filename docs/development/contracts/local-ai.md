@@ -8,8 +8,8 @@ API alone is too late for initialization telemetry; retain the process-start
 opt-out when changing CPU VAD or managed ONNX runtimes.
 Legacy Windows TraceLogging ignores the public 1DS opt-out. For the pinned
 base ONNX 1.31.0 wheel, the internal `ORT_RUNNING_UNIT_TESTS` signal skips ETW
-provider registration; a complete upstream source scan found only telemetry
-uses in production. Keep native Windows CI's active ETW collector, unsuppressed
+provider registration; an audit of upstream C++/Python sources found only
+telemetry uses in production. Keep native Windows CI's active ETW collector, unsuppressed
 positive control and guarded real VAD run when changing that pin: this internal
 switch is a qualified implementation detail, not a stable public API. Managed
 Speakrs/Parakeet runtime pins retain their separate qualification requirements.

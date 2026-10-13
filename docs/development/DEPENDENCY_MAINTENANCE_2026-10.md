@@ -343,11 +343,11 @@ hardware work. The actual 1.31 wheel uses legacy ETW: the public 1DS opt-out alo
 cannot suppress it, and the Python module creates its environment before exposing
 its disable API. [The pinned Windows provider constructor](https://github.com/microsoft/onnxruntime/blob/v1.31.0/onnxruntime/core/platform/windows/telemetry.cc)
 skips ETW registration entirely when `ORT_RUNNING_UNIT_TESTS=1` is set before
-import. A complete scan of the v1.31 source archive found production uses of that
-signal only in telemetry; it does not alter inference. This is an internal,
+import. A scan of the C++ and Python sources in the v1.31 archive found production
+uses of that signal only in telemetry; it does not alter inference. This is an internal,
 version-specific switch and must retain native qualification on future upgrades.
 
-- [Initial native Windows qualification on f20a0e3](https://github.com/AmirArshad/meeting-transcriber/actions/runs/38398259492)
+- [Initial native Windows qualification on f20a0e3](https://github.com/AmirArshad/meeting-transcriber/actions/runs/38398259492/job/115298928517)
   recorded **20 ETW events** for the unsuppressed candidate worker and **zero** for
   the guarded worker. The collector started before Python import and filtered
   the actual ONNX provider GUID and worker PID. All automatic CI flags were false
@@ -367,5 +367,14 @@ version-specific switch and must retain native qualification on future upgrades.
   PowerShell parsing passed. The first local attempt exhausted temporary storage
   during source extraction; disposable audit files were removed and the complete
   gate rerun successfully.
-- Final native application-boundary and installer qualification is recorded below
-  once the reviewed candidate completes CI; no release publication is performed.
+- [Final native qualification on ce08c6e](https://github.com/AmirArshad/meeting-transcriber/actions/runs/38398973062)
+  passed **all 13 jobs**. Through the actual standalone application boundary,
+  the Windows control emitted **20 ETW events** and the guarded worker **zero**.
+  The NSIS installer installed resources matching the qualified build, loaded
+  bundled ONNX **1.31.0** after the real startup guard overrode a hostile value,
+  and uninstalled successfully. The macOS read-only DMG and Linux package checks
+  passed; Linux VAD still matched with no native network calls. All dependency
+  audit jobs passed. Existing optional documentation lint warnings remain.
+- No release was published. Hardware audio/GPU acceptance and managed runtime
+  qualifications are unchanged; Windows base CPU VAD no longer needs a user-side
+  qualification task for this update.
