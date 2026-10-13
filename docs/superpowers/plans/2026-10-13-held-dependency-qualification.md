@@ -40,3 +40,24 @@
 **Implementation:** Record source evidence, exact qualification outcomes and remaining hardware/signing limits. Commit and push validated changes, verify final CI and local/remote equality, and close superseded Dependabot PRs.
 
 **Validation:** Final diff check, fresh full gate, installer CI conclusions and clean master synchronized with origin.
+
+### Windows follow-up: qualify pre-import ETW suppression
+
+**Files:** `scripts/qualify-windows-onnx.ps1`, `scripts/qualify-onnx-vad.py`,
+`.github/workflows/ci.yml`, the Python spawn/import boundaries and privacy tests,
+`requirements-windows-build.txt`, the local-AI contract and maintenance/status logs.
+
+**Decision:** ONNX 1.31's Python module creates its native environment before
+exposing the disable API. The legacy Windows provider ignores the public 1DS
+environment opt-out. Its internal `ORT_RUNNING_UNIT_TESTS=1` signal instead skips
+ETW registration; a complete source scan finds only telemetry uses in production.
+Qualify that exact pinned behavior with an active Windows ETW collector, a real
+unsuppressed positive control and a guarded worker running the bundled VAD model.
+Require matching baseline/candidate VAD results. Adopt the Windows pin only if
+native evidence passes; keep the ETW gate for future upgrades because the switch
+is internal. No OS privacy settings change and no recordings/models download.
+
+**Validation:** Windows ETW positive control must emit events from the worker;
+startup-suppressed candidate must emit zero events. Check native CPU VAD parity,
+spawn/standalone hostile-environment regressions, full local gate, native installer
+qualification and final master CI. Work inline under existing commit/push approval.

@@ -49,6 +49,14 @@ jobs:
     - name: Run Python unit tests
       run: python -m pytest tests/python
 
+    - name: Qualify Windows ONNX telemetry and CPU VAD
+      shell: pwsh
+      run: |
+        $baseline = Join-Path $env:RUNNER_TEMP 'onnxruntime-1.30.0-baseline'
+        python -m pip install --no-deps --target $baseline onnxruntime==1.30.0
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        ./scripts/qualify-windows-onnx.ps1 -BaselineSitePackages $baseline
+
     - name: Validate Python syntax (recursive under backend/)
       run: python scripts/check_python_syntax.py
 

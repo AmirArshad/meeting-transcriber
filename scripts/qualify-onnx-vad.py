@@ -22,13 +22,16 @@ os.environ['ORT_DISABLE_TELEMETRY'] = '1'
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def worker(site_packages):
+def worker(site_packages, windows_telemetry_guard=False):
     # Exercise the app's opt-out instead of ORT's automatic CI suppression.
     for key in ('CI', 'TF_BUILD', 'GITHUB_ACTIONS', 'GITLAB_CI', 'CIRCLECI',
                 'TRAVIS', 'JENKINS_URL', 'CODEBUILD_BUILD_ID', 'BUILDKITE',
                 'TEAMCITY_VERSION', 'APPVEYOR', 'BITBUCKET_BUILD_NUMBER',
                 'SYSTEM_TEAMFOUNDATIONCOLLECTIONURI', 'ORT_RUNNING_UNIT_TESTS'):
         os.environ[key] = '0'
+    if windows_telemetry_guard:
+        assert sys.platform == 'win32', 'Windows telemetry qualification requires Windows'
+        os.environ['ORT_RUNNING_UNIT_TESTS'] = '1'
     if site_packages:
         sys.path.insert(0, str(Path(site_packages).resolve()))
     import numpy as np
@@ -51,7 +54,8 @@ def worker(site_packages):
         else:
             assert segments == [], 'Silence must remain empty'
         cases[name] = {'probabilities': probabilities.tolist(), 'segments': segments}
-    return {'version': ort.__version__, 'telemetry_opt_out': os.environ['ORT_DISABLE_TELEMETRY'],
+    return {'version': ort.__version__, 'pid': os.getpid(),
+            'telemetry_opt_out': os.environ['ORT_DISABLE_TELEMETRY'],
             'fixture_sha256': hashlib.sha256(audio.tobytes()).hexdigest(), 'cases': cases}
 
 
@@ -60,12 +64,14 @@ def main():
     parser.add_argument('--baseline-site-packages')
     parser.add_argument('--check-network', action='store_true',
                         help='Require Linux strace and reject native network syscalls')
+    parser.add_argument('--windows-telemetry-guard', action='store_true',
+                        help='Exercise the pinned Windows pre-import ETW suppression')
     parser.add_argument('--worker', action='store_true')
     parser.add_argument('--site-packages')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     if args.worker:
-        result = worker(args.site_packages)
+        result = worker(args.site_packages, args.windows_telemetry_guard)
         if args.output:
             args.output.write_text(json.dumps(result), encoding='utf-8')
         else:
@@ -84,6 +90,8 @@ def main():
             command = [sys.executable, str(Path(__file__).resolve()), '--worker', '--output', str(output)]
             if packages:
                 command += ['--site-packages', packages]
+            if args.windows_telemetry_guard:
+                command += ['--windows-telemetry-guard']
             trace = Path(temp) / f'{index}.network'
             if args.check_network:
                 command = ['strace', '-f', '-e', 'trace=network', '-o', str(trace), *command]
