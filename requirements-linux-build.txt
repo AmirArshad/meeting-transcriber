@@ -9,7 +9,7 @@ pycparser==3.0
 numpy==2.4.6
 soxr==1.1.0
 faster-whisper==1.2.1
-filelock==4.0.12
+filelock==4.1.0
 av==18.1.0
 # 4.8.2 matched packaged 4.8.1 CUDA and CPU transcripts on CachyOS managed CUDA, 2026-10-08.
 ctranslate2==4.8.2
