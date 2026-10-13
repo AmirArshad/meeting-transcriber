@@ -256,3 +256,29 @@ The user authorized unattended dependency maintenance, commit and push.
 - No hardware capture, Metal inference, managed AI-runtime upgrade or manual
   installer acceptance is claimed. Electron-builder remains on hold. The
   implementation commit is followed only by this documentation of CI results.
+
+### Newly unblocked proposals and complete base-pin scan
+
+Closing the initial six superseded PRs freed Dependabot slots and exposed four
+more proposals. A publisher-metadata scan of every unique package in the three
+base build requirement files and `npm outdated` checked the remaining candidates.
+
+| Candidate | Decision |
+|---|---|
+| [#123 filelock 4.1.0](https://github.com/AmirArshad/meeting-transcriber/pull/123) | Supersede with **4.1.1**, the current compatible Python 3.11 release. [4.1.1 fixes the macOS SQLite descriptor lookup](https://github.com/tox-dev/filelock/blob/main/docs/changelog.rst). Application locks use supported numeric timeout/blocking options; actual cross-process exclusion, release and killed-owner recovery pass. |
+| [#124 pycparser 3.11](https://github.com/AmirArshad/meeting-transcriber/pull/124) | Accept in Linux/macOS closures. [C11 support and parser fixes](https://github.com/eliben/pycparser/releases/tag/release_v3.11) preserve the CFFI consumer; the real SoundCard PulseAudio declarations parse and a libpulse function call succeeds with CFFI 2.1.1. No microphone or desktop audio capture is claimed. |
+| [#126 tokenizers 0.23.3](https://github.com/AmirArshad/meeting-transcriber/pull/126) | Accept in Windows/Linux closures. [The Python patch restores overflowing/truncation behavior](https://github.com/huggingface/tokenizers/releases/tag/v0.23.3); the Rust tokenizer core is unchanged. Actual WordPiece batch encoding, decoding and truncation overflow checks pass. Keep huggingface-hub 1.33.0: relaxing the tokenizer's version range does not qualify the app for the hub 2.x API migration. |
+| [#125 ONNX Runtime 1.31.0](https://github.com/AmirArshad/meeting-transcriber/pull/125) | Hold at 1.30.0. [Upstream announces native-build telemetry-default changes and removed experimental API entries](https://github.com/microsoft/onnxruntime/releases/tag/v1.31.0). The new Windows/Linux wheels need explicit privacy and VAD qualification before this privacy-first app adopts them. This is a hold, not a claim that the current app sends telemetry. Managed Speakrs and Parakeet ORT artifacts remain separate. |
+| CTranslate2 4.8.3, released October 13 | Hold at the qualified 4.8.2. [Upstream changes CUDA TopK and Windows native shutdown handling](https://github.com/OpenNMT/CTranslate2/releases/tag/v4.8.3); no matching CPU/CUDA transcription or Windows teardown qualification exists for the new wheels. |
+| NumPy 2.5.4, PyAV 19.0.1, SciPy 1.18.1, NetworkX 3.7 | Preserve Python 3.11 ceilings: the current releases require Python >=3.12. |
+| huggingface-hub 2.2.0, tiktoken 0.14.0, mpmath 1.4.1 | Preserve the qualified hub 1.x API, lightning-whisper-mlx's exact tiktoken 0.3.3 requirement, and SymPy's mpmath <1.4 requirement. |
+
+All other base Python build pins matched their publisher's current version at
+this scan. The npm scan identified only the already-held electron-builder update.
+The isolated add-on locks/catalog and native artifact pins are not silently
+re-resolved to base-package versions. The second batch's refreshed local
+`npm run test:all` exited 0: **1,126 JS passed / 2 skipped**, **848 Python passed /
+7 skipped**, both syntax gates passed. Linux/Windows build-pin closure checks,
+all three Python inventory audits (zero findings), `pip check` and diff checks
+passed. Final native CI is available through the follow-up commit's checks; the
+first batch's passing CI is recorded above.

@@ -40,3 +40,11 @@
 **Implementation:** Record all seven PR decisions, sources, verification results and platform limits. Inspect final diff, commit the dependency changes, validate the combined update in CI before advancing origin/master where practical, and reconcile superseded Dependabot PRs.
 
 **Validation:** `git diff --check`, fresh full gate, GitHub CI conclusions, and local/remote commit equality after push.
+
+### Task 4: Review newly unblocked proposals and remaining pins
+
+**Files:** `requirements-common.txt`, `requirements-dev.txt`, `requirements.txt`, `requirements-{linux,macos,windows}.txt`, `requirements-{linux,macos,windows}-build.txt`, `docs/development/DEPENDENCY_MAINTENANCE_2026-10.md`, `todo.md`.
+
+**Implementation:** Closing the first batch freed Dependabot slots and exposed four more proposals. Accept tokenizers 0.23.3 and pycparser 3.11 after actual tokenizer/CFFI checks. Advance filelock to 4.1.1 instead of proposed 4.1.0, including its macOS SQLite fix. Hold ONNX Runtime 1.31.0 for the upstream telemetry-default/API changes, CTranslate2 4.8.3 for native CPU/CUDA qualification, and the existing Python/dependency ceilings. Scan all base build pins against publisher metadata to avoid further partial batches.
+
+**Validation:** Real tokenizer truncation/round trips, SoundCard CFFI declarations, cross-process filelock recovery, full automated gate, platform closure/audits, final master CI and remote commit equality.

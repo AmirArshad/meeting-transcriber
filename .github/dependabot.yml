@@ -43,7 +43,7 @@ updates:
       - dependency-name: librosa
         versions: [">=1"]
       - dependency-name: huggingface-hub
-        versions: [">=2"]         # tokenizers requires huggingface-hub <2
+        versions: [">=2"]         # 2.x API migration is not qualified for the app
       - dependency-name: mpmath
         versions: [">=1.4"]       # sympy requires mpmath <1.4
       # lightning-whisper-mlx pins tiktoken==0.3.3. Review by 2027-01-31 or

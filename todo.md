@@ -14,18 +14,24 @@ implementation or acceptance evidence.
 
 ### Dependabot follow-up — 2026-10-13
 
-Reviewed all seven open dependency PRs. Applied filelock 4.0.12, regex
-2026.9.29, the coordinated MLX/MLX Metal 0.32.3 pair, Torch 2.14.1 only in
-the pruned macOS build closure, and the reviewed Rust-toolchain action SHA.
-Managed AI runtimes retain their qualified pins. Electron-builder 26.17.0
-remains held for installer qualification. Future MLX updates are grouped.
+Reviewed the initial seven dependency PRs, four newly unblocked proposals,
+and every remaining base build pin. Applied filelock 4.1.1, pycparser 3.11,
+tokenizers 0.23.3, regex 2026.9.29, the coordinated MLX/MLX Metal 0.32.3 pair,
+Torch 2.14.1 only in the pruned macOS build closure, and the reviewed
+Rust-toolchain action SHA. Managed AI runtimes retain their qualified pins.
+Electron-builder 26.17.0, ONNX Runtime 1.31.0 and CTranslate2 4.8.3 remain
+held for the qualification described in the maintenance record. Existing
+Python 3.11/API ceilings remain. Future MLX updates are grouped.
 
 Local `npm run test:all` passed: 1,126 JS passed / 2 skipped and 848 Python
 passed / 7 skipped; syntax checks passed. Linux and Windows build-pin closure
 checks passed; all three Python inventories have zero audit findings.
 [Combined CI on 6de9143](https://github.com/AmirArshad/meeting-transcriber/actions/runs/38381564578)
 passed all 13 jobs, including Windows/macOS/Linux packaging and audits, before
-the updates were pushed to `master`. Review details and limits are in the
+the first batch was pushed to `master`; the post-push run also passed all 13.
+The second batch passed the same local full gate and all three Python audits;
+its final cross-platform evidence is available through the commit's CI checks.
+Review details and limits are in the
 [October maintenance record](docs/development/DEPENDENCY_MAINTENANCE_2026-10.md#dependabot-follow-up--2026-10-13).
 
 ### Dependency maintenance — 2026-10-08

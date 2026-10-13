@@ -7,11 +7,11 @@ pyaudiowpatch==0.2.12.9
 numpy==2.4.6
 soxr==1.1.0
 faster-whisper==1.2.1
-filelock==4.0.12
+filelock==4.1.1
 av==18.1.0
 ctranslate2==4.8.2
 huggingface-hub==1.33.0
-tokenizers==0.23.2
+tokenizers==0.23.3
 onnxruntime==1.30.0
 tqdm==4.70.1
 setuptools==84.0.0
