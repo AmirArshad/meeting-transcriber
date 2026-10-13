@@ -31,7 +31,7 @@ committed, pushed or published. No remote repository settings were changed.
 ### Electron and packaging tooling
 
 - **Electron 44.1.0 → 44.7.0** (lockfile regenerated). Packaged tray/dialog/recording checks remain host gates.
-- **electron-builder stays at 26.16.1.** Version 26.17.0 resolves and its provenance checks out, but it is held. It still depends on `@electron/get` 3.x, which carries global-agent → roarr → sprintf-js, so it fixes nothing below. A packaging-toolchain change also needs installer builds on all three hosts. Dependabot now proposes it separately from Electron.
+- **Initial hold: electron-builder 26.16.1.** Superseded by the native installer qualification on 2026-10-13 below. Version 26.17.0 still depends on `@electron/get` 3.x, which carries global-agent → roarr → sprintf-js, so the separate exception below remains.
 - **Narrow exception: sprintf-js ≤1.1.3, [GHSA-hp3w-g68c-fv3c](https://github.com/advisories/GHSA-hp3w-g68c-fv3c), moderate.** All 8 moderate `npm audit` findings are this one advisory.
   - Path: electron-builder → app-builder-lib → `@electron/get@3.1.0` → global-agent → roarr → sprintf-js.
   - It is build-time only (a devDependency, never packaged). `@electron/get` loads global-agent only when `ELECTRON_GET_USE_PROXY` is set. roarr's format strings are library-controlled.
@@ -286,7 +286,7 @@ first batch's passing CI is recorded above.
 ### Held-update qualification — 2026-10-13
 
 The user authorized further work on the remaining holds. The reviewed
-26.17.0 electron-builder proposal is under full native installer qualification,
+26.17.0 electron-builder proposal passed full native installer qualification,
 rather than treating unpacked-app CI as installer evidence. CI now has a
 `qualify_installers` manual input, default false: it builds Windows NSIS and
 macOS DMG without publishing, silently installs/verifies/uninstalls NSIS on
@@ -294,7 +294,7 @@ its disposable runner, and verifies the sealed app mounted from the DMG
 read-only. Linux retains its unpacked/AppImage/pacman/deb checks. Installed
 Windows resources must match the hashes of the qualified unpacked build.
 
-**ONNX Runtime: admit 1.31.0 on Linux only, subject to final native CI.**
+**ONNX Runtime: admit 1.31.0 on Linux only.**
 [Upstream's process-start opt-out](https://github.com/microsoft/onnxruntime/blob/v1.31.0/docs/Privacy.md)
 is `ORT_DISABLE_TELEMETRY=1`; its Python disable API alone may be too late for
 an initialization event. The main Python runtime forces the opt-out after
@@ -324,6 +324,14 @@ implement that opt-out; it does not qualify legacy Windows TraceLogging.
 - Linux/Windows closure checks and exact-inventory audits passed (zero Python
   findings); npm's existing eight moderate sprintf-js findings remain. This
   toolchain update does not resolve that separate dated exception.
-- Native installer qualification is required before remote master advances.
-  Hardware audio, GPU inference, Developer ID/notarization and interactive
+- [Native installer qualification on 8172ecb](https://github.com/AmirArshad/meeting-transcriber/actions/runs/38392212924)
+  passed **all 13 jobs** before remote master advances. Windows NSIS installed
+  resources matched the unpacked build; bundled Python/FFmpeg ran; silent
+  uninstall removed the executable. The DMG checksum and read-only mounted
+  sealed app passed. Linux packages and native CPU VAD comparison passed.
+- The qualification helper now has `--check-network`; routine Linux CI installs
+  strace and rejects native network syscalls as part of the VAD check, with
+  automatic ORT CI/unit-test suppression disabled. That helper path passed
+  locally with `network_checked: true`; final master CI checks the same path.
+- Hardware audio, GPU inference, Developer ID/notarization and interactive
   installer acceptance are not inferred from the automated qualification.

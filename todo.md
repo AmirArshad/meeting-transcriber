@@ -14,9 +14,9 @@ implementation or acceptance evidence.
 
 ### Remaining dependency qualification — 2026-10-13
 
-Further qualification is authorized. Candidate electron-builder 26.17.0 now
-has a manual CI mode for native NSIS install/uninstall and read-only DMG payload
-verification; the existing Linux package checks remain. Linux ONNX Runtime
+Electron-builder 26.17.0 passed native NSIS install/uninstall and read-only DMG
+payload verification; the existing Linux package checks also passed. A default-off
+manual CI mode retains those installer checks. Linux ONNX Runtime
 1.31.0 matches the prior CPU VAD probabilities/boundaries with no network
 syscalls under an enforced pre-import 1DS telemetry opt-out. Windows remains
 1.30.0: its candidate wheel has legacy TraceLogging and lacks that opt-out.
@@ -24,8 +24,9 @@ The existing moderate npm exception and hardware/signing limits remain.
 
 Local full gate: 1,127 JS passed / 2 skipped; 849 Python passed / 7 skipped;
 syntax clean. Focused privacy/packaging, Bash/PowerShell parsing, Linux/Windows
-dependency closure and audit checks passed. Native installer CI must pass before
-advancing remote master. Details are in the
+dependency closure and audit checks passed. [Native installer CI on 8172ecb](https://github.com/AmirArshad/meeting-transcriber/actions/runs/38392212924)
+passed all 13 jobs before advancing remote master. CI now also checks native
+Linux VAD network syscalls with automatic CI suppression disabled. Details are in the
 [maintenance record](docs/development/DEPENDENCY_MAINTENANCE_2026-10.md#held-update-qualification--2026-10-13).
 
 ### Dependabot follow-up — 2026-10-13

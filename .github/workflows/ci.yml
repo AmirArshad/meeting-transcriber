@@ -366,7 +366,7 @@ jobs:
     - name: Install package inspection tools
       run: |
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends zstd libarchive-tools libpulse0 fakeroot dpkg xvfb
+        sudo apt-get install -y --no-install-recommends zstd libarchive-tools libpulse0 fakeroot dpkg xvfb strace
 
     - name: Install Rust toolchain
       # dtolnay/rust-toolchain master as of 2026-10-13 (input hardening and rustup retries)
@@ -415,7 +415,7 @@ jobs:
     - name: Qualify CPU ONNX VAD against the previous runtime
       run: |
         python -m pip install --no-deps --target "$RUNNER_TEMP/ort-baseline" onnxruntime==1.30.0
-        python scripts/qualify-onnx-vad.py --baseline-site-packages "$RUNNER_TEMP/ort-baseline"
+        python scripts/qualify-onnx-vad.py --baseline-site-packages "$RUNNER_TEMP/ort-baseline" --check-network
 
     - name: Build Linux unpacked, AppImage, pacman, and deb packages
       run: |

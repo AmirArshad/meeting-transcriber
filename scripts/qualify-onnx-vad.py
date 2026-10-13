@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -57,6 +58,8 @@ def worker(site_packages):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline-site-packages')
+    parser.add_argument('--check-network', action='store_true',
+                        help='Require Linux strace and reject native network syscalls')
     parser.add_argument('--worker', action='store_true')
     parser.add_argument('--site-packages')
     parser.add_argument('--output', type=Path)
@@ -70,6 +73,8 @@ def main():
         return
     if not args.baseline_site_packages:
         parser.error('--baseline-site-packages is required for comparison')
+    if args.check_network and (not sys.platform.startswith('linux') or not shutil.which('strace')):
+        parser.error('--check-network requires Linux with strace installed')
     import numpy as np
 
     results = []
@@ -79,7 +84,14 @@ def main():
             command = [sys.executable, str(Path(__file__).resolve()), '--worker', '--output', str(output)]
             if packages:
                 command += ['--site-packages', packages]
+            trace = Path(temp) / f'{index}.network'
+            if args.check_network:
+                command = ['strace', '-f', '-e', 'trace=network', '-o', str(trace), *command]
             subprocess.run(command, check=True, timeout=120, env=dict(os.environ, ORT_DISABLE_TELEMETRY='1'))
+            if args.check_network:
+                trace_text = trace.read_text(encoding='utf-8')
+                assert not any(marker in trace_text for marker in
+                               ('AF_INET', 'AF_INET6', 'connect(', 'sendto(', 'sendmsg(')), trace_text
             results.append(json.loads(output.read_text(encoding='utf-8')))
     baseline, candidate = results
     assert baseline['version'] == '1.30.0', baseline['version']
@@ -92,6 +104,7 @@ def main():
     print(json.dumps({'baseline': baseline['version'], 'candidate': candidate['version'],
                       'telemetry_opt_out': candidate['telemetry_opt_out'],
                       'speech_segments': len(candidate['cases']['speech']['segments']),
+                      'network_checked': args.check_network,
                       'probabilities_match': True, 'boundaries_match': True, 'silence_empty': True}))
 
 
