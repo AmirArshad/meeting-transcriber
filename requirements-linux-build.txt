@@ -14,7 +14,7 @@ av==18.1.0
 # 4.8.2 matched packaged 4.8.1 CUDA and CPU transcripts on CachyOS managed CUDA, 2026-10-08.
 ctranslate2==4.8.2
 huggingface-hub==1.33.0
-tokenizers==0.23.2
+tokenizers==0.23.3
 onnxruntime==1.30.0
 tqdm==4.70.1
 setuptools==84.0.0
