@@ -18,11 +18,11 @@ pyobjc-framework-Quartz==12.2.2
 lightning-whisper-mlx==0.0.10
 # Pinned for reproducibility; also installed transitively via lightning-whisper-mlx (not used by backend/).
 scipy==1.17.1
-filelock==3.32.7
+filelock==4.0.12
 cffi==2.1.1
 pycparser==3.0
 tiktoken==0.3.3
-regex==2026.7.19
+regex==2026.9.29
 requests==2.34.2
 charset-normalizer==3.5.2
 idna==3.20
@@ -48,19 +48,19 @@ mdurl==0.1.2
 shellingham==1.5.4
 typing-extensions==4.16.0
 anyio==4.15.1
-mlx==0.32.2
-# macOS-only companion of mlx. pip includes it only when the closure check runs on darwin.
-mlx-metal==0.32.2
+mlx==0.32.3
+# Exact-version companion of mlx: upgrade both pins together. macOS only.
+mlx-metal==0.32.3
 more-itertools==11.1.0
 numba==0.68.0
 llvmlite==0.50.0
 # Pinned for reproducible pip resolution; lightning-whisper-mlx requires torch but MLX inference
 # never imports torch_whisper.py, so prepare-resources removes torch after install.
-# torch==2.13.0 requires setuptools>=77.0.3 (no <82 cap). Keep in lockstep with Windows/Linux
+# torch==2.14.1 requires setuptools>=77.0.3 (no <82 cap). Keep in lockstep with Windows/Linux
 # setuptools==84.0.0. Torch remains in MACOS_RUNTIME_REMOVABLE_PACKAGES and is pruned after pip.
 # pip-audit: CVE-2025-3000 is patched in 2.13.0; do not ignore it. setuptools 84.0.0
 # is past PYSEC-2026-3447 (setuptools<83); setuptools is still pruned after install.
-torch==2.13.0
+torch==2.14.1
 setuptools==84.0.0
 networkx==3.6.1
 sympy==1.14.0

@@ -150,8 +150,8 @@ jobs:
       continue-on-error: true
 
     - name: Install Rust toolchain
-      # dtolnay/rust-toolchain master as of 2026-08-05 (PR #182)
-      uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      # dtolnay/rust-toolchain master as of 2026-10-13 (input hardening and rustup retries)
+      uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
       with:
         toolchain: '1.88.0'
         targets: aarch64-apple-darwin
@@ -223,8 +223,8 @@ jobs:
         cache: 'npm'
 
     - name: Install Rust toolchain
-      # dtolnay/rust-toolchain master as of 2026-08-05 (PR #182)
-      uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      # dtolnay/rust-toolchain master as of 2026-10-13 (input hardening and rustup retries)
+      uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
       with:
         toolchain: '1.88.0'
         targets: x86_64-pc-windows-msvc
@@ -341,8 +341,8 @@ jobs:
         sudo apt-get install -y --no-install-recommends zstd libarchive-tools libpulse0 fakeroot dpkg xvfb
 
     - name: Install Rust toolchain
-      # dtolnay/rust-toolchain master as of 2026-08-05 (PR #182)
-      uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      # dtolnay/rust-toolchain master as of 2026-10-13 (input hardening and rustup retries)
+      uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
       with:
         toolchain: '1.88.0'
         targets: x86_64-unknown-linux-gnu
@@ -455,7 +455,7 @@ jobs:
     - name: Audit pinned Python build dependencies
       if: matrix.kind == 'pip'
       shell: bash
-      # macOS: torch==2.13.0 and setuptools==84.0.0 are installed only for
+      # macOS: torch==2.14.1 and setuptools==84.0.0 are installed only for
       # reproducible packaging resolution and removed before the app ships
       # (MACOS_RUNTIME_REMOVABLE_PACKAGES in prepare-resources.js).
       run: python -m pip_audit -r requirements-${{ matrix.target }}-build.txt

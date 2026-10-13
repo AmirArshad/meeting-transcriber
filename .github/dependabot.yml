@@ -53,6 +53,14 @@ updates:
         update-types:
           - version-update:semver-major
     groups:
+      # mlx requires an exactly matching mlx-metal version on macOS.
+      mlx-runtime:
+        patterns:
+          - mlx
+          - mlx-metal
+        update-types:
+          - patch
+          - minor
       python-runtime-pins:
         patterns:
           - filelock

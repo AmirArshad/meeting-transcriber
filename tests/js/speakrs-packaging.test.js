@@ -521,12 +521,12 @@ test('Speakrs GitHub Actions use reviewed commit SHAs rather than moving refs', 
   assert.doesNotMatch(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain@master/);
   assert.doesNotMatch(CI_WORKFLOW, /uses:\s*Swatinem\/rust-cache@v2\s/);
   assert.doesNotMatch(RELEASE_WORKFLOW, /uses:\s*Swatinem\/rust-cache@v2\s/);
-  assert.match(CI_WORKFLOW, /dtolnay\/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772/);
-  assert.match(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772/);
+  assert.match(CI_WORKFLOW, /dtolnay\/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f/);
+  assert.match(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f/);
   assert.match(CI_WORKFLOW, /Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/);
   assert.match(RELEASE_WORKFLOW, /Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/);
-  assert.match(CI_WORKFLOW, /dtolnay\/rust-toolchain master as of 2026-08-05/);
-  assert.match(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain master as of 2026-08-05/);
+  assert.match(CI_WORKFLOW, /dtolnay\/rust-toolchain master as of 2026-10-13/);
+  assert.match(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain master as of 2026-10-13/);
   assert.match(CI_WORKFLOW, /Swatinem\/rust-cache v2\.9\.2/);
   assert.match(RELEASE_WORKFLOW, /Swatinem\/rust-cache v2\.9\.2/);
 });

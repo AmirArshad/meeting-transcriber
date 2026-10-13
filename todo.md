@@ -12,6 +12,21 @@ implementation or acceptance evidence.
 
 ## Status
 
+### Dependabot follow-up — 2026-10-13
+
+Reviewed all seven open dependency PRs. Applied filelock 4.0.12, regex
+2026.9.29, the coordinated MLX/MLX Metal 0.32.3 pair, Torch 2.14.1 only in
+the pruned macOS build closure, and the reviewed Rust-toolchain action SHA.
+Managed AI runtimes retain their qualified pins. Electron-builder 26.17.0
+remains held for installer qualification. Future MLX updates are grouped.
+
+Local `npm run test:all` passed: 1,126 JS passed / 2 skipped and 848 Python
+passed / 7 skipped; syntax checks passed. Linux and Windows build-pin closure
+checks passed; all three Python inventories have zero audit findings. The
+combined update must pass Windows/macOS/Linux CI before advancing remote
+`master`. Review details and limits are in the
+[October maintenance record](docs/development/DEPENDENCY_MAINTENANCE_2026-10.md#dependabot-follow-up--2026-10-13).
+
 ### Dependency maintenance — 2026-10-08
 
 October 2026 dependency maintenance is on `master`. The decisions, evidence, exceptions

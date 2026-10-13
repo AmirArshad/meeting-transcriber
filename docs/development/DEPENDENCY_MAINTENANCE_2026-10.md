@@ -215,3 +215,39 @@ Python 3.11 security support ends in October 2027. Target a migration decision i
     - `C:\ffmpeg\bin\ffprobe.exe` is `2025-11-17-git-e94439e49b-full_build-www.gyan.dev`. With it on PATH, one recovery logged `Integrity check: OK (3.8s, opus)` and spent 0.387 s on `finalize_stage verify opus`, then removed the capture. With that directory off PATH, SIGKILL left one `.capture`. `audio.capture_recovery --ffmpeg` pointed at FFmpeg 8.1.2 wrote a 3.755 s Opus file (61,735 bytes), logged `OK (ffmpeg decode)`, skipped `finalize_stage verify opus`, and removed the capture only after that decode. An empty capture failed with `No mic audio was captured` and the capture directory stayed.
     - FFmpeg 8.1.2 encoded the fixture to Opus, 119,532 bytes. A null decode exited 0. `meeting_manager.py --recordings-dir <dir> scan` reported `scanned: 1`, `added: 1`, meeting `20261009_133721`.
     - Packaged `resources/python/python.exe`, `HF_HUB_OFFLINE=1`, transcribed the desktop-only file with `--model small`. CUDA exit 0: `device: cuda`, `computeType: float16`. CPU exit 0: `device: cpu`, `computeType: int8`. Both transcripts begin `Design review starts at 10, and I prepared the agenda. Thanks, Hazel. I will share the schedule and confirm each action owner.`
+
+## Dependabot follow-up — 2026-10-13
+
+Reviewed all seven open Dependabot PRs from clean `master` at `23f9aac`.
+The user authorized unattended dependency maintenance, commit and push.
+
+| PR | Decision and compatibility evidence |
+|---|---|
+| [#114 electron-builder 26.17.0](https://github.com/AmirArshad/meeting-transcriber/pull/114) | Held. Preserve the explicit installer-qualification hold above and the existing sprintf-js exception. This proposal does not remove that dependency path. |
+| [#115 Rust-toolchain action](https://github.com/AmirArshad/meeting-transcriber/pull/115) | Accepted SHA `e2a55d2ffb04f378e9626c28d38b36d230d1e12f`. Reviewed the upstream action diff: inputs enter quoted environment variables/arrays, checksum races retry, and non-host installation is explicit. Rust stays 1.88.0. The PR's three failing jobs all reached the old-SHA assertion in `speakrs-packaging.test.js`; action installation succeeded. Refresh the SHA and provenance expectations together. |
+| [#117 Torch 2.14.1](https://github.com/AmirArshad/meeting-transcriber/pull/117) | Accepted only in the macOS build closure. Python 3.11/macOS 14 arm64 wheel exists and its macOS dependency set remains covered by the exact pins. Packaging prunes Torch; the qualified pyannote, Parakeet and CUDA runtimes retain their versions. This does not qualify Torch 2.14 for those runtime environments. |
+| [#119 filelock 4.0.12](https://github.com/AmirArshad/meeting-transcriber/pull/119) | Accepted in platform build pins and development requirement floors. [The v4 protocol break](https://github.com/tox-dev/filelock/blob/4.0.12/docs/changelog.rst) concerns `SoftReadWriteLock`, which AvaNevis does not use. Application call sites use `FileLock` and `Timeout` with supported arguments. Tested actual cross-process contention, post-release acquisition and killed-owner recovery, plus the full recording/persistence suite. |
+| [#120 regex 2026.9.29](https://github.com/AmirArshad/meeting-transcriber/pull/120) | Accepted. [Upstream changes](https://github.com/mrabarnett/mrab-regex/blob/hg/changelog.txt) include native error-handling fixes and Unicode 18 data. Python 3.11 arm64 wheel exists. Real tiktoken 0.3.3 with the official lightning-whisper-mlx 0.0.10 English/multilingual vocabulary bytes passed round trips, batch encoding and word splitting on English, Persian, Chinese, Spanish and punctuation/emoji samples. |
+| [#121 MLX](https://github.com/AmirArshad/meeting-transcriber/pull/121), [#122 MLX Metal](https://github.com/AmirArshad/meeting-transcriber/pull/122) | Accepted together at 0.32.3. Real wheel metadata requires exactly matching `mlx-metal==0.32.3` on Darwin; separate PRs fail pip resolution because the other pin remains 0.32.2. Both have Python 3.11/macOS 14 arm64 wheels. Reviewed [release changes](https://github.com/ml-explore/mlx/releases/tag/v0.32.3) against the official Whisper adapter: it does not call `unstack`, whose return container changed. Add a Dependabot group for future minor/patch updates. |
+
+### Automated evidence and limits
+
+- Host: Ubuntu 26.04.1 x86_64, Node 24.21.0, repository `.venv` Python
+  3.11.16. `npm ci` restored the unchanged lockfile. Electron's explicit
+  install script supplied the locked 44.7.0 binary. The Python environment
+  was constrained to the updated Linux build pins.
+- `npm run test:all`, with a disposable Xvfb display: exit 0; **1,126 JS
+  passed / 2 skipped**, **848 Python passed / 7 skipped**; both syntax gates
+  passed. Focused Speakrs packaging tests: **24 passed**.
+- `scripts/check-build-requirements-closure.py linux windows`: exit 0.
+  Cross-host pip markers do not prove the Darwin-only dependency edges;
+  native macOS CI remains required for the combined MLX/Torch update.
+- `scripts/pip_audit_inventory.py` against each of the Linux, Windows and
+  macOS build inventories: exit 0, **0 findings** each (pip-audit 2.10.1).
+  `npm audit --audit-level=high`: exit 0; the same eight moderate sprintf-js
+  findings remain under the dated exception above.
+- `pip check`, workflow/Dependabot YAML parsing, agent setup validation and
+  `git diff --check`: exit 0.
+- No hardware capture, Metal inference, managed AI-runtime upgrade or
+  installer acceptance is claimed. A temporary validation branch will run
+  the combined Windows/macOS/Linux CI before remote `master` advances.
