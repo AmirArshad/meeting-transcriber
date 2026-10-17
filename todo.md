@@ -1,8 +1,8 @@
 # AvaNevis v2.10
 
-Current release version: **v2.10.0**; **v2.10.1** is prepared locally (version
-bumped, [release notes](docs/releases/v2.10.1.md) written, full gate passing)
-and awaits authorized commit, push, and tag. See the
+Current release version: **v2.10.1**, published 2026-10-17 from the annotated
+`v2.10.1` tag. See the [v2.10.1 release notes](docs/releases/v2.10.1.md).
+The v2.10.0 notes and record below remain historical. See the
 [v2.10.0 release notes](docs/releases/v2.10.0.md) and
 [qualification record](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md).
 The dated entries below preserve implementation and acceptance history.
@@ -318,7 +318,10 @@ passing on this Mac). The first prep CI run failed only the cargo-audit
 job on RustSec advisories published after the previous green run; the
 rustls 0.23.46 bump, dated zip audit ignores, and the global-agent 4
 override that retires the sprintf-js exception followed the same day.
-The `v2.10.1` tag awaits a green CI run on the fix commit. The sequencing
+CI passed all 13 jobs on the fix commit, the annotated `v2.10.1` tag was
+pushed, and the release workflow published
+[AvaNevis v2.10.1](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.10.1)
+with all platform installers. The sequencing
 below records the earlier implementation order.
 
 ## How to sequence the work (historical)
@@ -456,7 +459,7 @@ Pyannote removal.
 
 ## Release history
 
-- **v2.10.1 — prepared locally 2026-10-17; awaiting authorized tag:** History interaction fixes, faster post-stop finalization, October 2026 dependency/security maintenance (Electron 44.7.0, FFmpeg 8.1.2, ONNX Runtime 1.31 telemetry suppression, Pyannote 4.0.7 closure) with all host gates closed.
+- **v2.10.1 — released 2026-10-17:** History interaction fixes, faster post-stop finalization, October 2026 dependency/security maintenance (Electron 44.7.0, FFmpeg 8.1.2, ONNX Runtime 1.31 telemetry suppression, Pyannote 4.0.7 closure, rustls 0.23.46, sprintf-js exception retired) with all host gates closed.
 
 - **v2.10.0 — release-ready; tag-driven publication:** optional Parakeet, Whisper Large v3, checked Qwen summary languages, Settings/navigation UX, integrity/provenance/recovery fixes and dependency pins.
 
