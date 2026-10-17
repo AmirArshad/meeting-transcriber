@@ -1,0 +1,20 @@
+# cargo-audit exceptions for the speakrs-cli dependency tree.
+#
+# zip 6.0.0 (via ndarray-npy 0.10.0, pinned by speakrs =0.5.0, which
+# requires zip "6"): RUSTSEC-2026-0367, RUSTSEC-2026-0368 and
+# RUSTSEC-2026-0369 all concern filesystem extraction —
+# ZipArchive::extract() / ZipStreamReader::extract() following symlinks
+# or preserving SUID/SGID bits. ndarray-npy only opens ZipArchive and
+# reads entries in memory via by_name(); neither it nor speakrs-cli
+# calls any extract API, and the archives read are local model files,
+# not attacker-controlled downloads. zip cannot move to >= 9 without a
+# speakrs release that raises its ndarray-npy/zip requirements.
+# Revisit on the next speakrs update; review by 2027-01-31 (aligned
+# with the sprintf-js exception in the October maintenance record).
+
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
+]

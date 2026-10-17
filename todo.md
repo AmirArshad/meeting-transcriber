@@ -304,16 +304,22 @@ v2.10.0 is tagged, and October dependency maintenance is on `master`. Dependabot
 alerts and security updates are enabled. No tag or release-workflow action remains.
 
 Still open, and already recorded below: AUR publishing, Apple notarization, and the
-preflight trusted-sender note; Windows embedded Python 3.11.9; the electron-builder sprintf-js
-exception through 2027-01-31; and real Windows pyannote diarization, which still
-needs a user token and the gated model. Python modernization is a separate branch,
+preflight trusted-sender note; Windows embedded Python 3.11.9; and real Windows pyannote diarization, which still
+needs a user token and the gated model. (The sprintf-js exception was retired
+on 2026-10-17 by the global-agent 4 override; the zip RustSec ignores in
+`native/speakrs-cli/.cargo/audit.toml` are due for review by 2027-01-31.)
+Python modernization is a separate branch,
 not work on `master`. The October host gates did not repeat the
 full manual checklists. The macOS FFmpeg 8.1.2 gate closed on 2026-10-17, so the
 post-v2.10 maintenance on `master` is ready to ship as a patch release.
-v2.10.1 release prep is done locally on 2026-10-17 (version 2.10.1 in
+v2.10.1 release prep landed on 2026-10-17 (version 2.10.1 in
 `package.json`/lockfile, release notes, full gate 1,125 JS / 847 Python
-passing on this Mac); commit, push, and the `v2.10.1` tag still need user
-authorization. The sequencing below records the earlier implementation order.
+passing on this Mac). The first prep CI run failed only the cargo-audit
+job on RustSec advisories published after the previous green run; the
+rustls 0.23.46 bump, dated zip audit ignores, and the global-agent 4
+override that retires the sprintf-js exception followed the same day.
+The `v2.10.1` tag awaits a green CI run on the fix commit. The sequencing
+below records the earlier implementation order.
 
 ## How to sequence the work (historical)
 

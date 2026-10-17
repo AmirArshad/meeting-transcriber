@@ -399,3 +399,33 @@ recorders, so desktop-content capture was not re-qualified; the mic track
 carried real fixture audio and desktop capture remains qualified by the
 2026-10-09 macOS gate. The full manual checklists were not repeated. No
 FFmpeg host gate remains open on any platform.
+
+## RustSec and sprintf-js follow-up — 2026-10-17
+
+The v2.10.1 release-prep CI run failed only the `cargo audit` job: seven
+RustSec advisories dated 2026-10-09…14, published after the last green run,
+against crates already pinned in `native/speakrs-cli/Cargo.lock`. This was
+new advisory data, not a regression in the release commit.
+
+- **rustls 0.23.45 → 0.23.46** (`cargo update -p rustls`, one package)
+  clears RUSTSEC-2026-0346/0347/0348/0349. `cargo test --locked` passes
+  (7 tests). This supersedes the two-line 0.23.45 bump recorded above.
+- **zip 6.0.0** (RUSTSEC-2026-0367/0368/0369, extraction symlink/SUID
+  flaws) cannot move: ndarray-npy 0.10.0 requires zip `6`, and Speakrs
+  0.5.0 pins ndarray-npy 0.10.0. Source inspection shows ndarray-npy only
+  opens `ZipArchive` and reads entries in memory (`by_name`); no
+  `extract()` API is reachable, and the CLI reads local model files.
+  The three IDs are ignored in `native/speakrs-cli/.cargo/audit.toml`
+  with that justification, review by 2027-01-31 or on the next Speakrs
+  update. Local `cargo audit --deny warnings` (cargo-audit 0.22.2, the CI
+  pin) passes over 272 crates.
+- **sprintf-js exception closed.** `@electron/get` 3.1.0's only
+  global-agent call is `require('global-agent').bootstrap()`. A targeted
+  npm override (`"global-agent@3": "^4.1.3"`) moves it to global-agent 4,
+  which has no roarr/sprintf-js dependency; the v4 API still exports a
+  CommonJS `bootstrap`, verified by loading the nested proxy module and
+  running `initializeProxy` with proxy use enabled. After `npm ci`,
+  `npm audit` reports **0 vulnerabilities** and sprintf-js/roarr are
+  absent from the lockfile. The dated exception above is therefore
+  retired early; it remains as the historical record. electron-builder
+  26.17.0 still runs and the JS gate passes (1,125 / 4 skipped).
