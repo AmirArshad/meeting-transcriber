@@ -64,7 +64,7 @@ committed, pushed or published. No remote repository settings were changed.
   - shaka-project publishes n8.0.3 for macOS and Linux, and ffmpeg.org publishes the 8.0.3 source and signature. Gyan, the Windows provider, publishes no 8.0.3 build on either GitHub or gyan.dev; it goes from 8.0.1 to 8.1.
   - No 8.1.3 exists from either binary provider. 8.1.2 is the only matching newer set, so the Windows, macOS, Linux, and corresponding-source pins moved together.
   - The inventory extractor still fails if any FFmpeg binary version differs from the bundled source version.
-  - Linux Opus encode, decode-before-delete, recovery, and import passed on the 2026-10-09 CachyOS gate below. The same Windows check passed on 2026-10-09 against the pinned 8.1.2 binary; that pass did not rebuild the installer, so the 2026-10-08 Windows package is still 8.0.1. macOS still needs that check. The 2026-10-08 Windows package and the 2026-10-09 macOS package recorded further down were still n8.0.1. The 2026-10-09 Linux package is n8.1.2.
+  - Linux Opus encode, decode-before-delete, recovery, and import passed on the 2026-10-09 CachyOS gate below. The same Windows check passed on 2026-10-09 against the pinned 8.1.2 binary; that pass did not rebuild the installer, so the 2026-10-08 Windows package is still 8.0.1. macOS still needs that check (closed 2026-10-17; see the follow-up at the end of this record). The 2026-10-08 Windows package and the 2026-10-09 macOS package recorded further down were still n8.0.1. The 2026-10-09 Linux package is n8.1.2.
 
 ## Recurrence prevention
 
@@ -378,3 +378,24 @@ version-specific switch and must retain native qualification on future upgrades.
 - No release was published. Hardware audio/GPU acceptance and managed runtime
   qualifications are unchanged; Windows base CPU VAD no longer needs a user-side
   qualification task for this update.
+
+## macOS FFmpeg 8.1.2 follow-up — 2026-10-17
+
+The macOS check held open above is done on this Mac (macOS 26.7.1 arm64,
+Node 26.12.0, repo `.venv` Python 3.11.17, `master` `b1960a3`). The prepared
+FFmpeg reports `n8.1.2`; its SHA-256 matches the `ffmpegMac` manifest pin
+(`e7b9fcd9…14b22`). Using the repo backend with `AVANEVIS_FFMPEG` pointed at
+that binary (the Windows-gate method; the installer was not rebuilt):
+mic+desktop (11.2 s), desktop-only (8.0 s) and mic-only (5.9 s) recordings
+completed all stop stages with `Integrity check: OK (opus)`, and cancel left
+no Opus. A SIGKILL-interrupted capture recovered 6.06 s via
+`audio.capture_recovery` with `ffprobe` hidden from `PATH`, logging
+`OK (ffmpeg decode)` with `verify opus` skipped and the capture removed only
+after that decode. The two-speaker fixture encoded to Opus with a clean null
+decode, and `meeting_manager.py scan` imported the recovered file
+(`scanned: 1`, `added: 1`). Limits: the CoreAudio tap delivered silence in
+this session (buffers flowing, peak 0.0) under both the dev and packaged
+recorders, so desktop-content capture was not re-qualified; the mic track
+carried real fixture audio and desktop capture remains qualified by the
+2026-10-09 macOS gate. The full manual checklists were not repeated. No
+FFmpeg host gate remains open on any platform.

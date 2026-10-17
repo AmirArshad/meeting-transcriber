@@ -1,6 +1,8 @@
 # AvaNevis v2.10
 
-Current release version: **v2.10.0**. See the
+Current release version: **v2.10.0**; **v2.10.1** is prepared locally (version
+bumped, [release notes](docs/releases/v2.10.1.md) written, full gate passing)
+and awaits authorized commit, push, and tag. See the
 [v2.10.0 release notes](docs/releases/v2.10.0.md) and
 [qualification record](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md).
 The dated entries below preserve implementation and acceptance history.
@@ -11,6 +13,27 @@ Sequencing, remaining investigations, and which machines they need live in the
 implementation or acceptance evidence.
 
 ## Status
+
+### macOS FFmpeg 8.1.2 gate — 2026-10-17
+
+The last open October host gate is closed on this Mac (macOS 26.7.1 arm64,
+Node 26.12.0, repo `.venv` Python 3.11.17, `master` `b1960a3`). The prepared
+FFmpeg reports `n8.1.2` and its SHA-256 `e7b9fcd9…14b22` matches the
+`ffmpegMac` manifest pin. Recorder CLI runs used the repo backend with
+`AVANEVIS_FFMPEG` pointed at that binary (the same method as the Windows
+gate; no installer was rebuilt): mic+desktop 11.2 s, desktop-only 8.0 s,
+mic-only 5.9 s, all through `post_processing_complete` with `Integrity check:
+OK (opus)`; cancel returned `{ success: true, cancelled: true }` and left no
+Opus. A SIGKILLed capture recovered 6.06 s through
+`audio.capture_recovery` with `ffprobe` hidden from `PATH`: `OK (ffmpeg
+decode)`, `verify opus` skipped, and the capture was removed only after that
+decode. The fixture encoded to Opus with a clean null decode, and
+`meeting_manager.py scan` on the recovered file reported `scanned: 1`,
+`added: 1`. Limits: the CoreAudio tap delivered silence in this session
+(buffers flowing, peak 0.0) in both the dev and packaged recorders, so
+desktop-content capture was not re-qualified here; the mic track carried
+real fixture audio (peak −10 dB) and desktop capture itself was qualified
+on 2026-10-09. Full manual checklists were not repeated.
 
 ### Windows ONNX follow-up — 2026-10-13
 
@@ -281,12 +304,16 @@ v2.10.0 is tagged, and October dependency maintenance is on `master`. Dependabot
 alerts and security updates are enabled. No tag or release-workflow action remains.
 
 Still open, and already recorded below: AUR publishing, Apple notarization, and the
-preflight trusted-sender note; the FFmpeg 8.1.2 Opus, recovery, and import
-check on macOS; Windows embedded Python 3.11.9; the electron-builder sprintf-js
+preflight trusted-sender note; Windows embedded Python 3.11.9; the electron-builder sprintf-js
 exception through 2027-01-31; and real Windows pyannote diarization, which still
 needs a user token and the gated model. Python modernization is a separate branch,
 not work on `master`. The October host gates did not repeat the
-full manual checklists. The sequencing below records the earlier implementation order.
+full manual checklists. The macOS FFmpeg 8.1.2 gate closed on 2026-10-17, so the
+post-v2.10 maintenance on `master` is ready to ship as a patch release.
+v2.10.1 release prep is done locally on 2026-10-17 (version 2.10.1 in
+`package.json`/lockfile, release notes, full gate 1,125 JS / 847 Python
+passing on this Mac); commit, push, and the `v2.10.1` tag still need user
+authorization. The sequencing below records the earlier implementation order.
 
 ## How to sequence the work (historical)
 
@@ -422,6 +449,8 @@ Pyannote removal.
 - [ ] Modernize Python to current 3.11 practice on its own branch: builtin generics, orderly imports, and a committed Ruff/basedpyright standard. Formatting and annotations first. Exception handling, file lifetime, and subprocess calls stay a later reviewed slice. Brief: [Python modernization](docs/superpowers/plans/2026-10-09-python-modernization.md).
 
 ## Release history
+
+- **v2.10.1 — prepared locally 2026-10-17; awaiting authorized tag:** History interaction fixes, faster post-stop finalization, October 2026 dependency/security maintenance (Electron 44.7.0, FFmpeg 8.1.2, ONNX Runtime 1.31 telemetry suppression, Pyannote 4.0.7 closure) with all host gates closed.
 
 - **v2.10.0 — release-ready; tag-driven publication:** optional Parakeet, Whisper Large v3, checked Qwen summary languages, Settings/navigation UX, integrity/provenance/recovery fixes and dependency pins.
 

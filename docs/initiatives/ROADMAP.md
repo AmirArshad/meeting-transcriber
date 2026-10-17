@@ -69,9 +69,12 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ---
 
-## Current release: v2.10.0
+## Current release: v2.10.0 (v2.10.1 prepared)
 
-The [v2.10 release notes](../releases/v2.10.0.md) cover the accepted scope:
+The [v2.10 release notes](../releases/v2.10.0.md) cover the accepted scope.
+A v2.10.1 maintenance patch (History fixes, faster post-stop finalization,
+and the October 2026 dependency/security maintenance) is prepared locally
+with [release notes](../releases/v2.10.1.md) and awaits authorized tagging:
 
 - optional English-only Parakeet on Windows CUDA, Apple Silicon Metal and Linux
   managed CUDA 12, with integrity checks and durable capture/recovery selections;
@@ -151,7 +154,7 @@ Longer horizon, lower priority:
 - **Minor (1.X.0)** — New features, backwards compatible.
 - **Patch (1.2.X)** — Bug fixes and minor improvements.
 
-**Current release version:** v2.10.0. Hardware acceptance and its limits are recorded separately from CI.
+**Current release version:** v2.10.0 (v2.10.1 prepared locally, awaiting authorized tag). Hardware acceptance and its limits are recorded separately from CI.
 
 The rebrand introduces a new Electron `productName`, which changes the user-data folder. Existing Meeting Transcriber installs won't see their old recordings until the user manually moves the data folder, so this release uses a major version bump.
 
