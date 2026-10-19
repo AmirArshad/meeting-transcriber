@@ -51,7 +51,7 @@ anyio==4.15.1
 mlx==0.32.3
 # Exact-version companion of mlx: upgrade both pins together. macOS only.
 mlx-metal==0.32.3
-more-itertools==11.1.0
+more-itertools==11.2.1
 numba==0.68.0
 llvmlite==0.50.0
 # Pinned for reproducible pip resolution; lightning-whisper-mlx requires torch but MLX inference
