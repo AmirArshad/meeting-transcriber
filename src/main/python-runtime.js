@@ -223,6 +223,9 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
     // This telemetry-only internal switch skips ETW registration entirely;
     // native Windows CI tests it with a collecting trace and positive control.
     env.ORT_RUNNING_UNIT_TESTS = '1';
+    // hf-xet has a separate native TLS stack. Until its incident fix is
+    // qualified, use huggingface_hub's HTTP path with bundled patched certifi.
+    env.HF_HUB_DISABLE_XET = '1';
     // Packaged children always see AVANEVIS_PACKAGED=1; callers cannot override it.
     if (app.isPackaged) {
       env.AVANEVIS_PACKAGED = '1';
@@ -247,6 +250,7 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
     const isolated = { ...(env || {}) };
     isolated.ORT_DISABLE_TELEMETRY = '1';
     isolated.ORT_RUNNING_UNIT_TESTS = '1';
+    isolated.HF_HUB_DISABLE_XET = '1';
     if (app.isPackaged) {
       isolated.AVANEVIS_PACKAGED = '1';
       isolated.PYTHONNOUSERSITE = '1';

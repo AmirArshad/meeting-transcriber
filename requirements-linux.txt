@@ -14,3 +14,6 @@ filelock>=4.1.1         # Prevent race conditions during model downloads (CVE-20
 # Optional local speaker identification add-on
 # The desktop app installs pyannote.audio into userData during explicit speaker setup.
 # Linux speaker identification stays unsupported until Feature Parity (Phases 6–7).
+
+# Patched CA bundle for explicit model/add-on HTTPS downloads (October 2026).
+certifi>=2026.10.19

@@ -19,7 +19,7 @@ const { collectConfiguredDownloadHosts } = require('../../src/ai-addon/download-
 const { resolvePreferredTarExecutable } = require('../../src/ai-addon-archive-helpers');
 const { AI_MODEL_CATALOG } = require('../../src/ai-addon-state');
 
-test('ordinary and isolated Python children suppress both ONNX telemetry providers before startup', () => {
+test('ordinary and isolated Python children enforce telemetry and patched HTTP transport before startup', () => {
   const previous = process.env.ORT_DISABLE_TELEMETRY;
   const previousWindowsGuard = process.env.ORT_RUNNING_UNIT_TESTS;
   const previousResourcesPath = process.resourcesPath;
@@ -40,10 +40,11 @@ test('ordinary and isolated Python children suppress both ONNX telemetry provide
         dirname: path.join(__dirname, '..', '..', 'src'),
       });
       for (const override of ['0', undefined]) {
-        const overrides = { ORT_DISABLE_TELEMETRY: override, ORT_RUNNING_UNIT_TESTS: override };
+        const overrides = { ORT_DISABLE_TELEMETRY: override, ORT_RUNNING_UNIT_TESTS: override, HF_HUB_DISABLE_XET: override };
         const env = runtime.buildPythonEnv(overrides);
         assert.equal(env.ORT_DISABLE_TELEMETRY, '1');
         assert.equal(env.ORT_RUNNING_UNIT_TESTS, '1');
+        assert.equal(env.HF_HUB_DISABLE_XET, '1');
         for (const isolatedPythonPath of [false, true]) {
           runtime.spawnTrackedPython(['-c', 'pass'], {
             isolatedPythonPath,
@@ -51,6 +52,7 @@ test('ordinary and isolated Python children suppress both ONNX telemetry provide
           });
           assert.equal(captured.at(-1).ORT_DISABLE_TELEMETRY, '1');
           assert.equal(captured.at(-1).ORT_RUNNING_UNIT_TESTS, '1');
+          assert.equal(captured.at(-1).HF_HUB_DISABLE_XET, '1');
         }
       }
     }
