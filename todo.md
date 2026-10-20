@@ -1,7 +1,9 @@
 # AvaNevis v2.10
 
-Current release version: **v2.10.1**, published 2026-10-17 from the annotated
-`v2.10.1` tag. See the [v2.10.1 release notes](docs/releases/v2.10.1.md).
+Release version: **v2.10.2** — certificate-trust security maintenance.
+See the [v2.10.2 release notes](docs/releases/v2.10.2.md) and
+[maintenance evidence and release gates](docs/development/CERTIFICATE_TRUST_MAINTENANCE_2026-10.md).
+Previous release: **v2.10.1**, published 2026-10-17.
 The v2.10.0 notes and record below remain historical. See the
 [v2.10.0 release notes](docs/releases/v2.10.0.md) and
 [qualification record](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md).
@@ -13,6 +15,18 @@ Sequencing, remaining investigations, and which machines they need live in the
 implementation or acceptance evidence.
 
 ## Status
+
+### v2.10.2 certificate-trust maintenance — 2026-10-20
+
+Release branch: `release/2.10.2`. Electron 44.9.2, certifi 2026.10.19,
+pip 26.2.2 and Rust webpki updates cover bundled trust paths. Standalone
+Python pip is replaced, optional runtime identities require repair, and native
+Xet downloads are disabled in favor of the patched HTTP transport.
+Local validation passes (1,130 JS / 848 Python tests, plus syntax checks;
+2 JS / 8 Python skips). [PR #134](https://github.com/AmirArshad/meeting-transcriber/pull/134)
+tracks native CI and integration. Installer publication is tracked by the
+[tag release](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.10.2)
+and the release workflow; see the maintenance evidence for qualification limits.
 
 ### macOS FFmpeg 8.1.2 gate — 2026-10-17
 

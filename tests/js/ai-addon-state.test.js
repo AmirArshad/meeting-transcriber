@@ -29,6 +29,13 @@ const {
   resolveModelId,
 } = require('../../src/ai-addon-state');
 
+test('both managed Pyannote environments require the patched certificate bundle', () => {
+  for (const [platform, arch] of [['win32', 'x64'], ['darwin', 'arm64']]) {
+    const artifact = getDiarizationDependencyArtifactForPlatform(platform, arch);
+    assert.ok(artifact.pip.requirements.includes('certifi==2026.10.19'));
+  }
+});
+
 test('normalizes an empty AI add-on manifest with safe defaults', () => {
   const manifest = normalizeAiAddonManifest();
 

@@ -157,6 +157,8 @@ function buildPythonEnvForBackend({ backendPath, extra = {} } = {}) {
     HUGGINGFACE_HUB_TOKEN: '',
     HUGGING_FACE_HUB_TOKEN: '',
     HF_TOKEN_PATH: os.devNull,
+    // Match the shared Python runtime: avoid hf-xet's independent trust store.
+    HF_HUB_DISABLE_XET: '1',
     PYTHONPATH: pythonPathParts.join(separator),
   };
 }

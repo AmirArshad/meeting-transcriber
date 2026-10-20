@@ -1,13 +1,13 @@
 {
   "name": "avanevis",
-  "version": "2.10.1",
+  "version": "2.10.2",
   "description": "AvaNevis private meeting recorder and local AI transcriber",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
     "test": "npm run test:syntax && npm run test:js",
-    "test:js": "node --test",
+    "test:js": "node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./scripts/github-test-reporter.js --test-reporter-destination=stdout",
     "test:python": "node scripts/run-python-tests.js",
     "test:python-syntax": "node scripts/check-python-syntax.js",
     "test:all": "npm test && npm run test:python && npm run test:python-syntax",
@@ -40,7 +40,7 @@
     "adm-zip": "0.6.1"
   },
   "devDependencies": {
-    "electron": "^44.7.0",
+    "electron": "^44.9.2",
     "electron-builder": "^26.17.0"
   },
   "overrides": {
