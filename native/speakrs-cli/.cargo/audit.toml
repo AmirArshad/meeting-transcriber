@@ -11,10 +11,21 @@
 # speakrs release that raises its ndarray-npy/zip requirements.
 # Revisit on the next speakrs update; review by 2027-01-31 (aligned
 # with the sprintf-js exception in the October maintenance record).
+#
+# RUSTSEC-2026-0381: webpki-roots 0.26.11 is a certificate-free compatibility
+# shim: its entire API is `pub use parent::TLS_SERVER_ROOTS`. Cargo.lock resolves
+# parent to patched webpki-roots 1.0.10. ureq 2.12.1 (through ocipkg/intel-mkl-src,
+# build dependencies of speakrs) still requires the 0.26 facade. The advisory's
+# version-only range flags this facade although its actual roots are patched.
+# tests/js/certificate-trust-dependencies.test.js guards the resolved parent,
+# every roots bundle and the validator version so this exception cannot hide
+# a rollback to vulnerable trust data. Reviewed 2026-10-20; revisit with upstream
+# ureq/ocipkg updates or by 2026-11-20. No affected roots are retained by this shim.
 
 [advisories]
 ignore = [
     "RUSTSEC-2026-0367",
     "RUSTSEC-2026-0368",
     "RUSTSEC-2026-0369",
+    "RUSTSEC-2026-0381",
 ]

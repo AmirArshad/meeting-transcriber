@@ -6,3 +6,6 @@ numpy>=2.4.0            # For audio processing and mixing
 
 # Transcription
 filelock>=4.1.1         # Prevent race conditions during model downloads (CVE-2025-68146, CVE-2026-22701)
+
+# Patched CA bundle for explicit model/add-on HTTPS downloads (October 2026).
+certifi>=2026.10.19

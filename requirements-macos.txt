@@ -14,3 +14,6 @@ filelock>=4.1.1               # Prevent race conditions during model downloads
 # Note: lightning-whisper-mlx uses Apple's MLX framework for Metal GPU acceleration
 # This provides 2-3x realtime performance on Apple Silicon (M1/M2/M3/M4)
 # macOS builds target Apple Silicon only - Intel Macs are not supported
+
+# Patched CA bundle for explicit model/add-on HTTPS downloads (October 2026).
+certifi>=2026.10.19

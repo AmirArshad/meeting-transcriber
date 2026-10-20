@@ -673,7 +673,8 @@ test('Hugging Face downloader kills child process and rejects on cancellation', 
   const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
   Object.defineProperty(process, 'platform', { value: 'darwin' });
   try {
-    fsModule.__spawn = () => {
+    fsModule.__spawn = (_command, _args, options) => {
+      assert.equal(options.env.HF_HUB_DISABLE_XET, '1');
       child.kill = () => {
         child.signalCode = 'SIGTERM';
         setImmediate(() => child.emit('close', null, 'SIGTERM'));
@@ -1094,7 +1095,7 @@ test('diarization dependency cache uses managed userData path and pinned require
   assert.ok(artifact.pip.requirements.includes('torchvision==0.28.0+cu126'));
 });
 
-test('diarization dependency cache invalidates stale pinned requirements', () => {
+test('diarization dependency cache invalidates installs without patched certifi', () => {
   const fsModule = createMemoryFs();
   const artifact = getDiarizationDependencyArtifactForPlatform('win32', 'x64');
   const initialCache = checkDiarizationDependencyCache({
@@ -1110,7 +1111,7 @@ test('diarization dependency cache invalidates stale pinned requirements', () =>
     artifactId: artifact.id,
     package: artifact.package,
     version: artifact.version,
-    requirements: artifact.pip.requirements.filter((requirement) => !requirement.startsWith('torchvision==')),
+    requirements: artifact.pip.requirements.filter((requirement) => !requirement.startsWith('certifi==')),
     sourceArtifacts: artifact.pip.sourceArtifacts.map((sourceArtifact) => ({
       package: sourceArtifact.package,
       version: sourceArtifact.version,
