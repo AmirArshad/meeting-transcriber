@@ -93,10 +93,14 @@ dependency set.
   markers: Torch's Linux-only CUDA dependencies have no matching macOS wheel.
   The existing native macOS CI closure gate remains required.
 
-## Remaining release gates
+## Release tracking and gates
 
-GitHub device authentication was restored as the repository owner.
-PR creation, native CI, merge, annotated tag and release artifacts are the next gates.
+[PR #134](https://github.com/AmirArshad/meeting-transcriber/pull/134) tracks
+the release branch and its native CI checks. The annotated `v2.10.2` tag is to
+be created on the merged revision only after those checks pass. Installer
+publication is tracked by the
+[release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/workflows/build-release.yml)
+and [v2.10.2 release](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.10.2).
 No native Windows/macOS installer or new audio/GPU hardware qualification is
 claimed from this Linux cloud environment. Do not merge or tag until all required
 CI checks pass on the final revision.
