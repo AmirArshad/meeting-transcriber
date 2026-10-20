@@ -4,7 +4,8 @@ This directory separates current guides, maintainer references, completed implem
 
 ## Current Release
 
-- [AvaNevis v2.10.0 release notes](releases/v2.10.0.md)
+- [AvaNevis v2.10.2 release notes](releases/v2.10.2.md)
+- [Certificate trust maintenance and release gates](development/CERTIFICATE_TRUST_MAINTENANCE_2026-10.md)
 - [v2.10 qualification and manual acceptance](development/V2_10_LINUX_RELEASE_QUALIFICATION.md)
 - [Release scope/status](../todo.md)
 

@@ -35,8 +35,8 @@ test('BUILD_DOWNLOADS uses pinned direct download URLs', () => {
   assert.equal(BUILD_DOWNLOADS.ffmpegSource.url, 'https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz');
   assert.equal(BUILD_DOWNLOADS.ffmpegSource.archiveFileName, 'ffmpeg-8.1.2.tar.xz');
   assert.equal(BUILD_DOWNLOADS.ffmpegSource.sha256, '464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c');
-  assert.equal(BUILD_DOWNLOADS.pipWheel.url, 'https://files.pythonhosted.org/packages/f3/6e/1736e5b4ae2b778ef2f81c47d797de9f891d4d8acb047a24ca37a60294dd/pip-26.2.1-py3-none-any.whl');
-  assert.equal(BUILD_DOWNLOADS.pipWheel.sha256, '71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e');
+  assert.equal(BUILD_DOWNLOADS.pipWheel.url, 'https://files.pythonhosted.org/packages/3f/06/3e4420302363fbb71be3c7f35ce042f54bfca330e3e66b3a2e3c4cca579f/pip-26.2.2-py3-none-any.whl');
+  assert.equal(BUILD_DOWNLOADS.pipWheel.sha256, 'fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70');
 });
 
 

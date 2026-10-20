@@ -332,23 +332,26 @@ function buildResourceManifest() {
   };
 }
 
-function ensurePipInstalled(pythonExe, pipTargetDir) {
-  try {
-    execSync(`"${pythonExe}" -m pip --version`, { stdio: 'inherit' });
-    return Promise.resolve();
-  } catch (error) {
-    console.log('  pip not found; bootstrapping from pinned wheel...');
+function installPinnedPipWheel(pythonExe, pipWheelPath, pipTargetDir) {
+  // Standalone Python already includes pip. Replace it too: its vendored
+  // certificate bundle is independent of the application's certifi package.
+  fs.mkdirSync(pipTargetDir, { recursive: true });
+  for (const name of fs.readdirSync(pipTargetDir)) {
+    if (name === 'pip' || /^pip-[^/]+\.dist-info$/.test(name)) {
+      fs.rmSync(path.join(pipTargetDir, name), { recursive: true, force: true });
+    }
   }
+  execFileSync(pythonExe, ['-m', 'zipfile', '-e', pipWheelPath, pipTargetDir], { stdio: 'inherit' });
+}
 
-  if (!fs.existsSync(pipTargetDir)) {
-    fs.mkdirSync(pipTargetDir, { recursive: true });
-  }
+function ensurePipInstalled(pythonExe, pipTargetDir) {
+  console.log('  Installing pinned pip wheel (including its certificate bundle)...');
 
   const pipWheelPath = path.join(BUILD_DIR, path.basename(getBuildDownload('pipWheel').url));
 
   return downloadFile(getBuildDownload('pipWheel'), pipWheelPath)
     .then(() => {
-      execSync(`"${pythonExe}" -m zipfile -e "${pipWheelPath}" "${pipTargetDir}"`, { stdio: 'inherit' });
+      installPinnedPipWheel(pythonExe, pipWheelPath, pipTargetDir);
 
       if (IS_WINDOWS) {
         ensureWindowsEmbeddedPythonPathConfig();
@@ -1256,7 +1259,7 @@ async function prepareResources() {
 
       console.log('[3/4] Setting up pip...');
 
-      // python-build-standalone includes pip, just verify it works
+      // Replace standalone Python's pip with our patched, pinned wheel.
       const pythonExe = path.join(PYTHON_DIR, 'bin', 'python3');
 
       // Make python executable
@@ -1529,6 +1532,7 @@ module.exports = {
   buildSpeakrsCliCargoArgs,
   buildMacOSSpeakrsCliVerificationCommands,
   ensureWindowsEmbeddedPythonPathConfig,
+  installPinnedPipWheel,
   getMacOSPythonRuntimeRemovablePackages,
   buildMacOSHelperVerificationCommands,
   buildMacOSPythonWheelhouseCommands,

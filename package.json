@@ -1,6 +1,6 @@
 {
   "name": "avanevis",
-  "version": "2.10.1",
+  "version": "2.10.2",
   "description": "AvaNevis private meeting recorder and local AI transcriber",
   "main": "src/main.js",
   "scripts": {
@@ -40,7 +40,7 @@
     "adm-zip": "0.6.1"
   },
   "devDependencies": {
-    "electron": "^44.7.0",
+    "electron": "^44.9.2",
     "electron-builder": "^26.17.0"
   },
   "overrides": {

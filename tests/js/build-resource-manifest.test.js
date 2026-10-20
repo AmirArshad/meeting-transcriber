@@ -12,6 +12,7 @@ const {
   buildMacOSPythonWheelhouseCommands,
   buildResourceManifest,
   ensureWindowsEmbeddedPythonPathConfig,
+  installPinnedPipWheel,
   ensureWindowsEmptyBinDirectory,
   getMacOSPythonRuntimeRemovablePackages,
   getStaleResourceDirectories,
@@ -19,6 +20,42 @@ const {
   manifestsMatch,
   pruneMacOSPythonRuntimeDevelopmentFiles,
 } = require('../../build/prepare-resources');
+
+test('pinned pip replaces bundled pip and stale metadata without removing other packages', () => {
+  const AdmZip = require('adm-zip');
+  const { execFileSync } = require('node:child_process');
+  const root = path.resolve(__dirname, '..', '..');
+  const venvPython = path.join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+  const python = fs.existsSync(venvPython) ? venvPython : (process.platform === 'win32' ? 'python' : 'python3');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-pip-pin-'));
+  try {
+    // A minimal wheel exercises replacement, including obsolete files that
+    // extraction alone would otherwise leave in the bundled interpreter.
+    const target = path.join(dir, 'site packages');
+    fs.mkdirSync(path.join(target, 'pip'), { recursive: true });
+    fs.mkdirSync(path.join(target, 'pip-0.0.0.dist-info'));
+    fs.writeFileSync(path.join(target, 'pip', 'obsolete.py'), 'stale');
+    fs.writeFileSync(path.join(target, 'unrelated.py'), 'keep');
+    const zip = new AdmZip();
+    zip.addFile('pip/__init__.py', Buffer.from('__version__ = "26.2.2"\n'));
+    zip.addFile('pip-26.2.2.dist-info/METADATA', Buffer.from('Version: 26.2.2\n'));
+    const wheel = path.join(dir, 'pinned pip.whl');
+    zip.writeZip(wheel);
+
+    installPinnedPipWheel(python, wheel, target);
+    assert.equal(fs.existsSync(path.join(target, 'pip', 'obsolete.py')), false);
+    assert.equal(fs.existsSync(path.join(target, 'pip-0.0.0.dist-info')), false);
+    assert.equal(fs.readFileSync(path.join(target, 'unrelated.py'), 'utf8'), 'keep');
+    const version = execFileSync(python, ['-I', '-c', 'import sys; sys.path.insert(0, sys.argv[1]); import pip; print(pip.__version__)', target], { encoding: 'utf8' }).trim();
+    assert.equal(version, '26.2.2');
+    // Fresh embedded Python has no pip; the same path must bootstrap it.
+    const fresh = path.join(dir, 'fresh');
+    installPinnedPipWheel(python, wheel, fresh);
+    assert.ok(fs.existsSync(path.join(fresh, 'pip', '__init__.py')));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 
 test('hashString returns a stable SHA-256 for resource manifest inputs', () => {

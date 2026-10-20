@@ -1,7 +1,7 @@
 """Download pinned Hugging Face summary model artifacts.
 
-This wrapper lets the Electron main process use Hugging Face's native
-``huggingface_hub``/``hf_xet`` download path for large GGUF files while keeping
+This wrapper lets the Electron main process use Hugging Face's
+``huggingface_hub`` HTTP download path for large GGUF files while keeping
 the app's catalog pinning and checksum verification in JavaScript.
 """
 

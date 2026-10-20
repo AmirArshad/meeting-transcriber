@@ -19,3 +19,6 @@ filelock>=4.1.1         # Prevent race conditions during model downloads
 #
 # Note: Speaker diarization uses a separate managed PyTorch CUDA setup only when
 # the user explicitly enables that add-on.
+
+# Patched CA bundle for explicit model/add-on HTTPS downloads (October 2026).
+certifi>=2026.10.19

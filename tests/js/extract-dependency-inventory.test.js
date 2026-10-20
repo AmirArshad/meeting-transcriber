@@ -57,7 +57,7 @@ test('audit output normalizes aliases and strips local version labels', () => {
   const lock = parakeetLockInventory({ wheels: [wheel('Annotated_Doc', '0.0.5', 'annotated_doc-0.0.5-py3-none-any.whl')] }, 'fixture');
   assert.equal(toRequirements(lock), 'annotated-doc==0.0.5\n');
 
-  assert.equal(toRequirements(bootstrapInventory(BUILD_DOWNLOADS)), 'pip==26.2.1\n');
+  assert.equal(toRequirements(bootstrapInventory(BUILD_DOWNLOADS)), 'pip==26.2.2\n');
 });
 
 test('the intentionally vulnerable fixture reaches the audit with its vulnerable pins intact', () => {

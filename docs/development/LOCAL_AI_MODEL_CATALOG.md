@@ -2,6 +2,11 @@
 
 This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addon-state.js`. Do not hard-code summary model or runtime filenames in renderer logic.
 
+For v2.10.2, Python download children enforce `HF_HUB_DISABLE_XET=1` so
+Hugging Face downloads use patched certifi rather than the independent native
+Xet trust stack. Keep the hf-xet dependency pin for Hub dependency closure;
+re-enable acceleration only after its trust handling is patched and qualified.
+
 ## Rules
 
 ### v2.10 summary language policy
@@ -25,8 +30,8 @@ package, alternative model or translation feature was added.
 - Speaker diarization is accelerator-only: Windows uses CUDA; macOS uses Apple Silicon CoreML for Speakrs or PyTorch Metal/MPS for pyannote. Linux is Speakrs-only, CUDA-only on x86_64 after the accepted managed CUDA 12 preflight, and has no CPU fallback. Pyannote is not a Linux product option. Linux summaries are an active v2.9 CUDA-only Qwen lane, but remain unavailable until their own pinned runtime/model, integrity, managed CUDA, packaged, and RTX 4070 gates pass. Task 4 pins remain the Linux `speakrs-cli` and setup-time CUDA 12 ORT/model-pack closure in `src/ai-addon/speakrs-pack-spec.js`; do not weaken those pins.
 - Setup downloads must emit redacted progress, support cancellation, clean partial `.download` files, and preserve any previously valid install when cancellation happens during validation. Redaction must cover bearer tokens, legacy `Authorization: token ...`, `token=` / `access_token=` / `api_key=` query parameters, `X-Api-Key`, and URL credentials.
 - Pin every downloadable summary model and runtime artifact by immutable URL, filename, and SHA-256 checksum.
-- Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from catalog **download-related** keys only (`downloadUrl`, `url`, `indexUrl`, `extraIndexUrls`) plus known GitHub/Hugging Face/PyPI redirect hosts listed explicitly in `DOWNLOAD_REDIRECT_HOSTS` (`src/ai-addon/download-helpers.js`). `licenseUrl` / `releaseUrl` / docs links must not expand the allowlist. Do **not** wildcard `*.hf.co` / `*.huggingface.co`; when HF/Xet rotates CDN subdomains, add the new host to that set. HF-hosted summary models normally download via bundled Python `huggingface_hub`/`hf_xet` (bypassing the JS allowlist) and still require pinned SHA-256 verification. Arbitrary HTTPS hosts remain blocked.
-- Hugging Face summary model artifacts should download through the bundled Python `huggingface_hub`/`hf_xet` path when available. Keep it unauthenticated for public GGUF models (`token=False` / implicit token disabled), confine both temporary and final paths to the managed cache, and keep post-download SHA-256 verification in the app.
+- Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from catalog **download-related** keys only (`downloadUrl`, `url`, `indexUrl`, `extraIndexUrls`) plus known GitHub/Hugging Face/PyPI redirect hosts listed explicitly in `DOWNLOAD_REDIRECT_HOSTS` (`src/ai-addon/download-helpers.js`). `licenseUrl` / `releaseUrl` / docs links must not expand the allowlist. Do **not** wildcard `*.hf.co` / `*.huggingface.co`; when HF/Xet rotates CDN subdomains, add the new host to that set. HF-hosted summary models normally download via bundled Python `huggingface_hub` HTTP (bypassing the JS allowlist) and still require pinned SHA-256 verification. Arbitrary HTTPS hosts remain blocked.
+- Hugging Face summary model artifacts should download through the bundled Python `huggingface_hub` HTTP path when available. Keep it unauthenticated for public GGUF models (`token=False` / implicit token disabled), confine both temporary and final paths to the managed cache, and keep post-download SHA-256 verification in the app.
 - Prefer official model-owner GGUF artifacts. If unavailable, use established community quantizations with immutable revision URLs.
 - Keep summary runtime flags compatible with the selected catalog model. The current Qwen3.5/llama.cpp path runs with reasoning disabled; parameterize that before adding a non-Qwen3 model that needs different flags.
 - Store artifacts under Electron `userData` via the AI add-on cache helpers so app updates do not remove installed add-ons.
