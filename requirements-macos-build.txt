@@ -61,7 +61,7 @@ llvmlite==0.50.0
 # pip-audit: CVE-2025-3000 is patched in 2.13.0; do not ignore it. setuptools 84.0.0
 # is past PYSEC-2026-3447 (setuptools<83); setuptools is still pruned after install.
 torch==2.14.1
-setuptools==84.0.0
+setuptools==84.2.1
 networkx==3.6.1
 sympy==1.14.0
 # sympy==1.14.0 requires mpmath<1.4.
