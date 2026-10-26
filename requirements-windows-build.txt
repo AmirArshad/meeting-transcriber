@@ -14,7 +14,7 @@ huggingface-hub==1.33.0
 tokenizers==0.23.3
 onnxruntime==1.31.0
 tqdm==4.70.1
-setuptools==84.0.0
+setuptools==84.2.1
 PyYAML==6.0.3
 flatbuffers==25.12.19
 packaging==26.3
