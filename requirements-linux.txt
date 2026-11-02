@@ -6,7 +6,7 @@ soxr>=1.1.0              # Shared spool finalization / StatefulResampler (proces
 
 # Transcription Dependencies (Linux uses faster-whisper, not MLX)
 faster-whisper>=1.0.0    # Fast, accurate Whisper implementation (CPU + optional CUDA)
-filelock>=4.1.1         # Prevent race conditions during model downloads (CVE-2025-68146, CVE-2026-22701)
+filelock>=4.2.4         # Prevent race conditions during model downloads (CVE-2025-68146, CVE-2026-22701)
 
 # SoundCard native binding
 # cffi is pulled in by SoundCard; packaged builds pin it in requirements-linux-build.txt.
@@ -16,4 +16,4 @@ filelock>=4.1.1         # Prevent race conditions during model downloads (CVE-20
 # Linux speaker identification stays unsupported until Feature Parity (Phases 6–7).
 
 # Patched CA bundle for explicit model/add-on HTTPS downloads (October 2026).
-certifi>=2026.10.19
+certifi>=2026.10.23

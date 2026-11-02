@@ -7,7 +7,7 @@ pyaudiowpatch==0.2.12.9
 numpy==2.4.6
 soxr==1.1.0
 faster-whisper==1.2.1
-filelock==4.1.1
+filelock==4.2.4
 av==18.1.0
 ctranslate2==4.8.2
 huggingface-hub==1.33.0
@@ -26,7 +26,7 @@ httpcore==1.0.9
 typer==0.27.3
 typing-extensions==4.16.0
 anyio==4.15.1
-certifi==2026.10.19
+certifi==2026.10.23
 idna==3.20
 h11==0.16.0
 colorama==0.4.6
