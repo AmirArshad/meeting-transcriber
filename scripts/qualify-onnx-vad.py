@@ -66,6 +66,9 @@ def worker(site_packages, windows_telemetry_guard=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline-site-packages')
+    parser.add_argument('--candidate-site-packages')
+    parser.add_argument('--baseline-version', default='1.30.0')
+    parser.add_argument('--candidate-version', default='1.31.0')
     parser.add_argument('--check-network', action='store_true',
                         help='Require Linux strace and reject native network syscalls')
     parser.add_argument('--windows-telemetry-guard', action='store_true',
@@ -89,7 +92,7 @@ def main():
 
     results = []
     with tempfile.TemporaryDirectory(prefix='avanevis-vad-') as temp:
-        for index, packages in enumerate([args.baseline_site_packages, None]):
+        for index, packages in enumerate([args.baseline_site_packages, args.candidate_site_packages]):
             output = Path(temp) / f'{index}.json'
             command = [sys.executable, str(Path(__file__).resolve()), '--worker', '--output', str(output)]
             if packages:
@@ -106,8 +109,8 @@ def main():
                                ('AF_INET', 'AF_INET6', 'connect(', 'sendto(', 'sendmsg(')), trace_text
             results.append(json.loads(output.read_text(encoding='utf-8')))
     baseline, candidate = results
-    assert baseline['version'] == '1.30.0', baseline['version']
-    assert candidate['version'] == '1.31.0', candidate['version']
+    assert baseline['version'] == args.baseline_version, baseline['version']
+    assert candidate['version'] == args.candidate_version, candidate['version']
     assert baseline['fixture_sha256'] == candidate['fixture_sha256']
     for name in baseline['cases']:
         before, after = baseline['cases'][name], candidate['cases'][name]

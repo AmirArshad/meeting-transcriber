@@ -7,6 +7,10 @@ on:
     branches: [ master, main ]
   workflow_dispatch:
     inputs:
+      qualify_onnx_candidate:
+        description: Qualify ONNX Runtime 1.31.1 against 1.31.0 on Windows and Linux
+        type: boolean
+        default: false
       qualify_installers:
         description: Build and verify Windows NSIS and macOS DMG installers without publishing
         type: boolean
@@ -56,6 +60,18 @@ jobs:
         python -m pip install --no-deps --target $baseline onnxruntime==1.30.0
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         ./scripts/qualify-windows-onnx.ps1 -BaselineSitePackages $baseline
+
+    - name: Qualify candidate Windows ONNX telemetry and CPU VAD
+      if: github.event_name == 'workflow_dispatch' && inputs.qualify_onnx_candidate
+      shell: pwsh
+      run: |
+        $baseline = Join-Path $env:RUNNER_TEMP 'onnx-1.31.0'
+        $candidate = Join-Path $env:RUNNER_TEMP 'onnx-1.31.1'
+        python -m pip install --no-deps --target $baseline onnxruntime==1.31.0
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        python -m pip install --no-deps --target $candidate onnxruntime==1.31.1
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        ./scripts/qualify-windows-onnx.ps1 -BaselineSitePackages $baseline -CandidateSitePackages $candidate -BaselineVersion 1.31.0 -CandidateVersion 1.31.1
 
     - name: Validate Python syntax (recursive under backend/)
       run: python scripts/check_python_syntax.py
@@ -424,6 +440,13 @@ jobs:
       run: |
         python -m pip install --no-deps --target "$RUNNER_TEMP/ort-baseline" onnxruntime==1.30.0
         python scripts/qualify-onnx-vad.py --baseline-site-packages "$RUNNER_TEMP/ort-baseline" --check-network
+
+    - name: Qualify candidate Linux ONNX CPU VAD and network silence
+      if: github.event_name == 'workflow_dispatch' && inputs.qualify_onnx_candidate
+      run: |
+        python -m pip install --no-deps --target "$RUNNER_TEMP/ort-1310" onnxruntime==1.31.0
+        python -m pip install --no-deps --target "$RUNNER_TEMP/ort-1311" onnxruntime==1.31.1
+        python scripts/qualify-onnx-vad.py --baseline-site-packages "$RUNNER_TEMP/ort-1310" --candidate-site-packages "$RUNNER_TEMP/ort-1311" --baseline-version 1.31.0 --candidate-version 1.31.1 --check-network
 
     - name: Build Linux unpacked, AppImage, pacman, and deb packages
       run: |

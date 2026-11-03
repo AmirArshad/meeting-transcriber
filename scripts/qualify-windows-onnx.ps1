@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory = $true)][string]$BaselineSitePackages,
-    [string]$Python = 'python'
+    [string]$Python = 'python',
+    [string]$CandidateSitePackages = '',
+    [string]$BaselineVersion = '1.30.0',
+    [string]$CandidateVersion = '1.31.0'
 )
 
 # Native ETW qualification on a disposable runner, using only the bundled VAD
@@ -24,6 +27,7 @@ foreach ($mode in @('control', 'guarded')) {
     if ($LASTEXITCODE -ne 0) { throw "Cannot start ETW collector: $LASTEXITCODE" }
     try {
         $workerArgs = @($helper, '--worker', '--output', $output)
+        if ($CandidateSitePackages) { $workerArgs += @('--site-packages', $CandidateSitePackages) }
         if ($mode -eq 'guarded') { $workerArgs += '--windows-telemetry-guard' }
         & $Python @workerArgs
         if ($LASTEXITCODE -ne 0) { throw "VAD worker failed: $LASTEXITCODE" }
@@ -34,7 +38,7 @@ foreach ($mode in @('control', 'guarded')) {
     & tracerpt $etl -of XML -o $xmlPath -summary (Join-Path $root "$mode-summary.txt") -y
     if ($LASTEXITCODE -ne 0) { throw "Cannot decode ETW trace: $LASTEXITCODE" }
     $result = Get-Content $output -Raw | ConvertFrom-Json
-    if ($result.version -ne '1.31.0') { throw "Unexpected candidate: $($result.version)" }
+    if ($result.version -ne $CandidateVersion) { throw "Unexpected candidate: $($result.version)" }
     [xml]$events = Get-Content $xmlPath -Raw
     $count = 0
     foreach ($event in $events.SelectNodes("//*[local-name()='Event']")) {
@@ -50,6 +54,8 @@ foreach ($mode in @('control', 'guarded')) {
 }
 if ($counts.control -lt 1) { throw 'Positive control emitted no ETW events; collector proof failed.' }
 if ($counts.guarded -ne 0) { throw 'Guarded ONNX worker emitted telemetry.' }
-& $Python $helper --baseline-site-packages $BaselineSitePackages --windows-telemetry-guard
+$compareArgs = @($helper, '--baseline-site-packages', $BaselineSitePackages, '--baseline-version', $BaselineVersion, '--candidate-version', $CandidateVersion, '--windows-telemetry-guard')
+if ($CandidateSitePackages) { $compareArgs += @('--candidate-site-packages', $CandidateSitePackages) }
+& $Python @compareArgs
 if ($LASTEXITCODE -ne 0) { throw "Baseline/candidate VAD parity failed: $LASTEXITCODE" }
 Write-Host 'Windows ONNX qualification passed: positive control detected; guarded ETW events zero; VAD matches.'
