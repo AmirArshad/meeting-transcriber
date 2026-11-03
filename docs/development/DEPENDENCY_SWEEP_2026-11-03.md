@@ -41,7 +41,7 @@ the three exact Python build inventories and Parakeet lock inventories, and no
 unignored Cargo warnings. npm still reports 15 moderate findings through the
 packaging toolchain's minimatch dependencies; npm's suggested force fix is a
 breaking electron-builder downgrade. The prior zip 6 exceptions were removed
-because the compatibility patch now uses zip 9.0.0. The separate webpki-roots
+because the compatibility patch now uses zip 9.0.5. The separate webpki-roots
 compatibility-facade exception remains documented in the Cargo audit config.
 
 Local `npm run test:all` under a virtual X display passed: 1,132 JavaScript
