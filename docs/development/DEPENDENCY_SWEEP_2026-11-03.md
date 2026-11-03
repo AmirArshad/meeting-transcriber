@@ -252,3 +252,14 @@ live cancellation through its packaged JavaScript and bundled Python terminated
 the child after more than 10 MB and left no partial staging data. The full
 regression suite passed: 1,131 JavaScript tests and 847 Python tests; four and
 nine platform tests were skipped, respectively, and Python syntax passed.
+
+### v2.10.3 dependency decision — 2026-11-03
+
+After the user confirmed the Windows and Linux tests and requested release,
+the base Windows, macOS, and Linux build inventories advance hf-xet to 1.8.0.
+The macOS Parakeet lock is regenerated from the same real wheel and changes its
+runtime identity to `99d3a35c3a5758542211b76acfbe34999410789bae6817dfb9163af451304cf9`;
+existing installations require the normal explicit repair. The qualification
+results and limits above remain the evidence for these decisions. The native
+Xet transport is still forced off; installing the wheel does not qualify or
+enable its independent certificate trust or telemetry behavior.

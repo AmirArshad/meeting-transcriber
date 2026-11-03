@@ -1,9 +1,9 @@
 # AvaNevis v2.10
 
-Release version: **v2.10.2** — certificate-trust security maintenance.
-See the [v2.10.2 release notes](docs/releases/v2.10.2.md) and
-[maintenance evidence and release gates](docs/development/CERTIFICATE_TRUST_MAINTENANCE_2026-10.md).
-Previous release: **v2.10.1**, published 2026-10-17.
+Release version: **v2.10.3** — dependency and download maintenance.
+See the [v2.10.3 release notes](docs/releases/v2.10.3.md) and
+[dependency qualification evidence](docs/development/DEPENDENCY_SWEEP_2026-11-03.md).
+Previous release: **v2.10.2**, published 2026-10-21.
 The v2.10.0 notes and record below remain historical. See the
 [v2.10.0 release notes](docs/releases/v2.10.0.md) and
 [qualification record](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md).
