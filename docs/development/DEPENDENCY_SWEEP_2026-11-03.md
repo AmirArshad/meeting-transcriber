@@ -79,3 +79,29 @@ updated macOS 14-targeted wheel set, and the rebuilt Speakrs helper; the
 verification covered signatures, MLX imports and an Opus encode. This was an
 ad-hoc signed directory build, not a notarized DMG or a packaged recording and
 inference acceptance test.
+
+## Windows follow-up — 2026-11-03
+
+On Windows 11 x64 with Python 3.11.9 and RTX 4070 driver 621.01, isolated
+actual CTranslate2 4.8.2 and 4.8.5 wheels were tested with faster-whisper
+1.2.1, the locally cached base model and the two-speaker fixture, with
+Hugging Face offline mode enabled. Fresh processes on CPU/int8 and CUDA/float16
+produced identical four timestamped segments across both versions and exited
+normally. The Windows build pin advances to 4.8.5, matching Linux. This is a
+short inference and process-exit check, not a long recording or full add-on
+acceptance test.
+
+ONNX Runtime 1.31.1 remains held pending the disposable-runner ETW positive
+control, guarded VAD parity and source review required by the local AI contract.
+The hf-xet pin remains held pending explicit-download qualification; Xet remains
+disabled in the application transport policy.
+
+The native Windows build-pin closure resolved exactly and its inventory audit
+reported zero findings. `npm run test:all` passed (1,131 JavaScript passed,
+4 skipped; 848 Python passed, 8 skipped; Python syntax clean) using the repo
+venv, which was not fully realigned to the build pins. An unsigned `build:dir`
+with a separate output directory succeeded with Electron 45.2.1 and rebuilt
+Speakrs. Its embedded Python loaded CTranslate2 4.8.5 from the package and
+reproduced the same offline CPU/int8 and CUDA/float16 fixture transcript;
+CUDA DLLs came from the local Python CUDA 12 installation. This did not test an
+NSIS installation, packaged GUI recording, or add-on acceptance.
