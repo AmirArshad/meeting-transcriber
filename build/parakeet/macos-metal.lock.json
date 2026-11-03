@@ -1036,132 +1036,142 @@
     },
     {
       "packageName": "filelock",
-      "version": "3.32.3",
-      "fileName": "filelock-3.32.3-py3-none-any.whl",
-      "url": "https://files.pythonhosted.org/packages/a7/8e/50f46a9c0ce8d2861a394c1347caae037ea0431d2f67d7feb151cbc4649a/filelock-3.32.3-py3-none-any.whl",
-      "sizeBytes": 98901,
-      "sha256": "7f0ca4bcc0e181c60dbbd8aa9ab5b120ebb99e4e064e83636340056f833a1f09",
+      "version": "4.2.7",
+      "fileName": "filelock-4.2.7-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/1d/1a/1fcf0d3886bad15b92459a0e529dd86a1ec4d9ef30e789df48044fd3698c/filelock-4.2.7-py3-none-any.whl",
+      "sizeBytes": 164345,
+      "sha256": "d08972bbca2b8767ee552aff877b091dd111ffb1d22de7de885766ea7d719d5e",
       "license": "MIT",
       "extractedFiles": [
         {
-          "path": "filelock-3.32.3.dist-info/METADATA",
-          "sizeBytes": 2028,
-          "sha256": "2d80f43bd905689145c00b3133bc95895d654ced70a96a1802e9237e0d66599f"
+          "path": "filelock-4.2.7.dist-info/METADATA",
+          "sizeBytes": 1981,
+          "sha256": "560e42f22fa9efafbe185c5ff82d14c2daf81db20ba783e4f7706041e8d82911"
         },
         {
-          "path": "filelock-3.32.3.dist-info/RECORD",
-          "sizeBytes": 2027,
-          "sha256": "07bfde4083b4489b1d0b1f50a434397c43ce8669efa1212abbc9377513d2dca3"
+          "path": "filelock-4.2.7.dist-info/RECORD",
+          "sizeBytes": 2203,
+          "sha256": "91ab7b9a226fd85e57ae88f5ccd75d19ac3982e0f23ef8519fdb0ba3f0116c74"
         },
         {
-          "path": "filelock-3.32.3.dist-info/WHEEL",
+          "path": "filelock-4.2.7.dist-info/WHEEL",
           "sizeBytes": 87,
-          "sha256": "ccec20e2307acd7da453dd7437e70c6b08e2bc3ead3bc3445af135da37b56d59"
+          "sha256": "5b77e4a649bbfb07fdbc123967eeecd1e5a478cfaca6eefc23c35e6fdf037848"
         },
         {
-          "path": "filelock-3.32.3.dist-info/licenses/LICENSE",
+          "path": "filelock-4.2.7.dist-info/licenses/LICENSE",
           "sizeBytes": 1088,
           "sha256": "608c89d5060ae9921adccf3236695bc654a9946e12323ef6c021dfa04e294d48"
         },
         {
           "path": "filelock/__init__.py",
-          "sizeBytes": 3469,
-          "sha256": "644857d02a33bd1c45430b26f1861ceae88bbee2187be6a80f6d0009f8f28b38"
+          "sizeBytes": 6027,
+          "sha256": "2744a46f1e954b6da3a3d659b0151c0d4e8fe7e95b72beb7b82877766cb20e28"
         },
         {
           "path": "filelock/_api.py",
-          "sizeBytes": 82436,
-          "sha256": "5568ae5b6a161eb33d172df2465b31adef9d6978e99b309b24ee37885b989091"
+          "sizeBytes": 106542,
+          "sha256": "7edf7fda6df3d448caa505e2166fc153b4dfc52f02b2904af3882475b001eb8b"
         },
         {
           "path": "filelock/_async.py",
-          "sizeBytes": 6111,
-          "sha256": "aceea0b7587a66f4f6830ff43f55e67f58d9b3cda4122a59f715f8feb2549b79"
+          "sizeBytes": 20487,
+          "sha256": "8d2a9bf985337bc72329a36b949daa94c75f37db350d96e044c9e8ce9e240d9b"
         },
         {
           "path": "filelock/_async_read_write.py",
-          "sizeBytes": 13325,
-          "sha256": "640249d360802e067aba18567b0e0379f4ed9c453b96c952a06f958e63290c1b"
+          "sizeBytes": 17947,
+          "sha256": "4ece8dfe9e7e5102c3a181c9284ebb35f155e99a487295f472ebb74b9e5d5f34"
         },
         {
           "path": "filelock/_descriptor.py",
-          "sizeBytes": 2981,
-          "sha256": "b2cd457f2100cab675401dcb0d752d24793964501f48068275a6b9629d55ce4e"
+          "sizeBytes": 3277,
+          "sha256": "67cd71f7c47b45b37968781a473bb8f22edcd0ab6c85ecdee98839baf5ab5346"
         },
         {
           "path": "filelock/_error.py",
-          "sizeBytes": 2699,
-          "sha256": "49f74bc107a8a21f358c83354b8775d35d1cb59cd7641601a3bf1b240d65119b"
+          "sizeBytes": 3235,
+          "sha256": "b1935f155df069c9eb182ae73a2a6e70f6e71cdefc34fb752039e58359ce3759"
         },
         {
           "path": "filelock/_identity.py",
-          "sizeBytes": 8415,
-          "sha256": "758fe780c2502479b47cb0f94da19e7f5da8386781025f61d3fed7bf577718c3"
+          "sizeBytes": 17586,
+          "sha256": "87e6430b06ea358cfe67d4e8af409c75b2b031e387560a9db3bb37f4fc9e4fb8"
         },
         {
           "path": "filelock/_lease.py",
-          "sizeBytes": 15152,
-          "sha256": "9c48b8234d91cb7b7c4122d871cb6bdfa5d5e2357a78bc9a4f21e8eb305e48a1"
+          "sizeBytes": 19349,
+          "sha256": "50474c65c368b5772eb5409d05bf28529404f8a737c38cb45dad086c736e4c30"
         },
         {
           "path": "filelock/_marker.py",
-          "sizeBytes": 6026,
-          "sha256": "ed5256cb2ae1f305bc572c124cb2c847b382fff68d527e331677a5e49750c162"
+          "sizeBytes": 7896,
+          "sha256": "7558da943a5ca70a88445ed552f14adad915678382b618e69888a72b2f638451"
         },
         {
           "path": "filelock/_read_write.py",
-          "sizeBytes": 32881,
-          "sha256": "3c194b83f7db92a0dca51c89e4d91982858b47d0c450733ed6c43306766c383f"
+          "sizeBytes": 68945,
+          "sha256": "3d5dc0c9ee9d86ec750db810cedd5582ccf1cc89c874e9f7b06074889943eb4c"
         },
         {
           "path": "filelock/_soft.py",
-          "sizeBytes": 13014,
-          "sha256": "c9da56d79af78065b6901687863f05be7013430e7e91f5e7496c9885b11034a0"
+          "sizeBytes": 34446,
+          "sha256": "74d9a40e4ac94f7c5865bce706ed49d3bf049a6702a7d67f7ce2abfa0fa6bde5"
         },
         {
           "path": "filelock/_soft_protocol.py",
-          "sizeBytes": 187,
-          "sha256": "a84336c7d373f7382e5f0c168d9b02b0f11f6ace67a87949fbfa07bc0334528e"
+          "sizeBytes": 218,
+          "sha256": "0fae299d732533bcac2a9771d1f35784926088c712f53d90c2cbb61a93ecda2d"
         },
         {
           "path": "filelock/_soft_rw/__init__.py",
-          "sizeBytes": 370,
-          "sha256": "fe4b691a654e6f3aef2f42b5fc4015dcb17b07d25aad8c56fa6c7f7b218f853d"
+          "sizeBytes": 452,
+          "sha256": "240305e0d034d74fc9abe9c48071d98161d9ece7fdc08dcf287836e260dd5f9d"
         },
         {
           "path": "filelock/_soft_rw/_async.py",
-          "sizeBytes": 11492,
-          "sha256": "a0a0edf6382c45202fc7696cf5c03400dd8b9345a51dcedb7662934c236397d8"
+          "sizeBytes": 16939,
+          "sha256": "bf7ab669d7ea6fdbd0470aa195cb5874a658965b49e17bad65c27b217b83cb83"
+        },
+        {
+          "path": "filelock/_soft_rw/_protocol.py",
+          "sizeBytes": 30996,
+          "sha256": "3be10dbff5ecb51a482038781a71683cd7e4220fb1b0373cb55a6c7c186b9250"
+        },
+        {
+          "path": "filelock/_soft_rw/_storage.py",
+          "sizeBytes": 13710,
+          "sha256": "03509b117868d3883088ae20863035fb600f841fbc900b602b36e7a6d9fbdcc8"
         },
         {
           "path": "filelock/_soft_rw/_sync.py",
-          "sizeBytes": 43201,
-          "sha256": "5cc0b490ca1104ca02009ab12bd6d4fd45b9a3429543952671d62aa69e63f243"
+          "sizeBytes": 37648,
+          "sha256": "53072b9ebe01134dedc4b0ae7b6d6ddd25b0acc007f6f544eee556bb49cc1e85"
         },
         {
           "path": "filelock/_strict.py",
-          "sizeBytes": 38823,
-          "sha256": "379d37ee7580cf6005e7d2e5c8f32c3a0e08c062f5dc3eb1eb88614049f7bd04"
+          "sizeBytes": 60566,
+          "sha256": "058dfc8f5129d300d819cfbb1efbc988749e191d9594c4bf0a33d302b4aaf6cc"
         },
         {
           "path": "filelock/_unix.py",
-          "sizeBytes": 8722,
-          "sha256": "5bde6028b8d88af35960b4f7eb7e28ee5d2941fbd4f127415bfd82ddba3794bc"
+          "sizeBytes": 10986,
+          "sha256": "456365ea4efef44c4f4579361af870fafe01ed809bba0780d346261f7ba1eeb9"
         },
         {
           "path": "filelock/_util.py",
-          "sizeBytes": 6356,
-          "sha256": "818f37f4e5c8b6da7524eafdf85ba12d36183a806d131901d8d9f9d2df28c584"
+          "sizeBytes": 20573,
+          "sha256": "73084f5a62674e8cd4940a3763224dd91e613e8dfe21f48fd66711a5c25b9a9b"
         },
         {
           "path": "filelock/_windows.py",
-          "sizeBytes": 15988,
-          "sha256": "b0b024fbe72738ad5ffbd453b800003928e1e1705cc5ad11de3cb6c375e0519b"
+          "sizeBytes": 38880,
+          "sha256": "70316f24df1d26d7436231d83edfe4a65bc90a4943ff223bfd489a26457e57cd"
         },
         {
           "path": "filelock/asyncio.py",
-          "sizeBytes": 34599,
-          "sha256": "884e7ddc9f82814977c80006b27ce2b4877832d1c3b399defbe17c37ca12eb2b"
+          "sizeBytes": 42985,
+          "sha256": "a23d2175649d4bef3034897d350c4e65cb6e82248ea90a32e6ce8fa089ed1072"
         },
         {
           "path": "filelock/py.typed",
@@ -1170,8 +1180,8 @@
         },
         {
           "path": "filelock/version.py",
-          "sizeBytes": 522,
-          "sha256": "ef1adbf5c69f7b7f12d36c3b119704a6a4db88639ed2d0c71eb2e92921fc5e03"
+          "sizeBytes": 520,
+          "sha256": "87839c9b4e7d2a1ae65bd2e354f53315875c31d176397ae49802b10a0c98032e"
         }
       ]
     },
@@ -32428,5 +32438,5 @@
       ]
     }
   ],
-  "lockDigest": "98aa2fdac3866e58da490493fb3ba9a329b01d10d1acfa667ca9b9cb7bb59d43"
+  "lockDigest": "ea0e6f3a1ac056e0bb761f9ff4ef8394753f2088a356c3e85146fb59f61afcd1"
 }

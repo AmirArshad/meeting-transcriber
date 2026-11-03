@@ -130,7 +130,7 @@ def test_windows_desktop_only_constructor_does_not_probe_microphone(tmp_path, mo
         def terminate(self):
             return None
 
-    monkeypatch.setattr(windows_mod.pyaudio, "PyAudio", FakePyAudio)
+    monkeypatch.setattr(windows_mod.pyaudio, "PyAudio", FakePyAudio, raising=False)
     monkeypatch.setattr(
         windows_mod.AudioRecorder, "_probe_loopback_sample_rate", lambda self, *_: (48000, 2)
     )

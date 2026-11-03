@@ -323,6 +323,10 @@ function buildResourceManifest() {
         path.join(SPEAKRS_CLI_DIR, 'src'),
         SPEAKRS_CLI_DIR
       ),
+      speakrsVendor: buildDirectoryManifest(
+        path.join(SPEAKRS_CLI_DIR, 'vendor'),
+        SPEAKRS_CLI_DIR
+      ),
       speakrsOrtCompilePins: hashString(readTextOrEmpty(SPEAKRS_ORT_COMPILE_PINS_PATH)),
       speakrsCargoTarget: getSpeakrsResourceManifestTarget(),
       speakrsValidateWav: fs.existsSync(SPEAKRS_VALIDATE_WAV_SOURCE)

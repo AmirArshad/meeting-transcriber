@@ -247,3 +247,12 @@ test('macOS helper entitlement parser requires inherit entitlement', () => {
     false,
   );
 });
+
+
+test('resource manifest tracks the vendored Speakrs dependency patch', () => {
+  const manifest = buildResourceManifest();
+  assert.ok(manifest.inputs.speakrsVendor.some((entry) => entry.path === 'vendor/ndarray-npy/src/npz.rs'));
+  const changed = structuredClone(manifest);
+  changed.inputs.speakrsVendor[0].sha256 = 'changed';
+  assert.equal(manifestsMatch(manifest, changed), false);
+});

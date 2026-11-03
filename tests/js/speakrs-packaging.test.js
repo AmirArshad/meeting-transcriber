@@ -521,14 +521,14 @@ test('Speakrs GitHub Actions use reviewed commit SHAs rather than moving refs', 
   assert.doesNotMatch(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain@master/);
   assert.doesNotMatch(CI_WORKFLOW, /uses:\s*Swatinem\/rust-cache@v2\s/);
   assert.doesNotMatch(RELEASE_WORKFLOW, /uses:\s*Swatinem\/rust-cache@v2\s/);
-  assert.match(CI_WORKFLOW, /dtolnay\/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f/);
-  assert.match(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f/);
-  assert.match(CI_WORKFLOW, /Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/);
-  assert.match(RELEASE_WORKFLOW, /Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/);
-  assert.match(CI_WORKFLOW, /dtolnay\/rust-toolchain master as of 2026-10-13/);
-  assert.match(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain master as of 2026-10-13/);
-  assert.match(CI_WORKFLOW, /Swatinem\/rust-cache v2\.9\.2/);
-  assert.match(RELEASE_WORKFLOW, /Swatinem\/rust-cache v2\.9\.2/);
+  assert.match(CI_WORKFLOW, /dtolnay\/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8/);
+  assert.match(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8/);
+  assert.match(CI_WORKFLOW, /Swatinem\/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0/);
+  assert.match(RELEASE_WORKFLOW, /Swatinem\/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0/);
+  assert.match(CI_WORKFLOW, /dtolnay\/rust-toolchain master as of 2026-11-03/);
+  assert.match(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain master as of 2026-11-03/);
+  assert.match(CI_WORKFLOW, /Swatinem\/rust-cache v2\.9\.3/);
+  assert.match(RELEASE_WORKFLOW, /Swatinem\/rust-cache v2\.9\.3/);
 });
 
 

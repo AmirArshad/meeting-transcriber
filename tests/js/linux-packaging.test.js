@@ -94,10 +94,8 @@ test('electron-builder stays on 26.x and opts into the static FUSE-less AppImage
   assert.equal(packageJson.build.toolsets.appimage === '1.0.3', false);
 });
 
-test('Electron is the v2.9 stable 44.x candidate, not a 45 prerelease', () => {
-  assert.match(packageJson.devDependencies.electron, /^\^44\./);
-  assert.match(packageJson.devDependencies.electron, /^[^\s]*44\./);
-  assert.equal(packageJson.devDependencies.electron.includes('45'), false);
+test('Electron stays on the stable 45.x release line', () => {
+  assert.match(packageJson.devDependencies.electron, /^\^45\.\d+\.\d+$/);
 });
 
 test('Electron packages the Parakeet adapter lock files used by the runtime catalog', () => {
@@ -567,7 +565,7 @@ test('Ubuntu CI job builds Linux packages on ubuntu-latest with SHA-pinned actio
   assert.match(CI_WORKFLOW, /Speakrs CPU-mode inference smoke \(non-GPU structural check\)/);
   assert.match(CI_WORKFLOW, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/);
   assert.match(CI_WORKFLOW, /actions\/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1/);
-  assert.match(CI_WORKFLOW, /actions\/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97/);
+  assert.match(CI_WORKFLOW, /actions\/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0/);
   for (const workflow of [CI_WORKFLOW, RELEASE_WORKFLOW]) {
     for (const [, action] of workflow.matchAll(/^\s*(?:-\s*)?uses:\s*(\S+)/gm)) {
       assert.match(action, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${action} must be pinned to a full commit SHA`);

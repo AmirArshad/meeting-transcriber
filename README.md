@@ -211,7 +211,7 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
 
 ## Tech stack
 
-- **Frontend:** Electron 44, plain HTML / CSS / JavaScript (no UI framework)
+- **Frontend:** Electron 45, plain HTML / CSS / JavaScript (no UI framework)
 - **Backend:** Python 3.11, bundled with the installer
 - **Transcription:** `faster-whisper` (Windows/Linux, CUDA optional), `lightning-whisper-mlx` (macOS, Metal); optional Parakeet v2 with pinned platform runtimes
 - **Local AI add-ons:** Speakrs (token-free native CLI) or `pyannote.audio` for Windows CUDA and macOS Apple Silicon speaker identification; pinned `llama.cpp` + GGUF for user-triggered summaries
