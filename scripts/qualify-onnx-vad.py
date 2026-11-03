@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Compare CPU Silero VAD on the bundled model; no model/network downloads.
 
-Install ONNX Runtime 1.30.0 with --no-deps --target <baseline>, then run:
+Install ONNX Runtime 1.31.0 with --no-deps --target <baseline>, then run:
   python scripts/qualify-onnx-vad.py --baseline-site-packages <baseline>
-The active interpreter must contain candidate ONNX Runtime 1.31.0 and the
+The active interpreter must contain candidate ONNX Runtime 1.31.1 and the
 faster-whisper build dependencies. Workers use separate native processes.
 """
 
@@ -67,8 +67,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--baseline-site-packages')
     parser.add_argument('--candidate-site-packages')
-    parser.add_argument('--baseline-version', default='1.30.0')
-    parser.add_argument('--candidate-version', default='1.31.0')
+    parser.add_argument('--baseline-version', default='1.31.0')
+    parser.add_argument('--candidate-version', default='1.31.1')
     parser.add_argument('--check-network', action='store_true',
                         help='Require Linux strace and reject native network syscalls')
     parser.add_argument('--windows-telemetry-guard', action='store_true',

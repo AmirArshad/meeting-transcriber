@@ -2,8 +2,8 @@ param(
     [Parameter(Mandatory = $true)][string]$BaselineSitePackages,
     [string]$Python = 'python',
     [string]$CandidateSitePackages = '',
-    [string]$BaselineVersion = '1.30.0',
-    [string]$CandidateVersion = '1.31.0'
+    [string]$BaselineVersion = '1.31.0',
+    [string]$CandidateVersion = '1.31.1'
 )
 
 # Native ETW qualification on a disposable runner, using only the bundled VAD

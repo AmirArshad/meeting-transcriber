@@ -105,3 +105,29 @@ Speakrs. Its embedded Python loaded CTranslate2 4.8.5 from the package and
 reproduced the same offline CPU/int8 and CUDA/float16 fixture transcript;
 CUDA DLLs came from the local Python CUDA 12 installation. This did not test an
 NSIS installation, packaged GUI recording, or add-on acceptance.
+
+## ONNX and hf-xet qualification follow-up — 2026-11-03
+
+ONNX Runtime 1.31.1 advances the shared Windows and Linux CPU build pins.
+The [upstream 1.31.0–1.31.1 comparison](https://github.com/microsoft/onnxruntime/compare/v1.31.0...v1.31.1)
+changes release/version assertions and an OpenVINO provider declaration, with
+no telemetry source changes. This source review does not replace measurement.
+[Disposable CI run 41634848524](https://github.com/AmirArshad/meeting-transcriber/actions/runs/41634848524)
+installed the actual Windows and Linux Python 3.11 wheels. Windows ETW captured
+20 candidate events in the unsuppressed control and zero in the guarded worker;
+CPU VAD probabilities and speech boundaries matched 1.31.0, and silence stayed
+empty. Linux CPU VAD matched too, with no network syscalls observed under the
+existing strace gate and process-start opt-out. These checks do not qualify GPU
+hardware, managed Speakrs/Parakeet runtimes, or a packaged recording.
+
+hf-xet remains at 1.7.0. The app forces `HF_HUB_DISABLE_XET=1` for ordinary
+and isolated Python children and summary downloads, retaining the HTTP path and
+token scrubbing. A native Windows 1.8.0 wheel with huggingface-hub 1.33.0
+installed was tested with Xet disabled: a small public, revision-pinned HTTP
+download passed the summary wrapper's SHA-256 check, and a wrong checksum was
+rejected. This does not exercise hf-xet's native transport, a large model, or
+all explicit Whisper and add-on downloads on the supported platforms. Its
+independent TLS behavior and those paths remain unqualified; the disabled-Xet
+policy and current pin are unchanged. The [1.8.0 release](https://github.com/huggingface/xet-core/releases/tag/v1.8.0)
+also introduces experimental upload behavior, which the application does not
+need. No token was used in this test.
