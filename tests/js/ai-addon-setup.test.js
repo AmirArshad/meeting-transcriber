@@ -665,6 +665,9 @@ test('Hugging Face downloader kills child process and rejects on cancellation', 
     }),
   );
   const child = new EventEmitter();
+  const stagingPath = '/tmp/AvaNevis/model.gguf.download.hf-download';
+  fsModule.mkdirSync(stagingPath, { recursive: true });
+  fsModule.writeFileSync(path.join(stagingPath, 'partial'), 'partial');
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.exitCode = null;
@@ -697,6 +700,7 @@ test('Hugging Face downloader kills child process and rejects on cancellation', 
 
     await assert.rejects(downloadPromise, /canceled/i);
     assert.equal(child.signalCode, 'SIGTERM');
+    assert.equal(fsModule.existsSync(stagingPath), false);
   } finally {
     Object.defineProperty(process, 'platform', originalPlatform || { value: process.platform });
   }

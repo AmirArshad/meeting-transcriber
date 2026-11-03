@@ -207,3 +207,48 @@ Xet disabled and a failing native-Xet sentinel. It downloaded 74,418,540-byte
 weights and configuration into a fresh temporary cache, then accepted that
 cache with local-only mode enabled. No inference, cancellation, or packaged GUI
 setup flow was exercised by that check.
+
+### Further macOS qualification — 2026-11-03
+
+Using the candidate 1.8.0 wheel in the ad-hoc packaged Python and the app's
+JavaScript download helper with Xet disabled, the pinned Qwen3.5 4B GGUF
+(2,740,937,888 bytes) downloaded and matched its catalog SHA-256. The real
+summary setup installed the pinned macOS runtime and reached ready in an
+isolated userData directory. The real cache checker accepted the model,
+rejected a one-byte alteration, and accepted it after restoration.
+
+A live cancellation after more than 10 MB exposed a pre-existing cleanup bug:
+terminating the Python child bypassed its `finally` cleanup and left the
+`.hf-download` staging directory. The downloader now removes that directory
+when the cancelled child closes. The regression test first reproduced the
+failure, then passed with the fix. A second live cancellation through summary
+setup returned `notConfigured`, removed the partial staging directory, and
+kept the already-installed runtime. This used the production setup module and
+candidate bundled Python in isolated temporary directories, not the Electron UI.
+
+The existing isolated Parakeet runtime with Hub 1.29.0 was tested with the
+candidate hf-xet 1.8.0 wheel overlaid in a temporary import path; the managed
+runtime and lock were not modified. With Xet disabled, its pinned configuration
+was downloaded, SHA-256 verified, and retrieved offline. The local Metal
+Parakeet adapter transcribed the speech fixture using cached model files.
+This is candidate compatibility evidence, not an installed-lock repair or
+managed-runtime integrity qualification. The base pins, Parakeet lock, and
+native-Xet disable remain unchanged pending the other-platform and trust gates.
+A disposable checkout also regenerated the macOS Parakeet lock from the real
+1.8.0 wheel; its generator's dependency-closure checks passed and produced
+candidate lock digest `99d3a35c3a5758542211b76acfbe34999410789bae6817dfb9163af451304cf9`.
+An isolated repair then downloaded the locked wheels, copied the existing local
+model into a disposable userData directory, verified the model and runtime
+hashes, probed Metal, and promoted the candidate runtime to ready. The real
+user installation was not modified.
+The candidate runtime passed the live compute-integrity check and transcribed
+the speech fixture offline via the production bootstrap on Metal (six
+segments). The existing user installation reports repair-required when
+inspected against the candidate lock, as expected; it was not altered.
+
+After the cancellation fix, an ad-hoc app directory was repackaged from the
+candidate prepared resources and passed the macOS packaged verifier. A further
+live cancellation through its packaged JavaScript and bundled Python terminated
+the child after more than 10 MB and left no partial staging data. The full
+regression suite passed: 1,131 JavaScript tests and 847 Python tests; four and
+nine platform tests were skipped, respectively, and Python syntax passed.
