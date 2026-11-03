@@ -180,3 +180,30 @@ compromised-intermediate chain set (with a meaningful vulnerable positive
 control), plus packaged Windows, macOS and Linux download, checksum, cancellation,
 offline/cache, token-boundary and failure-recovery qualification. Success of
 HTTP downloads with Xet disabled is not evidence for that native TLS stack.
+
+### macOS candidate follow-up — 2026-11-03
+
+On macOS 26.7.1 arm64, Python 3.11.18 and Hub 1.33.0, the actual hf-xet
+1.8.0 arm64 wheel was loaded from an isolated target. The summary downloader
+fetched a 540,217-byte public Xet-backed fixture and verified its SHA-256 with
+`HF_HUB_DISABLE_XET=1`; instrumentation confirmed no native Xet call. A
+separate opt-in probe exercised the native Xet path and verified the same
+bytes. Both probes disabled implicit tokens and telemetry and used temporary
+caches. The native macOS candidate build-pin closure and exact-inventory
+audit passed (zero findings). Focused downloader and transcription-helper
+tests passed (64 passed, one Windows-only skip), as did 115 JavaScript add-on
+setup and privacy tests.
+
+An ad-hoc signed directory build with the candidate pin passed
+`npm run verify:mac:packaged`; its bundled Python completed the same HTTP-path
+fixture download with no native Xet call. These checks do not establish native
+Xet TLS or telemetry behavior, a substantial summary download, cancellation,
+MLX explicit download, Parakeet compatibility, a notarized installer, or full
+hardware acceptance. The existing 1.7.0 base pins, separate Parakeet lock, and
+disabled-Xet policy remain in place pending the outstanding gates above.
+
+A separate candidate-wheel check used the app's MLX Tiny download method with
+Xet disabled and a failing native-Xet sentinel. It downloaded 74,418,540-byte
+weights and configuration into a fresh temporary cache, then accepted that
+cache with local-only mode enabled. No inference, cancellation, or packaged GUI
+setup flow was exercised by that check.
