@@ -180,3 +180,75 @@ compromised-intermediate chain set (with a meaningful vulnerable positive
 control), plus packaged Windows, macOS and Linux download, checksum, cancellation,
 offline/cache, token-boundary and failure-recovery qualification. Success of
 HTTP downloads with Xet disabled is not evidence for that native TLS stack.
+
+### macOS candidate follow-up — 2026-11-03
+
+On macOS 26.7.1 arm64, Python 3.11.18 and Hub 1.33.0, the actual hf-xet
+1.8.0 arm64 wheel was loaded from an isolated target. The summary downloader
+fetched a 540,217-byte public Xet-backed fixture and verified its SHA-256 with
+`HF_HUB_DISABLE_XET=1`; instrumentation confirmed no native Xet call. A
+separate opt-in probe exercised the native Xet path and verified the same
+bytes. Both probes disabled implicit tokens and telemetry and used temporary
+caches. The native macOS candidate build-pin closure and exact-inventory
+audit passed (zero findings). Focused downloader and transcription-helper
+tests passed (64 passed, one Windows-only skip), as did 115 JavaScript add-on
+setup and privacy tests.
+
+An ad-hoc signed directory build with the candidate pin passed
+`npm run verify:mac:packaged`; its bundled Python completed the same HTTP-path
+fixture download with no native Xet call. These checks do not establish native
+Xet TLS or telemetry behavior, a substantial summary download, cancellation,
+MLX explicit download, Parakeet compatibility, a notarized installer, or full
+hardware acceptance. The existing 1.7.0 base pins, separate Parakeet lock, and
+disabled-Xet policy remain in place pending the outstanding gates above.
+
+A separate candidate-wheel check used the app's MLX Tiny download method with
+Xet disabled and a failing native-Xet sentinel. It downloaded 74,418,540-byte
+weights and configuration into a fresh temporary cache, then accepted that
+cache with local-only mode enabled. No inference, cancellation, or packaged GUI
+setup flow was exercised by that check.
+
+### Further macOS qualification — 2026-11-03
+
+Using the candidate 1.8.0 wheel in the ad-hoc packaged Python and the app's
+JavaScript download helper with Xet disabled, the pinned Qwen3.5 4B GGUF
+(2,740,937,888 bytes) downloaded and matched its catalog SHA-256. The real
+summary setup installed the pinned macOS runtime and reached ready in an
+isolated userData directory. The real cache checker accepted the model,
+rejected a one-byte alteration, and accepted it after restoration.
+
+A live cancellation after more than 10 MB exposed a pre-existing cleanup bug:
+terminating the Python child bypassed its `finally` cleanup and left the
+`.hf-download` staging directory. The downloader now removes that directory
+when the cancelled child closes. The regression test first reproduced the
+failure, then passed with the fix. A second live cancellation through summary
+setup returned `notConfigured`, removed the partial staging directory, and
+kept the already-installed runtime. This used the production setup module and
+candidate bundled Python in isolated temporary directories, not the Electron UI.
+
+The existing isolated Parakeet runtime with Hub 1.29.0 was tested with the
+candidate hf-xet 1.8.0 wheel overlaid in a temporary import path; the managed
+runtime and lock were not modified. With Xet disabled, its pinned configuration
+was downloaded, SHA-256 verified, and retrieved offline. The local Metal
+Parakeet adapter transcribed the speech fixture using cached model files.
+This is candidate compatibility evidence, not an installed-lock repair or
+managed-runtime integrity qualification. The base pins, Parakeet lock, and
+native-Xet disable remain unchanged pending the other-platform and trust gates.
+A disposable checkout also regenerated the macOS Parakeet lock from the real
+1.8.0 wheel; its generator's dependency-closure checks passed and produced
+candidate lock digest `99d3a35c3a5758542211b76acfbe34999410789bae6817dfb9163af451304cf9`.
+An isolated repair then downloaded the locked wheels, copied the existing local
+model into a disposable userData directory, verified the model and runtime
+hashes, probed Metal, and promoted the candidate runtime to ready. The real
+user installation was not modified.
+The candidate runtime passed the live compute-integrity check and transcribed
+the speech fixture offline via the production bootstrap on Metal (six
+segments). The existing user installation reports repair-required when
+inspected against the candidate lock, as expected; it was not altered.
+
+After the cancellation fix, an ad-hoc app directory was repackaged from the
+candidate prepared resources and passed the macOS packaged verifier. A further
+live cancellation through its packaged JavaScript and bundled Python terminated
+the child after more than 10 MB and left no partial staging data. The full
+regression suite passed: 1,131 JavaScript tests and 847 Python tests; four and
+nine platform tests were skipped, respectively, and Python syntax passed.

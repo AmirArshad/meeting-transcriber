@@ -262,6 +262,16 @@ async function downloadHuggingFaceSummaryArtifact({ artifact, destinationPath, e
         handleStdoutLine(stdoutBuffer);
       }
       if (cancelError) {
+        // SIGTERM/SIGKILL bypass the Python downloader's finally block. Wait
+        // for the child to close before removing its private staging directory.
+        // A timed-out operation may already have been retried at this path.
+        if (!settled) {
+          try {
+            bindFsMethod(fsModule, 'rmSync')?.(`${destinationPath}.hf-download`, { recursive: true, force: true });
+          } catch (error) {
+            // Cancellation must still settle if cleanup fails.
+          }
+        }
         finish(reject, cancelError);
         return;
       }
