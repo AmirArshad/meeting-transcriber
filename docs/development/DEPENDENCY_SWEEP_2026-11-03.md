@@ -17,7 +17,7 @@ these uncommitted changes.
 | [#132 serde_json](https://github.com/AmirArshad/meeting-transcriber/pull/132) | Apply 1.0.154; the Rust locked tests and audit pass. |
 | [#130 CTranslate2](https://github.com/AmirArshad/meeting-transcriber/pull/130) | Supersede 4.8.3 with 4.8.5 on Linux only. On CachyOS with an RTX 4070, the same cached tiny model and local speech fixture produced identical transcripts on CPU and CUDA with 4.8.2 and 4.8.5. Windows remains 4.8.2 pending native CUDA/CPU and shutdown qualification. |
 | [#129 more-itertools](https://github.com/AmirArshad/meeting-transcriber/pull/129) | Apply 11.2.1 to the macOS build closure. |
-| [#127 MLX](https://github.com/AmirArshad/meeting-transcriber/pull/127) | Hold the paired 0.32.4 update until actual Apple Silicon Metal Whisper inference can be checked. Wheel resolution alone cannot qualify GPU behavior. |
+| [#127 MLX](https://github.com/AmirArshad/meeting-transcriber/pull/127) | Update the paired pins to 0.32.4 after the native Metal Whisper check recorded below. Packaged-app and full hardware qualification remain. |
 
 Additional build pins updated: AnyIO 4.16.0 and pycparser 3.12. The pinned bootstrap pip wheel is now 26.3; its downloaded SHA-256 was verified against the PyPI release metadata and it imports under isolated Python 3.11. The latest
 compatible PyPI inventory also identifies Numba 0.68.1, ONNX Runtime 1.31.1,
@@ -53,3 +53,29 @@ inventory audit nevertheless reported no known advisories. All action and
 platform-native checks must run on the final changes before release. Existing
 macOS Parakeet installations will require the normal repair flow because the
 lock identity changed.
+
+## macOS follow-up — 2026-11-03
+
+On macOS 26.7.1 arm64 with Python 3.11.18, the updated macOS build-pin
+closure resolved for `macosx_14_0_arm64`, and the exact-pin inventory audit
+reported zero findings. The actual macOS 14-targeted MLX and MLX Metal 0.32.4
+wheels were installed into a temporary target, leaving the repo venv's MLX
+unchanged. Three fresh-process, offline production-path Whisper Small trials
+using the cached model and `tests/fixtures/speakrs-two-speaker-16k.wav`
+completed with timestamped output on Metal / float16. A separate production
+path run confirmed `Device(gpu, 0)` and recognizable fixture speech. These
+are short inference checks, not a macOS 14 host test or a recording and full
+hardware acceptance run. The Parakeet runtime is independent and was not
+upgraded by this change.
+
+The local `npm run test:all` gate passed with 1,131 JavaScript tests and 847
+Python tests (4 and 9 skipped respectively), plus both syntax checks. The repo
+venv was not fully realigned to the build pins for this suite; the separate
+Metal check explicitly loaded the 0.32.4 wheels.
+
+An isolated directory build with `npm run build:mac:dir` and
+`npm run verify:mac:packaged` passed. It included Electron 45.2.1, the
+updated macOS 14-targeted wheel set, and the rebuilt Speakrs helper; the
+verification covered signatures, MLX imports and an Opus encode. This was an
+ad-hoc signed directory build, not a notarized DMG or a packaged recording and
+inference acceptance test.
