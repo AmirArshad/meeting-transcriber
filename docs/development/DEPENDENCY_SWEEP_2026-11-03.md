@@ -131,3 +131,52 @@ independent TLS behavior and those paths remain unqualified; the disabled-Xet
 policy and current pin are unchanged. The [1.8.0 release](https://github.com/huggingface/xet-core/releases/tag/v1.8.0)
 also introduces experimental upload behavior, which the application does not
 need. No token was used in this test.
+
+## hf-xet 1.8.0 follow-up — 2026-11-03
+
+**Decision: hold the base pins at 1.7.0 and the separate macOS Parakeet lock
+at 1.6.0.** Installing the candidate and enabling its transport are separate
+decisions. The following partial evidence does not meet the requested native
+platform and explicit-download gates for changing either inventory.
+
+- On Windows 11 x64, Python 3.11.9 loaded the real
+  `hf_xet-1.8.0-cp38-abi3-win_amd64` wheel and Hub 1.33.0 in a temporary
+  target. On x86_64 WSL2 Linux, Python 3.11.15 loaded the real
+  `hf_xet-1.8.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64`
+  wheel and Hub 1.33.0 in a temporary venv. These were isolated dependency
+  environments, not packaged apps or full build-pin installations.
+- With `HF_HUB_DISABLE_XET=1`, implicit tokens disabled and `HF_TOKEN_PATH` set to the null device,
+  each host called
+  the installed faster-whisper `utils.download_model` for the public
+  `Systran/faster-whisper-tiny` snapshot. Both downloaded its 75,538,270-byte
+  `model.bin` at revision `d90ca5fe260221311c53c58e660288d3deb8d356`, and
+  returned the same cached snapshot with `local_files_only=True`. Both replaced
+  Hub's `xet_get` and `hf_xet.download_files` with failing sentinels; neither
+  fired. This exercises the third-party download helper, not the entire app
+  setup flow, and is not a model integrity or cancellation test. No user token
+  was used. The previous small Windows summary-wrapper and wrong-checksum test
+  is documented above; it is not a substantial summary-model test.
+- Temporary candidate copies of the Windows and Linux build requirements
+  resolved to exactly their respective pinned closures on their native OS
+  environments (Linux under WSL2), using the existing closure checker. The
+  actual repository pins were unchanged. The macOS arm64 1.8.0 wheel was
+  downloaded on Windows (SHA-256
+  `3e8934784425781f0f779b91044df441f3a7af4dab47375d7e3aeaecbb8eecb4`),
+  but was not imported or executed on macOS. Downloading a foreign wheel does
+  not establish its compatibility, its native closure or app behavior.
+- Existing focused tests cover launcher enforcement, token stdin/environment
+  handling, summary hash/path checks and mocked setup cancellation; they do not
+  substitute for candidate-wheel real-artifact cancellation, altered-file,
+  summary or gated-pyannote tests. macOS MLX explicit download and the separate
+  Parakeet Hub 1.29.0 / Xet 1.6.0 lock also remain unqualified. No real user
+  credential was used to access gated pyannote. Native macOS testing and
+  closure resolution, real applicable setup flows and packaged checks are
+  still needed before advancing the affected pins and generated inventory.
+
+The application still forces `HF_HUB_DISABLE_XET=1` after caller overrides;
+no TLS checks were weakened. Re-enabling acceleration would require independent
+review and native testing of hf-xet's own TLS trust handling against the
+compromised-intermediate chain set (with a meaningful vulnerable positive
+control), plus packaged Windows, macOS and Linux download, checksum, cancellation,
+offline/cache, token-boundary and failure-recovery qualification. Success of
+HTTP downloads with Xet disabled is not evidence for that native TLS stack.

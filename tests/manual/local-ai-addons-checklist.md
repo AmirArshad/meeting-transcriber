@@ -49,7 +49,7 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Confirm the pinned llama.cpp runtime downloads, verifies, and extracts before the model is marked ready.
 - [ ] Confirm unsafe or unparseable ZIP/`tar.gz` runtime entries are rejected before extraction.
 - [ ] Confirm runtime archives extract into a cleaned staging directory and summary execution uses the extracted `llama-cli` location with adjacent native libraries intact.
-- [ ] Confirm the pinned GGUF model downloads through Hugging Face `huggingface_hub`/`hf_xet` on Hugging Face-hosted artifacts and checksum-verifies before Ready.
+- [ ] Confirm the pinned GGUF model downloads through Hugging Face `huggingface_hub` HTTP with Xet disabled on Hugging Face-hosted artifacts and checksum-verifies before Ready.
 - [ ] Confirm Hugging Face model downloads write temporary files only under the managed summary cache and checksum-verify before moving into place.
 - [ ] Cancel summary setup during the Hugging Face model download and confirm the downloader subprocess exits, partial files are removed, and no diarization token is used.
 - [ ] Generate a summary from Home after a saved transcript.
