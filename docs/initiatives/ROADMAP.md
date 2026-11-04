@@ -101,6 +101,21 @@ historical evidence.
 
 ## Planned
 
+### Next: Parakeet and Speakrs upgrades
+
+- **Parakeet v3 evaluation and upgrade.** Compare the current English-only v2
+  with v3 on representative meetings, including English accuracy, multilingual
+  coverage, timestamps, speed and memory. Upgrade only platforms and languages
+  that pass the local, offline and packaged acceptance gates; retain a working
+  v2 path where v3 is not qualified. [Implementation plan](../superpowers/plans/2026-11-04-parakeet-v3-upgrade.md).
+- **Speakrs 0.7 evaluation and upgrade.** Qualify the new backend and model
+  requirements on Apple Silicon, Linux CUDA and Windows CUDA before changing
+  the pinned engine. Preserve the existing supported path on any platform where
+  0.7 cannot meet the current contract. [Implementation plan](../superpowers/plans/2026-11-04-speakrs-upgrade.md).
+
+These are the next roadmap items, not completed upgrades or hardware acceptance
+claims. No release version has been assigned.
+
 ### Updater
 
 - **True silent auto-install updater.** Today's updater detects new GitHub releases and opens the release page; the next iteration should download and apply the installer in-app. Reference: [FEATURE_AUTO_UPDATER.md](../completed/FEATURE_AUTO_UPDATER.md).

@@ -312,7 +312,23 @@ checks are recorded.
   `npm audit --audit-level=high`, `test:all`, Windows `build:dir` and packaged
   Speakrs/layout checks passed locally before commit/push.
 
-## Current next step
+## Next roadmap work — Parakeet and Speakrs
+
+The next planned work is the local AI upgrade initiative; no release version is
+assigned and no upgrade or new hardware acceptance is claimed yet. Execute the
+plans inline, starting with baseline and compatibility evidence:
+
+- [ ] Evaluate Parakeet TDT 0.6B v3 against the shipped v2, then implement and
+  qualify an upgrade on supported platforms and languages where evidence supports
+  it. Preserve v2 where a v3 path is not qualified. [Plan](docs/superpowers/plans/2026-11-04-parakeet-v3-upgrade.md).
+- [ ] Investigate Speakrs 0.7 platform, API, model and runtime compatibility;
+  upgrade and qualify each supported platform only when its current local-only
+  behavior and acceptance gates can be preserved. [Plan](docs/superpowers/plans/2026-11-04-speakrs-upgrade.md).
+- [ ] Record platform-specific benchmark and packaged-app evidence, limitations,
+  and the final ship/hold decision in the relevant qualification records. Run
+  the full pre-PR gate and applicable manual hardware checks.
+
+## Previous next step — v2.10 maintenance
 
 v2.10.0 is tagged, and October dependency maintenance is on `master`. Dependabot
 alerts and security updates are enabled. No tag or release-workflow action remains.
