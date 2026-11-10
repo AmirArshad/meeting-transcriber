@@ -16,6 +16,24 @@ implementation or acceptance evidence.
 
 ## Status
 
+### Next version — speaker identification and runtime maintenance — 2026-11-10
+
+Provisional target **v2.11**: upgrade to Speakrs 0.7 on Windows CUDA, Linux
+CUDA and macOS CoreML; migrate safeStorage to its asynchronous API and target
+the latest Electron 46; and take separately qualified, compatible dependency
+updates. The file-level
+scope, first Linux feasibility probe, and remaining platform gates are in the
+[v2.11 plan](docs/superpowers/plans/2026-11-10-v2.11-speaker-upgrade.md).
+Electron 45.2.3 is an interim branch change; the final target is 46.
+As of 2026-11-10, Electron 46 is available only as a pre-release
+(`46.0.0-alpha.8`). Speakrs remains at 0.5.0 in the product pending model
+migration, Windows CUDA feasibility, quality and platform qualification.
+Python modernization, AUR publishing, and notarization remain separate work.
+On Linux, `npm run test:all` passed under an isolated X display: 1,133 JS and
+852 Python passed, with 2 and 4 skips respectively; syntax checks passed.
+`npm audit --audit-level=high` passed with six moderate packaging-toolchain
+findings. Native installers and hardware checks for Electron 45.2.3 remain open.
+
 ### v2.10.2 certificate-trust maintenance — 2026-10-20
 
 Release branch: `release/2.10.2`. Electron 44.9.2, certifi 2026.10.19,
@@ -312,7 +330,10 @@ checks are recorded.
   `npm audit --audit-level=high`, `test:all`, Windows `build:dir` and packaged
   Speakrs/layout checks passed locally before commit/push.
 
-## Current next step
+## Historical next step after v2.10.0
+
+This section predates v2.10.3. The current next-version scope is recorded at
+the top of this file and in the v2.11 plan.
 
 v2.10.0 is tagged, and October dependency maintenance is on `master`. Dependabot
 alerts and security updates are enabled. No tag or release-workflow action remains.
