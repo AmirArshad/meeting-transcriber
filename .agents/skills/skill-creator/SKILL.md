@@ -340,7 +340,10 @@ Write the YAML frontmatter with `name` and `description`:
   - Include all "when to use" information here - Not in the body. The body is only loaded after triggering, so "When to Use This Skill" sections in the body are not helpful to Codex.
   - Example description for a `docx` skill: "Comprehensive document creation, editing, and analysis with support for tracked changes, comments, formatting preservation, and text extraction. Use when Codex needs to work with professional documents (.docx files) for: (1) Creating new documents, (2) Modifying or editing content, (3) Working with tracked changes, (4) Adding comments, or any other document tasks"
 
-Do not include any other fields in YAML frontmatter.
+For this repository, preserve license/handoff `metadata` and use
+`disable-model-invocation: true` for the explicit-only skills listed in
+`AGENTS.md`, together with their Codex `agents/openai.yaml` policy. The repo
+setup validator owns the supported frontmatter schema.
 
 ##### Body
 
@@ -348,13 +351,19 @@ Write instructions for using the skill and its bundled resources.
 
 ### Step 5: Validate the Skill
 
-Once development of the skill is complete, validate the skill folder to catch basic issues early:
+For project skills, run the repository validator from the root. It checks the
+actual shared metadata, invocation policies, links and instruction budgets with
+the existing npm-installed YAML parser:
 
 ```bash
-scripts/quick_validate.py <path/to/skill-folder>
+python3 scripts/agents/validate_setup.py
 ```
 
-The validation script checks YAML frontmatter format, required fields, and naming rules. If validation fails, fix the reported issues and run the command again.
+Use `py -3.11` on Windows. The bundled `scripts/quick_validate.py` is a generic
+upstream helper for standalone skills; it does not support this repo's manual
+invocation metadata. Do not install extra parsers or remove supported fields to
+satisfy that helper. Fix reported repository validation issues and rerun the
+affected check.
 
 ### Step 6: Iterate
 

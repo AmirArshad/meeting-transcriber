@@ -16,6 +16,17 @@ implementation or acceptance evidence.
 
 ## Status
 
+### Agent usage improvements — 2026-11-15
+
+Audited repo instructions, builds and recent repo-specific Codex session evidence.
+The [usage audit](docs/development/AGENT_USAGE_AUDIT.md) records duplicate personal
+Superpowers workflows, large-context/parallel-work amplification and the limits
+of token counters. Six core skills are now concise, verification reuses unchanged
+inputs, and setup checks enforce instruction budgets and real invocation-policy
+semantics. The ignored local Codex configuration disables the duplicate plugin;
+the [setup guide](.agents/README.md) and tracked example cover other machines.
+Setup/link tests pass (17); confirm plugin discovery after restarting Codex.
+
 ### Next version — speaker identification and runtime maintenance — 2026-11-10
 
 Provisional target **v2.11**: upgrade to Speakrs 0.7 on Windows CUDA, Linux

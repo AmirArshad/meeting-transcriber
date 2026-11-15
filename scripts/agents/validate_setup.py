@@ -8,6 +8,14 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
+EXPLICIT_SKILLS = {'grill-me', 'grill-with-docs', 'handoff', 'to-spec',
+                   'finishing-a-development-branch'}
+WORKFLOW_SKILLS = {'writing-plans', 'executing-plans', 'systematic-debugging',
+                   'verification-before-completion', 'requesting-code-review',
+                   'finishing-a-development-branch'}
+GUIDE_BYTE_LIMIT = 8192
+WORKFLOW_BYTE_LIMIT = 3072
+WORKFLOW_TOTAL_BYTE_LIMIT = 12288
 
 
 def require(ok, message):
@@ -19,26 +27,62 @@ def git_text(path):
     return subprocess.check_output(['git', 'show', f'HEAD:{path}'], cwd=ROOT).decode()
 
 
+def load_yaml(paths, *, frontmatter=False):
+    """Use the project's real YAML parser for skill metadata and Codex policy."""
+    js = """const fs=require('fs'),yaml=require('js-yaml');
+    const {paths,frontmatter}=JSON.parse(fs.readFileSync(0,'utf8'));
+    process.stdout.write(JSON.stringify(paths.map(p=>{
+      let s=fs.readFileSync(p,'utf8').replace(/\\r/g,'');
+      if(frontmatter){
+        if(!s.startsWith('---\\n'))throw Error('Missing frontmatter: '+p);
+        const end=s.indexOf('\\n---\\n',4);if(end<0)throw Error('Unclosed frontmatter: '+p);
+        s=s.slice(4,end);
+      }
+      return yaml.load(s);
+    })));"""
+    result = subprocess.run(['node', '-e', js],
+                            input=json.dumps({'paths': [str(p) for p in paths],
+                                              'frontmatter': frontmatter}),
+                            text=True, capture_output=True, cwd=ROOT, check=True)
+    return json.loads(result.stdout)
+
+
+def validate_context_budget(guide, skills):
+    require(len(guide.encode('utf-8')) <= GUIDE_BYTE_LIMIT,
+            'AGENTS.md exceeds 8 KiB context budget')
+    require(WORKFLOW_SKILLS <= skills.keys(), 'Missing core workflow skills')
+    sizes = {name: len(skills[name].encode('utf-8')) for name in WORKFLOW_SKILLS}
+    for name, size in sizes.items():
+        require(size <= WORKFLOW_BYTE_LIMIT, f'{name} exceeds 3 KiB context budget')
+    total = sum(sizes.values())
+    require(total <= WORKFLOW_TOTAL_BYTE_LIMIT, 'Workflow skills exceed 12 KiB combined context budget')
+    return total
+
+
+def validate_invocation_policy(name, data, policy):
+    require('disable-model-invocation' not in data or
+            (name in EXPLICIT_SKILLS and data['disable-model-invocation'] is True),
+            f'Invocation policy: {name}')
+    if name in EXPLICIT_SKILLS:
+        require('explicitly requested' in data['description'], f'Missing explicit trigger: {name}')
+        require(data.get('disable-model-invocation') is True, f'Missing manual-only frontmatter: {name}')
+        require(isinstance(policy, dict) and isinstance(policy.get('policy'), dict) and
+                policy['policy'].get('allow_implicit_invocation') is False,
+                f'Missing/invalid Codex explicit-only policy: {name}')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--migration-check', action='store_true')
     args = parser.parse_args()
     skills = sorted((ROOT / '.agents/skills').glob('*/SKILL.md'))
-    # Use the project's real YAML parser, not a permissive fake frontmatter parser.
-    js = """const fs=require('fs'),yaml=require('js-yaml');
-    const paths=JSON.parse(fs.readFileSync(0,'utf8'));
-    process.stdout.write(JSON.stringify(paths.map(p=>{
-      const s=fs.readFileSync(p,'utf8').replace(/\\r/g,'');
-      if(!s.startsWith('---\\n'))throw Error('Missing frontmatter: '+p);
-      const end=s.indexOf('\\n---\\n',4);if(end<0)throw Error('Unclosed frontmatter: '+p);
-      return yaml.load(s.slice(4,end));
-    })));"""
-    result = subprocess.run(['node', '-e', js], input=json.dumps([str(p) for p in skills]),
-                            text=True, capture_output=True, cwd=ROOT, check=True)
-    parsed = json.loads(result.stdout)
+    parsed = load_yaml(skills, frontmatter=True)
+    policy_paths = [p.parent / 'agents/openai.yaml' for p in skills
+                    if (p.parent / 'agents/openai.yaml').is_file()]
+    policies = dict(zip(policy_paths, load_yaml(policy_paths)))
     names = set()
-    explicit = {'grill-me', 'grill-with-docs', 'handoff', 'to-spec'}
     for p, data in zip(skills, parsed):
+        require(isinstance(data, dict), f'Invalid frontmatter: {p}')
         name = data['name']
         require(name == p.parent.name and re.fullmatch(r'[a-z0-9]+(-[a-z0-9]+)*', name)
                 and len(name) <= 64, f'Invalid skill name: {p}')
@@ -48,11 +92,7 @@ def main():
         require(isinstance(desc, str) and 1 <= len(desc) <= 1024 and
                 not any(x in desc for x in (': ', '<', '>', '"', "'")), f'Invalid description: {p}')
         require(set(data) <= {'name', 'description', 'metadata', 'disable-model-invocation'}, f'Unexpected fields: {p}')
-        require('disable-model-invocation' not in data or (name in explicit and data['disable-model-invocation'] is True), f'Invocation policy: {p}')
-        if name in explicit:
-            require('explicitly requested' in desc, f'Missing explicit trigger: {p}')
-            policy = p.parent / 'agents/openai.yaml'
-            require(policy.is_file() and 'allow_implicit_invocation: false' in policy.read_text(), f'Missing Codex policy: {p}')
+        validate_invocation_policy(name, data, policies.get(p.parent / 'agents/openai.yaml'))
         link = ROOT / '.claude/skills' / name
         require((link / 'SKILL.md').is_file(), f'Missing/dangling Claude skill: {name}')
         require(os.path.samefile(link / 'SKILL.md', p), f'Copied or wrong Claude skill: {name}')
@@ -60,11 +100,11 @@ def main():
             require(link.is_symlink() and os.readlink(link) == f'../../.agents/skills/{name}', f'Wrong relative link: {name}')
     require(names, 'No canonical skills')
     require({p.name for p in (ROOT / '.claude/skills').iterdir()} == names, 'Extra/stale Claude entries')
-    guide = (ROOT / 'AGENTS.md').read_text()
+    guide = (ROOT / 'AGENTS.md').read_text(encoding='utf-8')
     index = guide.split('## Skills index\n', 1)[1].split('\n## ', 1)[0]
     listed = set(re.findall(r'^\| ([a-z][a-z0-9-]+) \|', index, re.M))
     require(listed == names, f'Index mismatch: {listed ^ names}')
-    require(len(guide.encode()) < 12288, 'AGENTS.md exceeds soft size cap')
+    workflow_bytes = validate_context_budget(guide, {p.parent.name: p.read_text(encoding='utf-8') for p in skills})
     require((ROOT / 'CLAUDE.md').read_text() == '@AGENTS.md\n', 'Non-thin Claude adapter')
     require('instructions' not in json.loads((ROOT / 'opencode.json').read_text()), 'Unconditional OpenCode instructions')
     for p in (ROOT / '.cursor/rules').glob('*.mdc'):
@@ -98,6 +138,7 @@ def main():
         require(not subprocess.check_output(['git', 'diff', '--cached', '--name-only'], cwd=ROOT).strip(), 'Unexpected staged changes')
     print(f'Validated {len(names)} canonical skills, links, index, YAML, commands and adapters.')
     print(f'AGENTS.md: {len(guide.encode())} bytes, about {(len(guide.encode()) + 3) // 4} tokens, {len(guide.splitlines())} lines.')
+    print(f'Core workflow skills: {workflow_bytes} bytes / {WORKFLOW_TOTAL_BYTE_LIMIT} byte combined budget.')
 
 
 if __name__ == '__main__':
