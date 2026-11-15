@@ -35,6 +35,12 @@ struct ErrorPayload {
 }
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    if let Err(message) = configure_windows_dll_search() {
+        let _ = writeln!(std::io::stderr(), "{message}");
+        emit_error(&message);
+        return ExitCode::FAILURE;
+    }
     if let Err(message) = install_shutdown_handlers() {
         let _ = writeln!(std::io::stderr(), "{message}");
         emit_error(&message);
@@ -48,6 +54,26 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+// cudarc loads the driver dynamically. Restrict its default search before any
+// inference code runs, excluding the executable directory, CWD and PATH.
+#[cfg(windows)]
+fn configure_windows_dll_search() -> Result<(), String> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
+    }
+    configure_windows_dll_search_with(|flags| unsafe { SetDefaultDllDirectories(flags) })
+}
+
+#[cfg(windows)]
+fn configure_windows_dll_search_with(set_directories: impl FnOnce(u32) -> i32) -> Result<(), String> {
+    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
+    if set_directories(LOAD_LIBRARY_SEARCH_SYSTEM32) == 0 {
+        return Err("failed to restrict Windows DLL search to System32".to_string());
+    }
+    Ok(())
 }
 
 fn run() -> Result<(), String> {
@@ -328,6 +354,17 @@ mod tests {
         normalize_speaker_label, parse_exclusive, parse_mode, select_segments, single_line,
     };
     use speakrs::ExecutionMode;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_dll_search_is_system32_only_and_fails_closed() {
+        use super::configure_windows_dll_search_with;
+        assert!(configure_windows_dll_search_with(|flags| {
+            assert_eq!(flags, 0x0000_0800);
+            1
+        }).is_ok());
+        assert!(configure_windows_dll_search_with(|_| 0).is_err());
+    }
     use std::fs;
     use std::io::Write;
     use std::path::PathBuf;

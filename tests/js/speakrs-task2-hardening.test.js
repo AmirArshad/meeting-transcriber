@@ -619,7 +619,7 @@ test('Speakrs install rejects unsafe required-file paths before downloading', as
   }
 });
 
-test('Windows production runtime rejects replaced DLLs even with a forged install.json', async () => {
+test('Windows native runtime ignores the legacy private DLL tree', async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-runtime-'));
   const artifact = getSpeakrsSetupArtifactsForPlatform('win32', 'x64');
   const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
@@ -645,7 +645,8 @@ test('Windows production runtime rejects replaced DLLs even with a forged instal
       arch: 'x64',
       verifyChecksum: true,
     });
-    assert.equal(fullHash.valid, false);
+    assert.equal(fullHash.valid, true);
+    assert.equal(fullHash.skipped, true);
 
     const passive = await checkSpeakrsRuntimeCache({
       userDataDir,
@@ -653,7 +654,8 @@ test('Windows production runtime rejects replaced DLLs even with a forged instal
       arch: 'x64',
       verifyChecksum: false,
     });
-    assert.equal(passive.valid, false);
+    assert.equal(passive.valid, true);
+    assert.equal(passive.skipped, true);
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
@@ -952,7 +954,7 @@ test('Windows test runtime requires every non-empty integrity-checked DLL', asyn
   }
 });
 
-test('Windows runtime fails closed when runtime artifact metadata is absent', async () => {
+test('Windows native direct-file setup does not require a legacy private runtime', async () => {
   const catalog = JSON.parse(JSON.stringify(AI_MODEL_CATALOG));
   const speakrs = catalog.diarization.models.find((model) => model.id === SPEAKRS_DIARIZATION_MODEL_ID);
   speakrs.packArtifacts['win32-x64'] = speakrs.packArtifacts['win32-x64']
@@ -963,9 +965,9 @@ test('Windows runtime fails closed when runtime artifact metadata is absent', as
     arch: 'x64',
     catalog,
   });
-  assert.equal(result.supported, false);
-  assert.equal(result.valid, false);
-  assert.match(result.reason, /native CUDA loader qualification is pending/);
+  assert.equal(result.supported, true);
+  assert.equal(result.valid, true);
+  assert.equal(result.skipped, true);
   fs.rmSync(path.dirname(result.runtimeDir), { recursive: true, force: true });
 });
 

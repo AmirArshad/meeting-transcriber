@@ -41,6 +41,7 @@ try {
     Record "git_revision=$revision"
     # Hash the uncommitted tracked patch without including its contents in evidence.
     $patchPath = Join-Path $scratch 'source.patch'
+    New-Item -ItemType File -Path $patchPath | Out-Null
     & git -C $repo diff --binary HEAD -- native/speakrs-cli/src/main.rs native/speakrs-cli/vendor/ndarray-npy | Set-Content -LiteralPath $patchPath -Encoding UTF8
     if ($LASTEXITCODE -ne 0) { throw 'Cannot capture source patch.' }
     Record ('adapter_patch_sha256=' + (Hash $patchPath))
@@ -121,7 +122,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("ci-cpu-sm
         }
         # Isolate upstream tuning state; never pass a token to the native child.
         $names = @('SPEAKRS_MODELS_DIR','SPEAKRS_MODE','SPEAKRS_EXCLUSIVE','SPEAKRS_NUM_SPEAKERS','SPEAKRS_CUDA_TUNE_FILE','SPEAKRS_CUDA_PTX_TIER','SPEAKRS_CUDA_FORCE_PTX_JIT','SPEAKRS_CUDA_FORCE_LIBRARY','XDG_CONFIG_HOME','HF_TOKEN','HUGGING_FACE_HUB_TOKEN','HUGGINGFACE_HUB_TOKEN','HF_TOKEN_PATH')
-        $saved = @{}; foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process'); [Environment]::SetEnvironmentVariable($name, $null, 'Process') }
+        $saved = @{}; foreach ($name in $names) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process'); Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue }
         try {
             $env:SPEAKRS_MODELS_DIR = Join-Path $scratch 'models'; $env:SPEAKRS_MODE = 'cuda'; $env:SPEAKRS_EXCLUSIVE = '1'; $env:XDG_CONFIG_HOME = Join-Path $scratch 'config'; $env:HF_TOKEN_PATH = 'NUL'
             $stdout = Join-Path $scratch 'inference.json'; $stderr = Join-Path $scratch 'inference-stderr.log'
@@ -140,7 +141,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("ci-cpu-sm
             }
             if (@($result.segments).Count -eq 0) { throw 'Inference returned no segments.' }
             Record "inference_device=cuda segments=$(@($result.segments).Count) speakers=$(@($result.segments.speaker | Sort-Object -Unique).Count)"
-        } finally { foreach ($name in $names) { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') } }
+        } finally { foreach ($name in $names) { if ($null -eq $saved[$name]) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue } else { [Environment]::SetEnvironmentVariable($name, $saved[$name], 'Process') } } }
     } finally { Pop-Location }
     Record 'RESULT=source feasibility only; native packaged Windows acceptance remains open.'
     Record 'NEXT: capture dumpbin /DEPENDENTS plus Process Monitor Image Load paths and versions/hashes, including delayed loads. Repeat with developer CUDA directories absent from PATH and harmless DLL decoys in scratch CWD/PATH. Test a consented known multi-speaker recording and packaged inference; do not infer loader safety from this probe.'

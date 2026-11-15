@@ -43,8 +43,111 @@
 | Repository validation WAV | `1eed9687badcdd0d554638c8229fdb48d5c80e21ed1393c3bb5621f0c83bd998` |
 | Synthetic short and long WAVs | `7f68f00729c787a4a4c1a33218b3cdbb53387dc0b4f13a0ac0a74d3bff531f56`, `f04c875f767fe96710badef9f052e4aaa6c540aff7b404d4b9c524dad85daf93`. Recreate timings with `scripts/generate-speakrs-qualification-fixtures.py`. eSpeak NG PCM bytes can vary. |
 
+## 2026-11-15 · Windows x64 NVIDIA (in progress)
+
+Source `28b8a557551e2373913dd5161aaa131534eb72f7`; Windows 11 Pro
+10.0.26300, RTX 4070 (CC 8.9), driver 621.24, Node 22.15.0, npm
+10.9.2, repository Python 3.11.9, MSVC 14.29 and Rust 1.89.0. The
+isolated `scripts/probe-speakrs-windows-cuda.ps1` run built unmodified
+Speakrs 0.7.0 CUDA for MSVC; its graph includes SM75/80/90/120 and no
+online/HF/ORT. Scratch lock SHA-256
+`62d617c83682ea33dd442ca01d23f6e29f5c2824feb365d7da700bfc93627600`;
+binary SHA-256 `9c36f7c1642fd89ea1015d1b2dbf7bbe45adba2878d456d8dc90aebb8c9f7351`.
+All nine model lengths and hashes matched the catalog. The repository fixture
+returned CUDA, six exclusive segments and one speaker; it does not qualify
+multi-speaker quality. `dumpbin /DEPENDENTS` showed Windows system and VC
+runtime imports, not the delayed CUDA loads. A separate scratch experiment
+using System32-only DLL search and a restricted PATH also returned CUDA for
+the short fixture; sampled modules included System32 `nvcuda.dll` and the
+NVIDIA DriverStore driver. Sampling can miss transient loads: this is not a
+complete image-load trace or an approved product loader policy. Scratch probe
+artifacts are local under `D:\avanevis-v211-windows-probe-4`.
+
+The probe script was corrected for an empty Git diff and for Windows process
+environment removal (setting a variable to null produced an empty variable).
+The native contract and related Python tests ran against the explicit product
+CLI and verified models: 73 passed. A disposable Windows profile exercised
+real secure storage using synthetic tokens: Electron 45.2.3 synchronous write,
+46.0.0-alpha.10 product token-store async read/write, 46 restart, and 45
+synchronous read all passed. The profile was allowed to shut down normally so
+Electron persisted its encryption state. This does not exercise real key
+rotation or a user's existing profile.
+
+`npm ci` and the explicit Electron binary install corrected a pre-existing
+stale Electron 44.7.0 node_modules tree. With the locked Electron
+46.0.0-alpha.10, `npm run test:all` passed: 1,135 JS passed / 4 skipped and
+850 Python passed / 9 skipped. The JS skips concern Unix symlinks, ar,
+Unix-layout Python and a Linux Parakeet adapter. Python skips comprise three
+Linux/POSIX-only checks and six native CLI checks, which were separately run
+with the explicit target binary and verified model directory (73 passed).
+The focused packaging and IPC JS tests passed 80/80. `npm audit
+--audit-level=high` passed with six moderate packaging-chain advisories.
+
+`AVANEVIS_SKIP_DIST_CLEAN=1 npm run build` produced an unsigned x64 NSIS
+candidate with electron-builder 26.18.0 and Electron 46.0.0-alpha.10;
+the Speakrs packaged-layout verifier passed. The installer is 249,538,118
+bytes, SHA-256 `934388a3b45452fba35669d786950caec2375a8552eededbf9d9df399f0a94f9`.
+Unpacked `AvaNevis.exe` SHA-256
+`4270872e4de488f25a0dca344f48428ace3ebfd22bae92183ea0e74266fd4cdb`;
+packaged CLI SHA-256
+`9b66c34412c02e2cc0ae85158dfcbfcbf696709e364f939c9ef4a8445a04773e`.
+That CLI also returned CUDA and six exclusive segments for the fixture using
+the scratch models and ambient host loader environment. This is a direct
+binary check, not packaged setup or end-to-end application acceptance.
+The unpacked app opened its main window with a disposable `--user-data-dir`;
+the test process tree was then terminated, so this is not tray or graceful
+quit acceptance. A separate forced-PTX scratch run on this GPU returned the
+same six CUDA fixture segments. It does not establish a minimum driver or
+qualify other GPU tiers. Product Cargo tests passed 8 unit and 1 NPZ test;
+the test-only CPU crate passed 8 unit tests and its explicit-feature CPU
+smoke returned six segments. Both Cargo audits passed using the reviewed
+product audit configuration.
+
+### Windows follow-up · 2026-11-15
+
+The Windows product CLI now calls `SetDefaultDllDirectories` with
+`LOAD_LIBRARY_SEARCH_SYSTEM32` before inference and fails closed if that
+call fails. The direct-file setup gate was opened. On this host, a native
+debug-event image-load trace of the release-built CLI with real decoy DLLs in
+the working directory and PATH observed no decoy loads. A positive control
+with the unhardened scratch executable did load a decoy. On a 231.6-second
+synthetic two-voice WAV, the hardened binary returned 48 exclusive segments,
+matching the 48 known turns by maximum overlap (24/24 per voice). The trace
+showed the System32 NVIDIA driver and its DriverStore dependency; it does not
+qualify every GPU tier or driver-dependent load path. The NVIDIA driver files
+and full traces are inventoried in local scratch
+`D:\avanevis-v211-windows-probe-3`.
+
+On the same synthetic short and long WAVs, isolated v2.10.3 Speakrs 0.5 and
+0.7 CUDA runs produced identical segment boundaries and speaker labels: 8 and
+48 segments respectively. This is not representative natural-speech or DER
+evidence. The WAV SHA-256 values are
+`0f2ff819e34b51d53797f581874edcc8f9aca560d563f0bed19663b205bf4ef2` and
+`98ec6239c6632e93c859dd8285872f9d24e22160fe8a50f3f026a9c9f0a80539`.
+
+The integrated unpacked application explicitly installed its pinned models
+into a disposable profile, validated CUDA and reported Ready. A desktop-only
+WASAPI recording of the short synthetic sample then produced an eight-turn
+guided Whisper transcript with both voices correctly associated, and a CUDA
+exclusive speaker sidecar. The earlier candidate's NSIS installer installed
+to a scratch directory, launched, and uninstalled with `/KEEP_APP_DATA`;
+its profile survived. The integrated rebuild below has not itself been
+installed or uninstalled. A normal desktop-only recording also transcribed
+the repository fixture with Whisper Small on CUDA. A warning appeared after
+the playback stopped and no desktop callbacks arrived for 10 seconds.
+
+After the loader change, `npm run test:all` passed: 1,135 JS passed / 4 skipped
+and 854 Python passed / 5 skipped. The rebuilt unsigned NSIS candidate is
+249,539,953 bytes, SHA-256
+`a846343b20b18e3ce9f80e2a7d159029ee79a9ecc804a2d512633516706a56e1`;
+its packaged CLI SHA-256 is
+`23ec1b0d347fd878ecc7183aa1d18032c0386710058cbe0c67c3f3d3d185059f`.
+`node scripts/verify-speakrs-packaging.js --packaged` passed on that unpacked
+payload. The candidate remains an Electron 46 alpha, versioned 2.10.3 and
+unsigned; it is not a published release.
+
 ### Open release gates
 
-- **Windows x64 NVIDIA is next.** Run the isolated MSVC and upstream CUDA feasibility probe first. Capture real image-load paths and delayed dependencies, test a clean loader path and scratch decoys, and qualify any minimal compatibility patch in native Windows. Windows product setup remains gated until that evidence supports its loader policy. Then run local NSIS build, install and uninstall, guided audio, model repair and removal, and DPAPI migration on a disposable profile.
+- **Windows x64 NVIDIA remains open.** On the integrated build, test old-install repair, cancellation/failure/retry, removal, offline repeat and the NSIS install/uninstall lifecycle. Test representative consented multi-speaker audio and a longer guided recording; the completed examples use synthetic speech. Recheck loaded DLL paths with the packaged workflow and verify missing/old drivers and other GPU tiers. Minimum driver per tier remains unqualified. Settings currently overestimates the direct-file model footprint by including legacy ORT artifacts (observed about 536 MB); correct the estimate and cover it with a focused regression. Check the transient pending-transcription banner observed after the earlier completed recording if reproducible.
 - **macOS 15 arm64 follows.** The app plist and bundled Rust CLI floor are 15.0. Native CoreML model load, packaged DMG, signature/entitlements, recording/MLX, and Keychain migration with a consistent app identity remain open.
 - **Release-wide.** Recheck the latest published Electron 46 and repeat affected checks on a pin change. Only the CachyOS RTX 4070 tier has native CUDA evidence so far. Minimum driver by tier and hardware outside the tested host remain open. Keep the release candidate open until the three native gates are complete. Current installers use the existing app version in their filenames and are local artifacts.

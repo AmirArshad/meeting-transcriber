@@ -56,6 +56,18 @@ upstream CUDA/MSVC and loader probe first, then continue to macOS 15 arm64.
 The [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
 has the test evidence, hashes and pending gates.
 
+### v2.11 Windows qualification · 2026-11-15
+
+The Windows RTX 4070 native loader is restricted to System32; a decoy test,
+image-load trace, synthetic 0.5/0.7 comparison and packaged guided recording
+passed. The unsigned local NSIS candidate built with Electron 46.0.0-alpha.10;
+the full suite and disposable-profile DPAPI migration passed. Windows remains
+open for integrated installer lifecycle, model repair/cancel/removal, offline
+repeat, representative speech and other driver/GPU tiers. Settings also
+overestimates the native model footprint by including legacy runtime bytes.
+See the [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
+for evidence and next steps. macOS 15 arm64 remains open.
+
 ### v2.11 plan review — 2026-11-15
 
 Plan review only; no product implementation or new platform acceptance.

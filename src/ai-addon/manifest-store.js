@@ -1308,17 +1308,6 @@ async function checkSpeakrsRuntimeCache({
   const readFileSync = bindFsMethod(fsModule, 'readFileSync');
   const runtimeArtifacts = artifact?.runtimeArtifacts || [];
   const directFiles = artifact?.modelPack?.transport === 'files';
-  if (directFiles && platform === 'win32') {
-    return {
-      supported: false,
-      installed: false,
-      valid: false,
-      validationStatus: 'unsupported',
-      reason: 'Speakrs native CUDA loader qualification is pending on Windows.',
-      runtimeDir,
-      artifact,
-    };
-  }
   const requiresExtractedRuntime = !directFiles && (
     (platform === 'win32' && arch === 'x64')
     || (platform === 'linux' && arch === 'x64')
