@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const {
@@ -134,6 +135,50 @@ function getSpeakrsOrtRuntimeDir(userDataDir) {
 
 function getSpeakrsModelRevisionDir(userDataDir, revision = SPEAKRS_MODEL_PACK_REVISION) {
   return path.join(getSpeakrsModelCacheDir(userDataDir), safePathSegment(revision));
+}
+
+function getNativeSpeakrsModelDir(userDataDir, revision, installId) {
+  return installId && /^[0-9a-f]{32}$/.test(installId)
+    ? path.join(getSpeakrsModelRevisionDir(userDataDir, revision), installId)
+    : null;
+}
+
+function validateSpeakrsModelTransport(modelPack, requiredFiles) {
+  if (modelPack?.transport !== 'files') {
+    return Boolean(modelPack?.fileName && modelPack.archiveFormat && modelPack.downloadUrl
+      && isAllowedDownloadUrl(modelPack.downloadUrl) && isPinnedSha256(modelPack.sha256)
+      && Number(modelPack.sizeBytes) > 0);
+  }
+  const sources = modelPack.files;
+  if (!Array.isArray(sources) || sources.length === 0 || sources.length !== requiredFiles.length) {
+    return false;
+  }
+  const pins = new Map(requiredFiles.map((file) => [file.path, file]));
+  return pins.size === sources.length && sources.every((file) => {
+    const pin = pins.get(file.path);
+    pins.delete(file.path);
+    return pin && file.sizeBytes === pin.sizeBytes && Number.isSafeInteger(file.sizeBytes)
+      && file.sizeBytes > 0 && file.sha256 === pin.sha256 && isPinnedSha256(file.sha256)
+      && isAllowedDownloadUrl(file.downloadUrl);
+  });
+}
+
+function inspectNativeSpeakrsPath(userDataDir, filePath, fsModule = fs) {
+  const relative = path.relative(path.resolve(userDataDir), path.resolve(filePath));
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('Speakrs model path is outside the managed profile.');
+  }
+  const parts = relative.split(path.sep);
+  let candidate = path.resolve(userDataDir);
+  let stats;
+  for (const [index, part] of parts.entries()) {
+    candidate = path.join(candidate, part);
+    stats = fsModule.lstatSync(candidate);
+    if (stats.isSymbolicLink() || (index < parts.length - 1 && !stats.isDirectory())) {
+      throw new Error('Speakrs model path contains an unsafe file or directory.');
+    }
+  }
+  return stats;
 }
 
 function getSpeakrsSourceFilePath(userDataDir, file, revision = SPEAKRS_MODEL_PACK_REVISION) {
@@ -346,6 +391,7 @@ function linuxAllowlistedLibraryExists(fileName, fsModule = fs) {
 function buildSpeakrsLinuxLibraryPath({
   userDataDir,
   fsModule = fs,
+  includePrivateOrt = true,
 } = {}) {
   const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
   const libraryDirs = [];
@@ -370,7 +416,7 @@ function buildSpeakrsLinuxLibraryPath({
     }
   };
 
-  addDir(ortDir);
+  if (includePrivateOrt) addDir(ortDir);
 
   let managedPath = '';
   try {
@@ -433,6 +479,7 @@ function buildSpeakrsSpawnEnv({
   projectRoot = path.join(__dirname, '..', '..'),
   extra = {},
   cliPath = null,
+  stagedModelsDir = null,
 } = {}) {
   const packaged = env?.AVANEVIS_PACKAGED === '1';
   const bundledCliPath = getBundledSpeakrsCliPath({ platform, resourcesPath });
@@ -447,15 +494,34 @@ function buildSpeakrsSpawnEnv({
       resourcesPath,
       projectRoot,
     }));
-  const modelsDir = getSpeakrsModelRevisionDir(userDataDir);
-  const mode = platform === 'linux'
-    ? 'cuda'
-    : resolveSpeakrsMode(requiredDevice, env);
+  const artifact = getSpeakrsSetupArtifactsForPlatform(platform, process.arch);
+  const directFiles = artifact?.modelPack?.transport === 'files';
+  const installId = directFiles
+    ? loadManifest({ userDataDir, fsModule }).features.diarization.speakrsInstallId
+    : null;
+  const modelsDir = stagedModelsDir || (directFiles
+    ? getNativeSpeakrsModelDir(userDataDir, artifact.revision, installId)
+    : getSpeakrsModelRevisionDir(userDataDir));
+  const mode = directFiles
+    ? artifact.runtime.modeByPlatform[`${platform}-${process.arch}`]
+    : platform === 'linux' ? 'cuda' : resolveSpeakrsMode(requiredDevice, env);
   const { LD_LIBRARY_PATH: _ignoredLibraryPath, ...restExtra } = extra || {};
   const speakrsEnv = {
     ...restExtra,
     SPEAKRS_EXCLUSIVE: '1',
   };
+  if (directFiles) {
+    for (const key of new Set([...Object.keys(env), ...Object.keys(extra)])) {
+      if (/^(SPEAKRS_(?:CUDA|COREML)_|CUDA_|LD_|DYLD_)/i.test(key)
+          || ['GLIBC_TUNABLES', 'GCONV_PATH', 'LOCPATH', 'MALLOC_TRACE', 'SPEAKRS_AHC_THREADS', 'MATMUL_NUM_THREADS'].includes(key)) {
+        speakrsEnv[key] = undefined;
+      }
+    }
+    speakrsEnv.SPEAKRS_CUDA_TUNE_FILE = os.devNull;
+    speakrsEnv.ORT_DYLIB_PATH = undefined;
+    speakrsEnv.SPEAKRS_NUM_SPEAKERS = undefined;
+    speakrsEnv.SPEAKRS_MODELS_DIR = undefined;
+  }
   clearHuggingFaceEnvVars(speakrsEnv, extra, env);
   if (resolvedCliPath) {
     speakrsEnv.SPEAKRS_CLI_PATH = resolvedCliPath;
@@ -471,7 +537,7 @@ function buildSpeakrsSpawnEnv({
   if (packaged) {
     speakrsEnv.AVANEVIS_PACKAGED = '1';
   }
-  if (platform === 'win32') {
+  if (platform === 'win32' && !directFiles) {
     const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
     const currentPath = extra.PATH || env.PATH || process.env.PATH || '';
     speakrsEnv.PATH = prependUniquePathEntry(currentPath, ortDir);
@@ -481,11 +547,11 @@ function buildSpeakrsSpawnEnv({
     speakrsEnv.LD_LIBRARY_PATH = buildSpeakrsLinuxLibraryPath({
       userDataDir,
       fsModule,
+      includePrivateOrt: !directFiles,
     });
-    speakrsEnv.ORT_DYLIB_PATH = path.join(
-      getSpeakrsOrtRuntimeDir(userDataDir),
-      SPEAKRS_ORT_SO_NAMES[0],
-    );
+    if (!directFiles) {
+      speakrsEnv.ORT_DYLIB_PATH = path.join(getSpeakrsOrtRuntimeDir(userDataDir), SPEAKRS_ORT_SO_NAMES[0]);
+    }
   }
   return speakrsEnv;
 }
@@ -989,12 +1055,20 @@ async function checkSpeakrsModelCache({
   catalog = AI_MODEL_CATALOG,
   verifyChecksum = false,
   verifyChecksumIfChanged = false,
+  manifest,
 } = {}) {
   const artifact = getSpeakrsSetupArtifactsForPlatform(platform, arch, catalog);
   const modelPack = artifact?.modelPack;
   const revision = artifact?.revision || SPEAKRS_MODEL_PACK_REVISION;
   const modelCacheDir = getSpeakrsModelCacheDir(userDataDir);
-  const revisionDir = getSpeakrsModelRevisionDir(userDataDir, revision);
+  const directFiles = modelPack?.transport === 'files';
+  const installId = directFiles
+    ? (manifest || loadManifest({ userDataDir, fsModule, catalog })).features.diarization.speakrsInstallId
+    : null;
+  const revisionDir = directFiles
+    ? getNativeSpeakrsModelDir(userDataDir, revision, installId)
+    : getSpeakrsModelRevisionDir(userDataDir, revision);
+  const resolveModelFile = (file) => revisionDir && resolveContainedSpeakrsPath(revisionDir, file.path);
   const existsSync = bindFsMethod(fsModule, 'existsSync');
   const files = artifact?.modelFiles || [];
   const missing = [];
@@ -1003,8 +1077,17 @@ async function checkSpeakrsModelCache({
   for (const file of files) {
     let filePath;
     try {
-      filePath = getSpeakrsSourceFilePath(userDataDir, file, revision);
+      filePath = resolveModelFile(file);
+      if (filePath && directFiles) {
+        const stats = inspectNativeSpeakrsPath(userDataDir, filePath, fsModule);
+        if (!stats.isFile() || stats.size !== file.sizeBytes) sizeMismatches.push(file.path);
+        continue;
+      }
     } catch (error) {
+      if (error.code === 'ENOENT') {
+        missing.push(file.path);
+        continue;
+      }
       unsafePathError = error;
       break;
     }
@@ -1026,7 +1109,9 @@ async function checkSpeakrsModelCache({
     valid: false,
     checksumStatus: 'notChecked',
     validationStatus: installed ? 'installed' : partial ? 'notConfigured' : 'notConfigured',
-    reason: unsafePathError?.message || (installed ? null : 'Speakrs model pack is not installed.'),
+    reason: unsafePathError?.message || (installed ? null : directFiles
+      ? 'Run speaker setup or repair to install the current Speakrs models.'
+      : 'Speakrs model pack is not installed.'),
     modelCacheDir,
     revisionDir,
     revision,
@@ -1042,21 +1127,13 @@ async function checkSpeakrsModelCache({
       validationStatus: 'error',
     };
   }
-  const modelPackPinned = Boolean(
-    modelPack
-    && modelPack.fileName
-    && modelPack.archiveFormat
-    && modelPack.downloadUrl
-    && isAllowedDownloadUrl(modelPack.downloadUrl)
-    && isPinnedSha256(modelPack.sha256)
-    && Number(modelPack.sizeBytes) > 0,
-  );
+  const modelPackPinned = validateSpeakrsModelTransport(modelPack, files);
   if (!artifact || files.length === 0 || !modelPackPinned) {
     return {
       ...base,
       supported: false,
       valid: false,
-      reason: 'No complete pinned Speakrs model-pack archive is configured for this platform.',
+      reason: 'No complete pinned Speakrs model set is configured for this platform.',
       validationStatus: 'unsupported',
     };
   }
@@ -1072,7 +1149,7 @@ async function checkSpeakrsModelCache({
   }
 
   for (const file of files) {
-    const filePath = getSpeakrsSourceFilePath(userDataDir, file, revision);
+    const filePath = resolveModelFile(file);
     const fingerprint = verifyChecksumIfChanged ? getArtifactFingerprint(filePath, fsModule) : null;
     if (fingerprint) {
       const cached = speakrsChecksumFingerprintCache.get(fingerprint);
@@ -1230,7 +1307,19 @@ async function checkSpeakrsRuntimeCache({
   const existsSync = bindFsMethod(fsModule, 'existsSync');
   const readFileSync = bindFsMethod(fsModule, 'readFileSync');
   const runtimeArtifacts = artifact?.runtimeArtifacts || [];
-  const requiresExtractedRuntime = (
+  const directFiles = artifact?.modelPack?.transport === 'files';
+  if (directFiles && platform === 'win32') {
+    return {
+      supported: false,
+      installed: false,
+      valid: false,
+      validationStatus: 'unsupported',
+      reason: 'Speakrs native CUDA loader qualification is pending on Windows.',
+      runtimeDir,
+      artifact,
+    };
+  }
+  const requiresExtractedRuntime = !directFiles && (
     (platform === 'win32' && arch === 'x64')
     || (platform === 'linux' && arch === 'x64')
   );
@@ -2311,7 +2400,7 @@ async function checkAiAddonSetupStatus({
     ? resolveSpawnDiarizationEngine(status.features.diarization.engine, env)
     : null;
   const tokenStatus = status.features.diarization.engine === 'pyannote'
-    ? tokenStatusReader({
+    ? await tokenStatusReader({
       userDataDir,
       safeStorage,
       fsModule,
@@ -2562,6 +2651,9 @@ module.exports = {
   findRuntimeExecutablePath,
   hashFileSha256,
   isPinnedSha256,
+  getNativeSpeakrsModelDir,
+  validateSpeakrsModelTransport,
+  inspectNativeSpeakrsPath,
   validateDiarizationDependencyArtifact,
   validateSummaryRuntimeArtifact,
   isPinnedByteSize,

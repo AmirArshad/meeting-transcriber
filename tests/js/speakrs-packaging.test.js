@@ -18,7 +18,6 @@ const {
   getSpeakrsCargoTargetTriple,
   getSpeakrsResourceManifestTarget,
   getSpeakrsCliBinaryName,
-  loadSpeakrsOrtCompilePins,
   manifestsMatch,
   readElfMachine,
   readMachOCpuType,
@@ -31,34 +30,16 @@ const {
   writeSpeakrsPackagedIntegrityManifest,
 } = require('../../build/prepare-resources');
 const {
-  REQUIRED_LINUX_ORT_ARTIFACT_COUNT,
-  REQUIRED_MODEL_PACK_PLATFORMS,
-  REQUIRED_WINDOWS_ORT_ARTIFACT_COUNT,
-  assertCatalogPinsComplete,
-  assertModelPackPins,
-  assertOrtRuntimePins,
   assertPackagedSpeakrsLayout,
   assertPinnedDownloadArtifact,
   listReleaseChecksumArtifacts,
 } = require('../../scripts/verify-speakrs-packaging');
-const {
-  canReuseExtraction,
-  getCpuSmokeCacheIdentity,
-  getOnnxSubsetMarkerIdentity,
-  getWindowsCpuOrtMarkerIdentity,
-} = require('../../scripts/run-speakrs-cpu-smoke');
-const ortCompilePins = require('../../native/speakrs-cli/ort-compile-pins.json');
-const cpuSmokePins = require('../../native/speakrs-cli/ci-cpu-smoke-pins.json');
-const {
-  SPEAKRS_MODEL_PACK_ARTIFACTS,
-  SPEAKRS_ORT_RUNTIME_ARTIFACTS,
-} = require('../../src/ai-addon/speakrs-pack-spec');
+const { SPEAKRS_MODEL_PACK_ARTIFACTS } = require('../../src/ai-addon/speakrs-pack-spec');
 const { writeSpeakrsLinuxElfFixture } = require('./speakrs-linux-elf-fixture');
 
 const ROOT = path.join(__dirname, '..', '..');
 const CARGO_TOML = fs.readFileSync(path.join(ROOT, 'native', 'speakrs-cli', 'Cargo.toml'), 'utf8');
 const PREPARE_RESOURCES_SOURCE = fs.readFileSync(path.join(ROOT, 'build', 'prepare-resources.js'), 'utf8');
-const VERIFY_PACKAGING_SOURCE = fs.readFileSync(path.join(ROOT, 'scripts', 'verify-speakrs-packaging.js'), 'utf8');
 const CI_WORKFLOW = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
 const RELEASE_WORKFLOW = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'build-release.yml'), 'utf8');
 const MACOS_VERIFY_SCRIPT = fs.readFileSync(path.join(ROOT, 'scripts', 'verify-macos-packaged-app.sh'), 'utf8');
@@ -97,25 +78,25 @@ function writeCanonicalFixture(filePath, contents = Buffer.from('RIFF-fixture'))
 }
 
 
-test('speakrs rust-toolchain stays pinned at 1.88.0', () => {
+test('speakrs rust-toolchain stays pinned at 1.89.0', () => {
   const toolchain = fs.readFileSync(path.join(ROOT, 'native', 'speakrs-cli', 'rust-toolchain.toml'), 'utf8');
-  assert.match(toolchain, /channel = "1\.88\.0"/);
+  assert.match(toolchain, /channel = "1\.89\.0"/);
 });
 
 
 test('speakrs cargo feature flags stay on the Task 1 matrix', () => {
-  assert.deepEqual(getSpeakrsCargoFeatures('darwin'), ['default-linalg', 'coreml']);
-  assert.deepEqual(getSpeakrsCargoFeatures('win32'), ['default-linalg', 'cuda', 'load-dynamic']);
-  assert.deepEqual(getSpeakrsCargoFeatures('linux'), ['default-linalg', 'cuda', 'load-dynamic']);
+  assert.deepEqual(getSpeakrsCargoFeatures('darwin'), ['coreml']);
+  assert.deepEqual(getSpeakrsCargoFeatures('win32'), ['cuda']);
+  assert.deepEqual(getSpeakrsCargoFeatures('linux'), ['cuda']);
   assert.equal(CARGO_TOML.includes('default-features = false'), true);
-  assert.equal(CARGO_TOML.includes('default-linalg'), true);
+  assert.equal(CARGO_TOML.includes('default-linalg'), false);
   assert.equal(CARGO_TOML.includes('"online"'), false);
   assert.equal(/\bcoreml-fast\b/.test(CARGO_TOML), false);
   assert.equal(/\bcuda-fast\b/.test(CARGO_TOML), false);
   assert.equal(/\bonline\b/.test(CARGO_TOML), false);
-  assert.match(CARGO_TOML, /target_os = "macos"[\s\S]*features = \["default-linalg", "coreml"\]/);
-  assert.match(CARGO_TOML, /target_os = "windows"[\s\S]*features = \["default-linalg", "cuda", "load-dynamic"\]/);
-  assert.match(CARGO_TOML, /target_os = "linux"[\s\S]*features = \["default-linalg", "cuda", "load-dynamic"\]/);
+  assert.match(CARGO_TOML, /target_os = "macos"[\s\S]*features = \["coreml"\]/);
+  assert.match(CARGO_TOML, /target_os = "windows"[\s\S]*features = \["cuda"\]/);
+  assert.match(CARGO_TOML, /target_os = "linux"[\s\S]*features = \["cuda"\]/);
   for (const platform of ['darwin', 'win32', 'linux']) {
     assert.equal(
       getSpeakrsCargoFeatures(platform).some((feature) => feature.includes('fast') || feature === 'online'),
@@ -310,7 +291,7 @@ test('resource manifest fingerprints the speakrs crate, toolchain, entitlements,
   assert.equal(manifest.inputs.speakrsCargoToml.length, 64);
   assert.equal(manifest.inputs.speakrsCargoLock.length, 64);
   assert.equal(manifest.inputs.speakrsToolchain.length, 64);
-  assert.equal(manifest.inputs.speakrsOrtCompilePins.length, 64);
+  assert.equal(manifest.inputs.speakrsCargoConfig.length, 64);
   assert.equal(manifest.inputs.speakrsValidateWav.length, 64);
   assert.equal(manifest.inputs.inheritEntitlements.length, 64);
   assert.equal(manifest.inputs.speakrsCargoTarget, getSpeakrsResourceManifestTarget());
@@ -323,164 +304,28 @@ test('resource manifest fingerprints the speakrs crate, toolchain, entitlements,
 });
 
 
-test('ort compile-time downloads stay crate-pinned and off the installer download manifest', () => {
-  const pins = loadSpeakrsOrtCompilePins();
-  assert.equal(pins.ortSysVersion, '2.0.0-rc.13');
-  assert.equal(pins['win32-x64'], null);
-  assert.equal(pins['linux-x64'], null);
-  assert.equal(
-    pins['darwin-arm64'].url,
-    'https://cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/aarch64-apple-darwin+coreml.tar.lzma2',
-  );
-  assert.equal(
-    pins['darwin-arm64'].sha256,
-    '6934874e2e953576d9c1db47ff1af39c62c4f4220dbe6f988e131f72879674c7',
-  );
-  assert.equal(pins['darwin-arm64'].target, 'aarch64-apple-darwin');
-  assert.deepEqual(pins, ortCompilePins);
-  assert.throws(
-    () => assertOrtRuntimePins({ 'win32-x64': pins['win32-x64'] }),
-    /ORT 1\.27\.1 runtime pin set is incomplete/,
-  );
-});
-
-
-test('catalog pins require Windows, macOS, and Linux model packs plus ORT closures', () => {
-  assert.deepEqual([...REQUIRED_MODEL_PACK_PLATFORMS].sort(), ['darwin-arm64', 'linux-x64', 'win32-x64']);
-  assert.equal(REQUIRED_WINDOWS_ORT_ARTIFACT_COUNT, 3);
-  assert.equal(REQUIRED_LINUX_ORT_ARTIFACT_COUNT, 5);
-  assert.doesNotThrow(() => assertCatalogPinsComplete());
-
-  const missingDarwin = { 'win32-x64': SPEAKRS_MODEL_PACK_ARTIFACTS['win32-x64'] };
-  assert.throws(
-    () => assertModelPackPins(missingDarwin),
-    /exactly darwin-arm64, linux-x64, win32-x64/,
-  );
-
-  const incompleteOrt = {
-    'win32-x64': SPEAKRS_ORT_RUNTIME_ARTIFACTS['win32-x64'].slice(0, 2),
-  };
-  assert.throws(
-    () => assertOrtRuntimePins(incompleteOrt),
-    /ORT 1\.27\.1 runtime pin set is incomplete/,
-  );
-
-  const incompleteLinuxOrt = {
-    'win32-x64': SPEAKRS_ORT_RUNTIME_ARTIFACTS['win32-x64'],
-    'linux-x64': SPEAKRS_ORT_RUNTIME_ARTIFACTS['linux-x64'].slice(0, 3),
-  };
-  assert.throws(
-    () => assertOrtRuntimePins(incompleteLinuxOrt),
-    /Linux Speakrs ORT 1\.27\.1 runtime pin set is incomplete/,
-  );
-
-  const malformedSha = {
-    'win32-x64': SPEAKRS_ORT_RUNTIME_ARTIFACTS['win32-x64'].map((artifact, index) => (
-      index === 0 ? { ...artifact, sha256: 'deadbeef' } : { ...artifact }
-    )),
-  };
-  assert.throws(
-    () => assertOrtRuntimePins(malformedSha),
-    /sha256 is invalid/,
-  );
-
-  const missingExtracted = {
-    'win32-x64': SPEAKRS_ORT_RUNTIME_ARTIFACTS['win32-x64'].map((artifact, index) => (
-      index === 0 ? { ...artifact, extractedFiles: undefined } : { ...artifact }
-    )),
-  };
-  assert.throws(
-    () => assertOrtRuntimePins(missingExtracted),
-    /extractedFiles|extracted DLL/,
-  );
-
-  assert.throws(
-    () => assertPinnedDownloadArtifact({
-      fileName: 'demo.tar.gz',
-      downloadUrl: 'http://github.com/AmirArshad/meeting-transcriber/releases/download/x/demo.tar.gz',
-      sha256: 'a'.repeat(64),
-      sizeBytes: 12,
-    }, { label: 'demo' }),
-    /must use HTTPS/,
-  );
-});
-
-
-test('release checksum verification includes model packs and Windows/Linux ORT artifacts', () => {
+test('release verifier checks all 69 distinct model leaves at their pinned upstream paths', () => {
   const artifacts = listReleaseChecksumArtifacts();
-  assert.equal(artifacts.filter((artifact) => artifact.checksumKind === 'model-pack').length, 3);
-  assert.equal(artifacts.filter((artifact) => artifact.checksumKind === 'ort-runtime').length, 8);
-  assert.deepEqual(
-    artifacts.filter((artifact) => artifact.checksumKind === 'model-pack').map((artifact) => artifact.platform).sort(),
-    ['darwin-arm64', 'linux-x64', 'win32-x64'],
-  );
-  assert.ok(artifacts.some((artifact) => artifact.fileName === 'onnxruntime-win-x64-gpu_cuda12-1.27.1.zip'));
-  assert.ok(artifacts.some((artifact) => artifact.fileName === 'onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz'));
-  assert.ok(artifacts.some((artifact) => artifact.fileName.includes('nvidia_cuda_runtime_cu12')));
-  assert.ok(artifacts.some((artifact) => artifact.fileName.includes('nvidia_cufft_cu12')));
-  assert.ok(artifacts.some((artifact) => artifact.fileName === 'nvidia_curand_cu12-10.3.10.19-py3-none-manylinux_2_27_x86_64.whl'));
-  assert.ok(artifacts.some((artifact) => artifact.fileName === 'nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl'));
-  assert.match(VERIFY_PACKAGING_SOURCE, /async function verifyPublishedPackChecksums/);
-  assert.match(VERIFY_PACKAGING_SOURCE, /listReleaseChecksumArtifacts\(\)/);
-  assert.match(VERIFY_PACKAGING_SOURCE, /checksumKind: 'ort-runtime'/);
+  assert.equal(artifacts.length, 69);
+  assert.equal(new Set(artifacts.map((artifact) => artifact.path)).size, artifacts.length);
+  assert.ok(artifacts.some((artifact) => artifact.path.endsWith('.safetensors')));
+  assert.ok(artifacts.some((artifact) => artifact.path.includes('.mlmodelc/weights/')));
+  assert.ok(artifacts.every((artifact) => !artifact.fileName.endsWith('.onnx')));
+  assert.throws(() => listReleaseChecksumArtifacts({
+    'win32-x64': SPEAKRS_MODEL_PACK_ARTIFACTS['win32-x64'],
+  }), /exactly darwin-arm64, linux-x64, win32-x64/);
+  assert.throws(() => assertPinnedDownloadArtifact({
+    fileName: 'model.npy',
+    downloadUrl: 'http://huggingface.co/example/model.npy',
+    sha256: 'a'.repeat(64),
+    sizeBytes: 12,
+  }), /must use HTTPS/);
 });
 
-
-test('CPU smoke uses the published ONNX subset pack and CI-only Windows/Linux CPU ORT pins', () => {
-  const pack = SPEAKRS_MODEL_PACK_ARTIFACTS[cpuSmokePins.onnxSubsetPlatform];
-  assert.ok(pack);
-  assert.match(pack.sha256, /^[a-f0-9]{64}$/);
-  assert.equal(cpuSmokePins.windowsCpuOrt.fileName, 'onnxruntime-win-x64-1.27.1.zip');
-  assert.equal(
-    cpuSmokePins.windowsCpuOrt.sha256,
-    '2e00414a63fdef0914cd5a5ede6c707844878e0c08e1b6693842f0451b2df2a1',
-  );
-  assert.equal(cpuSmokePins.linuxCpuOrt.fileName, 'onnxruntime-linux-x64-1.27.1.tgz');
-  assert.equal(
-    cpuSmokePins.linuxCpuOrt.sha256,
-    '25b1ef1fea1acd210d63f8f24dc870ad6e077795ce1f54876252c6d3803c15af',
-  );
-  assert.equal(cpuSmokePins.linuxCpuOrt.dylibName, 'libonnxruntime.so.1.27.1');
-});
-
-
-test('CPU smoke extraction markers are pin-identity based and reject stale caches', () => {
-  const pack = SPEAKRS_MODEL_PACK_ARTIFACTS[cpuSmokePins.onnxSubsetPlatform];
-  const expectedOnnx = getOnnxSubsetMarkerIdentity(pack);
-  const expectedOrt = getWindowsCpuOrtMarkerIdentity(cpuSmokePins.windowsCpuOrt);
-  assert.equal(expectedOnnx, `${pack.sha256}\n${pack.fileName}\n`);
-  assert.match(expectedOrt, new RegExp(`${cpuSmokePins.windowsCpuOrt.sha256}`));
-
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-smoke-marker-'));
-  try {
-    const extractDir = path.join(tempDir, 'onnx-subset');
-    fs.mkdirSync(extractDir, { recursive: true });
-    fs.writeFileSync(path.join(extractDir, '.complete'), 'stale-sha\n');
-    assert.equal(canReuseExtraction(extractDir, expectedOnnx), false);
-
-    fs.writeFileSync(path.join(extractDir, '.complete'), expectedOnnx);
-    assert.equal(canReuseExtraction(extractDir, expectedOnnx), true);
-
-    const ortDir = path.join(tempDir, 'windows-cpu-ort');
-    fs.mkdirSync(ortDir, { recursive: true });
-    fs.writeFileSync(path.join(ortDir, 'onnxruntime.dll'), 'old-dll');
-    fs.writeFileSync(path.join(ortDir, '.complete'), 'old-ort-sha\n');
-    assert.equal(canReuseExtraction(ortDir, expectedOrt, 'onnxruntime.dll'), false);
-
-    fs.writeFileSync(path.join(ortDir, '.complete'), expectedOrt);
-    assert.equal(canReuseExtraction(ortDir, expectedOrt, 'onnxruntime.dll'), true);
-    assert.equal(canReuseExtraction(ortDir, expectedOrt, 'missing.dll'), false);
-
-    const identity = getCpuSmokeCacheIdentity();
-    assert.match(identity, /^[a-f0-9]{64}$/);
-    const drifted = getCpuSmokeCacheIdentity({
-      ...cpuSmokePins,
-      windowsCpuOrt: { ...cpuSmokePins.windowsCpuOrt, sha256: 'b'.repeat(64) },
-    });
-    assert.notEqual(identity, drifted);
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
+test('macOS app and native Speakrs deployment floors are 15.0', () => {
+  assert.equal(packageJson.build.mac.extendInfo.LSMinimumSystemVersion, '15.0');
+  assert.match(PREPARE_RESOURCES_SOURCE, /SPEAKRS_MACOS_DEPLOYMENT_TARGET = '15.0'/);
+  assert.match(MACOS_VERIFY_SCRIPT, /LSMinimumSystemVersion/);
 });
 
 
@@ -491,12 +336,9 @@ test('CI and release workflows install explicit Rust targets and pin-safe smoke 
   assert.match(CI_WORKFLOW, /cargo build --release --locked --target aarch64-apple-darwin/);
   assert.match(CI_WORKFLOW, /cargo build --release --locked --target x86_64-pc-windows-msvc/);
   assert.match(CI_WORKFLOW, /cargo build --release --locked --target x86_64-unknown-linux-gnu/);
-  assert.match(CI_WORKFLOW, /native\/speakrs-cli\/target\/aarch64-apple-darwin\/release\/speakrs-cli/);
-  assert.match(CI_WORKFLOW, /native\/speakrs-cli\/target\/x86_64-pc-windows-msvc\/release\/speakrs-cli\.exe/);
-  assert.match(CI_WORKFLOW, /native\/speakrs-cli\/target\/x86_64-unknown-linux-gnu\/release\/speakrs-cli/);
-  assert.match(CI_WORKFLOW, /Speakrs CPU-mode inference smoke \(non-GPU structural check\)/);
-  assert.match(CI_WORKFLOW, /hashFiles\('native\/speakrs-cli\/ci-cpu-smoke-pins\.json'/);
-  assert.equal(CI_WORKFLOW.includes('speakrs-cpu-smoke-${{ runner.os }}-5d24ffe'), false);
+  assert.equal((CI_WORKFLOW.match(/cargo build --release --locked --features ci-cpu-smoke/g) || []).length, 3);
+  assert.match(CI_WORKFLOW, /speakrs-cpu-smoke\/target\/release\/speakrs-cpu-smoke\.exe/);
+  assert.match(CI_WORKFLOW, /hashFiles\('native\/speakrs-cpu-smoke\/Cargo\.lock'/);
   assert.match(RELEASE_WORKFLOW, /rust-target: x86_64-pc-windows-msvc/);
   assert.match(RELEASE_WORKFLOW, /rust-target: aarch64-apple-darwin/);
   assert.match(RELEASE_WORKFLOW, /rust-target: x86_64-unknown-linux-gnu/);

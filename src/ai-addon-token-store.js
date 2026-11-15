@@ -21,61 +21,96 @@ function getTokenPath(userDataDir, tokenKey) {
   return path.join(getTokenStoreDir(userDataDir), fileName);
 }
 
-function requireEncryption(safeStorage) {
-  if (!safeStorage || typeof safeStorage.isEncryptionAvailable !== 'function' || !safeStorage.isEncryptionAvailable()) {
-    throw new Error('Secure token storage is unavailable right now. Unlock Keychain or restart AvaNevis and try again.');
+const operationStates = new Map();
+let tempSequence = 0;
+const unavailable = () => Object.assign(new Error('Secure token storage is unavailable right now. Unlock your secure storage and try again.'), { code: 'TOKEN_STORAGE_UNAVAILABLE' });
+const storageError = () => new Error('Secure token storage could not complete the operation. Please try again.');
+
+function stateFor(tokenPath) {
+  const key = path.resolve(tokenPath);
+  if (!operationStates.has(key)) operationStates.set(key, { generation: 0, tail: Promise.resolve(), active: 0 });
+  const state = operationStates.get(key);
+  state.active += 1;
+  return state;
+}
+
+function enqueue(state, action) {
+  const result = state.tail.then(action);
+  state.tail = result.catch(() => {});
+  return result;
+}
+
+function releaseState(tokenPath, state) {
+  state.active -= 1;
+  if (state.active === 0 && operationStates.get(path.resolve(tokenPath)) === state) {
+    operationStates.delete(path.resolve(tokenPath));
   }
 }
 
-function isTokenEncryptionAvailable({ safeStorage, checkAvailability = true } = {}) {
-  if (!checkAvailability) {
-    return null;
-  }
+// Electron 46.0.0-alpha.10 / Chromium 159: v10 uses a fixed POSIX key;
+// v11 and v12 identify the desktop keyring and Secret portal respectively.
+function isProtectedLinuxCiphertext(value) {
+  return Buffer.isBuffer(value) && (value.subarray(0, 3).equals(Buffer.from('v11'))
+    || value.subarray(0, 3).equals(Buffer.from('v12')));
+}
 
-  if (!safeStorage || typeof safeStorage.isEncryptionAvailable !== 'function') {
-    return false;
-  }
+async function isTokenEncryptionAvailable({ safeStorage, checkAvailability = true } = {}) {
+  if (!checkAvailability) return null;
+  try {
+    if (!safeStorage || typeof safeStorage.isAsyncEncryptionAvailable !== 'function') return false;
+    if (process.platform === 'linux' && (typeof safeStorage.getSelectedStorageBackend !== 'function'
+        || !['gnome_libsecret', 'kwallet', 'kwallet5', 'kwallet6'].includes(safeStorage.getSelectedStorageBackend()))) return false;
+    if ((await safeStorage.isAsyncEncryptionAvailable()) !== true) return false;
+    if (process.platform === 'linux') {
+      if (process.versions.electron && process.versions.electron !== '46.0.0-alpha.10') return false;
+      if (typeof safeStorage.encryptStringAsync !== 'function') return false;
+      return isProtectedLinuxCiphertext(await safeStorage.encryptStringAsync('avanevis-storage-probe'));
+    }
+    return true;
+  } catch (_) { return false; }
+}
 
-  return safeStorage.isEncryptionAvailable();
+async function requireEncryption(safeStorage) {
+  if (!await isTokenEncryptionAvailable({ safeStorage })) throw unavailable();
 }
 
 function writeTokenFileAtomicSync(fsModule, tokenPath, encryptedBuffer) {
-  const tempPath = `${tokenPath}.${process.pid}.${Date.now()}.tmp`;
-  const writeOptions = process.platform === 'win32' ? undefined : { mode: 0o600 };
-
+  const tempPath = `${tokenPath}.${process.pid}.${Date.now()}.${++tempSequence}.tmp`;
+  let fd;
+  let created = false;
   try {
-    fsModule.writeFileSync(tempPath, encryptedBuffer, writeOptions);
-    if (typeof fsModule.renameSync === 'function') {
-      fsModule.renameSync(tempPath, tokenPath);
-    } else {
-      fsModule.writeFileSync(tokenPath, encryptedBuffer, writeOptions);
-      if (typeof fsModule.unlinkSync === 'function') {
-        fsModule.unlinkSync(tempPath);
-      }
-    }
+    fd = fsModule.openSync(tempPath, 'wx', 0o600);
+    created = true;
+    fsModule.writeFileSync(fd, encryptedBuffer);
+    fsModule.fsyncSync(fd);
+    fsModule.closeSync(fd);
+    fd = undefined;
+    fsModule.renameSync(tempPath, tokenPath);
   } finally {
-    if (typeof fsModule.existsSync === 'function' && typeof fsModule.unlinkSync === 'function' && fsModule.existsSync(tempPath)) {
-      try {
-        fsModule.unlinkSync(tempPath);
-      } catch (error) {
-        // Best effort cleanup only.
-      }
-    }
+    if (fd !== undefined) { try { fsModule.closeSync(fd); } catch (_) {} }
+    if (created) { try { fsModule.unlinkSync(tempPath); } catch (_) {} }
   }
 }
 
-function storeAiAddonToken({ userDataDir, tokenKey, token, safeStorage, fsModule = fs } = {}) {
+async function storeAiAddonToken({ userDataDir, tokenKey, token, safeStorage, fsModule = fs } = {}) {
   const normalizedToken = typeof token === 'string' ? token.trim() : '';
-  if (!normalizedToken) {
-    throw new Error('Token must not be empty.');
-  }
-
-  requireEncryption(safeStorage);
+  if (!normalizedToken) throw new Error('Token must not be empty.');
   const tokenPath = getTokenPath(userDataDir, tokenKey);
-  fsModule.mkdirSync(path.dirname(tokenPath), { recursive: true });
-  writeTokenFileAtomicSync(fsModule, tokenPath, safeStorage.encryptString(normalizedToken));
-
-  return { success: true, hasToken: true };
+  const state = stateFor(tokenPath);
+  const generation = ++state.generation;
+  try {
+    await requireEncryption(safeStorage);
+    const encrypted = await safeStorage.encryptStringAsync(normalizedToken);
+    if (!Buffer.isBuffer(encrypted) || !encrypted.length
+        || (process.platform === 'linux' && !isProtectedLinuxCiphertext(encrypted))) throw storageError();
+    return await enqueue(state, () => {
+      if (state.generation !== generation) throw storageError();
+      fsModule.mkdirSync(path.dirname(tokenPath), { recursive: true });
+      writeTokenFileAtomicSync(fsModule, tokenPath, encrypted);
+      return { success: true, hasToken: true };
+    });
+  } catch (error) { if (error.code === 'TOKEN_STORAGE_UNAVAILABLE') throw error; throw storageError(); }
+  finally { releaseState(tokenPath, state); }
 }
 
 function hasAiAddonToken({ userDataDir, tokenKey, fsModule = fs } = {}) {
@@ -101,23 +136,52 @@ function hasAiAddonToken({ userDataDir, tokenKey, fsModule = fs } = {}) {
   return true;
 }
 
-function getAiAddonToken({ userDataDir, tokenKey, safeStorage, fsModule = fs } = {}) {
+async function getAiAddonToken({ userDataDir, tokenKey, safeStorage, fsModule = fs } = {}) {
   const tokenPath = getTokenPath(userDataDir, tokenKey);
-  if (!hasAiAddonToken({ userDataDir, tokenKey, fsModule })) {
-    return null;
-  }
-
-  requireEncryption(safeStorage);
-  return safeStorage.decryptString(fsModule.readFileSync(tokenPath));
+  const state = stateFor(tokenPath);
+  const generation = state.generation;
+  let snapshot;
+  try {
+    snapshot = await enqueue(state, () => {
+      if (!hasAiAddonToken({ userDataDir, tokenKey, fsModule })) return null;
+      return Buffer.from(fsModule.readFileSync(tokenPath));
+    });
+    if (!snapshot || !snapshot.length) return null;
+    if (process.platform === 'linux' && !isProtectedLinuxCiphertext(snapshot)) throw storageError();
+    await requireEncryption(safeStorage);
+    const decrypted = await safeStorage.decryptStringAsync(snapshot);
+    if (!decrypted || typeof decrypted.result !== 'string' || !decrypted.result
+        || typeof decrypted.shouldReEncrypt !== 'boolean') throw storageError();
+    if (state.generation !== generation) return null;
+    if (decrypted.shouldReEncrypt) {
+      try {
+        const rotated = await safeStorage.encryptStringAsync(decrypted.result);
+        if (!Buffer.isBuffer(rotated) || !rotated.length
+            || (process.platform === 'linux' && !isProtectedLinuxCiphertext(rotated))) throw storageError();
+        await enqueue(state, () => {
+          if (state.generation !== generation) return;
+          let current;
+          try { current = fsModule.readFileSync(tokenPath); } catch (_) { return; }
+          if (Buffer.from(current).equals(snapshot)) writeTokenFileAtomicSync(fsModule, tokenPath, rotated);
+        });
+      } catch (_) { /* Retain the readable original on rotation failure. */ }
+    }
+    return state.generation === generation ? decrypted.result : null;
+  } catch (error) { if (error.code === 'TOKEN_STORAGE_UNAVAILABLE') throw error; throw storageError(); }
+  finally { releaseState(tokenPath, state); }
 }
 
-function deleteAiAddonToken({ userDataDir, tokenKey, fsModule = fs } = {}) {
+async function deleteAiAddonToken({ userDataDir, tokenKey, fsModule = fs } = {}) {
   const tokenPath = getTokenPath(userDataDir, tokenKey);
-  if (fsModule.existsSync(tokenPath)) {
-    fsModule.unlinkSync(tokenPath);
-  }
-
-  return { success: true, hasToken: false };
+  const state = stateFor(tokenPath);
+  ++state.generation;
+  try {
+    return await enqueue(state, () => {
+      try { fsModule.unlinkSync(tokenPath); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+      return { success: true, hasToken: false };
+    });
+  } catch (_) { throw storageError(); }
+  finally { releaseState(tokenPath, state); }
 }
 
 module.exports = {

@@ -10,7 +10,7 @@ const { EventEmitter } = require('node:events');
 const { createTranscriptionService } = require('../../src/main/transcription-service');
 const { createPythonRuntime } = require('../../src/main/python-runtime');
 const { getDiarizationAvailability, LINUX_DIARIZATION_UNAVAILABLE_REASON } = require('../../src/ai-addon-state');
-const { getSpeakrsOrtRuntimeDir, SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE } = require('../../src/ai-addon/manifest-store');
+const { SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE } = require('../../src/ai-addon/manifest-store');
 
 const DIARIZE_REQUIRED_FLAGS = Object.freeze([
   '--audio',
@@ -352,6 +352,11 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
 
   const recordingsDir = makeTempDir('speakrs-diarize-rec-');
   const userDataDir = makeTempDir('speakrs-diarize-ud-');
+  const addonDir = path.join(userDataDir, 'ai-addons');
+  fs.mkdirSync(addonDir);
+  fs.writeFileSync(path.join(addonDir, 'manifest.json'), JSON.stringify({
+    features: { diarization: { engine: 'speakrs', speakrsInstallId: 'f'.repeat(32) } },
+  }));
   const audioPath = path.join(recordingsDir, 'meeting.opus');
   fs.writeFileSync(audioPath, 'opus');
 
@@ -519,11 +524,7 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
     assert.equal(String(env.PYTHONPATH || '').includes('pyannote-site'), false);
     assert.equal(cudaOptions.length > 0, true);
     assert.equal(cudaOptions[0].includeManagedDiarization, false);
-    if (process.platform === 'win32') {
-      const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
-      assert.equal(env.PATH.startsWith(`${ortDir}${path.delimiter}`) || env.PATH === ortDir, true);
-      assert.equal(env.ORT_DYLIB_PATH, path.join(ortDir, 'onnxruntime.dll'));
-    }
+    assert.equal(env.ORT_DYLIB_PATH, undefined);
     if (process.platform === 'win32') {
       assert.equal(options.detached, false);
     } else {

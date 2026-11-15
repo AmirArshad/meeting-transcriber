@@ -15,7 +15,7 @@ from common.sensitive_text import redact_sensitive_text
 
 SPEAKRS_MODEL_ID = "speakrs-community1-vbx"
 VALIDATE_WAV_NAME = "speakrs-two-speaker-16k.wav"
-ALLOWED_SPEAKRS_MODES = frozenset({"cpu", "coreml", "cuda"})
+ALLOWED_SPEAKRS_MODES = frozenset({"coreml", "cuda"})
 PRODUCT_ANNOTATION_SOURCE = "exclusive_speaker_diarization"
 HF_TOKEN_ENV_KEYS = ("HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "HUGGING_FACE_HUB_TOKEN")
 INVALID_CLI_OUTPUT = "speakrs-cli produced invalid output."
@@ -154,9 +154,25 @@ def build_speakrs_child_env(
         for key, value in (os.environ if env is None else env).items()
         if value is not None
     }
-    for key in HF_TOKEN_ENV_KEYS:
-        child.pop(key, None)
-    child.pop("SPEAKRS_NUM_SPEAKERS", None)
+    if mode not in ALLOWED_SPEAKRS_MODES:
+        raise ValueError("Speaker diarization requires either CUDA or Metal/MPS acceleration; CPU fallback is disabled.")
+
+    # The Electron parent admits the Linux loader path and selects this tune
+    # path. Preserve those two values while clearing inherited loader and
+    # upstream runtime overrides; a standalone invocation uses an empty device
+    # as the tune file rather than falling back to XDG/HOME configuration.
+    tune_file = child.get("SPEAKRS_CUDA_TUNE_FILE") or os.devnull
+    for key in list(child):
+        upper = key.upper()
+        if (
+            upper in HF_TOKEN_ENV_KEYS
+            or upper in {"SPEAKRS_NUM_SPEAKERS", "SPEAKRS_AHC_THREADS", "MATMUL_NUM_THREADS",
+                         "ORT_DYLIB_PATH", "GLIBC_TUNABLES", "GCONV_PATH", "LOCPATH", "MALLOC_TRACE"}
+            or upper.startswith(("SPEAKRS_CUDA_", "SPEAKRS_COREML_", "CUDA_", "DYLD_"))
+            or (upper.startswith("LD_") and upper != "LD_LIBRARY_PATH")
+        ):
+            child.pop(key, None)
+    child["SPEAKRS_CUDA_TUNE_FILE"] = tune_file
     child["HF_TOKEN_PATH"] = os.devnull
     child["SPEAKRS_MODE"] = mode
     child["SPEAKRS_EXCLUSIVE"] = "1"
@@ -297,6 +313,9 @@ def speaker_result_from_payload(
     mode: str,
 ) -> Tuple[List[Dict[str, Any]], str, str]:
     from .diarization_pipeline import annotation_to_speaker_segments
+
+    if mode not in ALLOWED_SPEAKRS_MODES:
+        raise ValueError("Speaker diarization requires either CUDA or Metal/MPS acceleration; CPU fallback is disabled.")
 
     if payload.get("success") is not True:
         error = redact_sensitive_text(payload.get("error") or "Speaker diarization failed.")

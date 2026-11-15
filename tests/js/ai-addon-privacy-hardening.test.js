@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
+const fs = require('node:fs');
 const { EventEmitter } = require('node:events');
 
 const { createAiAddonIpc } = require('../../src/main/ai-addon-ipc');
@@ -136,14 +137,16 @@ function createValidationDeps(overrides = {}) {
       progressEvents.push({ channel, payload });
     },
     getSafeStorage: () => ({
-      isEncryptionAvailable: () => true,
-      encryptString: (value) => Buffer.from(value),
-      decryptString: (value) => Buffer.from(value).toString('utf8'),
+      getSelectedStorageBackend: () => 'gnome_libsecret',
+      isAsyncEncryptionAvailable: async () => true,
+      encryptStringAsync: async (value) => Buffer.from(`v11${value}`),
+      decryptStringAsync: async (value) => ({ result: Buffer.from(value).subarray(3).toString('utf8'), shouldReEncrypt: false }),
     }),
     assertTrustedRendererSender(event) {
       trustedSenderCalls.push(event);
     },
     buildCudaRuntimeEnv: () => ({}),
+    resolveCudaStatusForTranscription: async () => ({ statusCode: 'ready', installed: true, deviceAvailable: true, runtimeLoadable: true, missingLibraries: [], matchedProfile: 'cuda12' }),
     createAbortableComputeAction: ({ action }) => action(),
     terminateProcessBestEffort(proc) {
       terminated.push(proc);
@@ -226,7 +229,8 @@ test('speakrs validation clears HF env and does not write a token to stdin', asy
   assert.equal(options.env.HF_HUB_CACHE, undefined);
   assert.equal(options.env.SPEAKRS_EXCLUSIVE, '1');
   assert.equal(options.env.SPEAKRS_MODE, 'cuda');
-  assert.ok(String(options.env.SPEAKRS_MODELS_DIR || '').includes('speakrs'));
+  // No installed model is represented in this fixture; do not invent an active path.
+  assert.equal(options.env.SPEAKRS_MODELS_DIR, undefined);
 
   child.stdout.emit('data', Buffer.from(JSON.stringify({ ok: true })));
   child.emit('close', 0);
@@ -393,6 +397,23 @@ test('validateDiarizationRuntime reassembles progress JSON split across stderr c
 
   await resultPromise;
   assert.ok(progressEvents.some((entry) => entry.payload && entry.payload.percent === 42));
+});
+
+test('passive token status never initializes storage and save errors omit secrets', async (t) => {
+  const { deps, progressEvents } = createValidationDeps();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-privacy-test-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  deps.app.getPath = () => dir;
+  let accesses = 0;
+  deps.getSafeStorage = () => { accesses += 1; throw new Error('synthetic-secret-diagnostic'); };
+  const handlers = new Map();
+  createAiAddonIpc(deps).registerIpc({ handle(channel, handler) { handlers.set(channel, handler); } });
+  const status = await handlers.get('get-diarization-token-status')({ sender: {} });
+  assert.deepEqual(status, { hasToken: false, encryptionAvailable: null });
+  assert.equal(accesses, 0);
+  const save = await handlers.get('store-diarization-token')({ sender: {} }, 'hf_syntheticToken1234567890123456789');
+  assert.equal(save.success, false);
+  assert.doesNotMatch(JSON.stringify({ save, progressEvents }), /hf_syntheticToken1234567890123456789|synthetic-secret-diagnostic/);
 });
 
 test('mutating token, setup, cancel, and validate IPC channels assert trusted renderer sender', async () => {

@@ -35,9 +35,9 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/speakrs-pack-verify
-          key: speakrs-pack-verify-${{ hashFiles('src/ai-addon/speakrs-pack-spec.js') }}
+          key: speakrs-pack-verify-${{ hashFiles('src/ai-addon/speakrs-pack-spec.js', 'src/ai-addon/speakrs-model-files.json') }}
 
-      - name: Download and verify Speakrs model-pack and ORT checksums
+      - name: Download and verify pinned Speakrs native model files
         run: node scripts/verify-speakrs-packaging.js --verify-pack-checksums
 
   build-installer:
@@ -55,7 +55,7 @@ jobs:
             artifact-path: "dist/AvaNevis-Setup-*.exe"
             artifact-name: avanevis-installer-windows
           - os: macOS
-            runner: macos-14 # macOS 14 (Sonoma) with M1/M2/M3 runners
+            runner: macos-15 # Apple Silicon
             rust-target: aarch64-apple-darwin
             build-script: npm run build:mac
             artifact-path: "dist/AvaNevis-Setup-*.dmg"
@@ -82,9 +82,13 @@ jobs:
         # dtolnay/rust-toolchain master as of 2026-11-03 (upstream revision update)
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
-          toolchain: "1.88.0"
+          toolchain: "1.89.0"
           targets: ${{ matrix.rust-target }}
           components: rustfmt, clippy
+
+      - name: Confirm Apple Silicon
+        if: runner.os == 'macOS'
+        run: test "$(uname -m)" = arm64
 
       - name: Cache cargo
         # Swatinem/rust-cache v2.9.3
@@ -329,7 +333,7 @@ jobs:
           ### Platform Support
 
           - Windows 10/11 x64
-          - macOS 14+ on Apple Silicon
+          - macOS 15+ on Apple Silicon
           - Linux x86_64 Core Beta (Omarchy first; other distros are experimental betas)
 
           ### Installation

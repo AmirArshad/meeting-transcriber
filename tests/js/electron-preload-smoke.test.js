@@ -24,6 +24,7 @@ test('sandboxed preload invokes IPC and subscribes and unsubscribes from progres
   const line = output.split(/\r?\n/).find((entry) => entry.startsWith('PRELOAD_SMOKE '));
   assert.ok(line, `Missing preload result: ${output}`);
   const result = JSON.parse(line.slice('PRELOAD_SMOKE '.length));
+  assert.equal(result.electron, require('electron/package.json').version);
   assert.deepEqual(result.state, { state: 'recording', sessionId: 'fixture' });
   assert.deepEqual(result.first, [{ phase: 'audio_encoding' }]);
   assert.equal(result.count, 1);

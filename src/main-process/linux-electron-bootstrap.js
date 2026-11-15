@@ -65,12 +65,12 @@ function getSelectedStorageBackend(safeStorage) {
   }
 }
 
-function probeSecretStorage(safeStorage) {
+async function probeSecretStorage(safeStorage) {
   const backend = getSelectedStorageBackend(safeStorage);
   let encryptionAvailable = false;
-  if (safeStorage && typeof safeStorage.isEncryptionAvailable === 'function') {
+  if (safeStorage && typeof safeStorage.isAsyncEncryptionAvailable === 'function') {
     try {
-      encryptionAvailable = Boolean(safeStorage.isEncryptionAvailable());
+      encryptionAvailable = Boolean(await safeStorage.isAsyncEncryptionAvailable());
     } catch (_error) {
       encryptionAvailable = false;
     }
@@ -88,7 +88,7 @@ function buildLinuxEnvironmentDiagnostics({
   commandLine = null,
   argv = [],
 } = {}) {
-  const secretStorage = probeSecretStorage(safeStorage);
+  const secretStorage = { backend: getSelectedStorageBackend(safeStorage), encryptionAvailable: null };
   const getSwitchValue = (name) => {
     if (!commandLine || typeof commandLine.getSwitchValue !== 'function') return null;
     const value = sanitizeDiagnosticLabel(commandLine.getSwitchValue(name));
@@ -111,22 +111,26 @@ function buildLinuxEnvironmentDiagnostics({
 
 const SAFESTORAGE_SMOKE_CANARY = 'avanevis-linux-phase5-safestorage';
 
-function runLinuxSafeStorageSmoke(safeStorage) {
-  const probe = probeSecretStorage(safeStorage);
+async function runLinuxSafeStorageSmoke(safeStorage) {
+  const probe = await probeSecretStorage(safeStorage);
   let roundTrip = false;
   let error = null;
   if (
     probe.encryptionAvailable
-    && !probe.isBasicText
+    && ['gnome_libsecret', 'kwallet', 'kwallet5', 'kwallet6'].includes(probe.backend)
     && safeStorage
-    && typeof safeStorage.encryptString === 'function'
-    && typeof safeStorage.decryptString === 'function'
+    && typeof safeStorage.encryptStringAsync === 'function'
+    && typeof safeStorage.decryptStringAsync === 'function'
   ) {
     try {
-      const encrypted = safeStorage.encryptString(SAFESTORAGE_SMOKE_CANARY);
-      roundTrip = safeStorage.decryptString(encrypted) === SAFESTORAGE_SMOKE_CANARY;
+      const encrypted = await safeStorage.encryptStringAsync(SAFESTORAGE_SMOKE_CANARY);
+      const protectedFormat = Buffer.isBuffer(encrypted)
+        && ['v11', 'v12'].includes(encrypted.subarray(0, 3).toString('ascii'))
+        && (!process.versions.electron || process.versions.electron === '46.0.0-alpha.10');
+      roundTrip = protectedFormat
+        && (await safeStorage.decryptStringAsync(encrypted)).result === SAFESTORAGE_SMOKE_CANARY;
     } catch (err) {
-      error = err && err.message ? String(err.message) : String(err);
+      error = 'Secure storage round-trip failed.';
     }
   }
   return {

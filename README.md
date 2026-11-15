@@ -56,7 +56,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 4. Pick your microphone and desktop-audio loopback device on the Record tab.
 5. First transcription downloads the Whisper model (~500MB) once and caches it.
 
-### macOS (Apple Silicon, macOS 14+)
+### macOS (Apple Silicon, macOS 15+ for v2.11)
 
 1. Download `AvaNevis-Setup-<version>.dmg` from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases).
 2. Open the DMG and drag *AvaNevis* into Applications.
@@ -202,8 +202,7 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
 
 ### macOS
 
-- macOS 14 (Sonoma) or later
-- macOS 14.2+ recommended for the CoreAudio system-audio capture path; earlier macOS 14 releases use ScreenCaptureKit fallback behavior
+- macOS 15 (Sequoia) or later for v2.11
 - Apple Silicon (M1 or newer) — Intel Macs have a CPU fallback path in dev but are not a packaged target
 - 4 GB RAM minimum, 8 GB recommended
 - Speaker identification (optional): **8 GB RAM minimum, 16 GB recommended** (Speakrs CLI peaked at 3.81 GB RSS on a 56 min Mac meeting)

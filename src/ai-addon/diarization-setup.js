@@ -1,6 +1,7 @@
 'use strict';
 
 const { execFile, spawn } = require('child_process');
+const { randomUUID } = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -18,6 +19,7 @@ const {
   TOKEN_KEYS,
   deleteAiAddonToken,
   getAiAddonToken,
+  isTokenEncryptionAvailable,
   storeAiAddonToken,
 } = require('../ai-addon-token-store');
 
@@ -62,6 +64,9 @@ const {
   cleanupStaleDiarizationDependencyDirs,
   hashFileSha256,
   isPinnedSha256,
+  getNativeSpeakrsModelDir,
+  inspectNativeSpeakrsPath,
+  validateSpeakrsModelTransport,
   validateDiarizationDependencyArtifact,
   createValidation,
   buildFeatureUpdates,
@@ -217,7 +222,7 @@ async function uninstallSpeakrsLocalState({ userDataDir, fsModule = fs } = {}) {
 
 async function uninstallPyannoteLocalState({ userDataDir, fsModule = fs, deleteToken = true } = {}) {
   if (deleteToken) {
-    deleteAiAddonToken({ userDataDir, tokenKey: TOKEN_KEYS.diarizationHuggingFace, fsModule });
+    await deleteAiAddonToken({ userDataDir, tokenKey: TOKEN_KEYS.diarizationHuggingFace, fsModule });
   }
   await removePathsStrict(getPyannoteUninstallPaths(userDataDir), { userDataDir, fsModule });
 }
@@ -283,6 +288,140 @@ async function validateStagedSpeakrsModelPack(stagingDir, files, fsModule = fs) 
     if (await hashFileSha256(filePath, fsModule) !== file.sha256) {
       throw new Error(`Speakrs model pack checksum does not match a required file: ${file.path}.`);
     }
+  }
+}
+
+function ensureNativeSpeakrsDirectory(userDataDir, directory, fsModule) {
+  const relative = path.relative(path.resolve(userDataDir), directory);
+  let current = path.resolve(userDataDir);
+  for (const component of relative.split(path.sep)) {
+    current = path.join(current, component);
+    try {
+      fsModule.mkdirSync(current);
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    if (!inspectNativeSpeakrsPath(userDataDir, current, fsModule).isDirectory()) {
+      throw new Error('Speakrs model directory is invalid.');
+    }
+  }
+}
+
+async function setupNativeSpeakrs({
+  userDataDir, platform, arch, fsModule, catalog, artifact, modelId, speakerCount,
+  now, downloader, emitProgress, cancelSignal, runtimeValidator, requiredDevice,
+  withExclusiveDiskMutation, previousDiarizationState, pyannoteState,
+}) {
+  const cancelMessage = 'Speaker identification setup was canceled.';
+  const runtimeCache = await checkSpeakrsRuntimeCache({ userDataDir, platform, arch, fsModule, catalog });
+  if (!runtimeCache.valid) throw new Error(runtimeCache.reason);
+  if (!validateSpeakrsModelTransport(artifact.modelPack, artifact.modelFiles)) {
+    throw new Error('Speakrs direct-file metadata is incomplete.');
+  }
+  if (typeof runtimeValidator !== 'function') {
+    throw new Error('Speakrs setup requires native runtime validation.');
+  }
+  const active = await checkSpeakrsModelCache({ userDataDir, platform, arch, fsModule, catalog, verifyChecksum: true });
+  const installId = active.valid ? previousDiarizationState.speakrsInstallId : randomUUID().replaceAll('-', '');
+  const destination = getNativeSpeakrsModelDir(userDataDir, artifact.revision, installId);
+  const staging = active.valid ? null : `${destination}.install`;
+  let ownsStaging = false;
+  let promoted = false;
+  let activated = false;
+  try {
+    if (staging) {
+      ensureNativeSpeakrsDirectory(userDataDir, path.dirname(staging), fsModule);
+      // The previous revision stays in place, so budget the entire candidate separately.
+      if (typeof fsModule.statfsSync === 'function') {
+        const { bavail, bsize } = fsModule.statfsSync(path.dirname(staging), { bigint: true });
+        const requiredBytes = artifact.modelPack.files.reduce((total, file) => total + BigInt(file.sizeBytes), 0n);
+        if (bavail * bsize < requiredBytes + 1048576n) {
+          throw new Error('Not enough disk space to install the Speakrs models.');
+        }
+      }
+      fsModule.mkdirSync(staging);
+      ownsStaging = true;
+      let completedBytes = 0;
+      const totalBytes = artifact.modelPack.files.reduce((total, file) => total + file.sizeBytes, 0);
+      const emitDownload = (bytes) => emitSafeProgress(emitProgress, {
+        feature: 'diarization', phase: 'downloading', status: 'downloading',
+        message: 'Downloading Speakrs speaker models.',
+        percent: Math.round(bytes / totalBytes * 80), downloadedBytes: bytes, totalBytes,
+      });
+      for (const file of artifact.modelPack.files) {
+        throwIfAiAddonCanceled(cancelSignal, cancelMessage);
+        const filePath = resolveContainedSpeakrsPath(staging, file.path);
+        ensureNativeSpeakrsDirectory(userDataDir, path.dirname(filePath), fsModule);
+        emitDownload(completedBytes);
+        await downloader({
+          url: file.downloadUrl,
+          destinationPath: filePath,
+          expectedSizeBytes: file.sizeBytes,
+          cancelSignal,
+          onProgress: ({ downloaded }) => emitDownload(completedBytes + (Number(downloaded) || 0)),
+        });
+        const stats = inspectNativeSpeakrsPath(userDataDir, filePath, fsModule);
+        if (!stats.isFile() || stats.size !== file.sizeBytes || await hashFileSha256(filePath, fsModule) !== file.sha256) {
+          throw new Error(`Speakrs model file does not match the pinned size and checksum: ${file.path}.`);
+        }
+        completedBytes += file.sizeBytes;
+      }
+    }
+    throwIfAiAddonCanceled(cancelSignal, cancelMessage);
+    const result = await runtimeValidator({
+      engine: 'speakrs',
+      modelId,
+      modelRef: getDiarizationModelRef(modelId, catalog),
+      stagedModelsDir: staging || destination,
+      requiredDevice,
+      cancelSignal,
+    });
+    throwIfAiAddonCanceled(cancelSignal, cancelMessage);
+    if (result?.status !== 'ready' || result.device !== requiredDevice) {
+      throw new Error('Speakrs did not validate on the required accelerator.');
+    }
+    const activate = () => {
+      throwIfAiAddonCanceled(cancelSignal, cancelMessage);
+      if (staging) {
+        fsModule.renameSync(staging, destination);
+        promoted = true;
+      }
+      updateManifestFeature({
+        userDataDir, feature: 'diarization', fsModule, catalog,
+        updates: {
+          ...buildFeatureUpdates({
+            status: 'ready', modelId, engine: 'speakrs', speakerCount,
+            validation: createValidation('ready', 'Speaker identification setup is ready.', now),
+          }),
+          speakrsInstallId: installId,
+        },
+      });
+      activated = true;
+      const previousDir = getNativeSpeakrsModelDir(userDataDir, artifact.revision, previousDiarizationState.speakrsInstallId);
+      if (previousDir && previousDir !== destination) removePathBestEffort(previousDir, fsModule);
+    };
+    if (typeof withExclusiveDiskMutation === 'function') {
+      await withExclusiveDiskMutation(activate);
+    } else {
+      activate();
+    }
+    if (pyannoteState) {
+      try {
+        await uninstallPyannoteLocalState({ userDataDir, fsModule, deleteToken: false });
+      } catch (_error) {
+        emitSafeProgress(emitProgress, {
+          feature: 'diarization', phase: 'warning',
+          message: 'Speakrs is ready. Retry setup to finish removing old speaker files.',
+        });
+      }
+    }
+    emitSafeProgress(emitProgress, {
+      feature: 'diarization', phase: 'ready', status: 'ready',
+      message: 'Speaker identification setup is ready.', modelId, percent: 100,
+    });
+  } finally {
+    if (ownsStaging) removePathBestEffort(staging, fsModule);
+    if (promoted && !activated) removePathBestEffort(destination, fsModule);
   }
 }
 
@@ -967,23 +1106,24 @@ async function validateDiarizationSetup({
     status = dependencyCache.validationStatus === 'error' ? 'error' : 'notConfigured';
     message = dependencyCache.reason || 'Speaker identification dependencies are not installed.';
     error = message;
-  } else if (!tokenStatusReader({
+  } else if (!(await tokenStatusReader({
     userDataDir,
     safeStorage,
     fsModule,
     checkEncryptionAvailability: false,
-  }).hasToken) {
+  })).hasToken) {
     status = 'needsAccount';
     message = 'Hugging Face token is required for speaker identification setup.';
     error = message;
   } else {
     try {
-      const token = existingToken || tokenReader({
+      const token = existingToken || await tokenReader({
         userDataDir,
         tokenKey: TOKEN_KEYS.diarizationHuggingFace,
         safeStorage,
         fsModule,
       });
+      throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
       if (!isLikelyHuggingFaceToken(token)) {
         status = 'needsAccount';
         message = 'Stored Hugging Face token does not match the expected token format.';
@@ -1110,7 +1250,7 @@ async function assertTargetEngineLocalPreflight({
   }
   await assertDiarizationSourceBuildToolchain({ platform, artifact, toolchainChecker });
 
-  if (!safeStorage || typeof safeStorage.isEncryptionAvailable !== 'function' || !safeStorage.isEncryptionAvailable()) {
+  if (!await isTokenEncryptionAvailable({ safeStorage })) {
     throw new Error('Secure token storage is unavailable right now. Unlock Keychain or restart AvaNevis and try again.');
   }
 
@@ -1122,7 +1262,7 @@ async function assertTargetEngineLocalPreflight({
     return;
   }
 
-  const storedStatus = tokenStatusReader({
+  const storedStatus = await tokenStatusReader({
     userDataDir,
     safeStorage,
     fsModule,
@@ -1131,7 +1271,7 @@ async function assertTargetEngineLocalPreflight({
   if (!storedStatus.hasToken) {
     throw new Error('Hugging Face token is required for speaker identification setup.');
   }
-  const storedToken = tokenReader({
+  const storedToken = await tokenReader({
     userDataDir,
     tokenKey: TOKEN_KEYS.diarizationHuggingFace,
     safeStorage,
@@ -1320,8 +1460,37 @@ async function setupDiarizationAddon({
     })
     : null;
 
+  const nativeArtifact = selectedEngine === 'speakrs'
+    ? getSpeakrsSetupArtifactsForPlatform(platform, arch, catalog)
+    : null;
+  if (nativeArtifact?.modelPack?.transport === 'files') {
+    try {
+      if (packagedCliError) throw packagedCliError;
+      if (!resolveSpeakrsCliPath({ platform, env, fsModule, resourcesPath })) {
+        throw new Error(getSpeakrsCliMissingMessage(env));
+      }
+      await setupNativeSpeakrs({
+        userDataDir, platform, arch, fsModule, catalog, artifact: nativeArtifact, modelId: selectedModelId,
+        speakerCount, now, downloader, emitProgress, cancelSignal, runtimeValidator,
+        requiredDevice: nativeArtifact.runtime.modeByPlatform[`${platform}-${arch}`],
+        withExclusiveDiskMutation, previousDiarizationState,
+        pyannoteState: hasPyannoteLocalState({ userDataDir, fsModule, tokenStatus: { hasToken: false } }),
+      });
+    } catch (error) {
+      const canceled = isAiAddonCancelError(error);
+      emitSafeProgress(emitProgress, {
+        feature: 'diarization', phase: canceled ? 'cancelled' : 'error',
+        status: canceled ? 'notConfigured' : 'error',
+        message: canceled ? 'Speaker identification setup was canceled. Partial downloads were removed.' : error.message,
+        modelId: selectedModelId,
+      });
+      if (!canceled) throw error;
+    }
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus, resourcesPath });
+  }
+
   const tokenStatus = selectedEngine === 'pyannote'
-    ? tokenStatusReader({
+    ? await tokenStatusReader({
       userDataDir,
       safeStorage,
       fsModule,
@@ -1369,6 +1538,7 @@ async function setupDiarizationAddon({
       throw preflightError;
     }
     const mutateExclusiveEngine = async () => {
+      throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
       if (selectedEngine === 'speakrs' && pyannoteState) {
         await uninstallPyannoteLocalState({ userDataDir, fsModule, deleteToken: false });
       }
@@ -1508,7 +1678,7 @@ async function setupDiarizationAddon({
     }
 
     try {
-      tokenWriter({
+      await tokenWriter({
         userDataDir,
         tokenKey: TOKEN_KEYS.diarizationHuggingFace,
         token: trimmedToken,
@@ -1521,12 +1691,14 @@ async function setupDiarizationAddon({
     }
   }
 
-  const storedTokenStatus = tokenStatusReader({
+  throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
+  const storedTokenStatus = await tokenStatusReader({
     userDataDir,
     safeStorage,
     fsModule,
     checkEncryptionAvailability: false,
   });
+  throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
   if (!storedTokenStatus.hasToken) {
     const message = 'Hugging Face token is required for speaker identification setup.';
     updateManifestFeature({
@@ -1643,7 +1815,7 @@ async function setupDiarizationAddon({
 
   if (!tokenForValidation) {
     try {
-      tokenForValidation = tokenReader({
+      tokenForValidation = await tokenReader({
         userDataDir,
         tokenKey: TOKEN_KEYS.diarizationHuggingFace,
         safeStorage,

@@ -26,8 +26,8 @@ package, alternative model or translation feature was added.
 
 - Keep AvaNevis local-only: no cloud diarization, cloud summarization, telemetry, or background uploads.
 - Summary model and runtime downloads must be explicit user-triggered setup actions.
-- Speaker diarization setup must be explicit and stays under Electron `userData`. Speakrs uses a self-hosted model-pack archive plus a Windows or Linux ONNX Runtime closure; pyannote uses its managed Python dependencies and Hugging Face cache.
-- Speaker diarization is accelerator-only: Windows uses CUDA; macOS uses Apple Silicon CoreML for Speakrs or PyTorch Metal/MPS for pyannote. Linux is Speakrs-only, CUDA-only on x86_64 after the accepted managed CUDA 12 preflight, and has no CPU fallback. Pyannote is not a Linux product option. Linux summaries are an active v2.9 CUDA-only Qwen lane, but remain unavailable until their own pinned runtime/model, integrity, managed CUDA, packaged, and RTX 4070 gates pass. Task 4 pins remain the Linux `speakrs-cli` and setup-time CUDA 12 ORT/model-pack closure in `src/ai-addon/speakrs-pack-spec.js`; do not weaken those pins.
+- Speaker diarization setup must be explicit and stays under Electron `userData`. Speakrs 0.7 uses direct model files at an immutable upstream revision; pyannote uses its managed Python dependencies and Hugging Face cache.
+- Speaker diarization is accelerator-only: Windows uses CUDA; macOS uses Apple Silicon CoreML for Speakrs or PyTorch Metal/MPS for pyannote. Linux is Speakrs-only, CUDA-only on x86_64 after the accepted managed CUDA 12 preflight, and has no CPU fallback. Pyannote is not a Linux product option. Linux summaries are an active v2.9 CUDA-only Qwen lane, but remain unavailable until their own pinned runtime/model, integrity, managed CUDA, packaged, and RTX 4070 gates pass. Linux 0.7 requires the same live managed CUDA 12 admission before native inference.
 - Setup downloads must emit redacted progress, support cancellation, clean partial `.download` files, and preserve any previously valid install when cancellation happens during validation. Redaction must cover bearer tokens, legacy `Authorization: token ...`, `token=` / `access_token=` / `api_key=` query parameters, `X-Api-Key`, and URL credentials.
 - Pin every downloadable summary model and runtime artifact by immutable URL, filename, and SHA-256 checksum.
 - Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from catalog **download-related** keys only (`downloadUrl`, `url`, `indexUrl`, `extraIndexUrls`) plus known GitHub/Hugging Face/PyPI redirect hosts listed explicitly in `DOWNLOAD_REDIRECT_HOSTS` (`src/ai-addon/download-helpers.js`). `licenseUrl` / `releaseUrl` / docs links must not expand the allowlist. Do **not** wildcard `*.hf.co` / `*.huggingface.co`; when HF/Xet rotates CDN subdomains, add the new host to that set. HF-hosted summary models normally download via bundled Python `huggingface_hub` HTTP (bypassing the JS allowlist) and still require pinned SHA-256 verification. Arbitrary HTTPS hosts remain blocked.
@@ -72,35 +72,16 @@ the managed CUDA 12 admission, all local artifact checks, and packaged RTX
 10. Confirm actual diarization runs load pyannote from the local Hugging Face cache only after setup; missing or incomplete cache should tell the user to re-run speaker setup.
 11. Run `npm test`, `npm run test:python`, and platform speaker setup smoke tests including cancel during dependency install.
 
-## Updating Speakrs Model-Pack Pins
+## Updating Speakrs model pins
 
-These rules live **alongside** the still-live pyannote dependency-pin rules above. Do not delete pyannote pins.
+The active 0.7 upstream revision is `avencera/speakrs-models@67f963b6a1d94fcd4678948237b3cc8bd69bf1d8`. Keep the seven shared files, two CUDA/CPU safetensors, and 60 CoreML leaves in `src/ai-addon/speakrs-model-files.json`. Normal CoreML requires the bundle formats supported by macOS 15+.
 
-| Pin | Value |
-|-----|--------|
-| Upstream repo | `avencera/speakrs-models` |
-| Revision | `5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f` (`5d24ffe`) |
-| Windows pack | `speakrs-models-5d24ffe-win32-x64-cuda.tar.gz` — sha256 `a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20`, 208765985 bytes, 19 ONNX/PLDA files |
-| Linux pack | same published CUDA archive as Windows (`speakrs-models-5d24ffe-win32-x64-cuda.tar.gz`, same hash/size/19 files); pack-spec and catalog id `speakrs-models-5d24ffe-linux-x64-cuda`, `architecture: x64`, `cudaMajor: 12`. Setup and guided transcription admit only after x64/CUDA preflight. |
-| macOS pack | `speakrs-models-5d24ffe-darwin-arm64-coreml.tar.gz` — sha256 `0677b5eee394402ddd4cbdb991afd0736c24e955b145d4b98f69d63523cc8d50`, 375813778 bytes, 76 CoreML/ONNX/PLDA leaves |
-| Windows ORT | official `onnxruntime-win-x64-gpu_cuda12-1.27.1.zip` plus NVIDIA `cudart64_12` / `cufft64_11` wheels — setup-time only |
-| Linux ORT | official `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz` (244,763,765 bytes, `08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf`) plus NVIDIA `libcudart.so.12` / `libcufft.so.11` / `libcurand.so.10` / `libnvrtc.so.12` wheels — setup-time only; compile-time pin `linux-x64: null` |
-
-Per-mode file lists and per-file SHA-256 values live in `src/ai-addon/speakrs-model-files.json` (`cudaPins` / `coremlPins`). Do not invent a shorter list.
-
-1. Pin the immutable `avencera/speakrs-models` revision in `src/ai-addon/speakrs-pack-spec.js`; keep `scripts/build-speakrs-model-pack.js`'s binding revision identical.
-2. Update `src/ai-addon/speakrs-model-files.json` only from the exact `speakrs` `required_files` lists and verify every source size and SHA-256.
-3. Build one archive per platform with:
-   - `node scripts/build-speakrs-model-pack.js --platform win32-x64 --source <snapshot-dir> --out <output-dir>`
-   - `node scripts/build-speakrs-model-pack.js --platform darwin-arm64 --source <snapshot-dir> --out <output-dir>`
-   - `node scripts/build-speakrs-model-pack.js --platform linux-x64 --source <snapshot-dir> --out <output-dir>` (same CUDA ONNX subset as Windows; Linux currently publishes that existing archive URL)
-4. The builder must preserve nested `.mlmodelc` paths and inject `legal/speakrs-model-pack/ATTRIBUTION.md` plus every complete text under `LICENSES/`. Do not publish a pack if those files are missing.
-5. Publish packs only on a dedicated GitHub model-artifact release, not an AvaNevis application release. Record each exact public URL, byte size, and SHA-256 in `SPEAKRS_MODEL_PACK_ARTIFACTS`; absent metadata must keep production setup fail-closed.
-6. Keep the Windows and Linux runtimes separate from the model pack. Windows must use the pinned ONNX Runtime 1.27.1 CUDA 12 archive and NVIDIA runtime/cuFFT wheels, extract only `onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `onnxruntime_providers_cuda.dll`, `cudart64_12.dll`, and `cufft64_11.dll`. Linux must use the pinned `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz` archive and NVIDIA `libcudart.so.12` / `libcufft.so.11` / `libcurand.so.10` / `libnvrtc.so.12` wheels, extract only `libonnxruntime.so.1.27.1`, `libonnxruntime_providers_shared.so`, `libonnxruntime_providers_cuda.so`, `libcudart.so.12`, `libcufft.so.11`, `libcurand.so.10`, and `libnvrtc.so.12`. Pin each extracted file's SHA-256 and size in catalog/spec `extractedFiles`. Installation and setup validation full-hash those immutable pins. Passive status checks enforce the pinned sizes plus archive identity; every Speakrs compute admission hashes changed `path + size + mtimeMs` fingerprints before spawn. Never trust hashes written into user-writable `install.json`.
-7. Never delete shared CUDA pip packages, Whisper caches, or the packaged `Resources/bin/speakrs-cli`. Speakrs uninstall owns only `models/diarization/speakrs` and `runtimes/speakrs-ort`.
-8. Keep `licenseUrl` / `licenseUrls` metadata accurate. These fields document the MIT, CC-BY-4.0, and Apache-2.0 constituents and must not expand the download allowlist.
-9. Validate archive traversal rejection, per-file model checksums, all five Windows DLLs, cancellation cleanup, token-store isolation, and redacted progress with `npm test`.
-10. `speakrs-cli` is built by `build/prepare-resources.js` and installer-bundled. Pin `ort` compile-time downloads in `native/speakrs-cli/ort-compile-pins.json` only — never in `build/download-manifest.js`.
+1. Derive the file sets from the exact upstream crate's backend requirements. Recompute each size and SHA-256 from actual downloaded bytes, preserving bundle-relative paths.
+2. Pin immutable public HTTPS URLs in the catalog and verify allowed redirect hosts. Run `node scripts/verify-speakrs-packaging.js --verify-pack-checksums` to check all distinct files.
+3. Explicit setup stages files in the owned model root. Native validation uses staged paths and the required accelerator. The atomic manifest update activates the verified installation. Old revision files remain available for a manual downgrade or repair. Remove owns the Speakrs models and private legacy runtime tree.
+4. Keep shared CUDA and Whisper runtime ownership independent. Linux requires live admission even when the Speakrs kernels only load the NVIDIA driver. Windows native loader ownership remains pending qualification.
+5. Keep attribution and complete license texts under `legal/speakrs-model-pack/`. The optional offline archive builder uses the same pinned files, with no required archive publication for product setup.
+6. Run the focused setup, integrity and packaging tests plus native packaged inference before activating a platform.
 
 ## Updating Summary Model Pins
 

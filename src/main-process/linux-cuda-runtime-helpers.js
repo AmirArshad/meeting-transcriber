@@ -370,7 +370,15 @@ function resolveLinuxCudaDriverLibraryDirs({
     }
     let stats;
     try {
-      stats = lstatRejectSymlink(candidate, fsModule, 'CUDA driver library directory');
+      const lstatSync = fsModule.lstatSync || fs.lstatSync;
+      stats = lstatSync(candidate);
+      if (stats.isSymbolicLink?.()) {
+        const canonical = realpathNoEscape(candidate, fsModule);
+        if (!allowlist.includes(canonical)) {
+          throw new Error(`CUDA driver library alias escaped the explicit allowlist: ${candidate}`);
+        }
+        stats = lstatRejectSymlink(canonical, fsModule, 'CUDA driver library directory');
+      }
     } catch (error) {
       if (error && (error.code === 'ENOENT' || /does not exist/.test(error.message))) {
         continue;

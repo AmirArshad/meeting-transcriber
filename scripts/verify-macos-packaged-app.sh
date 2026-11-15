@@ -26,6 +26,7 @@ echo ""
 # complete ad-hoc bundle signature. Reject unsigned or partially signed apps;
 # the v2.7.0 release incident passed the old leaf-binary-only checks.
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP_PATH/Contents/Info.plist")" = "15.0"
 
 test -f "$HELPER_PATH"
 test -x "$HELPER_PATH"
@@ -33,6 +34,8 @@ test -f "$SPEAKRS_CLI_PATH"
 test -x "$SPEAKRS_CLI_PATH"
 test -s "$SPEAKRS_CLI_PATH"
 file "$SPEAKRS_CLI_PATH" | grep -q "arm64"
+cli_minimum="$(otool -l "$SPEAKRS_CLI_PATH" | awk '$1 == "minos" { print $2 }')"
+test "$cli_minimum" = "15.0"
 if [[ ! -f "$SPEAKRS_WAV_BIN" ]]; then
   echo "ERROR: Packaged Speakrs validation fixture WAV is missing at Contents/Resources/bin/speakrs-two-speaker-16k.wav" >&2
   exit 1

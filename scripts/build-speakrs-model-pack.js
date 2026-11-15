@@ -18,12 +18,14 @@ const {
   resolveContainedSpeakrsPath,
 } = require('../src/ai-addon/speakrs-pack-spec');
 
-const BINDING_REVISION = '5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f';
+const BINDING_REVISION = '67f963b6a1d94fcd4678948237b3cc8bd69bf1d8';
 const MODEL_PACK_LEGAL_DIR = path.join(__dirname, '..', 'legal', 'speakrs-model-pack');
 const REQUIRED_MODEL_PACK_LEGAL_FILES = Object.freeze([
   'ATTRIBUTION.md',
   'LICENSES/Apache-2.0.txt',
+  'LICENSES/Apache-2.0-cudarc.txt',
   'LICENSES/CC-BY-4.0.txt',
+  'LICENSES/MIT-cudarc.txt',
   'LICENSES/MIT-onnxruntime.txt',
   'LICENSES/MIT-pyannote.txt',
 ]);

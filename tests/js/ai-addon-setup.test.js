@@ -59,6 +59,8 @@ function createMemoryFs() {
   const files = new Map();
   const dirs = new Set();
   const removed = [];
+  const openFiles = new Map();
+  let nextFd = 0;
 
   function pathVariants(targetPath) {
     return [...new Set([targetPath, path.normalize(targetPath), path.resolve(targetPath)])];
@@ -87,7 +89,22 @@ function createMemoryFs() {
         addDirTree(variant);
       }
     },
+    openSync(filePath, flag) {
+      assert.equal(flag, 'wx');
+      assert.equal(this.existsSync(filePath), false);
+      this.writeFileSync(filePath, Buffer.alloc(0));
+      const fd = ++nextFd;
+      openFiles.set(fd, filePath);
+      return fd;
+    },
+    fsyncSync(fd) {
+      assert.ok(openFiles.has(fd));
+    },
+    closeSync(fd) {
+      assert.equal(openFiles.delete(fd), true);
+    },
     writeFileSync(filePath, data) {
+      if (typeof filePath === 'number') filePath = openFiles.get(filePath);
       this.mkdirSync(path.dirname(filePath));
       files.set(filePath, Buffer.isBuffer(data) ? data : Buffer.from(String(data)));
     },
@@ -239,9 +256,10 @@ function createCatalogWithMockDiarizationSourceArtifact(platformKey = 'win32-x64
 
 function createSafeStorage() {
   return {
-    isEncryptionAvailable: () => true,
-    encryptString: (value) => Buffer.from(`encrypted:${value}`, 'utf8'),
-    decryptString: (value) => Buffer.from(value).toString('utf8').replace(/^encrypted:/, ''),
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    isAsyncEncryptionAvailable: async () => true,
+    encryptStringAsync: async (value) => Buffer.from(`v11encrypted:${value}`, 'utf8'),
+    decryptStringAsync: async (value) => ({ result: Buffer.from(value).toString('utf8').replace(/^v11encrypted:/, ''), shouldReEncrypt: false }),
   };
 }
 
@@ -249,28 +267,30 @@ function createCountingSafeStorage() {
   const counters = { availability: 0, encrypt: 0, decrypt: 0 };
   return {
     counters,
-    isEncryptionAvailable: () => {
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    isAsyncEncryptionAvailable: async () => {
       counters.availability += 1;
       return true;
     },
-    encryptString: (value) => {
-      counters.encrypt += 1;
-      return Buffer.from(`encrypted:${value}`, 'utf8');
+    encryptStringAsync: async (value) => {
+      if (value !== 'avanevis-storage-probe') counters.encrypt += 1;
+      return Buffer.from(`v11encrypted:${value}`, 'utf8');
     },
-    decryptString: (value) => {
+    decryptStringAsync: async (value) => {
       counters.decrypt += 1;
-      return Buffer.from(value).toString('utf8').replace(/^encrypted:/, '');
+      return { result: Buffer.from(value).toString('utf8').replace(/^v11encrypted:/, ''), shouldReEncrypt: false };
     },
   };
 }
 
 function createUnavailableSafeStorage() {
   return {
-    isEncryptionAvailable: () => false,
-    encryptString: () => {
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    isAsyncEncryptionAvailable: async () => false,
+    encryptStringAsync: async () => {
       throw new Error('unavailable');
     },
-    decryptString: () => {
+    decryptStringAsync: async () => {
       throw new Error('unavailable');
     },
   };
@@ -888,7 +908,7 @@ test('check status includes token and summary cache state without exposing token
   const fsModule = createMemoryFs();
   const safeStorage = createSafeStorage();
   const userDataDir = '/tmp/AvaNevis';
-  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('v11encrypted:hf_secret'));
   fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'manifest.json'), JSON.stringify({
     features: { diarization: { status: 'needsAccount', modelId: PYANNOTE_DIARIZATION_MODEL_ID } },
   }));
@@ -914,16 +934,18 @@ test('check status includes token and summary cache state without exposing token
 test('passive add-on status does not query secure storage availability', async () => {
   const fsModule = createMemoryFs();
   const userDataDir = '/tmp/AvaNevis';
-  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('v11encrypted:hf_secret'));
   fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'manifest.json'), JSON.stringify({
     features: { diarization: { status: 'needsAccount', modelId: PYANNOTE_DIARIZATION_MODEL_ID } },
   }));
   let encryptionChecks = 0;
   const safeStorage = {
-    isEncryptionAvailable: () => {
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    isAsyncEncryptionAvailable: async () => {
       encryptionChecks += 1;
       return true;
     },
+    encryptStringAsync: async () => Buffer.from('v11probe'),
   };
 
   const status = await checkAiAddonSetupStatus({
@@ -961,19 +983,21 @@ test('passive add-on status does not walk storage cache directories', async () =
   fsModule.readdirSync = originalReaddirSync;
 });
 
-test('explicit token status can query secure storage availability', () => {
+test('explicit token status can query secure storage availability', async () => {
   const fsModule = createMemoryFs();
   const userDataDir = '/tmp/AvaNevis';
-  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('v11encrypted:hf_secret'));
   let encryptionChecks = 0;
   const safeStorage = {
-    isEncryptionAvailable: () => {
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    isAsyncEncryptionAvailable: async () => {
       encryptionChecks += 1;
       return true;
     },
+    encryptStringAsync: async () => Buffer.from('v11probe'),
   };
 
-  const status = getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule });
+  const status = await getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule });
 
   assert.equal(status.hasToken, true);
   assert.equal(status.encryptionAvailable, true);
@@ -983,7 +1007,7 @@ test('explicit token status can query secure storage availability', () => {
 test('ready diarization does not require secure token storage after setup', async () => {
   const fsModule = createMemoryFs();
   const userDataDir = '/tmp/AvaNevis';
-  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('v11encrypted:hf_secret'));
   const artifact = getDiarizationDependencyArtifactForPlatform('darwin', 'arm64');
   const sitePackagesDir = path.join(userDataDir, 'ai-addons', 'dependencies', 'diarization', artifact.id, 'site-packages');
   fsModule.mkdirSync(sitePackagesDir, { recursive: true });
@@ -1587,7 +1611,7 @@ test('setup diarization decrypts an existing token once for runtime validation',
   const fsModule = createMemoryFs();
   const safeStorage = createCountingSafeStorage();
   const userDataDir = '/tmp/AvaNevis';
-  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_validtoken123'));
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('v11encrypted:hf_validtoken123'));
   const validations = [];
 
   const status = await setupDiarizationAddon({
@@ -2809,7 +2833,7 @@ test('setup speakrs deletes an existing pyannote tree first and keeps shared CUD
   const pyannoteHub = path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'hub', 'models--pyannote--speaker-diarization-community-1', 'config.json');
   fsModule.writeFileSync(path.join(pyannoteDir, 'pyannote.txt'), 'deps');
   fsModule.writeFileSync(pyannoteHub, 'hub');
-  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('v11encrypted:hf_secret'));
 
   const status = await setupDiarizationAddon({
     userDataDir,
@@ -2876,7 +2900,7 @@ test('exclusive switch reserves disk mutation only around delete and releases be
   const cliPath = writeSpeakrsCli(fsModule, userDataDir);
   const pyannoteHub = path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'hub', 'config.json');
   fsModule.writeFileSync(pyannoteHub, 'hub');
-  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('v11encrypted:hf_secret'));
 
   let reserved = false;
   let reservationEntered = false;
@@ -2926,7 +2950,7 @@ test('token-only Pyannote state keeps the saved token when switching to Speakrs'
   const catalog = createSpeakrsTestCatalog();
   const cliPath = writeSpeakrsCli(fsModule, userDataDir);
   const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
-  fsModule.writeFileSync(tokenPath, Buffer.from('encrypted:hf_secret'));
+  fsModule.writeFileSync(tokenPath, Buffer.from('v11encrypted:hf_secret'));
 
   const status = await setupDiarizationAddon({
     userDataDir,
@@ -2954,7 +2978,7 @@ test('empty Pyannote token reuses the saved token after a Speakrs switch', async
   const pyannoteCatalog = createCatalogWithMockDiarizationSourceArtifact('win32-x64');
   const cliPath = writeSpeakrsCli(fsModule, userDataDir);
   const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
-  fsModule.writeFileSync(tokenPath, Buffer.from('encrypted:hf_validtoken123'));
+  fsModule.writeFileSync(tokenPath, Buffer.from('v11encrypted:hf_validtoken123'));
 
   const speakrsStatus = await setupDiarizationAddon({
     userDataDir,
@@ -3077,11 +3101,12 @@ test('failed Pyannote switch preflight leaves Speakrs ready and local files unch
       engine: 'pyannote',
       token: 'hf_validtoken123',
       safeStorage: {
-        isEncryptionAvailable: () => false,
-        encryptString: () => {
+        getSelectedStorageBackend: () => 'gnome_libsecret',
+        isAsyncEncryptionAvailable: async () => false,
+        encryptStringAsync: async () => {
           throw new Error('encrypt should not run');
         },
-        decryptString: () => {
+        decryptStringAsync: async () => {
           throw new Error('decrypt should not run');
         },
       },
@@ -3129,7 +3154,7 @@ test('failed Speakrs switch preflight leaves Pyannote token and files unchanged'
   const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
   const pyannoteHub = path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'hub', 'config.json');
   fsModule.writeFileSync(pyannoteHub, 'hub');
-  fsModule.writeFileSync(tokenPath, Buffer.from('encrypted:hf_secret'));
+  fsModule.writeFileSync(tokenPath, Buffer.from('v11encrypted:hf_secret'));
   const snapshot = {
     hub: fsModule.readFileSync(pyannoteHub),
     token: fsModule.readFileSync(tokenPath),
@@ -3169,7 +3194,7 @@ test('remove speakrs setup leaves engine as the last choice', async () => {
   const catalog = createSpeakrsTestCatalog();
   const cliPath = writeSpeakrsCli(fsModule, userDataDir);
   const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
-  const tokenBytes = Buffer.from('encrypted:hf_validtoken123');
+  const tokenBytes = Buffer.from('v11encrypted:hf_validtoken123');
   fsModule.writeFileSync(tokenPath, tokenBytes);
 
   await setupDiarizationAddon({
@@ -3243,7 +3268,7 @@ test('repeated speakrs removal preserves the saved token', async () => {
   const catalog = createSpeakrsTestCatalog();
   const cliPath = writeSpeakrsCli(fsModule, userDataDir);
   const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
-  const tokenBytes = Buffer.from('encrypted:hf_validtoken123');
+  const tokenBytes = Buffer.from('v11encrypted:hf_validtoken123');
   fsModule.writeFileSync(tokenPath, tokenBytes);
 
   await setupDiarizationAddon({
@@ -3369,7 +3394,7 @@ test('exclusive uninstall helpers never delete shared CUDA pip or Whisper caches
   fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'speakrs', 'rev', 'model.bin'), 'pack');
   fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'runtimes', 'speakrs-ort', 'onnxruntime.dll'), 'ort');
   fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'dependencies', 'diarization', 'pyannote', 'site-packages', 'ok'), 'deps');
-  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('v11encrypted:hf_secret'));
 
   await uninstallSpeakrsLocalState({ userDataDir, fsModule });
   await uninstallPyannoteLocalState({ userDataDir, modelId: PYANNOTE_DIARIZATION_MODEL_ID, fsModule });
@@ -3378,4 +3403,91 @@ test('exclusive uninstall helpers never delete shared CUDA pip or Whisper caches
   assert.equal(fsModule.existsSync(protectedFiles.whisperCache), true);
   assert.equal(fsModule.existsSync(protectedFiles.bundledCli), true);
   assert.equal(fsModule.existsSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace)), false);
+});
+
+test('native Speakrs repair validates staged files and preserves the old manifest until activation', async (t) => {
+  const userDataDir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'avanevis-native-speakrs-'));
+  t.after(() => fs.rmSync(userDataDir, { recursive: true, force: true }));
+  const { AI_MODEL_CATALOG } = require('../../src/ai-addon-state');
+  const catalog = structuredClone(AI_MODEL_CATALOG);
+  const speakrs = catalog.diarization.models.find((model) => model.id === SPEAKRS_DIARIZATION_MODEL_ID);
+  const pack = speakrs.packArtifacts['darwin-arm64'][0];
+  const file = {
+    path: 'synthetic.mlmodelc/weights/weight.bin',
+    sha256: SPEAKRS_TEST_SHA256, sizeBytes: SPEAKRS_TEST_BYTES.length,
+  };
+  pack.requiredFiles = [file];
+  pack.files = [{ ...file, downloadUrl: 'https://huggingface.co/example/models/resolve/pinned/weight.bin' }];
+  const addonRoot = path.join(userDataDir, 'ai-addons');
+  const modelRoot = path.join(addonRoot, 'models', 'diarization', 'speakrs');
+  const oldFile = path.join(modelRoot, '5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f', 'old.onnx');
+  fs.mkdirSync(path.dirname(oldFile), { recursive: true });
+  fs.writeFileSync(oldFile, SPEAKRS_TEST_BYTES);
+  const manifestPath = path.join(addonRoot, 'manifest.json');
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    features: { diarization: { engine: 'speakrs', status: 'ready', modelId: speakrs.id } },
+  }));
+  const oldManifest = fs.readFileSync(manifestPath);
+  const cliPath = path.join(userDataDir, 'speakrs-cli');
+  fs.writeFileSync(cliPath, 'fixture');
+  const options = {
+    userDataDir, platform: 'darwin', arch: 'arm64', engine: 'speakrs',
+    catalog, env: { SPEAKRS_CLI_PATH: cliPath },
+    downloader: async ({ destinationPath }) => fs.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES),
+  };
+  const revisionDir = path.join(modelRoot, speakrs.packRevision);
+  const runtimeValidator = async ({ stagedModelsDir, requiredDevice }) => {
+    assert.equal(requiredDevice, 'coreml');
+    assert.match(stagedModelsDir, /\.install$/);
+    assert.deepEqual(fs.readFileSync(manifestPath), oldManifest);
+    assert.deepEqual(fs.readFileSync(path.join(stagedModelsDir, file.path)), SPEAKRS_TEST_BYTES);
+    return { status: 'ready', device: 'coreml' };
+  };
+
+  await assert.rejects(setupDiarizationAddon({
+    ...options, runtimeValidator: async () => ({ status: 'ready', device: 'cpu' }),
+  }), /required accelerator/);
+  const controller = new AbortController();
+  await setupDiarizationAddon({
+    ...options, cancelSignal: controller.signal,
+    runtimeValidator: async (payload) => {
+      const result = await runtimeValidator(payload);
+      controller.abort();
+      return result;
+    },
+  });
+  await assert.rejects(setupDiarizationAddon({
+    ...options, runtimeValidator,
+    fsModule: {
+      ...fs,
+      renameSync(source, target) {
+        if (target === manifestPath) throw new Error('activation failed');
+        return fs.renameSync(source, target);
+      },
+    },
+  }), /activation failed/);
+  assert.deepEqual(fs.readFileSync(manifestPath), oldManifest);
+  assert.deepEqual(fs.readdirSync(revisionDir), []);
+
+  // Simulate a restart after a directory promotion that did not activate.
+  const orphan = path.join(revisionDir, 'e'.repeat(32));
+  fs.mkdirSync(path.dirname(path.join(orphan, file.path)), { recursive: true });
+  fs.writeFileSync(path.join(orphan, file.path), SPEAKRS_TEST_BYTES);
+  const beforeRepair = await checkAiAddonSetupStatus(options);
+  assert.equal(beforeRepair.features.diarization.setupComplete, false);
+  const repaired = await setupDiarizationAddon({ ...options, runtimeValidator });
+  assert.equal(repaired.features.diarization.setupComplete, true);
+  const active = JSON.parse(fs.readFileSync(manifestPath, 'utf8')).features.diarization.speakrsInstallId;
+  assert.match(active, /^[a-f0-9]{32}$/);
+  assert.notEqual(active, path.basename(orphan));
+  assert.deepEqual(fs.readFileSync(oldFile), SPEAKRS_TEST_BYTES);
+  const repeated = await setupDiarizationAddon({
+    ...options,
+    downloader: async () => assert.fail('valid active models should work offline'),
+    runtimeValidator: async ({ stagedModelsDir }) => {
+      assert.equal(stagedModelsDir, path.join(revisionDir, active));
+      return { status: 'ready', device: 'coreml' };
+    },
+  });
+  assert.equal(repeated.features.diarization.setupComplete, true);
 });

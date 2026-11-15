@@ -41,7 +41,7 @@
     "adm-zip": "0.6.1"
   },
   "devDependencies": {
-    "electron": "^45.2.3",
+    "electron": "46.0.0-alpha.10",
     "electron-builder": "^26.18.0"
   },
   "overrides": {
@@ -175,6 +175,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
+        "LSMinimumSystemVersion": "15.0",
         "CFBundleDisplayName": "AvaNevis Meeting Recorder & Transcriber",
         "NSMicrophoneUsageDescription": "AvaNevis needs microphone access to record your voice during meetings.",
         "NSAudioCaptureUsageDescription": "AvaNevis needs system audio access to capture desktop audio locally for meeting transcription.",

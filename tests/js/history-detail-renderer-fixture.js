@@ -173,6 +173,12 @@ app.whenReady().then(async () => {
   try {
     await win.loadFile(indexHtml);
     win.showInactive();
+    const dbg = win.webContents.debugger;
+    dbg.attach('1.3');
+    const setViewport = (width, height) => dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+      width, height, deviceScaleFactor: 1, mobile: false,
+    });
+    await setViewport(600, 400);
     const buttonIds = JSON.stringify(['generate-summary-btn', 'copy-transcript-btn', 'save-meeting-transcript-btn']);
     await win.webContents.executeJavaScript(`
       ${clippedBy.toString()}
@@ -194,8 +200,6 @@ app.whenReady().then(async () => {
     result.summary = await win.webContents.executeJavaScript('window.__prepareSummaryCancellation()', true);
     const center = await win.webContents.executeJavaScript("window.__buttonCenter('generate-summary-btn')", true);
     result.hit = await win.webContents.executeJavaScript(`window.__hitTargetAt(${center.x}, ${center.y})`, true);
-    const dbg = win.webContents.debugger;
-    dbg.attach('1.3');
     const pointerAt = async (type, point, clickCount = 0) => {
       await dbg.sendCommand('Input.dispatchMouseEvent', {
         type,
@@ -217,7 +221,7 @@ app.whenReady().then(async () => {
     result.cancelCallsAfterBlockedClick = await win.webContents.executeJavaScript('window.__cancelCalls', true);
     result.install = await win.webContents.executeJavaScript('window.__installLoadingStyle()', true);
 
-    win.setContentSize(800, 900);
+    await setViewport(800, 900);
     result.tallViewport = await win.webContents.executeJavaScript('window.__settle()', true);
     result.tall = await win.webContents.executeJavaScript(`window.__measureHistory(${buttonIds})`, true);
   } catch (error) {

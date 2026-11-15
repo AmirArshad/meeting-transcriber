@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import re
 import signal
@@ -19,6 +20,7 @@ CARGO_TOML = CLI_DIR / 'Cargo.toml'
 FIXTURE_PROVENANCE = FIXTURES / 'README.md'
 FIXTURE_GENERATOR = FIXTURES / 'generate_speakrs_fixture.ps1'
 REAL_MODELS_DIR = os.environ.get('SPEAKRS_TEST_MODELS_DIR')
+TEST_MODE = os.environ.get('SPEAKRS_TEST_MODE', 'cuda')
 
 SUCCESS_FIELDS = frozenset({'success', 'device', 'annotationSource', 'segments'})
 SEGMENT_FIELDS = frozenset({'start', 'end', 'speaker'})
@@ -31,6 +33,12 @@ SPEAKER_LABEL = re.compile(r'^SPEAKER_\d{2}$')
 
 
 def _cli_path():
+    explicit = os.environ.get('SPEAKRS_TEST_CLI_PATH')
+    if explicit is not None:
+        path = Path(explicit)
+        if not path.is_absolute() or not path.is_file() or not os.access(path, os.X_OK):
+            raise pytest.UsageError('SPEAKRS_TEST_CLI_PATH must name an absolute executable file')
+        return path
     name = 'speakrs-cli.exe' if os.name == 'nt' else 'speakrs-cli'
     source_mtime = (CLI_DIR / 'src' / 'main.rs').stat().st_mtime
     candidates = [
@@ -115,10 +123,10 @@ def test_fixture_wav_is_licensed_local_mono_16k():
 def test_cargo_toml_keeps_online_compiled_out():
     manifest = CARGO_TOML.read_text(encoding='utf-8')
     assert 'default-features = false' in manifest
-    assert 'default-linalg' in manifest
+    assert 'default-linalg' not in manifest
     assert 'coreml' in manifest
     assert 'cuda' in manifest
-    assert 'load-dynamic' in manifest
+    assert 'load-dynamic' not in manifest
     assert '"online"' not in manifest
     assert 'from_pretrained' not in (CLI_DIR / 'src' / 'main.rs').read_text(encoding='utf-8')
 
@@ -129,7 +137,7 @@ def test_cli_missing_models_emits_structured_failure(tmp_path):
         [str(WAV_FIXTURE)],
         {
             'SPEAKRS_MODELS_DIR': str(tmp_path / 'missing-models'),
-            'SPEAKRS_MODE': 'cpu',
+            'SPEAKRS_MODE': TEST_MODE,
         },
     )
     assert result.returncode != 0
@@ -161,7 +169,7 @@ def test_cli_rejects_num_speakers_and_fast_modes(tmp_path):
         [str(WAV_FIXTURE)],
         {
             'SPEAKRS_MODELS_DIR': str(models),
-            'SPEAKRS_MODE': 'cpu',
+            'SPEAKRS_MODE': TEST_MODE,
             'SPEAKRS_NUM_SPEAKERS': '2',
         },
     )
@@ -180,7 +188,18 @@ def test_cli_rejects_num_speakers_and_fast_modes(tmp_path):
     assert fast_mode.returncode != 0
     fast_payload = _single_stdout_payload(fast_mode)
     assert fast_payload['success'] is False
-    assert 'expected cpu, coreml, or cuda' in fast_payload['error']
+    assert 'unsupported SPEAKRS_MODE' in fast_payload['error']
+
+
+@pytest.mark.skipif(_cli_path() is None, reason='speakrs-cli binary not built')
+def test_product_cli_rejects_cpu_mode(tmp_path):
+    if TEST_MODE == 'cpu':
+        pytest.skip('CPU smoke is a separate test-only binary')
+    result = _run_cli([str(WAV_FIXTURE)], {
+        'SPEAKRS_MODELS_DIR': str(tmp_path), 'SPEAKRS_MODE': 'cpu',
+    })
+    assert result.returncode != 0
+    assert 'unsupported SPEAKRS_MODE' in _single_stdout_payload(result)['error']
 
 
 @pytest.mark.skipif(
@@ -192,47 +211,65 @@ def test_cli_real_fixture_inference_smoke():
         [str(WAV_FIXTURE)],
         {
             'SPEAKRS_MODELS_DIR': REAL_MODELS_DIR,
-            'SPEAKRS_MODE': 'cpu',
+            'SPEAKRS_MODE': TEST_MODE,
         },
     )
     assert result.returncode == 0, result.stderr
     payload = _single_stdout_payload(result)
     assert set(payload) == SUCCESS_FIELDS
     assert payload['success'] is True
-    assert payload['device'] == 'cpu'
+    assert payload['device'] == TEST_MODE
     assert payload['annotationSource'] == 'exclusive_speaker_diarization'
     assert payload['segments']
+    previous_end = 0.0
+    for segment in payload['segments']:
+        assert math.isfinite(segment['start']) and math.isfinite(segment['end'])
+        assert 0 <= segment['start'] < segment['end'] <= 16
+        assert segment['start'] >= previous_end
+        previous_end = segment['end']
 
 
 @pytest.mark.skipif(
     _cli_path() is None or not REAL_MODELS_DIR or not Path(REAL_MODELS_DIR).is_dir(),
     reason='speakrs-cli binary or real model directory not available',
 )
-def test_cli_termination_signal_exits_promptly():
+def test_cli_termination_signal_exits_promptly(tmp_path):
+    long_wav = tmp_path / 'long-fixture.wav'
+    with wave.open(str(WAV_FIXTURE), 'rb') as source, wave.open(str(long_wav), 'wb') as target:
+        target.setparams(source.getparams())
+        turn = source.readframes(source.getnframes())
+        # The short fixture may finish before the runner can send a signal.
+        for _ in range(100):
+            target.writeframesraw(turn)
     creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0
     process = subprocess.Popen(
-        [_cli_path(), str(WAV_FIXTURE)],
+        [_cli_path(), str(long_wav)],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         env=_cli_env({
             'SPEAKRS_MODELS_DIR': REAL_MODELS_DIR,
-            'SPEAKRS_MODE': 'cpu',
+            'SPEAKRS_MODE': TEST_MODE,
         }),
         creationflags=creationflags,
     )
-    time.sleep(0.5)
-    assert process.poll() is None, 'CLI exited before its termination handler could be exercised'
+    try:
+        time.sleep(0.15)
+        assert process.poll() is None, 'CLI exited before its termination handler could be exercised'
 
-    started = time.monotonic()
-    if os.name == 'nt':
-        process.send_signal(signal.CTRL_BREAK_EVENT)
-    else:
-        process.terminate()
-    process.communicate(timeout=2)
+        started = time.monotonic()
+        if os.name == 'nt':
+            process.send_signal(signal.CTRL_BREAK_EVENT)
+        else:
+            process.terminate()
+        process.communicate(timeout=2)
 
-    assert process.returncode != 0
-    assert time.monotonic() - started < 2
+        assert process.returncode != 0
+        assert time.monotonic() - started < 2
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate(timeout=2)
 
 
 @pytest.mark.skipif(_cli_path() is None, reason='speakrs-cli binary not built')

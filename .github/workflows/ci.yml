@@ -75,7 +75,7 @@ jobs:
   test-backend-macos:
     name: Test Python Backend (macOS)
     if: github.event_name != 'schedule'
-    runs-on: macos-14  # Apple Silicon runner
+    runs-on: macos-15  # Apple Silicon runner
     timeout-minutes: 90
 
     steps:
@@ -169,7 +169,7 @@ jobs:
       # dtolnay/rust-toolchain master as of 2026-11-03 (upstream revision update)
       uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
       with:
-        toolchain: '1.88.0'
+        toolchain: '1.89.0'
         targets: aarch64-apple-darwin
         components: rustfmt, clippy
 
@@ -177,8 +177,13 @@ jobs:
       # Swatinem/rust-cache v2.9.3
       uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
       with:
-        workspaces: native/speakrs-cli
+        workspaces: |
+          native/speakrs-cli
+          native/speakrs-cpu-smoke
         cache-on-failure: true
+
+    - name: Confirm Apple Silicon
+      run: test "$(uname -m)" = arm64
 
     - name: Test speakrs-cli
       working-directory: native/speakrs-cli
@@ -186,13 +191,15 @@ jobs:
 
     - name: Build speakrs-cli release
       working-directory: native/speakrs-cli
+      env:
+        MACOSX_DEPLOYMENT_TARGET: '15.0'
       run: cargo build --release --locked --target aarch64-apple-darwin
 
     - name: Cache Speakrs CPU smoke artifacts
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .cache/speakrs-cpu-smoke
-        key: speakrs-cpu-smoke-${{ runner.os }}-${{ hashFiles('native/speakrs-cli/ci-cpu-smoke-pins.json', 'src/ai-addon/speakrs-pack-spec.js', 'src/ai-addon/speakrs-model-files.json') }}
+        key: speakrs-cpu-smoke-${{ runner.os }}-${{ hashFiles('native/speakrs-cpu-smoke/Cargo.lock', 'src/ai-addon/speakrs-pack-spec.js', 'src/ai-addon/speakrs-model-files.json') }}
 
     - name: Set up Node.js
       uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -206,8 +213,15 @@ jobs:
     - name: Run frontend regression tests
       run: npm run test:js
 
+    - name: Verify product Speakrs rejects CPU and fast modes
+      run: node scripts/verify-speakrs-packaging.js --check-product-modes native/speakrs-cli/target/aarch64-apple-darwin/release/speakrs-cli
+
+    - name: Build separate Speakrs CPU smoke tool
+      working-directory: native/speakrs-cpu-smoke
+      run: cargo build --release --locked --features ci-cpu-smoke
+
     - name: Speakrs CPU-mode inference smoke
-      run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cli/target/aarch64-apple-darwin/release/speakrs-cli
+      run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cpu-smoke/target/release/speakrs-cpu-smoke
 
     - name: Build packaged macOS app smoke test
       env:
@@ -251,7 +265,7 @@ jobs:
       # dtolnay/rust-toolchain master as of 2026-11-03 (upstream revision update)
       uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
       with:
-        toolchain: '1.88.0'
+        toolchain: '1.89.0'
         targets: x86_64-pc-windows-msvc
         components: rustfmt, clippy
 
@@ -259,14 +273,16 @@ jobs:
       # Swatinem/rust-cache v2.9.3
       uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
       with:
-        workspaces: native/speakrs-cli
+        workspaces: |
+          native/speakrs-cli
+          native/speakrs-cpu-smoke
         cache-on-failure: true
 
     - name: Test speakrs-cli
       working-directory: native/speakrs-cli
       run: cargo test --locked
 
-    - name: Prove Windows cuda,load-dynamic compiles without a CUDA toolkit
+    - name: Build speakrs-cli Windows x64 CUDA release
       working-directory: native/speakrs-cli
       run: cargo build --release --locked --target x86_64-pc-windows-msvc
 
@@ -274,13 +290,20 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .cache/speakrs-cpu-smoke
-        key: speakrs-cpu-smoke-${{ runner.os }}-${{ hashFiles('native/speakrs-cli/ci-cpu-smoke-pins.json', 'src/ai-addon/speakrs-pack-spec.js', 'src/ai-addon/speakrs-model-files.json') }}
+        key: speakrs-cpu-smoke-${{ runner.os }}-${{ hashFiles('native/speakrs-cpu-smoke/Cargo.lock', 'src/ai-addon/speakrs-pack-spec.js', 'src/ai-addon/speakrs-model-files.json') }}
 
     - name: Install dependencies
       run: npm ci
 
+    - name: Verify product Speakrs rejects CPU and fast modes
+      run: node scripts/verify-speakrs-packaging.js --check-product-modes native/speakrs-cli/target/x86_64-pc-windows-msvc/release/speakrs-cli.exe
+
+    - name: Build separate Speakrs CPU smoke tool
+      working-directory: native/speakrs-cpu-smoke
+      run: cargo build --release --locked --features ci-cpu-smoke
+
     - name: Speakrs CPU-mode inference smoke
-      run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cli/target/x86_64-pc-windows-msvc/release/speakrs-cli.exe
+      run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cpu-smoke/target/release/speakrs-cpu-smoke.exe
 
     - name: Validate JavaScript syntax under src/
       run: npm run test:syntax
@@ -380,7 +403,7 @@ jobs:
       # dtolnay/rust-toolchain master as of 2026-11-03 (upstream revision update)
       uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
       with:
-        toolchain: '1.88.0'
+        toolchain: '1.89.0'
         targets: x86_64-unknown-linux-gnu
         components: rustfmt, clippy
 
@@ -388,7 +411,9 @@ jobs:
       # Swatinem/rust-cache v2.9.3
       uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
       with:
-        workspaces: native/speakrs-cli
+        workspaces: |
+          native/speakrs-cli
+          native/speakrs-cpu-smoke
         cache-on-failure: true
 
     - name: Test speakrs-cli
@@ -412,10 +437,17 @@ jobs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .cache/speakrs-cpu-smoke
-        key: speakrs-cpu-smoke-${{ runner.os }}-${{ hashFiles('native/speakrs-cli/ci-cpu-smoke-pins.json', 'src/ai-addon/speakrs-pack-spec.js', 'src/ai-addon/speakrs-model-files.json') }}
+        key: speakrs-cpu-smoke-${{ runner.os }}-${{ hashFiles('native/speakrs-cpu-smoke/Cargo.lock', 'src/ai-addon/speakrs-pack-spec.js', 'src/ai-addon/speakrs-model-files.json') }}
+
+    - name: Verify product Speakrs rejects CPU and fast modes
+      run: node scripts/verify-speakrs-packaging.js --check-product-modes native/speakrs-cli/target/x86_64-unknown-linux-gnu/release/speakrs-cli
+
+    - name: Build separate Speakrs CPU smoke tool
+      working-directory: native/speakrs-cpu-smoke
+      run: cargo build --release --locked --features ci-cpu-smoke
 
     - name: Speakrs CPU-mode inference smoke (non-GPU structural check)
-      run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cli/target/x86_64-unknown-linux-gnu/release/speakrs-cli
+      run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cpu-smoke/target/release/speakrs-cpu-smoke
 
     - name: Run the full automated suite
       run: xvfb-run -a npm run test:all
@@ -448,7 +480,7 @@ jobs:
             kind: pip
             target: windows
           - label: macos-python
-            runner: macos-14
+            runner: macos-15
             kind: pip
             target: macos
           - label: linux-python
@@ -556,7 +588,7 @@ jobs:
           - platform: win32-x64
             runner: windows-latest
           - platform: darwin-arm64
-            runner: macos-14
+            runner: macos-15
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -593,6 +625,10 @@ jobs:
     - name: Audit speakrs-cli dependencies
       working-directory: native/speakrs-cli
       run: cargo audit --deny warnings
+
+    - name: Audit separate Speakrs CPU smoke dependencies
+      working-directory: native/speakrs-cli
+      run: cargo audit --deny warnings --file ../speakrs-cpu-smoke/Cargo.lock
 
   validate-docs:
     name: Validate Documentation

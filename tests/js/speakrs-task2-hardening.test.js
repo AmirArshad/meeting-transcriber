@@ -67,9 +67,10 @@ const READY_LINUX_CUDA = Object.freeze({
 
 function createSafeStorage() {
   return {
-    isEncryptionAvailable: () => true,
-    encryptString: (value) => Buffer.from(value),
-    decryptString: (value) => Buffer.from(value).toString('utf8'),
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    isAsyncEncryptionAvailable: async () => true,
+    encryptStringAsync: async (value) => Buffer.from(`v11${value}`),
+    decryptStringAsync: async (value) => ({ result: Buffer.from(value).toString('utf8').slice(3), shouldReEncrypt: false }),
   };
 }
 
@@ -377,12 +378,8 @@ test('packaged buildSpeakrsSpawnEnv pins Resources/bin and ignores decoys', () =
     assert.equal(spawned.SPEAKRS_EXCLUSIVE, '1');
     assert.equal(spawned.AVANEVIS_PACKAGED, '1');
     assert.equal(spawned.SPEAKRS_MODE, 'cuda');
-    assert.ok(spawned.PATH.startsWith(`${getSpeakrsOrtRuntimeDir(userDataDir)}${path.delimiter}`));
-    assert.equal(
-      spawned.ORT_DYLIB_PATH,
-      path.join(getSpeakrsOrtRuntimeDir(userDataDir), 'onnxruntime.dll'),
-    );
-    assert.equal(spawned.PATH.includes(path.dirname(pathCandidate)), true);
+    assert.equal(spawned.ORT_DYLIB_PATH, undefined);
+    assert.equal(spawned.PATH, path.dirname(pathCandidate));
 
     const pyDecoyEnv = buildSpeakrsSpawnEnv({
       userDataDir,
@@ -423,24 +420,16 @@ test('packaged buildSpeakrsSpawnEnv pins Resources/bin and ignores decoys', () =
   }
 });
 
-test('Windows Speakrs PATH prepends speakrs-ort once', (t) => {
-  if (process.platform !== 'win32') {
-    t.skip('Windows PATH uses `;`; host path.delimiter cannot simulate it on POSIX.');
-    return;
-  }
-  const userDataDir = path.join('C:', 'Users', 'tester', 'AvaNevis');
-  const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
+test('Windows native Speakrs leaves the legacy private runtime off the loader path', () => {
+  const userDataDir = path.join(os.tmpdir(), 'avanevis-speakrs-windows');
+  const currentPath = 'C:\\Windows\\System32';
   const spawned = buildSpeakrsSpawnEnv({
-    userDataDir,
-    requiredDevice: 'cuda',
-    platform: 'win32',
-    extra: {
-      PATH: `${ortDir}${path.delimiter}${ortDir}${path.delimiter}C:\\Windows\\System32`,
-    },
+    userDataDir, platform: 'win32', requiredDevice: 'cuda',
+    extra: { PATH: currentPath },
+    env: { ORT_DYLIB_PATH: 'untrusted-onnxruntime.dll' },
   });
-  const parts = spawned.PATH.split(path.delimiter);
-  assert.equal(parts[0], ortDir);
-  assert.equal(parts.filter((part) => path.normalize(part) === path.normalize(ortDir)).length, 1);
+  assert.equal(spawned.PATH, currentPath);
+  assert.equal(spawned.ORT_DYLIB_PATH, undefined);
 });
 
 test('packaged buildPythonEnv enforces packaged isolation after caller overrides', () => {
@@ -976,7 +965,7 @@ test('Windows runtime fails closed when runtime artifact metadata is absent', as
   });
   assert.equal(result.supported, false);
   assert.equal(result.valid, false);
-  assert.match(result.reason, /No complete Speakrs ONNX Runtime artifact/);
+  assert.match(result.reason, /native CUDA loader qualification is pending/);
   fs.rmSync(path.dirname(result.runtimeDir), { recursive: true, force: true });
 });
 
@@ -1504,6 +1493,9 @@ test('Linux Speakrs spawn env is CUDA-only and ignores ambient LD_LIBRARY_PATH',
         HOME: '/home/test',
         SPEAKRS_MODE: 'cpu',
         LD_LIBRARY_PATH: '/tmp/ambient',
+        LD_PRELOAD: '/tmp/ambient-injection.so',
+        SPEAKRS_CUDA_FORCE_PTX_JIT: '1',
+        SPEAKRS_CUDA_TUNE_FILE: '/tmp/ambient-tuning',
         HF_HUB_CACHE: '/tmp/hf',
       },
       platform: 'linux',
@@ -1515,10 +1507,13 @@ test('Linux Speakrs spawn env is CUDA-only and ignores ambient LD_LIBRARY_PATH',
     assert.equal(env.HUGGINGFACE_HUB_TOKEN, undefined);
     assert.equal(env.HF_HUB_CACHE, undefined);
     assert.doesNotMatch(String(env.LD_LIBRARY_PATH || ''), /hostile-libs|ambient/);
-    assert.ok(String(env.LD_LIBRARY_PATH || '').startsWith(path.resolve(runtimeDir)));
+    assert.equal(linuxLibraryPathContainsDir(env.LD_LIBRARY_PATH, runtimeDir), false);
+    assert.equal(env.LD_PRELOAD, undefined);
+    assert.equal(env.SPEAKRS_CUDA_FORCE_PTX_JIT, undefined);
+    assert.equal(env.SPEAKRS_CUDA_TUNE_FILE, os.devNull);
     assert.ok(linuxLibraryPathContainsDir(env.LD_LIBRARY_PATH, cublasDir));
     assert.ok(linuxLibraryPathContainsDir(env.LD_LIBRARY_PATH, cudnnDir));
-    assert.equal(env.ORT_DYLIB_PATH, path.join(runtimeDir, 'libonnxruntime.so.1.27.1'));
+    assert.equal(env.ORT_DYLIB_PATH, undefined);
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }

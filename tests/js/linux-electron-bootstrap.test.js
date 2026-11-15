@@ -56,7 +56,7 @@ test('Linux diagnostics are bounded, sanitized, and do not expose display socket
     },
     safeStorage: {
       getSelectedStorageBackend: () => 'gnome_libsecret',
-      isEncryptionAvailable: () => true,
+      isAsyncEncryptionAvailable: async () => true,
     },
     commandLine: {
       getSwitchValue(name) {
@@ -74,7 +74,7 @@ test('Linux diagnostics are bounded, sanitized, and do not expose display socket
     hasX11Display: true,
     requestedPasswordStore: 'gnome-libsecret',
     selectedSecretBackend: 'gnome_libsecret',
-    secretEncryptionAvailable: true,
+    secretEncryptionAvailable: null,
     ozonePlatform: null,
     ozonePlatformHint: 'auto',
     sandboxDisabled: true,
@@ -114,44 +114,44 @@ test('Linux command-line switches append password-store and ozone-platform-hint=
   assert.equal(result.ozonePlatformHint, 'auto');
 });
 
-test('getSelectedStorageBackend is exposed for later preflights and rejects basic_text probes', () => {
+test('getSelectedStorageBackend is exposed for later preflights and rejects basic_text probes', async () => {
   assert.equal(getSelectedStorageBackend(null), null);
   assert.equal(getSelectedStorageBackend({}), null);
   assert.equal(getSelectedStorageBackend({
     getSelectedStorageBackend: () => 'gnome_libsecret',
   }), 'gnome_libsecret');
 
-  const probe = probeSecretStorage({
+  const probe = await probeSecretStorage({
     getSelectedStorageBackend: () => 'basic_text',
-    isEncryptionAvailable: () => true,
+    isAsyncEncryptionAvailable: async () => true,
   });
   assert.equal(probe.backend, 'basic_text');
   assert.equal(probe.encryptionAvailable, true);
   assert.equal(probe.isBasicText, true);
 
-  const real = probeSecretStorage({
+  const real = await probeSecretStorage({
     getSelectedStorageBackend: () => 'gnome_libsecret',
-    isEncryptionAvailable: () => true,
+    isAsyncEncryptionAvailable: async () => true,
   });
   assert.equal(real.isBasicText, false);
 });
 
-test('Linux safeStorage smoke requires a real backend and a successful encrypt/decrypt round-trip', () => {
-  const basic = runLinuxSafeStorageSmoke({
+test('Linux safeStorage smoke requires a real backend and a successful encrypt/decrypt round-trip', async () => {
+  const basic = await runLinuxSafeStorageSmoke({
     getSelectedStorageBackend: () => 'basic_text',
-    isEncryptionAvailable: () => true,
-    encryptString: () => Buffer.from('x'),
-    decryptString: () => SAFESTORAGE_SMOKE_CANARY,
+    isAsyncEncryptionAvailable: async () => true,
+    encryptStringAsync: async () => Buffer.from('x'),
+    decryptStringAsync: async () => ({ result: SAFESTORAGE_SMOKE_CANARY }),
   });
   assert.equal(basic.ok, false);
   assert.equal(basic.isBasicText, true);
   assert.equal(basic.roundTrip, false);
 
-  const good = runLinuxSafeStorageSmoke({
+  const good = await runLinuxSafeStorageSmoke({
     getSelectedStorageBackend: () => 'gnome_libsecret',
-    isEncryptionAvailable: () => true,
-    encryptString: (value) => Buffer.from(value),
-    decryptString: (value) => value.toString(),
+    isAsyncEncryptionAvailable: async () => true,
+    encryptStringAsync: async (value) => Buffer.from(`v11${value}`),
+    decryptStringAsync: async (value) => ({ result: value.subarray(3).toString() }),
   });
   assert.equal(good.ok, true);
   assert.equal(good.roundTrip, true);

@@ -1564,7 +1564,7 @@ app.whenReady().then(async () => {
       );
     }
     if (smokeRequested && smokeAllowed) {
-      const smoke = runLinuxSafeStorageSmoke(getSafeStorage());
+      const smoke = await runLinuxSafeStorageSmoke(getSafeStorage());
       const {
         getDiarizationAvailability,
         getSummaryAvailability,

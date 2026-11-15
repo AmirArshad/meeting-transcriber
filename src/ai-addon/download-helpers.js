@@ -107,14 +107,14 @@ function isLikelyHuggingFaceToken(token) {
   return /^hf_[A-Za-z0-9_-]{8,}$/.test(String(token || '').trim());
 }
 
-function getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule = fs, checkEncryptionAvailability = true } = {}) {
+async function getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule = fs, checkEncryptionAvailability = true } = {}) {
   return {
     hasToken: hasAiAddonToken({
       userDataDir,
       tokenKey: TOKEN_KEYS.diarizationHuggingFace,
       fsModule,
     }),
-    encryptionAvailable: isTokenEncryptionAvailable({ safeStorage, checkAvailability: checkEncryptionAvailability }),
+    encryptionAvailable: await isTokenEncryptionAvailable({ safeStorage, checkAvailability: checkEncryptionAvailability }),
   };
 }
 

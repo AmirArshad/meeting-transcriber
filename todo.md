@@ -34,6 +34,33 @@ On Linux, `npm run test:all` passed under an isolated X display: 1,133 JS and
 `npm audit --audit-level=high` passed with six moderate packaging-toolchain
 findings. Native installers and hardware checks for Electron 45.2.3 remain open.
 
+### v2.11 local release candidate · CachyOS, 2026-11-15
+
+CachyOS built and verified the AppImage, pacman and deb candidates under the
+existing app version. Native Speakrs 0.7 CUDA, disposable-profile repair and
+removal, synthetic short and long guided transcription, PipeWire capture, and
+the Electron 46 alpha secure-storage smoke ran locally. The release candidate
+is open. Take the source-only patch to native Windows x64 NVIDIA for the
+upstream CUDA/MSVC and loader probe first, then continue to macOS 15 arm64.
+The [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
+has the test evidence, hashes and pending gates.
+
+### v2.11 plan review — 2026-11-15
+
+Plan review only; no product implementation or new platform acceptance.
+The [revised plan](docs/superpowers/plans/2026-11-10-v2.11-speaker-upgrade.md)
+starts on CachyOS with the Linux CUDA probe and parallel preparation when
+requested. Native Windows CUDA and macOS CoreML remain required. Live npm verification found latest 46 **46.0.0-alpha.10** (official
+prerelease dated November 12) and stable **45.3.2**; the November 10 versions and
+test counts above are historical. The plan specifies direct-file model setup,
+transactional activation, complete async-token migration, separate CPU CI smoke,
+and native loader/signing/quality checks. All 69 distinct required native model
+leaves were downloaded and hashed for planning; this is not inference evidence.
+The v2.11 minimum is **macOS 15 on Apple Silicon**, matching the upstream
+CoreML asset target. Native macOS 15 packaged validation remains open, along
+with Windows CUDA loading, driver-tier and real key-store migration checks.
+Upstream CoreML assets still require qualification, and no re-export is planned.
+
 ### v2.10.2 certificate-trust maintenance — 2026-10-20
 
 Release branch: `release/2.10.2`. Electron 44.9.2, certifi 2026.10.19,
