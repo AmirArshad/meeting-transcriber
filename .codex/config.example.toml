@@ -1,0 +1,5 @@
+# Merge this table into your local .codex/config.toml; preserve other settings.
+# Project config applies only in a trusted checkout. Restart Codex afterward.
+# Keep the repo-adapted skills instead of the duplicate workflow router.
+[plugins."superpowers@openai-curated-remote"]
+enabled = false

@@ -35,6 +35,12 @@ struct ErrorPayload {
 }
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    if let Err(message) = configure_windows_dll_search() {
+        let _ = writeln!(std::io::stderr(), "{message}");
+        emit_error(&message);
+        return ExitCode::FAILURE;
+    }
     if let Err(message) = install_shutdown_handlers() {
         let _ = writeln!(std::io::stderr(), "{message}");
         emit_error(&message);
@@ -50,6 +56,26 @@ fn main() -> ExitCode {
     }
 }
 
+// cudarc loads the driver dynamically. Restrict its default search before any
+// inference code runs, excluding the executable directory, CWD and PATH.
+#[cfg(windows)]
+fn configure_windows_dll_search() -> Result<(), String> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetDefaultDllDirectories(directory_flags: u32) -> i32;
+    }
+    configure_windows_dll_search_with(|flags| unsafe { SetDefaultDllDirectories(flags) })
+}
+
+#[cfg(windows)]
+fn configure_windows_dll_search_with(set_directories: impl FnOnce(u32) -> i32) -> Result<(), String> {
+    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
+    if set_directories(LOAD_LIBRARY_SEARCH_SYSTEM32) == 0 {
+        return Err("failed to restrict Windows DLL search to System32".to_string());
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let wav_path = env::args()
         .nth(1)
@@ -63,7 +89,7 @@ fn run() -> Result<(), String> {
 
     if env::var_os("SPEAKRS_NUM_SPEAKERS").is_some() {
         return Err(
-            "SPEAKRS_NUM_SPEAKERS is not supported; speakrs 0.5.0 is auto-only".to_string(),
+            "SPEAKRS_NUM_SPEAKERS is not supported; speakrs 0.7.0 is auto-only".to_string(),
         );
     }
 
@@ -76,12 +102,7 @@ fn run() -> Result<(), String> {
         .run(&samples)
         .map_err(|error| format!("speakrs inference failed: {error}"))?;
 
-    let mut discrete = result.discrete_diarization.clone();
-    if exclusive {
-        discrete.make_exclusive();
-    }
-    let segments = discrete
-        .to_segments()
+    let segments = select_segments(result.segments, result.exclusive_segments, exclusive)
         .into_iter()
         .map(|segment| SegmentPayload {
             start: segment.start as f32,
@@ -99,6 +120,18 @@ fn run() -> Result<(), String> {
     let json = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
     println!("{json}");
     Ok(())
+}
+
+fn select_segments(
+    segments: Vec<speakrs::Segment>,
+    exclusive_segments: Vec<speakrs::Segment>,
+    exclusive: bool,
+) -> Vec<speakrs::Segment> {
+    if exclusive {
+        exclusive_segments
+    } else {
+        segments
+    }
 }
 
 fn emit_error(message: &str) {
@@ -125,11 +158,12 @@ fn annotation_source(exclusive: bool) -> &'static str {
 
 fn parse_mode(value: &str) -> Result<ExecutionMode, String> {
     match value {
+        #[cfg(feature = "ci-cpu-smoke")]
         "cpu" => Ok(ExecutionMode::Cpu),
         "coreml" => Ok(ExecutionMode::CoreMl),
         "cuda" => Ok(ExecutionMode::Cuda),
         other => Err(format!(
-            "unsupported SPEAKRS_MODE: {other} (expected cpu, coreml, or cuda)"
+            "unsupported SPEAKRS_MODE: {other} (expected coreml or cuda; cpu is test-only)"
         )),
     }
 }
@@ -317,9 +351,20 @@ mod tests {
     use super::{
         ANNOTATION_SOURCE_EXCLUSIVE, ANNOTATION_SOURCE_OVERLAP, ErrorPayload, MODELS_SETUP_ERROR,
         SegmentPayload, SuccessPayload, annotation_source, assert_models_dir, decode_s16le_wav,
-        normalize_speaker_label, parse_exclusive, parse_mode, single_line,
+        normalize_speaker_label, parse_exclusive, parse_mode, select_segments, single_line,
     };
     use speakrs::ExecutionMode;
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_dll_search_is_system32_only_and_fails_closed() {
+        use super::configure_windows_dll_search_with;
+        assert!(configure_windows_dll_search_with(|flags| {
+            assert_eq!(flags, 0x0000_0800);
+            1
+        }).is_ok());
+        assert!(configure_windows_dll_search_with(|_| 0).is_err());
+    }
     use std::fs;
     use std::io::Write;
     use std::path::PathBuf;
@@ -376,12 +421,32 @@ mod tests {
 
     #[test]
     fn parse_mode_accepts_only_frozen_modes() {
+        #[cfg(feature = "ci-cpu-smoke")]
         assert!(matches!(parse_mode("cpu"), Ok(ExecutionMode::Cpu)));
+        #[cfg(not(feature = "ci-cpu-smoke"))]
+        assert!(parse_mode("cpu").is_err());
         assert!(matches!(parse_mode("coreml"), Ok(ExecutionMode::CoreMl)));
         assert!(matches!(parse_mode("cuda"), Ok(ExecutionMode::Cuda)));
         for rejected in ["coreml-fast", "cuda-fast", "migraphx", "", "CPU"] {
             assert!(parse_mode(rejected).is_err(), "{rejected}");
         }
+    }
+
+    #[test]
+    fn selects_exclusive_or_overlapping_turns_without_dropping_them() {
+        let overlap = vec![
+            speakrs::Segment::new(0.0, 2.0, "0"),
+            speakrs::Segment::new(1.0, 3.0, "1"),
+        ];
+        let exclusive = vec![
+            speakrs::Segment::new(0.0, 1.0, "0"),
+            speakrs::Segment::new(1.0, 3.0, "1"),
+        ];
+        assert_eq!(
+            select_segments(overlap.clone(), exclusive.clone(), true),
+            exclusive
+        );
+        assert_eq!(select_segments(overlap.clone(), exclusive, false), overlap);
     }
 
     #[test]

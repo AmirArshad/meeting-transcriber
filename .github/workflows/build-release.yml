@@ -35,9 +35,9 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/speakrs-pack-verify
-          key: speakrs-pack-verify-${{ hashFiles('src/ai-addon/speakrs-pack-spec.js') }}
+          key: speakrs-pack-verify-${{ hashFiles('src/ai-addon/speakrs-pack-spec.js', 'src/ai-addon/speakrs-model-files.json') }}
 
-      - name: Download and verify Speakrs model-pack and ORT checksums
+      - name: Download and verify pinned Speakrs native model files
         run: node scripts/verify-speakrs-packaging.js --verify-pack-checksums
 
   build-installer:
@@ -55,13 +55,13 @@ jobs:
             artifact-path: "dist/AvaNevis-Setup-*.exe"
             artifact-name: avanevis-installer-windows
           - os: macOS
-            runner: macos-14 # macOS 14 (Sonoma) with M1/M2/M3 runners
+            runner: macos-15 # Apple Silicon
             rust-target: aarch64-apple-darwin
             build-script: npm run build:mac
             artifact-path: "dist/AvaNevis-Setup-*.dmg"
             artifact-name: avanevis-installer-macos
           - os: Linux
-            runner: ubuntu-latest
+            runner: ubuntu-24.04 # AppImage 1.0.2 is incompatible with Ubuntu 26.04 host libraries
             rust-target: x86_64-unknown-linux-gnu
             build-script: npm run build:linux
             artifact-path: |
@@ -82,9 +82,13 @@ jobs:
         # dtolnay/rust-toolchain master as of 2026-11-03 (upstream revision update)
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
-          toolchain: "1.88.0"
+          toolchain: "1.89.0"
           targets: ${{ matrix.rust-target }}
           components: rustfmt, clippy
+
+      - name: Confirm Apple Silicon
+        if: runner.os == 'macOS'
+        run: test "$(uname -m)" = arm64
 
       - name: Cache cargo
         # Swatinem/rust-cache v2.9.3
@@ -207,11 +211,34 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  stage-release-legal:
+    name: Stage and verify release legal assets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: "npm"
+      - run: npm ci
+      - name: Stage release legal assets
+        env:
+          RELEASE_LEGAL_DIR: ${{ github.workspace }}/release-legal
+        run: node scripts/stage-release-legal-assets.js
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-legal
+          path: release-legal/
+          if-no-files-found: error
+          retention-days: 30
+
   publish-release:
     name: Publish GitHub Release
     needs:
       - build-installer
       - verify-speakrs-release-artifacts
+      - stage-release-legal
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -222,30 +249,19 @@ jobs:
       # would delete release-artifacts/ if download ran first (see f411436 regression).
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up Node.js
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
-          cache: "npm"
+          persist-credentials: false
 
-      - name: Install Node dependencies
-        run: npm ci
-
-      - name: Resolve release version
-        id: release_version
-        shell: bash
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-
-      - name: Stage release legal assets
-        env:
-          RELEASE_VERSION: ${{ steps.release_version.outputs.version }}
-          RELEASE_LEGAL_DIR: ${{ github.workspace }}/release-legal
-        run: node scripts/stage-release-legal-assets.js
+      - name: Download verified legal assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-legal
+          path: release-legal
 
       - name: Download installer artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: avanevis-installer-*
           path: release-artifacts
 
       - name: Collect release assets
@@ -254,17 +270,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          windows_asset=$(find release-artifacts/avanevis-installer-windows -type f -name '*.exe' | head -n 1)
-          macos_asset=$(find release-artifacts/avanevis-installer-macos -type f -name '*.dmg' | head -n 1)
-          linux_appimage=$(find release-artifacts/avanevis-installer-linux -type f -name 'AvaNevis-Setup-*.AppImage' | head -n 1)
-          linux_pacman=$(find release-artifacts/avanevis-installer-linux -type f -name 'AvaNevis-Setup-*.pkg.tar.zst' | head -n 1)
-          linux_deb=$(find release-artifacts/avanevis-installer-linux -type f -name 'AvaNevis-Setup-*.deb' | head -n 1)
-
-          if [ -z "$windows_asset" ] || [ -z "$macos_asset" ] || [ -z "$linux_appimage" ] || [ -z "$linux_pacman" ] || [ -z "$linux_deb" ]; then
-            echo "Expected release assets were not downloaded"
-            find release-artifacts -maxdepth 3 -type f | sort || true
-            exit 1
-          fi
+          version="${GITHUB_REF#refs/tags/v}"
+          installer="AvaNevis-Setup-${version}"
+          windows_asset="release-artifacts/avanevis-installer-windows/${installer}.exe"
+          macos_asset="release-artifacts/avanevis-installer-macos/${installer}.dmg"
+          linux_appimage="release-artifacts/avanevis-installer-linux/${installer}.AppImage"
+          linux_pacman="release-artifacts/avanevis-installer-linux/${installer}.pkg.tar.zst"
+          linux_deb="release-artifacts/avanevis-installer-linux/${installer}.deb"
+          for asset in "$windows_asset" "$macos_asset" "$linux_appimage" "$linux_pacman" "$linux_deb"; do
+            if [ ! -s "$asset" ]; then
+              echo "Missing or empty release asset: $asset"
+              exit 1
+            fi
+          done
 
           mkdir -p release-upload
           cp "$windows_asset" release-upload/
@@ -273,7 +291,7 @@ jobs:
           cp "$linux_pacman" release-upload/
           cp "$linux_deb" release-upload/
 
-          echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "windows_name=$(basename "$windows_asset")" >> $GITHUB_OUTPUT
           echo "windows_size=$(du -h "$windows_asset" | cut -f1)" >> $GITHUB_OUTPUT
           echo "macos_name=$(basename "$macos_asset")" >> $GITHUB_OUTPUT
@@ -329,7 +347,7 @@ jobs:
           ### Platform Support
 
           - Windows 10/11 x64
-          - macOS 14+ on Apple Silicon
+          - macOS 15+ on Apple Silicon
           - Linux x86_64 Core Beta (Omarchy first; other distros are experimental betas)
 
           ### Installation
@@ -342,7 +360,7 @@ jobs:
           **macOS**
           1. Download the \`.dmg\` file.
           2. Drag AvaNevis into Applications.
-          3. On first launch, right-click the app and choose "Open" to bypass Gatekeeper for the unsigned build.
+          3. The app is ad-hoc signed and not notarized. If macOS blocks it, use System Settings → Privacy & Security → Open Anyway after attempting to open it. See https://support.apple.com/en-us/102445.
           4. Grant microphone and screen recording permissions when prompted.
 
           **Linux Core Beta**
@@ -372,7 +390,7 @@ jobs:
           cat docs/development/RELEASE_FFMPEG_NOTICE.md >> release-notes.md
 
       - name: Create or update GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           name: AvaNevis ${{ github.ref_name }}
           files: |

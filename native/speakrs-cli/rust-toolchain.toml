@@ -1,5 +1,5 @@
 [toolchain]
-channel = "1.88.0"
+channel = "1.89.0"
 components = ["rustfmt", "clippy"]
 # Packaging builds pass an explicit --target (aarch64-apple-darwin,
 # x86_64-pc-windows-msvc, or x86_64-unknown-linux-gnu). CI/release and

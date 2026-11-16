@@ -35,7 +35,7 @@ app.whenReady().then(async () => {
   await win.webContents.executeJavaScript('window.stopRecordingEvents()');
   win.webContents.send('recording-progress', { phase: 'unexpected' });
   const count = await win.webContents.executeJavaScript('new Promise(resolve => setTimeout(() => resolve(window.receivedRecordingEvents.length), 100))');
-  process.stdout.write(`PRELOAD_SMOKE ${JSON.stringify({ state, first, count })}\n`);
+  process.stdout.write(`PRELOAD_SMOKE ${JSON.stringify({ state, first, count, electron: process.versions.electron })}\n`);
   app.quit();
 }).catch((error) => {
   process.stderr.write(`${error.stack || error}\n`);

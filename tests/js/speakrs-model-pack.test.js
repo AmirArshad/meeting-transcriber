@@ -15,6 +15,8 @@ const {
   SPEAKRS_ORT_RUNTIME_ARTIFACTS,
   assertSpeakrsLinuxRequiredDynamicLibraryClosure,
   buildSpeakrsSourceDownloadUrl,
+  buildSpeakrsSourceArtifacts,
+  getSpeakrsModelPackArtifact,
   getSpeakrsRuntimeArtifacts,
   getSpeakrsSetupProgressCopy,
   getSpeakrsSourceFiles,
@@ -37,25 +39,25 @@ const {
 
 test('speakrs pack spec keeps the binding revision and source file counts', () => {
   assert.equal(SPEAKRS_MODELS_REPO, 'avencera/speakrs-models');
-  assert.equal(SPEAKRS_MODEL_PACK_REVISION, '5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f');
-  assert.equal(SPEAKRS_MODEL_PACK_REVISION_SHORT, '5d24ffe');
+  assert.equal(SPEAKRS_MODEL_PACK_REVISION, '67f963b6a1d94fcd4678948237b3cc8bd69bf1d8');
+  assert.equal(SPEAKRS_MODEL_PACK_REVISION_SHORT, '67f963b');
   assert.equal(BINDING_REVISION, SPEAKRS_MODEL_PACK_REVISION);
   assert.doesNotThrow(() => assertBindingPins());
 
   const cudaFiles = selectPackFiles('win32-x64');
   const linuxCudaFiles = selectPackFiles('linux-x64');
   const coremlFiles = selectPackFiles('darwin-arm64');
-  assert.equal(cudaFiles.length, 19);
-  assert.equal(linuxCudaFiles.length, 19);
+  assert.equal(cudaFiles.length, 9);
+  assert.equal(linuxCudaFiles.length, 9);
   assert.deepEqual(linuxCudaFiles.map((file) => file.path), cudaFiles.map((file) => file.path));
-  assert.equal(coremlFiles.length, 76);
-  assert.equal(getSpeakrsSourceTotalBytes('win32-x64'), 230677218);
-  assert.equal(getSpeakrsSourceTotalBytes('linux-x64'), 230677218);
-  assert.equal(getSpeakrsSourceTotalBytes('darwin-arm64'), 419482724);
+  assert.equal(coremlFiles.length, 67);
+  assert.equal(getSpeakrsSourceTotalBytes('win32-x64'), 32692756);
+  assert.equal(getSpeakrsSourceTotalBytes('linux-x64'), 32692756);
+  assert.equal(getSpeakrsSourceTotalBytes('darwin-arm64'), 272600614);
   assert.ok(cudaFiles.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
   assert.ok(coremlFiles.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
-  assert.ok(cudaFiles.some((file) => file.path === 'wespeaker-voxceleb-resnet34-tail.onnx'));
-  assert.ok(coremlFiles.some((file) => file.path === 'wespeaker-chunk-emb-s12-w116.mlmodelc/weights/weight.bin'));
+  assert.ok(cudaFiles.some((file) => file.path === 'wespeaker-multimask-tail.safetensors'));
+  assert.ok(coremlFiles.some((file) => file.path === 'wespeaker-chunk-emb-p1s-w111.mlmodelc/weights/weight.bin'));
 });
 
 test('speakrs pack spec pins the official ORT 1.27.1 cuda12 archive and NVIDIA wheels', () => {
@@ -113,12 +115,15 @@ test('speakrs pack spec pins the official ORT 1.27.1 cuda12 archive and NVIDIA w
   const linuxPack = require('../../src/ai-addon/speakrs-pack-spec').getSpeakrsModelPackArtifact('linux-x64');
   assert.equal(linuxPack.architecture, 'x64');
   assert.equal(linuxPack.cudaMajor, 12);
-  assert.equal(linuxPack.sha256, 'a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20');
-  assert.equal(linuxPack.sizeBytes, 208765985);
-  assert.match(
-    buildSpeakrsSourceDownloadUrl('wespeaker-fbank.onnx'),
-    /huggingface\.co\/avencera\/speakrs-models\/resolve\/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f\/wespeaker-fbank\.onnx$/,
-  );
+  assert.equal(linuxPack.transport, 'files');
+  assert.equal(linuxPack.sha256, undefined);
+  assert.equal(linuxPack.downloadUrl, undefined);
+  assert.equal(linuxPack.sizeBytes, 32692756);
+  assert.deepEqual(linuxPack.files, buildSpeakrsSourceArtifacts('linux-x64'));
+  assert.equal(linuxPack.files.length, 9);
+  assert.match(buildSpeakrsSourceDownloadUrl('segmentation-3.0.safetensors'),
+    /huggingface\.co\/avencera\/speakrs-models\/resolve\/67f963b6a1d94fcd4678948237b3cc8bd69bf1d8\/segmentation-3\.0\.safetensors$/);
+  assert.throws(() => buildSpeakrsSourceDownloadUrl('../escape'), /Unsafe Speakrs/);
 });
 
 test('Linux Speakrs requiredDynamicLibraries map every non-system library to a pin or managed CUDA catalog', () => {
@@ -308,4 +313,27 @@ test('speakrs pack archive bytes are reproducible across creation times', () => 
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+
+test('CPU smoke rehashes corrupt cached files and identity includes every pin', async () => {
+  const { ensurePinnedFile, getCpuSmokeCacheIdentity } = require('../../scripts/run-speakrs-cpu-smoke');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-smoke-'));
+  const bytes = Buffer.from('pinned smoke fixture');
+  const pin = { path: 'nested/model.bin', sizeBytes: bytes.length, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), downloadUrl: 'https://example.test/model' };
+  let downloads = 0;
+  const download = async (_url, dest) => { downloads += 1; fs.writeFileSync(dest, bytes); };
+  try {
+    const dest = await ensurePinnedFile(pin, tempDir, download);
+    await ensurePinnedFile(pin, tempDir, download);
+    assert.equal(downloads, 1);
+    fs.writeFileSync(dest, Buffer.alloc(bytes.length));
+    await ensurePinnedFile(pin, tempDir, download);
+    assert.equal(downloads, 2);
+    assert.deepEqual(fs.readFileSync(dest), bytes);
+    const identity = getCpuSmokeCacheIdentity([pin]);
+    for (const change of [{ path: 'other' }, { sizeBytes: 2 }, { sha256: '0'.repeat(64) }, { downloadUrl: 'https://example.test/other' }]) {
+      assert.notEqual(identity, getCpuSmokeCacheIdentity([{ ...pin, ...change }]));
+    }
+  } finally { fs.rmSync(tempDir, { recursive: true, force: true }); }
 });

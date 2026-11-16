@@ -478,7 +478,6 @@ const AI_MODEL_CATALOG = deepFreeze({
             {
               ...getSpeakrsModelPackArtifact('linux-x64'),
             },
-            ...getSpeakrsRuntimeArtifacts('linux-x64'),
           ],
         },
         supportedPlatforms: {
@@ -840,6 +839,9 @@ function normalizeDiarizationState(value, catalog = AI_MODEL_CATALOG) {
     engine: selection.engine,
     modelId: selection.modelId,
     speakerCount: normalizeSpeakerCount(state.speakerCount),
+    ...(typeof state.speakrsInstallId === 'string' && /^[0-9a-f]{32}$/.test(state.speakrsInstallId)
+      ? { speakrsInstallId: state.speakrsInstallId }
+      : {}),
     lastValidation: normalizeLastValidation(state.lastValidation),
     error: normalizeNullableString(state.error),
   };

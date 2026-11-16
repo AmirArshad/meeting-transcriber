@@ -105,7 +105,8 @@ def test_resolve_speakrs_mode_maps_mps_to_coreml():
     assert runner.resolve_speakrs_mode('cuda') == 'cuda'
     assert runner.resolve_speakrs_mode('mps') == 'coreml'
     assert runner.resolve_speakrs_mode('COREML') == 'coreml'
-    assert runner.resolve_speakrs_mode(None, env={'SPEAKRS_MODE': 'cpu'}) == 'cpu'
+    with pytest.raises(ValueError, match='CPU fallback is disabled'):
+        runner.resolve_speakrs_mode(None, env={'SPEAKRS_MODE': 'cpu'})
     with pytest.raises(ValueError, match='CPU fallback is disabled'):
         runner.resolve_speakrs_mode('cpu')
     with pytest.raises(ValueError, match='CPU fallback is disabled'):
@@ -397,8 +398,8 @@ def test_speaker_result_from_payload_rejects_mismatched_and_noncanonical_devices
     assert (source, device, segments[0]['speaker']) == ('exclusive_speaker_diarization', 'coreml', 'SPEAKER_00')
 
     payload = _success_payload(device='cpu')
-    _, _, device = runner.speaker_result_from_payload(payload, mode='cpu')
-    assert device == 'cpu'
+    with pytest.raises(ValueError, match='CPU fallback is disabled'):
+        runner.speaker_result_from_payload(payload, mode='cpu')
 
 
 def test_speaker_result_from_payload_requires_exclusive_annotation_source():
@@ -655,3 +656,58 @@ def test_group_kill_reaps_speakrs_cli(tmp_path):
         if parent.poll() is None:
             parent.kill()
             parent.wait(timeout=5)
+
+
+def test_speakrs_child_environment_preserves_admitted_loader_and_blocks_overrides():
+    incoming = {
+        'LD_LIBRARY_PATH': '/managed/cuda:/driver',
+        'LD_PRELOAD': '/untrusted/inject.so',
+        'LD_AUDIT': '/untrusted/audit.so',
+        'DYLD_INSERT_LIBRARIES': '/untrusted/inject.dylib',
+        'GLIBC_TUNABLES': 'unsafe',
+        'SPEAKRS_CUDA_TUNE_FILE': '/app/absent-tune.json',
+        'SPEAKRS_CUDA_FORCE_LIBRARY': '1',
+        'SPEAKRS_CUDA_FORCE_PTX_JIT': '1',
+        'SPEAKRS_CUDA_PTX_TIER': 'bad',
+        'SPEAKRS_COREML_SEG_W8A16': '1',
+        'CUDA_VISIBLE_DEVICES': '0',
+        'SPEAKRS_AHC_THREADS': '99',
+        'MATMUL_NUM_THREADS': '99',
+        'ORT_DYLIB_PATH': '/untrusted/ort',
+        'SPEAKRS_MODE': 'cpu',
+        'SPEAKRS_EXCLUSIVE': '0',
+        'SPEAKRS_NUM_SPEAKERS': '2',
+        'HF_TOKEN': 'secret',
+    }
+    child = runner.build_speakrs_child_env(mode='cuda', env=incoming)
+    assert child['LD_LIBRARY_PATH'] == incoming['LD_LIBRARY_PATH']
+    assert child['SPEAKRS_CUDA_TUNE_FILE'] == incoming['SPEAKRS_CUDA_TUNE_FILE']
+    assert child['SPEAKRS_MODE'] == 'cuda'
+    assert child['SPEAKRS_EXCLUSIVE'] == '1'
+    assert child['HF_TOKEN_PATH'] == os.devnull
+    assert not (set(incoming) - {'LD_LIBRARY_PATH', 'SPEAKRS_CUDA_TUNE_FILE', 'SPEAKRS_MODE', 'SPEAKRS_EXCLUSIVE'}) & child.keys()
+    assert runner.build_speakrs_child_env(mode='cuda', env={})['SPEAKRS_CUDA_TUNE_FILE'] == os.devnull
+    for mode in ('cpu', 'cuda-fast', 'coreml-fast'):
+        with pytest.raises(ValueError, match='CPU fallback is disabled'):
+            runner.build_speakrs_child_env(mode=mode, env=incoming)
+        with pytest.raises(ValueError, match='CPU fallback is disabled'):
+            runner.resolve_speakrs_mode(None, env={'SPEAKRS_MODE': mode})
+
+
+def test_v07_exclusive_turns_keep_labels_for_transcript_merge():
+    from backend.diarization.speaker_segments import merge_speaker_labels
+
+    payload = _success_payload(device='cuda', segments=[
+        {'start': 0.0, 'end': 1.5, 'speaker': 'SPEAKER_01'},
+        {'start': 1.5, 'end': 3.0, 'speaker': 'SPEAKER_00'},
+        {'start': 3.0, 'end': 4.0, 'speaker': 'SPEAKER_01'},
+    ])
+    turns, source, device = runner.speaker_result_from_payload(payload, mode='cuda')
+    assert (source, device) == ('exclusive_speaker_diarization', 'cuda')
+    assert [turn['speaker'] for turn in turns] == ['SPEAKER_01', 'SPEAKER_00', 'SPEAKER_01']
+    merged = merge_speaker_labels([
+        {'start': 0.0, 'end': 1.5, 'text': 'first'},
+        {'start': 1.5, 'end': 3.0, 'text': 'second'},
+        {'start': 3.0, 'end': 4.0, 'text': 'third'},
+    ], turns)
+    assert [item['speaker'] for item in merged] == ['Speaker 2', 'Speaker 1', 'Speaker 2']

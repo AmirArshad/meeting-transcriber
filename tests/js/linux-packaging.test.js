@@ -94,8 +94,8 @@ test('electron-builder stays on 26.x and opts into the static FUSE-less AppImage
   assert.equal(packageJson.build.toolsets.appimage === '1.0.3', false);
 });
 
-test('Electron stays on the stable 45.x release line', () => {
-  assert.match(packageJson.devDependencies.electron, /^\^45\.\d+\.\d+$/);
+test('Electron uses the exact qualified 46 prerelease pin', () => {
+  assert.equal(packageJson.devDependencies.electron, '46.0.0-alpha.10');
 });
 
 test('Electron packages the Parakeet adapter lock files used by the runtime catalog', () => {
@@ -531,15 +531,17 @@ test('findLinuxResourcesRoot locates python-build-standalone under unpacked and 
   }
 });
 
-test('findLinuxArtifact only matches AvaNevis-Setup names', () => {
+test('findLinuxArtifact selects the current package version when old installers remain', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-artifact-'));
   try {
     fs.writeFileSync(path.join(tempDir, 'source.tar.gz'), 'nope');
     fs.writeFileSync(path.join(tempDir, 'AvaNevis-2.7.0.AppImage'), 'nope');
-    fs.writeFileSync(path.join(tempDir, 'AvaNevis-Setup-2.7.0.AppImage'), 'ok');
+    fs.writeFileSync(path.join(tempDir, 'AvaNevis-Setup-2.7.0.AppImage'), 'stale');
+    const expected = path.join(tempDir, `AvaNevis-Setup-${packageJson.version}.AppImage`);
+    fs.writeFileSync(expected, 'ok');
     assert.equal(
       findLinuxArtifact(tempDir, '.AppImage'),
-      path.join(tempDir, 'AvaNevis-Setup-2.7.0.AppImage'),
+      expected,
     );
     assert.equal(findLinuxArtifact(tempDir, '.pkg.tar.zst'), null);
   } finally {
@@ -550,13 +552,13 @@ test('findLinuxArtifact only matches AvaNevis-Setup names', () => {
 test('prepare-resources builds Speakrs on Linux and still creates a bin directory for extraResources', () => {
   assert.match(PREPARE_RESOURCES_SOURCE, /isSpeakrsPackagingSupported/);
   assert.match(PREPARE_RESOURCES_SOURCE, /x86_64-unknown-linux-gnu/);
-  assert.match(PREPARE_RESOURCES_SOURCE, /Linux speakrs-cli must stay load-dynamic/);
+  assert.doesNotMatch(PREPARE_RESOURCES_SOURCE, /load-dynamic|ORT_COMPILE_PINS/);
   assert.match(PREPARE_RESOURCES_SOURCE, /isLinuxX64ElfExecutableFileOutput/);
   assert.doesNotMatch(PREPARE_RESOURCES_SOURCE, /Skipping speakrs-cli packaging on this platform/);
   assert.match(PREPARE_RESOURCES_SOURCE, /ensureLinuxEmptyBinDirectory|IS_LINUX && !fs.existsSync\(BIN_DIR\)/);
 });
 
-test('Ubuntu CI job builds Linux packages on ubuntu-latest with SHA-pinned actions', () => {
+test('Ubuntu CI job builds Linux packages with SHA-pinned actions', () => {
   assert.match(CI_WORKFLOW, /runs-on:\s*ubuntu-latest/);
   assert.match(CI_WORKFLOW, /npm run test:all/);
   assert.match(CI_WORKFLOW, /build:linux|electron-builder build --linux/);
@@ -579,7 +581,10 @@ test('Ubuntu CI job builds Linux packages on ubuntu-latest with SHA-pinned actio
 });
 
 test('release workflow builds and publishes all three Linux Core Beta payload artifacts after Gate B', () => {
-  assert.match(RELEASE_WORKFLOW, /os: Linux/);
+  assert.match(RELEASE_WORKFLOW, /os: Linux\s+runner: ubuntu-24\.04/);
+  assert.match(CI_WORKFLOW, /test-packaging-linux:[\s\S]*?runs-on: ubuntu-24\.04/);
+  assert.match(RELEASE_WORKFLOW, /stage-release-legal:[\s\S]*?run: node scripts\/stage-release-legal-assets\.js/);
+  assert.match(RELEASE_WORKFLOW, /publish-release:[\s\S]*?needs:[\s\S]*?- stage-release-legal/);
   assert.match(RELEASE_WORKFLOW, /build:linux/);
   assert.match(RELEASE_WORKFLOW, /AvaNevis-Setup-\*\.AppImage/);
   assert.match(RELEASE_WORKFLOW, /AvaNevis-Setup-\*\.pkg\.tar\.zst/);

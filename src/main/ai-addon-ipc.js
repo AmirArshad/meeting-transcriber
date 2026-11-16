@@ -28,6 +28,7 @@ const {
   buildSummaryRuntimeEnv: defaultBuildSummaryRuntimeEnv,
 } = require('../ai-addon/manifest-store');
 const {
+  getDiarizationAvailability,
   getSummaryArtifactForPlatform,
 } = require('../ai-addon-state');
 const {
@@ -325,7 +326,7 @@ function createAiAddonIpc(deps) {
     assertAddonDiskMutationCanRun(feature, 'remove');
   }
 
-  function buildDiarizationValidationEnv(engine, requiredDevice) {
+  function buildDiarizationValidationEnv(engine, requiredDevice, stagedModelsDir) {
     const resolvedEngine = resolveSpawnDiarizationEngine(engine);
     if (resolvedEngine === 'speakrs') {
       const preflightError = getPackagedSpeakrsCliPreflightError({
@@ -346,6 +347,7 @@ function createAiAddonIpc(deps) {
         ...buildSpeakrsSpawnEnv({
           userDataDir: app.getPath('userData'),
           requiredDevice,
+          stagedModelsDir,
           extra: cudaEnv,
           cliPath: typeof resolveSpeakrsCliPath === 'function' ? resolveSpeakrsCliPath() : null,
         }),
@@ -360,7 +362,7 @@ function createAiAddonIpc(deps) {
     };
   }
 
-  function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSignal, engine } = {}) {
+  async function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSignal, engine, stagedModelsDir } = {}) {
     clearDiarizationDependencySitePackagesCache();
     const resolvedEngine = resolveSpawnDiarizationEngine(engine);
     if (resolvedEngine === 'speakrs') {
@@ -378,11 +380,14 @@ function createAiAddonIpc(deps) {
     const isSpeakrs = resolvedEngine === 'speakrs';
     const resolvedToken = isSpeakrs
       ? null
-      : (token || getAiAddonToken({
+      : (token || await getAiAddonToken({
         userDataDir: app.getPath('userData'),
         tokenKey: TOKEN_KEYS.diarizationHuggingFace,
         safeStorage: getSafeStorage(),
       }));
+    if (cancelSignal?.aborted) {
+      throw createAiAddonCancelError('Speaker identification setup was canceled.');
+    }
 
     return createAbortableComputeAction({
       cancelSignal,
@@ -392,7 +397,13 @@ function createAiAddonIpc(deps) {
         timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
         label: 'Speaker identification validation',
         terminateProcess: terminateProcessBestEffort,
-        action: (registerProcess) => new Promise((resolve, reject) => {
+        action: async (registerProcess) => {
+          if (isSpeakrs && process.platform === 'linux') {
+            const cudaStatus = await resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal });
+            const availability = getDiarizationAvailability(process.platform, process.arch, { cudaStatus });
+            if (!availability.supported) throw new Error(availability.reason);
+          }
+          return new Promise((resolve, reject) => {
           if (cancelSignal && cancelSignal.aborted) {
             reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
             return;
@@ -402,7 +413,7 @@ function createAiAddonIpc(deps) {
             buildManagedDiarizationValidationArgs(modelRef, requiredDevice, resolvedEngine),
             {
               cwd: pythonConfig.backendPath,
-              env: buildDiarizationValidationEnv(resolvedEngine, requiredDevice),
+              env: buildDiarizationValidationEnv(resolvedEngine, requiredDevice, stagedModelsDir),
             },
           ));
 
@@ -493,7 +504,8 @@ function createAiAddonIpc(deps) {
             finish(reject, new Error(reason || 'Speaker identification runtime validation failed.'));
           });
           python.on('error', (error) => finish(reject, error));
-        }),
+          });
+        },
         });
       },
     });
@@ -623,11 +635,11 @@ function createAiAddonIpc(deps) {
           token: trimmedToken,
           safeStorage: getSafeStorage(),
         });
-      } catch (error) {
+      } catch (_error) {
         return {
           success: false,
           code: 'STORAGE_ERROR',
-          message: error.message || 'Secure token storage is unavailable.',
+          message: 'Secure token storage could not save the token. Check your secure storage and try again.',
         };
       }
     });
@@ -637,7 +649,7 @@ function createAiAddonIpc(deps) {
         userDataDir: app.getPath('userData'),
         tokenKey: TOKEN_KEYS.diarizationHuggingFace,
       }),
-      encryptionAvailable: isTokenEncryptionAvailable({ safeStorage: getSafeStorage() }),
+      encryptionAvailable: await isTokenEncryptionAvailable({ checkAvailability: false }),
     }));
 
     ipcMain.handle('delete-diarization-token', async (event) => {

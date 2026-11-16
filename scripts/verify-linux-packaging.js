@@ -702,13 +702,9 @@ function findLinuxArtifact(distDir, suffix) {
   if (!fs.existsSync(distDir)) {
     return null;
   }
-  const matches = [];
-  for (const name of fs.readdirSync(distDir)) {
-    if (name.startsWith('AvaNevis-Setup-') && name.endsWith(suffix)) {
-      matches.push(path.join(distDir, name));
-    }
-  }
-  return matches.sort()[0] || null;
+  const { version } = require('../package.json');
+  const artifact = path.join(distDir, `AvaNevis-Setup-${version}${suffix}`);
+  return fs.existsSync(artifact) ? artifact : null;
 }
 
 function extractAppImage(appImagePath, destDir, { spawnSyncFn = spawnSync } = {}) {

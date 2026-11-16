@@ -1,65 +1,17 @@
 ---
 name: executing-plans
-description: Use when you have a written implementation plan to execute inline with focused verification
+description: Use when implementing an existing written plan supplied by the user or resumed from an earlier session. Do not reload a plan just written in the current context.
 ---
 
 # Executing Plans
 
-## Overview
+Work inline on the current branch. Delegate only when explicitly requested; high-risk work alone is not authorization.
 
-Load plan, review critically, execute all tasks, report when complete.
+1. Check the working tree and current task status. Read the plan goal, global constraints, sequencing and applicable task sections. Use a heading search for long plans; load referenced details before editing the surface they govern. Reuse content already in context.
+2. Resolve material gaps. Continue independent work when a native host, dependency or user decision blocks one phase. Diagnose failures before asking the user to solve them.
+3. Implement coherent tasks and run their focused checks. Keep brief status/evidence in `todo.md`; do not manufacture per-step commits, reviews or handoffs.
+4. Integrate changes, inspect the diff and run the required final gate once for the integrated inputs. Reuse passing evidence while code, dependencies and relevant environment remain unchanged. Report remaining platform gates honestly.
 
-**Announce at start:** "I'm using the executing-plans skill to implement this plan."
+For authorized parallel work, assign exact disjoint files, small task-specific context and focused tests. The lead owns shared integration, the full suite and installers. Workers report changed files, outcomes and blockers once; use completion notifications instead of status polling. Do not copy the entire parent transcript or repeatedly broadcast unchanged status when the harness supports scoped context.
 
-Use inline execution by default. Consider a subagent only for an explicitly requested independent review or a high-risk cross-process, concurrency, persistence, packaging, or security boundary.
-
-## The Process
-
-### Step 1: Load and Review Plan
-1. Read plan file
-2. Review only for material gaps that would block safe implementation
-3. If concerns: Raise them with your human partner before starting
-4. If no concerns: Create todos for the plan items and proceed
-
-### Step 2: Execute Tasks
-
-For each task:
-1. Mark as in_progress
-2. Follow the plan's intent; combine routine steps when it improves flow without skipping requirements
-3. Run focused verifications as specified
-4. Mark as completed
-
-### Step 3: Complete Development
-
-After all tasks complete and verified:
-Use `finishing-a-development-branch` only when the user asks for merge/PR/cleanup guidance.
-
-## When to Stop and Ask for Help
-
-**STOP executing immediately when:**
-- Hit a blocker (missing dependency, test fails, instruction unclear)
-- Plan has critical gaps preventing starting
-- You don't understand an instruction
-- Verification fails repeatedly
-
-**Ask for clarification rather than guessing.**
-
-## When to Revisit Earlier Steps
-
-**Return to Review (Step 1) when:**
-- Partner updates the plan based on your feedback
-- Fundamental approach needs rethinking
-
-**Don't force through blockers** - stop and ask.
-
-## Remember
-- Review the plan for material gaps first
-- Follow the plan's requirements
-- Don't skip verifications
-- Use skills only when their workflow adds clear value
-- Stop when blocked, don't guess
-- Never start implementation on main/master branch without explicit user consent
-
-## Integration
-
-Use related workflow skills only when their specific workflow is needed.
+When finished, carry out the requested delivery. A request to commit/push already settles that choice; it does not authorize a PR, merge or cleanup. Use branch-decision guidance only if the user requests an unresolved integration decision.

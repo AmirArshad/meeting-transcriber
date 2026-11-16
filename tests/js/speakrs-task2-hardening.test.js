@@ -67,9 +67,10 @@ const READY_LINUX_CUDA = Object.freeze({
 
 function createSafeStorage() {
   return {
-    isEncryptionAvailable: () => true,
-    encryptString: (value) => Buffer.from(value),
-    decryptString: (value) => Buffer.from(value).toString('utf8'),
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    isAsyncEncryptionAvailable: async () => true,
+    encryptStringAsync: async (value) => Buffer.from(`v11${value}`),
+    decryptStringAsync: async (value) => ({ result: Buffer.from(value).toString('utf8').slice(3), shouldReEncrypt: false }),
   };
 }
 
@@ -352,6 +353,7 @@ test('packaged buildSpeakrsSpawnEnv pins Resources/bin and ignores decoys', () =
       userDataDir,
       requiredDevice: 'cuda',
       platform: 'win32',
+      arch: 'x64',
       env: packagedEnv,
       resourcesPath,
       projectRoot: root,
@@ -377,12 +379,8 @@ test('packaged buildSpeakrsSpawnEnv pins Resources/bin and ignores decoys', () =
     assert.equal(spawned.SPEAKRS_EXCLUSIVE, '1');
     assert.equal(spawned.AVANEVIS_PACKAGED, '1');
     assert.equal(spawned.SPEAKRS_MODE, 'cuda');
-    assert.ok(spawned.PATH.startsWith(`${getSpeakrsOrtRuntimeDir(userDataDir)}${path.delimiter}`));
-    assert.equal(
-      spawned.ORT_DYLIB_PATH,
-      path.join(getSpeakrsOrtRuntimeDir(userDataDir), 'onnxruntime.dll'),
-    );
-    assert.equal(spawned.PATH.includes(path.dirname(pathCandidate)), true);
+    assert.equal(spawned.ORT_DYLIB_PATH, undefined);
+    assert.equal(spawned.PATH, path.dirname(pathCandidate));
 
     const pyDecoyEnv = buildSpeakrsSpawnEnv({
       userDataDir,
@@ -423,24 +421,16 @@ test('packaged buildSpeakrsSpawnEnv pins Resources/bin and ignores decoys', () =
   }
 });
 
-test('Windows Speakrs PATH prepends speakrs-ort once', (t) => {
-  if (process.platform !== 'win32') {
-    t.skip('Windows PATH uses `;`; host path.delimiter cannot simulate it on POSIX.');
-    return;
-  }
-  const userDataDir = path.join('C:', 'Users', 'tester', 'AvaNevis');
-  const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
+test('Windows native Speakrs leaves the legacy private runtime off the loader path', () => {
+  const userDataDir = path.join(os.tmpdir(), 'avanevis-speakrs-windows');
+  const currentPath = 'C:\\Windows\\System32';
   const spawned = buildSpeakrsSpawnEnv({
-    userDataDir,
-    requiredDevice: 'cuda',
-    platform: 'win32',
-    extra: {
-      PATH: `${ortDir}${path.delimiter}${ortDir}${path.delimiter}C:\\Windows\\System32`,
-    },
+    userDataDir, platform: 'win32', arch: 'x64', requiredDevice: 'cuda',
+    extra: { PATH: currentPath },
+    env: { ORT_DYLIB_PATH: 'untrusted-onnxruntime.dll' },
   });
-  const parts = spawned.PATH.split(path.delimiter);
-  assert.equal(parts[0], ortDir);
-  assert.equal(parts.filter((part) => path.normalize(part) === path.normalize(ortDir)).length, 1);
+  assert.equal(spawned.PATH, currentPath);
+  assert.equal(spawned.ORT_DYLIB_PATH, undefined);
 });
 
 test('packaged buildPythonEnv enforces packaged isolation after caller overrides', () => {
@@ -630,7 +620,7 @@ test('Speakrs install rejects unsafe required-file paths before downloading', as
   }
 });
 
-test('Windows production runtime rejects replaced DLLs even with a forged install.json', async () => {
+test('Windows native runtime ignores the legacy private DLL tree', async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-runtime-'));
   const artifact = getSpeakrsSetupArtifactsForPlatform('win32', 'x64');
   const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
@@ -656,7 +646,8 @@ test('Windows production runtime rejects replaced DLLs even with a forged instal
       arch: 'x64',
       verifyChecksum: true,
     });
-    assert.equal(fullHash.valid, false);
+    assert.equal(fullHash.valid, true);
+    assert.equal(fullHash.skipped, true);
 
     const passive = await checkSpeakrsRuntimeCache({
       userDataDir,
@@ -664,7 +655,34 @@ test('Windows production runtime rejects replaced DLLs even with a forged instal
       arch: 'x64',
       verifyChecksum: false,
     });
-    assert.equal(passive.valid, false);
+    assert.equal(passive.valid, true);
+    assert.equal(passive.skipped, true);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('native Speakrs storage estimates exclude unused legacy runtime artifacts', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-native-footprint-'));
+  try {
+    for (const [platform, arch] of [['win32', 'x64'], ['linux', 'x64'], ['darwin', 'arm64']]) {
+      const artifact = getSpeakrsSetupArtifactsForPlatform(platform, arch);
+      const expected = artifact.modelFiles.reduce((total, file) => total + file.sizeBytes, 0);
+      const status = await checkAiAddonSetupStatus({ userDataDir, platform, arch });
+      const storage = status.features.diarization.storage;
+      assert.equal(storage.estimatedInstalledBytes, expected, platform);
+      assert.equal(storage.estimatedDownloadBytes, expected, platform);
+      assert.deepEqual(storage.runtimeFamilies, [], platform);
+    }
+
+    const legacyCatalog = createPinnedTestCatalog();
+    const legacy = getSpeakrsSetupArtifactsForPlatform('win32', 'x64', legacyCatalog);
+    const status = await checkAiAddonSetupStatus({ userDataDir, platform: 'win32', arch: 'x64', catalog: legacyCatalog });
+    const expected = [...legacy.modelFiles, ...legacy.runtimeArtifacts]
+      .reduce((total, file) => total + file.sizeBytes, 0);
+    assert.equal(status.features.diarization.storage.estimatedInstalledBytes, expected);
+    assert.equal(status.features.diarization.storage.estimatedDownloadBytes, expected);
+    assert.deepEqual(status.features.diarization.storage.runtimeFamilies, ['speakrs-ort']);
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
@@ -963,7 +981,7 @@ test('Windows test runtime requires every non-empty integrity-checked DLL', asyn
   }
 });
 
-test('Windows runtime fails closed when runtime artifact metadata is absent', async () => {
+test('Windows native direct-file setup does not require a legacy private runtime', async () => {
   const catalog = JSON.parse(JSON.stringify(AI_MODEL_CATALOG));
   const speakrs = catalog.diarization.models.find((model) => model.id === SPEAKRS_DIARIZATION_MODEL_ID);
   speakrs.packArtifacts['win32-x64'] = speakrs.packArtifacts['win32-x64']
@@ -974,9 +992,9 @@ test('Windows runtime fails closed when runtime artifact metadata is absent', as
     arch: 'x64',
     catalog,
   });
-  assert.equal(result.supported, false);
-  assert.equal(result.valid, false);
-  assert.match(result.reason, /No complete Speakrs ONNX Runtime artifact/);
+  assert.equal(result.supported, true);
+  assert.equal(result.valid, true);
+  assert.equal(result.skipped, true);
   fs.rmSync(path.dirname(result.runtimeDir), { recursive: true, force: true });
 });
 
@@ -1504,6 +1522,9 @@ test('Linux Speakrs spawn env is CUDA-only and ignores ambient LD_LIBRARY_PATH',
         HOME: '/home/test',
         SPEAKRS_MODE: 'cpu',
         LD_LIBRARY_PATH: '/tmp/ambient',
+        LD_PRELOAD: '/tmp/ambient-injection.so',
+        SPEAKRS_CUDA_FORCE_PTX_JIT: '1',
+        SPEAKRS_CUDA_TUNE_FILE: '/tmp/ambient-tuning',
         HF_HUB_CACHE: '/tmp/hf',
       },
       platform: 'linux',
@@ -1515,10 +1536,13 @@ test('Linux Speakrs spawn env is CUDA-only and ignores ambient LD_LIBRARY_PATH',
     assert.equal(env.HUGGINGFACE_HUB_TOKEN, undefined);
     assert.equal(env.HF_HUB_CACHE, undefined);
     assert.doesNotMatch(String(env.LD_LIBRARY_PATH || ''), /hostile-libs|ambient/);
-    assert.ok(String(env.LD_LIBRARY_PATH || '').startsWith(path.resolve(runtimeDir)));
+    assert.equal(linuxLibraryPathContainsDir(env.LD_LIBRARY_PATH, runtimeDir), false);
+    assert.equal(env.LD_PRELOAD, undefined);
+    assert.equal(env.SPEAKRS_CUDA_FORCE_PTX_JIT, undefined);
+    assert.equal(env.SPEAKRS_CUDA_TUNE_FILE, os.devNull);
     assert.ok(linuxLibraryPathContainsDir(env.LD_LIBRARY_PATH, cublasDir));
     assert.ok(linuxLibraryPathContainsDir(env.LD_LIBRARY_PATH, cudnnDir));
-    assert.equal(env.ORT_DYLIB_PATH, path.join(runtimeDir, 'libonnxruntime.so.1.27.1'));
+    assert.equal(env.ORT_DYLIB_PATH, undefined);
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }

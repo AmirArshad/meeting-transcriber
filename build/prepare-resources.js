@@ -59,7 +59,7 @@ const {
 
 const SPEAKRS_CLI_DIR = path.join(REPO_ROOT, 'native', 'speakrs-cli');
 const SPEAKRS_VALIDATE_WAV_SOURCE = path.join(REPO_ROOT, 'tests', 'fixtures', SPEAKRS_VALIDATE_WAV_NAME);
-const SPEAKRS_ORT_COMPILE_PINS_PATH = path.join(SPEAKRS_CLI_DIR, 'ort-compile-pins.json');
+const SPEAKRS_MACOS_DEPLOYMENT_TARGET = '15.0';
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -327,7 +327,8 @@ function buildResourceManifest() {
         path.join(SPEAKRS_CLI_DIR, 'vendor'),
         SPEAKRS_CLI_DIR
       ),
-      speakrsOrtCompilePins: hashString(readTextOrEmpty(SPEAKRS_ORT_COMPILE_PINS_PATH)),
+      speakrsMacOSDeploymentTarget: IS_MAC ? SPEAKRS_MACOS_DEPLOYMENT_TARGET : null,
+      speakrsCargoConfig: hashString(readTextOrEmpty(path.join(SPEAKRS_CLI_DIR, '.cargo', 'config.toml'))),
       speakrsCargoTarget: getSpeakrsResourceManifestTarget(),
       speakrsValidateWav: fs.existsSync(SPEAKRS_VALIDATE_WAV_SOURCE)
         ? hashFileContent(SPEAKRS_VALIDATE_WAV_SOURCE)
@@ -803,12 +804,12 @@ function getSpeakrsResourceManifestTarget(platform = process.platform) {
 
 function getSpeakrsCargoFeatures(platform = process.platform) {
   if (platform === 'darwin') {
-    return Object.freeze(['default-linalg', 'coreml']);
+    return Object.freeze(['coreml']);
   }
   if (platform === 'win32' || platform === 'linux') {
-    return Object.freeze(['default-linalg', 'cuda', 'load-dynamic']);
+    return Object.freeze(['cuda']);
   }
-  return Object.freeze(['default-linalg']);
+  return Object.freeze([]);
 }
 
 function resolveCargoTargetDir(env = process.env, { cwd = SPEAKRS_CLI_DIR } = {}) {
@@ -838,13 +839,6 @@ function buildSpeakrsCliCargoArgs(platform = process.platform, { manifestPath } 
     '--manifest-path',
     manifestPath || path.join(SPEAKRS_CLI_DIR, 'Cargo.toml'),
   ];
-}
-
-function loadSpeakrsOrtCompilePins() {
-  if (!fs.existsSync(SPEAKRS_ORT_COMPILE_PINS_PATH)) {
-    throw new Error(`Speakrs ort compile-time pins are missing: ${SPEAKRS_ORT_COMPILE_PINS_PATH}`);
-  }
-  return JSON.parse(fs.readFileSync(SPEAKRS_ORT_COMPILE_PINS_PATH, 'utf8'));
 }
 
 function assertSpeakrsCliArchitecture(filePath, platform = process.platform) {
@@ -880,7 +874,7 @@ function resolveCargoExecutable() {
       return candidate;
     }
   }
-  throw new Error('Rust cargo not found. Install rustup 1.88.0 from native/speakrs-cli/rust-toolchain.toml.');
+  throw new Error('Rust cargo not found. Install Rust 1.89.0 via rustup from native/speakrs-cli/rust-toolchain.toml.');
 }
 
 function resolveRustupExecutable(cargoPath) {
@@ -901,13 +895,13 @@ function resolveRustupExecutable(cargoPath) {
       return candidate;
     }
   }
-  throw new Error('Rust rustup not found. Install rustup 1.88.0 from native/speakrs-cli/rust-toolchain.toml.');
+  throw new Error('Rust rustup not found. Install Rust 1.89.0 via rustup from native/speakrs-cli/rust-toolchain.toml.');
 }
 
 function ensureSpeakrsRustTargetInstalled(triple, cargoPath) {
   const rustup = resolveRustupExecutable(cargoPath);
   try {
-    execFileSync(rustup, ['target', 'add', triple], { stdio: 'inherit' });
+    execFileSync(rustup, ['target', 'add', triple], { cwd: SPEAKRS_CLI_DIR, stdio: 'inherit' });
   } catch (error) {
     throw new Error(`Failed to install Rust target ${triple}: ${error.message}`);
   }
@@ -1023,17 +1017,6 @@ function buildSpeakrsCli() {
     throw new Error('speakrs-cli rust-toolchain.toml is missing');
   }
 
-  const pins = loadSpeakrsOrtCompilePins();
-  if (IS_WINDOWS && pins['win32-x64'] !== null) {
-    throw new Error('Windows speakrs-cli must stay load-dynamic; do not add a compile-time ORT download pin.');
-  }
-  if (IS_LINUX && pins['linux-x64'] !== null) {
-    throw new Error('Linux speakrs-cli must stay load-dynamic; do not add a compile-time ORT download pin.');
-  }
-  if (IS_MAC && (!pins['darwin-arm64'] || !pins['darwin-arm64'].sha256 || !pins['darwin-arm64'].url)) {
-    throw new Error('macOS speakrs-cli is missing a pinned ort compile-time download.');
-  }
-
   const cargo = resolveCargoExecutable();
   const features = getSpeakrsCargoFeatures();
   const triple = getSpeakrsCargoTargetTriple();
@@ -1046,7 +1029,7 @@ function buildSpeakrsCli() {
     execFileSync(cargo, buildSpeakrsCliCargoArgs(), {
       cwd: SPEAKRS_CLI_DIR,
       stdio: 'inherit',
-      env: process.env,
+      env: IS_MAC ? { ...process.env, MACOSX_DEPLOYMENT_TARGET: SPEAKRS_MACOS_DEPLOYMENT_TARGET } : process.env,
     });
   } catch (error) {
     throw new Error(`speakrs-cli cargo build failed: ${error.message}`);
@@ -1549,7 +1532,6 @@ module.exports = {
   getStaleResourceDirectories,
   ensureWindowsEmptyBinDirectory,
   listFilesRecursively,
-  loadSpeakrsOrtCompilePins,
   manifestsMatch,
   prepareResources,
   pruneMacOSPythonRuntimeDevelopmentFiles,

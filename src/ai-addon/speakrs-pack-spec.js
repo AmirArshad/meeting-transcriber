@@ -6,8 +6,8 @@ const SPEAKRS_MODEL_FILES = require('./speakrs-model-files.json');
 const { getLinuxCudaRequiredLibraries } = require('../main-process/linux-cuda-runtime-catalog');
 
 const SPEAKRS_MODELS_REPO = 'avencera/speakrs-models';
-const SPEAKRS_MODEL_PACK_REVISION = '5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f';
-const SPEAKRS_MODEL_PACK_REVISION_SHORT = '5d24ffe';
+const SPEAKRS_MODEL_PACK_REVISION = '67f963b6a1d94fcd4678948237b3cc8bd69bf1d8';
+const SPEAKRS_MODEL_PACK_REVISION_SHORT = '67f963b';
 const SPEAKRS_DIARIZATION_MODEL_ID = 'speakrs-community1-vbx';
 const PYANNOTE_DIARIZATION_MODEL_ID = 'pyannote/speaker-diarization-community-1';
 const SPEAKRS_DIARIZATION_ENGINES = Object.freeze(['speakrs', 'pyannote']);
@@ -315,42 +315,13 @@ const SPEAKRS_ORT_RUNTIME_ARTIFACTS = Object.freeze({
 });
 
 const SPEAKRS_MODEL_PACK_ARTIFACTS = Object.freeze({
-  'win32-x64': Object.freeze({
-    id: `speakrs-models-${SPEAKRS_MODEL_PACK_REVISION_SHORT}-win32-x64-cuda`,
-    kind: 'model-pack',
-    fileName: `speakrs-models-${SPEAKRS_MODEL_PACK_REVISION_SHORT}-win32-x64-cuda.tar.gz`,
-    archiveFormat: 'tar.gz',
-    downloadUrl: 'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-models-5d24ffe-r1/speakrs-models-5d24ffe-win32-x64-cuda.tar.gz',
-    sha256: 'a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20',
-    sizeBytes: 208765985,
-    validationStatus: 'ready',
-  }),
-  'darwin-arm64': Object.freeze({
-    id: `speakrs-models-${SPEAKRS_MODEL_PACK_REVISION_SHORT}-darwin-arm64-coreml`,
-    kind: 'model-pack',
-    fileName: `speakrs-models-${SPEAKRS_MODEL_PACK_REVISION_SHORT}-darwin-arm64-coreml.tar.gz`,
-    archiveFormat: 'tar.gz',
-    downloadUrl: 'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-models-5d24ffe-r1/speakrs-models-5d24ffe-darwin-arm64-coreml.tar.gz',
-    sha256: '0677b5eee394402ddd4cbdb991afd0736c24e955b145d4b98f69d63523cc8d50',
-    sizeBytes: 375813778,
-    validationStatus: 'ready',
-  }),
-  'linux-x64': Object.freeze({
-    id: `speakrs-models-${SPEAKRS_MODEL_PACK_REVISION_SHORT}-linux-x64-cuda`,
-    kind: 'model-pack',
-    fileName: `speakrs-models-${SPEAKRS_MODEL_PACK_REVISION_SHORT}-win32-x64-cuda.tar.gz`,
-    archiveFormat: 'tar.gz',
-    architecture: 'x64',
-    cudaMajor: 12,
-    downloadUrl: 'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-models-5d24ffe-r1/speakrs-models-5d24ffe-win32-x64-cuda.tar.gz',
-    sha256: 'a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20',
-    sizeBytes: 208765985,
-    validationStatus: 'ready',
-  }),
+  'win32-x64': Object.freeze({ id: `speakrs-models-${SPEAKRS_MODEL_PACK_REVISION_SHORT}-win32-x64-cuda`, kind: 'model-pack', transport: 'files' }),
+  'darwin-arm64': Object.freeze({ id: `speakrs-models-${SPEAKRS_MODEL_PACK_REVISION_SHORT}-darwin-arm64-coreml`, kind: 'model-pack', transport: 'files' }),
+  'linux-x64': Object.freeze({ id: `speakrs-models-${SPEAKRS_MODEL_PACK_REVISION_SHORT}-linux-x64-cuda`, kind: 'model-pack', transport: 'files', architecture: 'x64', cudaMajor: 12 }),
 });
 
 function assertPinnedRevision() {
-  if (SPEAKRS_MODEL_PACK_REVISION !== '5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f') {
+  if (SPEAKRS_MODEL_PACK_REVISION !== '67f963b6a1d94fcd4678948237b3cc8bd69bf1d8') {
     throw new Error('Speakrs model-pack revision does not match the binding plan.');
   }
   if (!SPEAKRS_MODEL_PACK_REVISION.startsWith(SPEAKRS_MODEL_PACK_REVISION_SHORT)) {
@@ -580,6 +551,8 @@ function getSpeakrsModelPackArtifact(platformOrKey, arch) {
   return {
     ...artifact,
     requiredFiles: getSpeakrsSourceFiles(key),
+    files: buildSpeakrsSourceArtifacts(key),
+    sizeBytes: getSpeakrsSourceTotalBytes(key),
   };
 }
 
@@ -589,7 +562,7 @@ function getSpeakrsSourceTotalBytes(platformOrKey, arch) {
 }
 
 function buildSpeakrsSourceDownloadUrl(filePath) {
-  const encodedPath = String(filePath || '')
+  const encodedPath = normalizeSpeakrsRelativePath(filePath)
     .split('/')
     .map((segment) => encodeURIComponent(segment))
     .join('/');
@@ -597,7 +570,9 @@ function buildSpeakrsSourceDownloadUrl(filePath) {
 }
 
 function getSpeakrsPackFileName(platformOrKey, arch) {
-  return getSpeakrsModelPackArtifact(platformOrKey, arch)?.fileName || null;
+  const key = arch ? platformKey(platformOrKey, arch) : platformOrKey;
+  const artifact = SPEAKRS_MODEL_PACK_ARTIFACTS[key];
+  return artifact ? `${artifact.id}.tar.gz` : null;
 }
 
 function buildSpeakrsSourceArtifacts(platformOrKey, arch) {

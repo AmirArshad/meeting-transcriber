@@ -2,91 +2,14 @@
 
 Complete guide for installing AvaNevis on macOS.
 
----
+## Install AvaNevis
 
-## ⚠️ IMPORTANT: The "Damaged" Error
+AvaNevis v2.11 requires Apple Silicon and macOS 15 (Sequoia) or later.
+On macOS 14, use [v2.10.3](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.10.3).
 
-If you see this error:
-
-```
-"AvaNevis" is damaged and can't be opened.
-You should move it to the Bin.
-```
-
-**Don't worry!** The app is NOT damaged. This is macOS's way of saying the app isn't signed with an Apple Developer certificate (which costs $99/year).
-
----
-
-## ✅ Solution 1: Right-Click Method (Easiest)
-
-### Step-by-Step with Pictures
-
-1. **Download** the `.dmg` file from GitHub Releases
-
-2. **Open** the DMG file (double-click it)
-
-3. **Drag** AvaNevis to the Applications folder
-
-4. **Go to Applications** folder (Cmd+Shift+A in Finder)
-
-5. **Find** "AvaNevis.app"
-
-6. **Right-click** (or Control+Click) on the app icon
-   - DO NOT double-click!
-   - Right-click opens a context menu
-
-7. **Select "Open"** from the menu
-   ```
-   [Context Menu]
-   ├─ Open              ← Click this!
-   ├─ Open With →
-   ├─ Show Package Contents
-   ├─ Move to Bin
-   └─ Get Info
-   ```
-
-8. **macOS will show a different dialog:**
-   ```
-   "AvaNevis" is from an unidentified developer.
-   Are you sure you want to open it?
-
-   [Cancel]  [Open]  ← Click "Open"
-   ```
-
-9. **Click "Open"** in the confirmation dialog
-
-10. **Done!** The app will launch. Future opens work normally (just double-click).
-
----
-
-## ✅ Solution 2: Terminal Method (Advanced)
-
-If right-click doesn't work, use Terminal:
-
-```bash
-# Method A: Remove quarantine from installed app
-xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app
-
-# Method B: Remove quarantine from DMG before installing
-xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
-```
-
-After running this command, you can double-click the app normally.
-
----
-
-## ✅ Solution 3: System Settings Method
-
-1. **Try to open the app** (you'll see the "damaged" error)
-2. Go to **System Settings** (or System Preferences on older macOS)
-3. Navigate to **Privacy & Security**
-4. Scroll down to the **Security** section
-5. You should see a message: `"AvaNevis" was blocked from use because it is not from an identified developer`
-6. Click **"Open Anyway"**
-7. Try opening the app again
-8. Click **"Open"** in the confirmation dialog
-
----
+1. Download the `AvaNevis-Setup-<version>.dmg` from [GitHub Releases](https://github.com/AmirArshad/meeting-transcriber/releases).
+2. Open the DMG and drag AvaNevis to Applications.
+3. Open AvaNevis from Applications. The app is ad-hoc signed and has no Apple notarization. If macOS blocks it because it cannot verify the developer, open **System Settings → Privacy & Security** after trying to launch the app and choose **Open Anyway**. [Apple’s instructions](https://support.apple.com/en-us/102445)
 
 ## 🔐 Required Permissions
 
@@ -138,57 +61,11 @@ If the CoreAudio path is unavailable or fails, AvaNevis falls back to ScreenCapt
 
 ---
 
-## ❓ Why Does This Happen?
+## Troubleshooting
 
-### The Technical Explanation
-
-Apple requires apps to be:
-1. **Code-signed** with an Apple Developer certificate ($99/year)
-2. **Notarized** by Apple (submitted to Apple for malware scanning)
-
-This is an **open-source project** without commercial funding, so the app isn't signed.
-
-### Is This Safe?
-
-**Yes!** Here's why:
-- ✅ **Source code is public** on GitHub - you can audit it
-- ✅ **Built by GitHub Actions** - public build logs, no tampering
-- ✅ **No telemetry** - 100% local processing, no data sent anywhere
-- ✅ **No background uploads** - only explicit model downloads and update checks
-- ✅ **Full security audit** - See [SECURITY_AUDIT.md](../completed/audits/SECURITY_AUDIT.md)
-
-The app does exactly what it says: records audio and transcribes it locally.
-
----
-
-## 🐛 Troubleshooting
-
-### "Operation not permitted" when running xattr command
-
-Try with sudo:
-```bash
-sudo xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app
-```
-
-### App still won't open after removing quarantine
-
-1. Move the app to Trash
-2. Empty Trash
-3. Re-download the DMG
-4. Run the xattr command on the DMG before installing:
-   ```bash
-   xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
-   ```
-5. Install the app
-6. Try opening it
-
-### "App is damaged and can't be opened" persists
-
-Check if you have any security software (antivirus, firewall) blocking the app:
-1. Check **System Settings → Privacy & Security**
-2. Look for any blocks under "Security"
-3. Temporarily disable third-party security software
-4. Try opening the app
+If macOS reports that AvaNevis is damaged, download a fresh copy from GitHub
+Releases. If the message persists, report the exact error and your macOS version
+so the release artifact can be checked.
 
 ### Still having issues?
 
@@ -198,10 +75,10 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) or [open an issue on GitHub](https:
 
 ## 📋 macOS Version Requirements
 
-- **Minimum:** macOS 14 (Sonoma)
-- **Recommended:** macOS 14.2 or later for CoreAudio system-audio capture
+- **Minimum for v2.11:** macOS 15 (Sequoia) on Apple Silicon
+- CoreAudio system-audio capture is available on this supported baseline; the helper retains its separate compatibility checks.
 - **Architecture:**
-  - ✅ Apple Silicon (M1 or newer) - Full GPU acceleration
+  - ✅ Apple Silicon (M1 or newer) — packaged target
   - ❌ Intel Mac (x64) - packaged releases are not supported
 
 If you are building from source for development only, the repo still contains an Intel Mac CPU fallback path.

@@ -465,41 +465,13 @@ test('catalog keeps both speakrs and pyannote diarization entries', () => {
 
   const windowsPack = getSpeakrsSetupArtifactsForPlatform('win32', 'x64');
   const macPack = getSpeakrsSetupArtifactsForPlatform('darwin', 'arm64');
-  assert.equal(windowsPack.revision, '5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f');
-  assert.equal(windowsPack.modelPack.validationStatus, 'ready');
-  assert.equal(
-    windowsPack.modelPack.downloadUrl,
-    'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-models-5d24ffe-r1/speakrs-models-5d24ffe-win32-x64-cuda.tar.gz',
-  );
-  assert.equal(windowsPack.modelPack.sha256, 'a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20');
-  assert.equal(windowsPack.modelPack.sizeBytes, 208765985);
-  assert.equal(windowsPack.modelFiles.length, 19);
-  assert.equal(windowsPack.runtimeArtifacts.length, 3);
-  const extractedDlls = {};
-  for (const artifact of windowsPack.runtimeArtifacts) {
-    assert.ok(artifact.extractedFiles);
-    for (const name of artifact.keepFileNames) {
-      const pin = artifact.extractedFiles[name];
-      assert.match(pin.sha256, /^[a-f0-9]{64}$/);
-      assert.equal(Number.isInteger(pin.sizeBytes) && pin.sizeBytes > 0, true);
-      extractedDlls[name] = pin;
-    }
+  assert.equal(windowsPack.revision, '67f963b6a1d94fcd4678948237b3cc8bd69bf1d8');
+  for (const artifact of [windowsPack, macPack]) {
+    assert.equal(artifact.modelPack.transport, 'files');
+    assert.ok(artifact.modelPack.files.every((file) => file.downloadUrl.includes(artifact.revision)));
   }
-  assert.deepEqual(Object.keys(extractedDlls).sort(), [
-    'cudart64_12.dll',
-    'cufft64_11.dll',
-    'onnxruntime.dll',
-    'onnxruntime_providers_cuda.dll',
-    'onnxruntime_providers_shared.dll',
-  ]);
-  assert.equal(macPack.modelPack.validationStatus, 'ready');
-  assert.equal(
-    macPack.modelPack.downloadUrl,
-    'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-models-5d24ffe-r1/speakrs-models-5d24ffe-darwin-arm64-coreml.tar.gz',
-  );
-  assert.equal(macPack.modelPack.sha256, '0677b5eee394402ddd4cbdb991afd0736c24e955b145d4b98f69d63523cc8d50');
-  assert.equal(macPack.modelPack.sizeBytes, 375813778);
-  assert.equal(macPack.modelFiles.length, 76);
+  assert.equal(windowsPack.modelFiles.length, 9);
+  assert.equal(macPack.modelFiles.length, 67);
   assert.equal(macPack.runtimeArtifacts.length, 0);
   assert.equal(windowsPack.runtime.modeByPlatform['win32-x64'], 'cuda');
   assert.equal(macPack.runtime.modeByPlatform['darwin-arm64'], 'coreml');

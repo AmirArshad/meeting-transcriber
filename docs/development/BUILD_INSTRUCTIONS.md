@@ -6,9 +6,9 @@ This document explains how to build AvaNevis from source for the supported packa
 
 - Node.js 22.12+ installed; Node 24 is used in CI
 - Internet connection (for downloading Python and ffmpeg during build)
-- Rust/`cargo` with the toolchain in `native/speakrs-cli/rust-toolchain.toml` (needed to build bundled `speakrs-cli` on Windows and macOS; Linux Core Beta skips Speakrs)
+- Rust/`cargo` with the toolchain in `native/speakrs-cli/rust-toolchain.toml` for the bundled `speakrs-cli` on Windows, macOS, and Linux
 - Windows 10/11 (64-bit) for Windows builds
-- macOS 14+ on Apple Silicon for macOS builds
+- macOS 15+ on Apple Silicon for v2.11 macOS builds
 - Linux x86_64 for AppImage, pacman, and experimental deb builds (cannot cross-compile AppImages)
 - ~2GB free disk space for build artifacts
 
@@ -143,7 +143,7 @@ Stay on electron-builder 26.x with `"toolsets": { "appimage": "1.0.2" }`. That i
 
 Arch/Omarchy **build host** extra: electron-builder's bundled fpm needs `libcrypt.so.1` (`sudo pacman -S libxcrypt-compat`). That package is not a runtime `pacman.depends` entry.
 
-Linux packages **omit** `speakrs-cli`, ONNX Runtime CUDA archives, llama.cpp, and pyannote CUDA wheels. Transcription is CPU faster-whisper. Add-ons stay greyed `unsupported`.
+Linux packages include the native x86_64 Speakrs CLI and validation fixture. CPU faster-whisper is the default transcription path. On supported NVIDIA hosts, explicit managed CUDA 12 setup enables the accelerator preflight for Speakrs. Qwen summaries have a separate CUDA and artifact gate. Model and runtime setup downloads are separate from installer construction.
 
 Do not commit `dist/` or downloaded `build/resources/` runtimes.
 
@@ -155,7 +155,7 @@ The installer includes:
 - ✅ Embedded Python 3.11.9 runtime
 - ✅ Platform Python stack from `requirements-*-build.txt` (Windows: `faster-whisper`, `soxr`, `numpy`, …; macOS: `lightning-whisper-mlx`, `soxr`, `scipy`, `mlx`, …; Linux: `faster-whisper` CPU plus Pulse/SoundCard; `torch` is installed during macOS build then removed). See [installer size notes](../completed/INSTALLER_SIZE_NOTES.md).
 - ✅ ffmpeg binary
-- ✅ `speakrs-cli` (Speakrs engine binary; model packs stay setup-time) — **Windows and macOS only**. Linux Core Beta does not bundle it.
+- ✅ `speakrs-cli` (Speakrs 0.7.0; Windows and Linux x64 CUDA, macOS arm64 CoreML). Setup downloads the pinned model files separately.
 - ✅ Backend Python scripts
 - ✅ Third-party notices under `resources/legal/`
 

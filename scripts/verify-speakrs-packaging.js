@@ -9,9 +9,10 @@ const { spawnSync } = require('child_process');
 
 const {
   SPEAKRS_MODEL_PACK_ARTIFACTS,
-  SPEAKRS_ORT_RUNTIME_ARTIFACTS,
-  assertSpeakrsLinuxRequiredDynamicLibraryClosure,
-  getSpeakrsExtractedRuntimeDllPins,
+  buildSpeakrsSourceArtifacts,
+  buildSpeakrsSourceDownloadUrl,
+  normalizeSpeakrsRelativePath,
+  resolveContainedSpeakrsPath,
 } = require('../src/ai-addon/speakrs-pack-spec');
 const { isAllowedDownloadUrl } = require('../src/ai-addon/download-helpers');
 const {
@@ -25,8 +26,6 @@ const {
 const REPO_ROOT = path.join(__dirname, '..');
 const WAV_NAME = SPEAKRS_VALIDATE_WAV_NAME;
 const REQUIRED_MODEL_PACK_PLATFORMS = Object.freeze(['darwin-arm64', 'linux-x64', 'win32-x64']);
-const REQUIRED_WINDOWS_ORT_ARTIFACT_COUNT = 3;
-const REQUIRED_LINUX_ORT_ARTIFACT_COUNT = 5;
 const CONNECT_TIMEOUT_MS = 30000;
 const IDLE_TIMEOUT_MS = 60000;
 const MAX_REDIRECTS = 5;
@@ -76,119 +75,35 @@ function assertPinnedDownloadArtifact(artifact, { label } = {}) {
   }
 }
 
-function assertModelPackPins(artifacts = SPEAKRS_MODEL_PACK_ARTIFACTS) {
-  const keys = Object.keys(artifacts).sort();
+function listReleaseChecksumArtifacts(modelPacks = SPEAKRS_MODEL_PACK_ARTIFACTS) {
+  const keys = Object.keys(modelPacks).sort();
   const required = [...REQUIRED_MODEL_PACK_PLATFORMS].sort();
   if (keys.length !== required.length || keys.some((key, index) => key !== required[index])) {
-    fail(`Speakrs model-pack platforms must be exactly ${required.join(', ')}`);
+    fail(`Speakrs model platforms must be exactly ${required.join(', ')}`);
   }
+  const artifacts = new Map();
   for (const platform of required) {
-    const artifact = artifacts[platform];
-    if (!artifact) {
-      fail(`Speakrs model-pack pin is missing for ${platform}`);
+    if (modelPacks[platform]?.transport !== 'files') {
+      fail(`Speakrs direct-file model pins are missing for ${platform}`);
     }
-    assertPinnedDownloadArtifact(artifact, { label: `model-pack ${platform}` });
-  }
-}
-
-function assertOrtRuntimePins(artifacts = SPEAKRS_ORT_RUNTIME_ARTIFACTS) {
-  const windowsOrt = artifacts['win32-x64'];
-  if (!Array.isArray(windowsOrt) || windowsOrt.length !== REQUIRED_WINDOWS_ORT_ARTIFACT_COUNT) {
-    fail('Windows Speakrs ORT 1.27.1 runtime pin set is incomplete.');
-  }
-  for (const artifact of windowsOrt) {
-    assertPinnedDownloadArtifact(artifact, { label: artifact.id || artifact.fileName });
-    if (!Array.isArray(artifact.keepFileNames) || artifact.keepFileNames.length === 0) {
-      fail(`Speakrs runtime pin is missing keepFileNames: ${artifact.id}`);
+    const files = buildSpeakrsSourceArtifacts(platform);
+    if (files.length !== (platform === 'darwin-arm64' ? 67 : 9)) {
+      fail(`Speakrs native model file count is invalid for ${platform}`);
     }
-    if (!artifact.extractedFiles || typeof artifact.extractedFiles !== 'object') {
-      fail(`Speakrs runtime pin is missing extractedFiles: ${artifact.id}`);
-    }
-    for (const name of artifact.keepFileNames) {
-      const pin = artifact.extractedFiles[name];
-      if (!pin || !/^[a-f0-9]{64}$/.test(String(pin.sha256 || '')) || !Number.isInteger(pin.sizeBytes) || pin.sizeBytes <= 0) {
-        fail(`Speakrs runtime pin is missing extracted DLL integrity for ${name}`);
+    for (const artifact of files) {
+      assertPinnedDownloadArtifact(artifact);
+      const relative = normalizeSpeakrsRelativePath(artifact.path);
+      if (artifact.downloadUrl !== buildSpeakrsSourceDownloadUrl(relative)) {
+        fail(`Speakrs model URL is outside the pinned upstream revision: ${relative}`);
       }
-    }
-  }
-  if (!getSpeakrsExtractedRuntimeDllPins(windowsOrt, 'win32-x64')) {
-    fail('Windows Speakrs extracted DLL pin set is incomplete.');
-  }
-
-  const linuxOrt = artifacts['linux-x64'];
-  if (!Array.isArray(linuxOrt) || linuxOrt.length !== REQUIRED_LINUX_ORT_ARTIFACT_COUNT) {
-    fail('Linux Speakrs ORT 1.27.1 runtime pin set is incomplete.');
-  }
-  for (const artifact of linuxOrt) {
-    assertPinnedDownloadArtifact(artifact, { label: artifact.id || artifact.fileName });
-    if (artifact.architecture !== 'x64') {
-      fail(`Linux Speakrs runtime pin is missing architecture x64: ${artifact.id}`);
-    }
-    if (artifact.cudaMajor !== 12) {
-      fail(`Linux Speakrs runtime pin is missing cudaMajor 12: ${artifact.id}`);
-    }
-    if (!artifact.dynamicLibraryDir || typeof artifact.dynamicLibraryDir !== 'string') {
-      fail(`Linux Speakrs runtime pin is missing dynamicLibraryDir: ${artifact.id}`);
-    }
-    if (!Array.isArray(artifact.keepFileNames) || artifact.keepFileNames.length === 0) {
-      fail(`Speakrs runtime pin is missing keepFileNames: ${artifact.id}`);
-    }
-    if (!artifact.extractedFiles || typeof artifact.extractedFiles !== 'object') {
-      fail(`Speakrs runtime pin is missing extractedFiles: ${artifact.id}`);
-    }
-    for (const name of artifact.keepFileNames) {
-      const pin = artifact.extractedFiles[name];
-      if (!pin || !/^[a-f0-9]{64}$/.test(String(pin.sha256 || '')) || !Number.isInteger(pin.sizeBytes) || pin.sizeBytes <= 0) {
-        fail(`Speakrs runtime pin is missing extracted library integrity for ${name}`);
+      const prior = artifacts.get(relative);
+      if (prior && (prior.sha256 !== artifact.sha256 || prior.sizeBytes !== artifact.sizeBytes)) {
+        fail(`Speakrs platforms disagree about the checksum or size of ${relative}`);
       }
+      artifacts.set(relative, artifact);
     }
   }
-  if (!getSpeakrsExtractedRuntimeDllPins(linuxOrt, 'linux-x64')) {
-    fail('Linux Speakrs extracted library pin set is incomplete.');
-  }
-  try {
-    assertSpeakrsLinuxRequiredDynamicLibraryClosure({ runtimeArtifacts: linuxOrt });
-  } catch (error) {
-    fail(error.message);
-  }
-}
-
-function assertCatalogPinsComplete(
-  modelPacks = SPEAKRS_MODEL_PACK_ARTIFACTS,
-  ortArtifacts = SPEAKRS_ORT_RUNTIME_ARTIFACTS,
-) {
-  assertModelPackPins(modelPacks);
-  assertOrtRuntimePins(ortArtifacts);
-}
-
-function listReleaseChecksumArtifacts(
-  modelPacks = SPEAKRS_MODEL_PACK_ARTIFACTS,
-  ortArtifacts = SPEAKRS_ORT_RUNTIME_ARTIFACTS,
-) {
-  assertCatalogPinsComplete(modelPacks, ortArtifacts);
-  const artifacts = [];
-  for (const platform of REQUIRED_MODEL_PACK_PLATFORMS) {
-    artifacts.push({
-      ...modelPacks[platform],
-      checksumKind: 'model-pack',
-      platform,
-    });
-  }
-  for (const artifact of ortArtifacts['win32-x64']) {
-    artifacts.push({
-      ...artifact,
-      checksumKind: 'ort-runtime',
-      platform: 'win32-x64',
-    });
-  }
-  for (const artifact of ortArtifacts['linux-x64'] || []) {
-    artifacts.push({
-      ...artifact,
-      checksumKind: 'ort-runtime',
-      platform: 'linux-x64',
-    });
-  }
-  return artifacts;
+  return [...artifacts.values()];
 }
 
 function unlinkIfExists(filePath) {
@@ -306,7 +221,7 @@ function downloadHttps(url, destination, { redirectDepth = 0 } = {}) {
 }
 
 async function verifyArtifactDownload(artifact, cacheDir) {
-  const dest = path.join(cacheDir, artifact.fileName);
+  const dest = resolveContainedSpeakrsPath(cacheDir, artifact.path);
   const tempPath = `${dest}.download`;
   unlinkIfExists(tempPath);
 
@@ -343,12 +258,13 @@ async function verifyArtifactDownload(artifact, cacheDir) {
 function resolvePackagedResourcesRoot() {
   const macApp = path.join(REPO_ROOT, 'dist', 'mac-arm64', 'AvaNevis.app', 'Contents', 'Resources');
   const winUnpacked = path.join(REPO_ROOT, 'dist', 'win-unpacked', 'resources');
-  if (fs.existsSync(macApp)) {
-    return macApp;
-  }
-  if (fs.existsSync(winUnpacked)) {
-    return winUnpacked;
-  }
+  const platformResources = {
+    darwin: macApp,
+    win32: winUnpacked,
+    linux: path.join(REPO_ROOT, 'dist', 'linux-unpacked', 'resources'),
+  };
+  const resources = platformResources[process.platform];
+  if (resources && fs.existsSync(resources)) return resources;
   fail('Packaged app resources were not found under dist/.');
 }
 
@@ -413,32 +329,52 @@ function assertPackagedSpeakrsLayout(resourcesRoot = resolvePackagedResourcesRoo
   return cliPath;
 }
 
-async function verifyPublishedPackChecksums() {
+async function verifyPinnedModelChecksums() {
   const artifacts = listReleaseChecksumArtifacts();
   const cacheDir = path.join(REPO_ROOT, '.cache', 'speakrs-pack-verify');
   fs.mkdirSync(cacheDir, { recursive: true });
   for (const artifact of artifacts) {
     await verifyArtifactDownload(artifact, cacheDir);
   }
-  const derived = spawnSync(process.execPath, [path.join(__dirname, 'derive-speakrs-runtime-dll-pins.js')], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-  });
-  if (derived.status !== 0) {
-    fail((derived.stderr || derived.stdout || 'Extracted Speakrs runtime DLL pin verification failed.').trim());
+
+}
+
+function assertProductRejectsTestModes(executable) {
+  const cli = path.resolve(executable);
+  const fixture = path.join(REPO_ROOT, 'tests', 'fixtures', WAV_NAME);
+  for (const mode of ['cpu', 'cuda-fast', 'coreml-fast']) {
+    const env = { ...process.env, SPEAKRS_MODE: mode, SPEAKRS_MODELS_DIR: path.dirname(fixture) };
+    delete env.SPEAKRS_NUM_SPEAKERS;
+    const result = spawnSync(cli, [fixture], { env, encoding: 'utf8', timeout: 30000 });
+    let payload;
+    try {
+      payload = JSON.parse(result.stdout);
+    } catch (_error) {
+      fail(`Product Speakrs CLI did not return JSON when rejecting ${mode}.`);
+    }
+    if (!result.status || payload.success !== false || !payload.error?.includes('unsupported SPEAKRS_MODE')) {
+      fail(`Product Speakrs CLI did not reject ${mode}.`);
+    }
   }
+  process.stdout.write('Product Speakrs CLI rejected CPU and fast modes.\n');
 }
 
 async function main() {
-  const args = new Set(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const args = new Set(argv);
+  if (args.has('--check-product-modes')) {
+    const executable = argv[argv.indexOf('--check-product-modes') + 1];
+    if (!executable) fail('--check-product-modes requires the built CLI path.');
+    assertProductRejectsTestModes(executable);
+  }
   if (args.has('--require-binary') || args.has('--packaged')) {
     assertPackagedSpeakrsLayout();
   }
   if (args.has('--verify-pack-checksums')) {
-    await verifyPublishedPackChecksums();
+    await verifyPinnedModelChecksums();
   }
-  if (!args.has('--require-binary') && !args.has('--packaged') && !args.has('--verify-pack-checksums')) {
-    assertCatalogPinsComplete();
+  if (args.size === 0) {
+    listReleaseChecksumArtifacts();
     process.stdout.write('Speakrs catalog pins are complete.\n');
   }
 }
@@ -451,15 +387,10 @@ if (require.main === module) {
 }
 
 module.exports = {
-  REQUIRED_LINUX_ORT_ARTIFACT_COUNT,
   REQUIRED_MODEL_PACK_PLATFORMS,
-  REQUIRED_WINDOWS_ORT_ARTIFACT_COUNT,
-  assertCatalogPinsComplete,
-  assertModelPackPins,
-  assertOrtRuntimePins,
   assertPackagedSpeakrsLayout,
   assertPinnedDownloadArtifact,
   listReleaseChecksumArtifacts,
   verifyArtifactDownload,
-  verifyPublishedPackChecksums,
+  verifyPinnedModelChecksums,
 };

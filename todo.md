@@ -1,6 +1,7 @@
-# AvaNevis v2.10
+# AvaNevis release status
 
-Release version: **v2.10.3** — dependency and download maintenance.
+Latest published version: **v2.10.3** — dependency and download maintenance.
+Next release prepared on this branch: **v2.11.0**, pending authorized tag and publication.
 See the [v2.10.3 release notes](docs/releases/v2.10.3.md) and
 [dependency qualification evidence](docs/development/DEPENDENCY_SWEEP_2026-11-03.md).
 Previous release: **v2.10.2**, published 2026-10-21.
@@ -15,6 +16,150 @@ Sequencing, remaining investigations, and which machines they need live in the
 implementation or acceptance evidence.
 
 ## Status
+
+### v2.11 release review follow-up
+
+The [hosted release dry run](https://github.com/AmirArshad/meeting-transcriber/actions/runs/43787045494)
+passed on `38fbea7` for Windows, macOS, all three Linux packages on Ubuntu 24.04,
+Speakrs model checksums, and FFmpeg legal staging. The publication job was skipped.
+Recheck Electron releases and npm availability before tagging. A runtime pin
+change requires new qualification. The Windows pending-transcription banner and
+remaining manual coverage gaps are in the
+[qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md).
+
+### Security maintenance after v2.11.0 · reviewed 2026-11-16
+
+The review found no demonstrated exploit path through AvaNevis that warrants
+delaying v2.11.0 for these updates. Prioritize the runtime fixes below.
+
+- [ ] **Electron:** Qualify a published Electron 46 build with Node 26.13.1
+  or newer. The qualified `46.0.0-alpha.10` embeds Node 26.13.0. The November
+  fixes are already on the 46 branch. The reviewed app paths do not run HTTP/2
+  or TLS servers or mix HTTPS Agent certificate policies. Alpha.10 contains
+  the exploited Chromium XML fix (CVE-2026-125350) and the revoked eMudhra RSA
+  block in Chromium and Node. Recheck the Linux keyring provider mapping and
+  fixed-key rejection against the new pin, then rerun token migration smokes.
+  [Node advisories](https://nodejs.org/en/blog/vulnerability/november-2026-security-releases/),
+  [Electron Node update](https://github.com/electron/electron/pull/55755),
+  [Chromium fix](https://github.com/chromium/chromium/blob/159.0.8153.0/third_party/libxslt/chromium/0008-Fix-use-after-free-in-direct-pattern-match-cache.patch),
+  [Electron certificate fix](https://github.com/electron/electron/pull/55741).
+- [ ] **Bundled CPython:** Qualify 3.11.18 or newer on all three platforms,
+  starting with Windows. The Windows embedded runtime is 3.11.9 and macOS/Linux
+  use 3.11.17. They lack 3.11.18 fixes for eMudhra distrust in `ssl`, Expat, and
+  `tarfile`. The Hugging Face HTTPS path uses patched certifi with native Xet
+  disabled. Qualify the replacement Windows embedded layout, packaged
+  transcription, and add-on setup before switching the release pins.
+  [Runtime pins](build/download-manifest.js),
+  [CPython security fixes](https://www.python.org/downloads/release/python-31118/).
+- [ ] **Python package updates:** Review filelock (#146), numba/llvmlite (#147),
+  torch (#150), and click (#152) against current advisories and packaged
+  inventories. The November 16 `pip-audit` rerun found zero findings in the
+  platform build pins, managed Parakeet locks, direct Pyannote pins, bootstrap
+  pip, and local macOS payload inventory. The upstream PyTorch advisory lacks a
+  package mapping and was identified separately. It covers attacker-controlled
+  checkpoints loaded under Torch 2.14.1 and is fixed in 2.15.0. Packaging removes
+  macOS build-time Torch 2.14.1, which was confirmed absent from the local app's
+  import path. Optional Windows/macOS Pyannote pins Torch 2.13.0, outside this
+  advisory's affected range. [PyTorch advisory](https://github.com/pytorch/pytorch/security/advisories/GHSA-v32g-mr63-3j83).
+
+### Agent usage improvements — 2026-11-15
+
+Audited repo instructions, builds and recent repo-specific Codex session evidence.
+The [usage audit](docs/development/AGENT_USAGE_AUDIT.md) records duplicate personal
+Superpowers workflows, large-context/parallel-work amplification and the limits
+of token counters. Six core skills are now concise, verification reuses unchanged
+inputs, and setup checks enforce instruction budgets and real invocation-policy
+semantics. The ignored local Codex configuration disables the duplicate plugin;
+the [setup guide](.agents/README.md) and tracked example cover other machines.
+Setup/link tests pass (17); confirm plugin discovery after restarting Codex.
+
+### Historical v2.11 proposal — 2026-11-10
+
+The original provisional target **v2.11** was: upgrade to Speakrs 0.7 on Windows CUDA, Linux
+CUDA and macOS CoreML; migrate safeStorage to its asynchronous API and target
+the latest Electron 46; and take separately qualified, compatible dependency
+updates. The file-level
+scope, first Linux feasibility probe, and remaining platform gates are in the
+[v2.11 plan](docs/superpowers/plans/2026-11-10-v2.11-speaker-upgrade.md).
+Electron 45.2.3 is an interim branch change; the final target is 46.
+As of 2026-11-10, Electron 46 is available only as a pre-release
+(`46.0.0-alpha.8`). Speakrs remains at 0.5.0 in the product pending model
+migration, Windows CUDA feasibility, quality and platform qualification.
+Python modernization, AUR publishing, and notarization remain separate work.
+On Linux, `npm run test:all` passed under an isolated X display: 1,133 JS and
+852 Python passed, with 2 and 4 skips respectively; syntax checks passed.
+`npm audit --audit-level=high` passed with six moderate packaging-toolchain
+findings. Native installers and hardware checks for Electron 45.2.3 remain open.
+
+### v2.11 dependency review · 2026-11-16
+
+GitHub returned no open Dependabot alerts. Applied the pytest minimum 9.2.0
+(#149) and pinned release action 3.0.4 (#151). The Electron 45.2.3 PR (#148)
+would downgrade the qualified 46 alpha and was not applied. Deferred filelock
+(#146), numba (#147), torch (#150), and click (#152): these affect packaged
+Python closures and require platform and bundled inventory verification beyond
+the available evidence. Their PR checks include Linux/Cargo failures and
+cancelled macOS jobs. `npm audit --audit-level=high` passed with six moderate
+minimatch findings in the build toolchain; the suggested forced fix changes
+major packaging dependencies, so it was deferred pending compatibility testing.
+
+### v2.11 acceptance · 2026-11-16
+
+The user accepted the release with the documented qualification limits and
+waived additional macOS-version and NVIDIA GPU-tier testing. Untested cases
+remain identified as such in the [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md).
+Release preparation is recorded in the [v2.11.0 release notes](docs/releases/v2.11.0.md).
+Publication requires a separately authorized tag; acceptance does not turn
+unperformed checks into passing results.
+
+### Historical v2.11 local release candidate · CachyOS, 2026-11-15
+
+CachyOS built and verified the AppImage, pacman and deb candidates under the
+existing app version. Native Speakrs 0.7 CUDA, disposable-profile repair and
+removal, synthetic short and long guided transcription, PipeWire capture, and
+the Electron 46 alpha secure-storage smoke ran locally. Subsequent Windows and
+macOS checks and accepted limits are recorded below and in the qualification record.
+The [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
+has the test evidence, hashes and pending gates.
+
+### Historical v2.11 Windows qualification · 2026-11-15
+
+The Windows RTX 4070 native loader is restricted to System32; a decoy test,
+image-load trace, synthetic 0.5/0.7 comparison and packaged guided recording
+passed. The unsigned local NSIS candidate built with Electron 46.0.0-alpha.10;
+the full suite and disposable-profile DPAPI migration passed. Windows remains
+open for integrated installer lifecycle, model repair/cancel/removal, offline
+repeat, representative speech and other driver/GPU tiers. Settings also
+overestimates the native model footprint by including legacy runtime bytes.
+See the [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
+for evidence and next steps. macOS 15 arm64 remains open.
+
+### Historical v2.11 Windows continuation · 2026-11-16
+
+The rebuilt Windows candidate passed the full suite, packaged CLI loader trace,
+scratch NSIS install/uninstall, synthetic legacy-profile repair and a longer
+packaged guided CUDA run. Controlled service checks covered cancellation,
+failure/retry, no-downloader repeat and removal. The Speakrs model footprint
+estimate is corrected. Natural multi-speaker audio, independently isolated
+offline execution, other GPU/driver tiers and macOS 15 arm64 remain open; the
+[qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
+distinguishes the evidence from these remaining release gates.
+
+### Historical v2.11 plan review — 2026-11-15
+
+Plan review only; no product implementation or new platform acceptance.
+The [revised plan](docs/superpowers/plans/2026-11-10-v2.11-speaker-upgrade.md)
+starts on CachyOS with the Linux CUDA probe and parallel preparation when
+requested. Native Windows CUDA and macOS CoreML remain required. Live npm verification found latest 46 **46.0.0-alpha.10** (official
+prerelease dated November 12) and stable **45.3.2**; the November 10 versions and
+test counts above are historical. The plan specifies direct-file model setup,
+transactional activation, complete async-token migration, separate CPU CI smoke,
+and native loader/signing/quality checks. All 69 distinct required native model
+leaves were downloaded and hashed for planning; this is not inference evidence.
+The v2.11 minimum is **macOS 15 on Apple Silicon**, matching the upstream
+CoreML asset target. Native macOS 15 packaged validation remains open, along
+with Windows CUDA loading, driver-tier and real key-store migration checks.
+Upstream CoreML assets still require qualification, and no re-export is planned.
 
 ### v2.10.2 certificate-trust maintenance — 2026-10-20
 
@@ -312,7 +457,10 @@ checks are recorded.
   `npm audit --audit-level=high`, `test:all`, Windows `build:dir` and packaged
   Speakrs/layout checks passed locally before commit/push.
 
-## Current next step
+## Historical next step after v2.10.0
+
+This section predates v2.10.3. The current next-version scope is recorded at
+the top of this file and in the v2.11 plan.
 
 v2.10.0 is tagged, and October dependency maintenance is on `master`. Dependabot
 alerts and security updates are enabled. No tag or release-workflow action remains.

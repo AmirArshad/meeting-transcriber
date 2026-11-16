@@ -1,6 +1,6 @@
 # AvaNevis Agent Guide
 
-AvaNevis is a privacy-first Electron desktop application that records microphone and desktop audio and transcribes locally with Whisper. It uses Electron 44, plain HTML/CSS/JavaScript, Python 3.11 subprocesses, a Swift audio helper and a Rust Speakrs CLI; it has JS and Python regression suites plus manual hardware checks. This is the canonical always-on guide for Codex, Cursor, OpenCode and Claude Code through the root CLAUDE.md import.
+AvaNevis records and transcribes locally: Electron, plain HTML/CSS/JS, Python 3.11 subprocesses, Swift audio and Rust Speakrs CLI. Canonical guide; CLAUDE.md imports it. Runtime pins: package.json/native manifests. Platform rules: contracts below.
 
 ## Quick commands
 
@@ -9,41 +9,34 @@ Run from the repository root unless a directory is specified. Use npm and the co
 | Task | Command / expected signal |
 |---|---|
 | Node install | `npm ci` — installs locked dependencies |
-| Python environment, Linux/macOS | `python3.11 -m venv .venv` |
-| Python environment, Windows | `py -3.11 -m venv .venv` |
-| Python install, Linux | `.venv/bin/python -m pip install -r requirements-linux.txt -r requirements-dev.txt` |
-| Python install, macOS | `.venv/bin/python -m pip install -r requirements-macos.txt -r requirements-dev.txt` |
-| Python install, Windows PowerShell | `.venv/Scripts/python.exe -m pip install -r requirements-windows.txt -r requirements-dev.txt` |
 | Run / dev | `npm start` / `npm run dev` — opens Electron; audio requires a desktop session |
 | JS syntax / regression | `npm run test:syntax` / `npm test` — exit 0 |
 | Python regression / syntax | `npm run test:python` / `npm run test:python-syntax` — exit 0 |
 | Full pre-PR gate | `npm run test:all` — exit 0; hardware acceptance remains manual |
 | Windows / macOS / Linux installers | `npm run build` / `npm run build:mac` / `npm run build:linux` on the matching host — artifacts in dist/ |
-| Device smoke | `python backend/device_manager.py` with .venv active — device JSON; requires hardware |
-| Swift helper, macOS | `swift build -c release --arch arm64` inside swift/AudioCaptureHelper |
-| Agent setup checks | `python scripts/agents/validate_setup.py` — exit 0 |
+| Agent setup checks | `python3 scripts/agents/validate_setup.py` — exit 0 (Windows: `py -3.11`) |
 
-There is no dedicated lint, typecheck or automated end-to-end npm target. CI's optional Python lint is `flake8 backend --count --select=E9,F63,F7,F82 --show-source --statistics`; install flake8 explicitly if using it. Build prerequisites, signing flags and fresh-machine testing live in README.md and docs/development/TESTING.md.
+No lint/typecheck/E2E npm target. Setup and native checks: README.md and docs/development/TESTING.md. Install dependencies only when needed.
 
 ## Repo map
 
-- Read `src/main.js` for lifecycle, tray, quit drain and service wiring; keep it a composition root. Platform/update channels still registered there are deliberate exceptions.
+- `src/main.js`: lifecycle, tray, quit drain and wiring; keep it a composition root.
 - Follow `src/renderer/app.js` → `window.electronAPI` in `src/preload.js` → owning `src/main/` service → `src/main/python-runtime.js` → Python. Read both process sides for contract changes.
 - Start recorder work in `src/main/recorder-service.js` and `backend/audio/`; persistence in `backend/meeting_manager.py` and `backend/meetings/`.
-- Read `src/main/transcription-service.js`, `backend/transcription/`, `src/ai-addon/`, `backend/diarization/` and `backend/summaries/` for local AI.
-- Read `build/prepare-resources.js`, `build/download-manifest.js`, package.json and `.github/workflows/` for packaging. Native helpers live in `swift/AudioCaptureHelper/` and `native/speakrs-cli/`.
-- Put pure renderer logic in `src/renderer/*-helpers.js` with matching `tests/js/*-helpers.test.js`; retain plain JS and explicit platform modules. Python is spawned per invocation, not a server.
+- Local AI: `src/main/transcription-service.js`, `backend/transcription/`, `src/ai-addon/`, `backend/diarization/`, `backend/summaries/`.
+- Packaging: `build/prepare-resources.js`, `build/download-manifest.js`, package.json, `.github/workflows/`. Native: `swift/AudioCaptureHelper/`, `native/speakrs-cli/`.
+- Pure renderer logic: `src/renderer/*-helpers.js`, matching `tests/js/*-helpers.test.js`. Keep plain JS and explicit platforms. Python is spawned per invocation.
 
 ## Invariants / do-not
 
 - Never add cloud processing, telemetry, background uploads, embedded/proxied secrets or hidden downloads. Model/add-on setup is explicit; summaries are user-triggered. User tokens stay in safeStorage and validated stdin boundaries.
 - Store recordings, metadata and derived AI sidecars in Electron userData, never the repo. Preserve locks, atomic writes, recovery, stop/discard distinctions and graceful degradation.
-- Target Windows 10/11 x64, macOS 14+ with arm64-only packages, and Linux x86_64 Core Beta. Preserve Windows faster-whisper, Apple Silicon MLX and Linux CPU transcription with optional managed CUDA 12.
+- Preserve Windows 10/11 x64, macOS arm64 and Linux x86_64 targets. The packaging contract owns the current macOS minimum. Preserve Windows faster-whisper, Apple Silicon MLX and Linux CPU transcription with optional managed CUDA 12.
 - Linux device IDs are opaque strings; never parseInt them. A managed CUDA tree makes transcription fail-closed; preserve Repair/Uninstall escape paths and component gates. Linux speaker identification is Speakrs-only, CUDA-only; summaries need their own CUDA gate. Never add CPU/cloud fallbacks for those add-ons.
 - Preserve supported Omarchy/CachyOS Hyprland/Wayland/PipeWire versus experimental distro/desktop tiers. Use compatibility evidence for acceptance claims; never infer hardware success from CI.
 - Change IPC owner, preload, every renderer caller and characterization tests together. Preserve facade export key sets and AI_ADDON_PROGRESS_CHANNEL / AI_ADDON_CANCEL_CODE values.
 - Do not hand-edit generated build/resources, dist, native targets, Swift .build, caches or local data. Change manifests and regenerate deliberately; update lockfiles only with authorized dependency work. Never commit secrets or machine-local settings.
-- Read the relevant contract before editing its surface; detailed contracts are canonical, not optional background:
+- Read the applicable canonical contract before editing:
 
 | Surface | Read first |
 |---|---|
@@ -56,23 +49,25 @@ There is no dedicated lint, typecheck or automated end-to-end npm target. CI's o
 
 ## Working agreements
 
-- Work inline; ask before delegation. Keep plans concise and file-level. Do not add per-step TDD, commit or handoff ceremonies unless requested or justified by high-risk behavior.
-- Preserve operational behavior before reducing complexity; prefer extraction behind stable interfaces, explicit platform differences and intentional graceful degradation.
-- Use the smallest relevant tests while iterating; run `npm run test:all` before any PR and for cross-cutting, recorder, persistence, packaging or security changes. Use real third-party types/asset bytes where fakes could hide behavior.
-- Inspect the final diff and fresh evidence before claiming completion. Do not re-review unchanged work after feedback unless a material change introduces risk.
-- Do not stage, commit, push or publish without user authorization. Authorization to edit does not authorize these actions.
+- Work inline; delegate only when explicitly requested. Risk alone is not permission. Keep plans file-level; routine builds/small fixes need only a short inline plan. No automatic planning/review/TDD/handoff chain.
+- Preserve behavior before simplifying; prefer extraction behind stable interfaces and explicit platforms.
+- Use focused tests while iterating. Run `npm run test:all` on final integrated inputs before any PR and for cross-cutting, recorder, persistence, packaging or security behavior changes. Instruction/docs/setup-only edits use their relevant checks. Use real types/asset bytes where fakes hide behavior.
+- Reuse passing evidence while code, dependencies and relevant environment are unchanged, including at commit/push time. Fresh does not mean same-message. Inspect the final diff; repeat checks/review only for changed inputs or unresolved concerns. One lead owns full-suite/installer gates in authorized parallel work.
+- Search paths/symbols before large reads. Load applicable contracts once; read long plans by constraints, sequencing and current tasks. Parse lockfile keys instead of dumping files. Skip generated/ignored trees unless diagnosing them.
+- Capture verbose build/test output to ignored local logs, preserve the real exit code, and read summaries/failure excerpts. Use completion notifications or blocking waits instead of repeated short polls. Run one build per output tree; rebuild only for changed inputs or a specific unresolved check.
+- Stage/commit/push/publish only with user authorization; editing permission is not enough.
 - Do not edit AGENTS.md, adapters or skill wiring during ordinary feature work; change them only for an explicitly requested instruction/setup task. Keep runtime facts in contracts and task status in todo.md.
-- Trust runtime scripts, tests and compatibility evidence over stale prose. Resolve documentation conflicts at the canonical contract; inspect Electron and Python before changing cross-process behavior.
+- Trust scripts/tests and compatibility evidence over stale prose; resolve conflicts at the canonical contract.
 
 ## Skills index
 
-Canonical bodies are `.agents/skills/<name>/SKILL.md`. Read only the selected skill. Explicit-only skills below must never auto-run; tool-specific discovery does not grant permission to publish, discard or delegate.
+Canonical bodies: `.agents/skills/<name>/SKILL.md`. Load matching skills once; prefer repo adaptations to global duplicates. Explicit-only skills must not auto-run. Discovery grants no publish/discard/delegation permission. Plugin setup: `.agents/README.md`.
 
 | Skill | Trigger |
 |---|---|
-| writing-plans | A spec or multi-step task needs a concise file-level plan |
-| executing-plans | Implement an existing written plan inline |
-| finishing-a-development-branch | Tested work needs an integration or cleanup decision |
+| writing-plans | Requested plan or substantive multi-file design |
+| executing-plans | Implement a supplied/resumed written plan |
+| finishing-a-development-branch | Explicitly requested integration/cleanup decision |
 | verification-before-completion | Before claiming completion, a fix or passing checks |
 | systematic-debugging | Investigate a bug, failed test or unexpected behavior |
 | requesting-code-review | A targeted review would materially reduce risk |
@@ -87,17 +82,6 @@ Canonical bodies are `.agents/skills/<name>/SKILL.md`. Read only the selected sk
 | skill-creator | Author or update a project skill |
 | frontend-design | Visual-system, layout, HTML or CSS work in src/renderer |
 
-## Pointers to deeper docs
+## Deeper docs
 
-- README.md
-- .agents/README.md
-- docs/development/TESTING.md
-- docs/development/BACKEND.md
-- docs/development/BUILD_INSTRUCTIONS.md
-- docs/development/INSTALLER_IMPLEMENTATION.md
-- docs/development/LOCAL_AI_MODEL_CATALOG.md
-- docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md
-- docs/development/ADVERSARIAL_REVIEW_PROMPTS.md
-- docs/guides/LINUX_EXPERIMENTAL.md
-- tests/manual/recording-smoke-checklist.md
-- tests/manual/local-ai-addons-checklist.md
+Hardware acceptance: tests/manual/recording-smoke-checklist.md and tests/manual/local-ai-addons-checklist.md. Status: todo.md. Agent setup/usage: .agents/README.md.

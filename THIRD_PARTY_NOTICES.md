@@ -22,7 +22,7 @@ These components are included when you build installers via
 | [ffmpeg](https://ffmpeg.org/) | Opus compression after recording | **GPLv3** (typical third-party builds) | See [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt) and [legal/FFMPEG-COMPLIANCE.json](legal/FFMPEG-COMPLIANCE.json). Windows: gyan.dev essentials build. macOS: shaka-project/static-ffmpeg-binaries arm64 static build. Linux (when packaged): shaka-project `ffmpeg-linux-x64` static build. Windows builds may include `legal/ffmpeg-upstream-*` copied from the gyan.dev archive. |
 | Python packages in `requirements-*-build.txt` | Recording, transcription, HF downloads | Mostly MIT / BSD / Apache-2.0 | Non-exhaustive list below |
 | macOS `audiocapture-helper` (Swift) | Desktop audio capture | Same as AvaNevis (MIT) unless otherwise noted in `swift/` | |
-| `speakrs-cli` | Token-free speaker-identification engine (optional add-on) | Apache-2.0 | Built from `native/speakrs-cli` (Speakrs 0.5.0) and bundled under `Resources/bin/`. Model packs and the Windows ONNX Runtime archive are setup-time downloads, not installer-bundled. |
+| `speakrs-cli` | Token-free speaker-identification engine (optional add-on) | Apache-2.0 | Built from `native/speakrs-cli` (Speakrs 0.7.0) and bundled under `Resources/bin/`. Pinned native model files are explicit setup-time downloads. |
 
 ### Notable bundled Python packages
 
@@ -74,10 +74,13 @@ same source notices are installed under
 
 | Title | Author | Source | License | Changes |
 |-------|--------|--------|---------|---------|
-| `pyannote/segmentation-3.0` | pyannoteAI / CNRS | [original model](https://huggingface.co/pyannote/segmentation-3.0); [pinned repacked source](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) | MIT; Copyright (c) 2020 CNRS | Converted upstream to ONNX/CoreML and repackaged; weights unmodified by AvaNevis |
-| `wespeaker-voxceleb-resnet34-LM` | WeSpeaker contributors; upstream pyannote/Speakrs conversion authors | [WeSpeaker](https://github.com/wenet-e2e/wespeaker); [pinned repacked source](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) | CC BY 4.0 | Converted upstream to ONNX/CoreML and repackaged; weights unmodified by AvaNevis |
-| PLDA/VBx parameters from `speaker-diarization-community-1` | pyannoteAI | [original pipeline](https://huggingface.co/pyannote/speaker-diarization-community-1); [pinned repacked source](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) | CC BY 4.0 | Extracted upstream and repackaged; parameters unmodified by AvaNevis |
-| `speakrs` 0.5.0 | avencera / Praveen Perera | [source](https://github.com/avencera/speakrs/tree/v0.5.0) | Apache-2.0; Copyright 2026 Praveen Perera | AvaNevis selects the offline platform file set and repackages it with notices |
+| `pyannote/segmentation-3.0` | pyannoteAI / CNRS | [original model](https://huggingface.co/pyannote/segmentation-3.0); [pinned repacked source](https://huggingface.co/avencera/speakrs-models/tree/67f963b6a1d94fcd4678948237b3cc8bd69bf1d8) | MIT; Copyright (c) 2020 CNRS | Converted upstream to safetensors/CoreML and repackaged; weights unmodified by AvaNevis |
+| `wespeaker-voxceleb-resnet34-LM` | WeSpeaker contributors; upstream pyannote/Speakrs conversion authors | [WeSpeaker](https://github.com/wenet-e2e/wespeaker); [pinned repacked source](https://huggingface.co/avencera/speakrs-models/tree/67f963b6a1d94fcd4678948237b3cc8bd69bf1d8) | CC BY 4.0 | Converted upstream to safetensors/CoreML and repackaged; weights unmodified by AvaNevis |
+| PLDA/VBx parameters from `speaker-diarization-community-1` | pyannoteAI | [original pipeline](https://huggingface.co/pyannote/speaker-diarization-community-1); [pinned repacked source](https://huggingface.co/avencera/speakrs-models/tree/67f963b6a1d94fcd4678948237b3cc8bd69bf1d8) | CC BY 4.0 | Extracted upstream and repackaged; parameters unmodified by AvaNevis |
+| `speakrs` 0.7.0 | avencera / Praveen Perera | [source](https://github.com/avencera/speakrs/tree/v0.7.0) | Apache-2.0; Copyright 2026 Praveen Perera | AvaNevis selects the offline platform file set and repackages it with notices |
+| `cudarc` 0.19.10 | cudarc contributors | [crate source](https://crates.io/crates/cudarc/0.19.10) | MIT OR Apache-2.0 | Dynamically loads NVIDIA CUDA driver APIs. License texts are under `legal/speakrs-model-pack/LICENSES/`. |
+| `speakrs-ptx-sm75`, `speakrs-ptx-sm80`, `speakrs-ptx-sm120` 0.7.0 | Speakrs contributors | [kernel source and build](https://github.com/avencera/speakrs/tree/v0.7.0) | Apache-2.0 | Embedded PTX from the checksum-pinned crates.io releases. |
+| Vendored `ndarray-npy` | ndarray-npy contributors | [local patch record](native/speakrs-cli/vendor/ndarray-npy/AVANEVIS-PATCH.md) | MIT OR Apache-2.0 | AvaNevis's patched dependency is shared by the native product and separate CPU smoke crates. |
 | ONNX Runtime 1.27.1 CUDA 12 | Microsoft Corporation | [release](https://github.com/microsoft/onnxruntime/releases/tag/v1.27.1) | MIT; Copyright (c) Microsoft Corporation | AvaNevis selectively extracts five required DLLs; binaries unmodified |
 
 **Attribution (CC BY 4.0):** When using Speakrs speaker identification, credit the CC BY pack components, for example:  

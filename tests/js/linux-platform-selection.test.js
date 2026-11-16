@@ -456,11 +456,11 @@ test('Linux Speakrs and Qwen summary catalogs are present and CUDA-gated', () =>
   assert.equal(summary.reason, LINUX_SUMMARY_UNAVAILABLE_REASON);
 
   const linuxArtifacts = getSpeakrsSetupArtifactsForPlatform('linux', 'x64');
-  assert.equal(linuxArtifacts.modelPack.id, 'speakrs-models-5d24ffe-linux-x64-cuda');
+  assert.equal(linuxArtifacts.modelPack.id, 'speakrs-models-67f963b-linux-x64-cuda');
   assert.equal(linuxArtifacts.runtime.modeByPlatform['linux-x64'], 'cuda');
-  assert.ok(linuxArtifacts.runtimeArtifacts.some((entry) => entry.kind === 'ort-archive'));
-  assert.ok(linuxArtifacts.runtimeArtifacts.some((entry) => entry.kind === 'curand-wheel'));
-  assert.ok(linuxArtifacts.runtimeArtifacts.some((entry) => entry.kind === 'nvrtc-wheel'));
+  assert.equal(linuxArtifacts.modelPack.transport, 'files');
+  assert.equal(linuxArtifacts.modelFiles.length, 9);
+  assert.deepEqual(linuxArtifacts.runtimeArtifacts, []);
   const summaryRuntime = getSummaryRuntimeArtifactForPlatform('linux', 'x64');
   assert.equal(summaryRuntime.platform, 'linux');
   assert.equal(summaryRuntime.arch, 'x64');
