@@ -17,6 +17,17 @@ implementation or acceptance evidence.
 
 ## Status
 
+### v2.11 release review follow-up
+
+Before tagging, run the release workflow manually on the final committed SHA and
+verify all three Linux packages and checksum-verified legal staging; verify the
+full installer matrix and CI for that SHA. Recheck the Electron release and npm
+availability immediately before tagging; if the pin changes, requalify
+safeStorage. Track a separate CPython 3.11.18 runtime update and platform
+qualification. The Windows pending-transcription banner and remaining manual
+coverage gaps stay open in the qualification record. Manual workflow runs do not
+publish; publication requires a separately authorized tag.
+
 ### Agent usage improvements — 2026-11-15
 
 Audited repo instructions, builds and recent repo-specific Codex session evidence.

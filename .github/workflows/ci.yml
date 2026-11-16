@@ -372,7 +372,7 @@ jobs:
   test-packaging-linux:
     name: Test Python Backend and Linux Packaging (Ubuntu)
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # Match the release AppImage build environment
     timeout-minutes: 90
 
     steps:

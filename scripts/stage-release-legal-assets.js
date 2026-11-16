@@ -30,6 +30,19 @@ function createLegalBundleZip(legalDir, version) {
   return zipPath;
 }
 
+async function stageSourceWithRetry(legalDir, { stage = stageFfmpegSourceArchive, delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms)) } = {}) {
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await stage(legalDir);
+    } catch (error) {
+      if (attempt === attempts) throw error;
+      console.warn(`FFmpeg source staging failed (attempt ${attempt}/${attempts}): ${error.message}; retrying`);
+      await delay(attempt * 5000);
+    }
+  }
+}
+
 async function main() {
   const rawVersion = process.env.RELEASE_VERSION || require(path.join(REPO_ROOT, 'package.json')).version;
   const version = String(rawVersion).replace(/^v/, '');
@@ -52,7 +65,7 @@ async function main() {
     console.log(`Warning: could not generate Python SBOM: ${error.message}`);
   }
 
-  const sourceArchive = await stageFfmpegSourceArchive(legalDir);
+  const sourceArchive = await stageSourceWithRetry(legalDir);
   const bundleZip = createLegalBundleZip(legalDir, version);
 
   console.log('Release legal assets ready:');
@@ -68,4 +81,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main };
+module.exports = { main, stageSourceWithRetry };

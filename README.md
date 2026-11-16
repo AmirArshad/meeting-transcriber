@@ -32,7 +32,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - **Recovery-friendly storage** — meetings are persisted with an atomic write + cross-process file lock, with corrupt-metadata backups (`meetings.corrupt.*.json`) and filesystem rescan/import on launch or when you refresh history (not on every list reload).
 - **Optional local AI add-ons** — speaker labels and meeting summaries are explicit local setup on Windows and macOS. Linux uses CUDA-only Speakrs and CUDA-only Qwen summaries after managed-runtime admission; Linux Pyannote, CPU fallback, and cloud fallback are unavailable. Linux support evidence is limited to CachyOS x86_64 + RTX 4070; see the [Linux guide](docs/guides/LINUX_EXPERIMENTAL.md) for support boundaries.
 - **One-click installer** — Windows NSIS and macOS DMG bundle Python, ffmpeg, `speakrs-cli`, and the macOS helper. Linux x86_64 packages bundle Python/ffmpeg/backend and stage `speakrs-cli`; add-on model packs and CUDA runtimes are explicit setup-time downloads. No system Python is required.
-- **Update awareness** — checks GitHub Releases on launch and shows an in-app banner with one-click open of the release page.
+- **Update awareness** — checks GitHub Releases on launch and shows an in-app banner with one-click download of the matching installer (or the release page if no installer matches).
 
 ## Privacy
 
@@ -58,13 +58,14 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 
 ### macOS (Apple Silicon, macOS 15+ for v2.11)
 
+**macOS 14:** Stay on [v2.10.3](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.10.3). The v2.11 installer requires macOS 15 or later, even if the older app offers the update.
+
 1. Download `AvaNevis-Setup-<version>.dmg` from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases).
 2. Open the DMG and drag *AvaNevis* into Applications.
-3. **Right-click → Open** the first time. Double-clicking will trigger Gatekeeper to claim the app is "damaged" because the build is unsigned. Right-click → Open bypasses this safely.
+3. The app is ad-hoc signed and not notarized. If macOS blocks it, open **System Settings → Privacy & Security**, then choose **Open Anyway** after attempting to open the app. See [Apple’s instructions](https://support.apple.com/en-us/102445).
 4. Grant microphone and desktop-audio permissions when prompted. On macOS 14.2+, AvaNevis uses a CoreAudio process tap that may request System Audio Recording permission; Screen Recording may still be requested by the ScreenCaptureKit fallback. No screen video is saved.
 5. First transcription downloads the MLX Whisper model once and caches it under `~/Library/Caches/avanevis/mlx_models`; cached files are reused on later transcriptions.
 
-If right-click → Open misbehaves, run `xattr -d com.apple.quarantine /Applications/AvaNevis.app` once and relaunch.
 
 ### Linux (x86_64 Core Beta — Omarchy and CachyOS)
 
@@ -76,7 +77,7 @@ The AppImage is a static-pie runtime and does **not** need host `fuse2` / `libfu
 
 Transcription defaults to local CPU `faster-whisper`. On x86_64 Linux with a verified managed CUDA 12 runtime and NVIDIA GPU, CUDA transcription and local add-ons may be set up; otherwise their controls remain fail-closed. Linux support and acceptance boundaries are in [LINUX_EXPERIMENTAL.md](docs/guides/LINUX_EXPERIMENTAL.md). The [v2.9 compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) is the historical release evidence record.
 
-> **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS, `~/.config/avanevis` on Linux), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The in-app update banner opens the GitHub release page in your browser. It does not download or install the update.
+> **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS, `~/.config/avanevis` on Linux), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The in-app update banner opens the matching installer download in your browser, or the GitHub release page if no installer matches. It does not install the update.
 
 ## Develop
 
@@ -130,7 +131,7 @@ See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS
 
 AI Add-ons are optional and live under Settings. They are not required for recording or transcription.
 
-- **Speaker Identification:** Settings lets you install **one** engine: **Speakrs** (token-free; default for new users; Windows CUDA / macOS Apple Silicon CoreML) or **Pyannote** (`pyannote/speaker-diarization-community-1` with the user's own Hugging Face token; Windows CUDA / macOS Apple Silicon MPS). Switching uninstalls the other engine's models; a saved Hugging Face token is kept across a switch and when removing Speakrs; token deletion applies to Pyannote removal. When setup is ready, AvaNevis runs diarization before transcription and uses padded speaker turns to create speaker-guided Whisper chunks; if that guided path fails, it saves a normal transcript and records the speaker-label failure. The main process uses catalog-resolved model refs, validates the required accelerator, refuses CPU fallback, and serializes GPU-heavy work (transcription, diarization, guided transcription, summaries) through one compute queue with wall-clock timeouts so a hung job cannot block the app for the rest of the session.
+- **Speaker Identification:** Settings lets you install **one** engine: **Speakrs** (token-free; default for new users; Windows CUDA / macOS Apple Silicon CoreML) or **Pyannote** (`pyannote/speaker-diarization-community-1` with the user's own Hugging Face token; Windows CUDA / macOS Apple Silicon MPS). Switching uninstalls the other engine's models; a saved Hugging Face token is kept across a switch and when removing Speakrs; token deletion applies to Pyannote removal. When setup is ready, AvaNevis runs diarization before transcription and uses padded speaker turns to create speaker-guided Whisper chunks; if that guided path fails, it saves a normal transcript and records the speaker-label failure. The main process uses catalog-resolved model refs, validates the required accelerator, disables standalone Speakrs CPU mode, and serializes GPU-heavy work (transcription, diarization, guided transcription, summaries) through one compute queue with wall-clock timeouts so a hung job cannot block the app for the rest of the session.
 - **Meeting Summaries:** Uses a pinned local `llama.cpp` runtime and pinned GGUF model artifacts stored under Electron `userData`. Hugging Face-hosted public GGUF downloads use bundled `huggingface_hub` HTTPS with patched certifi, without reusing the speaker token. Native Xet acceleration is disabled pending its certificate-trust qualification; large downloads can take longer. Summary setup verifies HTTPS artifact hosts, SHA-256 checksums, and safe runtime extraction. Summary generation is always user-triggered from Home or History. The current Qwen model supports English, Spanish, French, German, Chinese, Japanese, Italian, Panjabi, Hindi, Korean and Portuguese. Each generation asks for transcript-language confirmation and checks input/output language locally; failed checks preserve the previous summary.
 - **Expected size:** the default summary model is about 5.7 GB plus platform runtime archives. CUDA setup remains separate and can add several GB.
 - **Outputs:** derived files are saved beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; raw transcripts remain the source of truth.

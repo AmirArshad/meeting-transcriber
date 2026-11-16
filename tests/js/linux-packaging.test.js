@@ -558,7 +558,7 @@ test('prepare-resources builds Speakrs on Linux and still creates a bin director
   assert.match(PREPARE_RESOURCES_SOURCE, /ensureLinuxEmptyBinDirectory|IS_LINUX && !fs.existsSync\(BIN_DIR\)/);
 });
 
-test('Ubuntu CI job builds Linux packages on ubuntu-latest with SHA-pinned actions', () => {
+test('Ubuntu CI job builds Linux packages with SHA-pinned actions', () => {
   assert.match(CI_WORKFLOW, /runs-on:\s*ubuntu-latest/);
   assert.match(CI_WORKFLOW, /npm run test:all/);
   assert.match(CI_WORKFLOW, /build:linux|electron-builder build --linux/);
@@ -581,7 +581,10 @@ test('Ubuntu CI job builds Linux packages on ubuntu-latest with SHA-pinned actio
 });
 
 test('release workflow builds and publishes all three Linux Core Beta payload artifacts after Gate B', () => {
-  assert.match(RELEASE_WORKFLOW, /os: Linux/);
+  assert.match(RELEASE_WORKFLOW, /os: Linux\s+runner: ubuntu-24\.04/);
+  assert.match(CI_WORKFLOW, /test-packaging-linux:[\s\S]*?runs-on: ubuntu-24\.04/);
+  assert.match(RELEASE_WORKFLOW, /stage-release-legal:[\s\S]*?run: node scripts\/stage-release-legal-assets\.js/);
+  assert.match(RELEASE_WORKFLOW, /publish-release:[\s\S]*?needs:[\s\S]*?- stage-release-legal/);
   assert.match(RELEASE_WORKFLOW, /build:linux/);
   assert.match(RELEASE_WORKFLOW, /AvaNevis-Setup-\*\.AppImage/);
   assert.match(RELEASE_WORKFLOW, /AvaNevis-Setup-\*\.pkg\.tar\.zst/);
