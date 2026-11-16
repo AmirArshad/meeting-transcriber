@@ -227,8 +227,18 @@ The Keychain migration was not exercised: the current user's login Keychain
 is the default, and the available fixture isolates profile files but not the
 Keychain. Use an isolated Keychain session and consistent identity.
 
-### Open release gates
+### Release acceptance · 2026-11-16
 
-- **Windows x64 NVIDIA remains open.** Qualify representative consented multi-speaker audio and a longer natural recording; current speaker evidence is synthetic. Verify installed-app UI cancellation/removal, network-isolated offline inference, missing/old drivers and other GPU tiers; the controlled tests above do not establish those cases. Minimum driver per tier remains unqualified. Check the transient pending-transcription banner observed after the earlier completed recording if reproducible.
-- **macOS 15 arm64 remains open.** The 26.7.3 host evidence above covers native CoreML fixture inference and packaged DMG/signature checks, but not execution on macOS 15. Packaged setup, representative speaker quality, recording/MLX and Keychain migration with a consistent app identity remain open.
-- **Release-wide.** Recheck the latest published Electron 46 and repeat affected checks on a pin change. Only the CachyOS RTX 4070 tier has native CUDA evidence so far. Minimum driver by tier and hardware outside the tested host remain open. Keep the release candidate open until the three native gates are complete. Current installers use the existing app version in their filenames and are local artifacts.
+The user accepted the release on the evidence recorded above and waived further
+qualification on other macOS versions and NVIDIA GPU tiers. This is acceptance
+of the coverage limits, not evidence that those configurations were tested.
+The user also accepted the release with the other outstanding qualification
+limits: natural multi-speaker quality, installed-app cancellation/removal,
+independently isolated offline inference, missing/old drivers, macOS packaged
+setup and live recording/permission flows, and Keychain migration. The earlier
+transient Windows pending-transcription banner was not resolved by this sign-off.
+
+Release preparation still needs the final version, documentation and artifact
+checks. Recheck the Electron pin and repeat affected checks if it changes.
+Existing candidates are local, ad-hoc signed or unsigned, and carry the old
+2.10.3 version; they are not published release artifacts.

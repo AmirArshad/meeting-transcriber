@@ -45,6 +45,14 @@ On Linux, `npm run test:all` passed under an isolated X display: 1,133 JS and
 `npm audit --audit-level=high` passed with six moderate packaging-toolchain
 findings. Native installers and hardware checks for Electron 45.2.3 remain open.
 
+### v2.11 acceptance · 2026-11-16
+
+The user accepted the release with the documented qualification limits and
+waived additional macOS-version and NVIDIA GPU-tier testing. Untested cases
+remain identified as such in the [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md).
+Release versioning, documentation, dependency review and publication preparation
+remain to be completed.
+
 ### v2.11 local release candidate · CachyOS, 2026-11-15
 
 CachyOS built and verified the AppImage, pacman and deb candidates under the
