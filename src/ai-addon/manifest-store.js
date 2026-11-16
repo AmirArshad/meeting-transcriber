@@ -823,11 +823,12 @@ function buildDiarizationStorageFootprint({
   const estimatedPackBytes = Array.isArray(packCache?.artifact?.modelFiles)
     ? packCache.artifact.modelFiles.reduce((total, file) => total + (Number(file.sizeBytes) || 0), 0)
     : null;
-  const estimatedRuntimeBytes = Array.isArray(runtimeCache?.artifact?.runtimeArtifacts)
+  const directFiles = packCache?.artifact?.modelPack?.transport === 'files';
+  const estimatedRuntimeBytes = !directFiles && Array.isArray(runtimeCache?.artifact?.runtimeArtifacts)
     ? runtimeCache.artifact.runtimeArtifacts.reduce((total, file) => total + (Number(file.sizeBytes) || 0), 0)
     : null;
   const runtimeFamilies = engine === 'speakrs'
-    ? ['speakrs-ort']
+    ? (directFiles ? [] : ['speakrs-ort'])
     : (dependencyCache?.artifact?.runtimeFamilies || []);
   const estimatedInstalledBytes = engine === 'speakrs'
     ? (estimatedPackBytes || 0) + (estimatedRuntimeBytes || 0) || null

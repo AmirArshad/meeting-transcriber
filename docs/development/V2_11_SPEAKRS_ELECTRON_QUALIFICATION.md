@@ -146,8 +146,47 @@ its packaged CLI SHA-256 is
 payload. The candidate remains an Electron 46 alpha, versioned 2.10.3 and
 unsigned; it is not a published release.
 
+### Windows continuation · 2026-11-16
+
+On the same Windows 11 / RTX 4070 / driver 621.24 host, the unpacked app
+repaired a disposable legacy-ready Speakrs profile containing a 0.5 model
+file and private ORT DLL. It downloaded and validated the 0.7 files on CUDA,
+reported Ready and retained the old model. A UI cancellation attempt arrived
+after the fast download and validation completed, so it is not cancellation
+evidence. Separately, the real source setup service on a fresh synthetic legacy
+profile handled an injected cancellation and an injected download failure
+without changing the old manifest or model. Retry copied the nine pinned files,
+verified their hashes and validated them using the bundled Windows CUDA CLI.
+A second setup completed with a downloader that would fail if called. Removal
+deleted the owned model and legacy runtime trees while preserving a shared
+CUDA sentinel. These controlled service checks are not an installed-app UI
+cancellation/removal test or proof of a network-disconnected machine.
+
+The packaged Python backend ran the 231.6-second synthetic sample with
+`HF_HUB_OFFLINE=1` and local-only Whisper. It returned CUDA Speakrs and CUDA
+float16 Whisper, 48 non-empty guided turns and two speakers, matching the
+known synthetic turns 24/24 per voice by maximum overlap. This was an offline
+configuration, not an independently observed network isolation trace. A
+native debug-event trace of the final unpacked CLI on the same sample returned
+CUDA and 48 segments; no scratch CWD/PATH decoy DLL was loaded. Only the
+System32 NVIDIA driver and its DriverStore dependency appeared among CUDA
+loads. Other GPU/driver tiers remain untested.
+
+The native model footprint now excludes legacy ORT downloads from estimates;
+the rebuilt installed app displayed 31 MB instead of 536 MB. The final NSIS
+candidate installed to a scratch directory, launched with the repaired test
+profile and showed speaker setup Ready; its uninstaller exited 0 with
+`/KEEP_APP_DATA`, removed the app executable and retained the test models.
+The unsigned installer is 249,538,139 bytes, SHA-256
+`0df3c28f62f30a481208d7f2a7cf39ca5507eb076e88f492e4aca870dc4e216e`;
+the packaged CLI SHA-256 remains
+`23ec1b0d347fd878ecc7183aa1d18032c0386710058cbe0c67c3f3d3d185059f`.
+The packaged-layout verifier and `npm run test:all` passed: 1,136 JS passed /
+4 skipped and 854 Python passed / 5 skipped. The npm registry still lists
+46.0.0-alpha.10 as the latest Electron 46 alpha on this date.
+
 ### Open release gates
 
-- **Windows x64 NVIDIA remains open.** On the integrated build, test old-install repair, cancellation/failure/retry, removal, offline repeat and the NSIS install/uninstall lifecycle. Test representative consented multi-speaker audio and a longer guided recording; the completed examples use synthetic speech. Recheck loaded DLL paths with the packaged workflow and verify missing/old drivers and other GPU tiers. Minimum driver per tier remains unqualified. Settings currently overestimates the direct-file model footprint by including legacy ORT artifacts (observed about 536 MB); correct the estimate and cover it with a focused regression. Check the transient pending-transcription banner observed after the earlier completed recording if reproducible.
+- **Windows x64 NVIDIA remains open.** Qualify representative consented multi-speaker audio and a longer natural recording; current speaker evidence is synthetic. Verify installed-app UI cancellation/removal, network-isolated offline inference, missing/old drivers and other GPU tiers; the controlled tests above do not establish those cases. Minimum driver per tier remains unqualified. Check the transient pending-transcription banner observed after the earlier completed recording if reproducible.
 - **macOS 15 arm64 follows.** The app plist and bundled Rust CLI floor are 15.0. Native CoreML model load, packaged DMG, signature/entitlements, recording/MLX, and Keychain migration with a consistent app identity remain open.
 - **Release-wide.** Recheck the latest published Electron 46 and repeat affected checks on a pin change. Only the CachyOS RTX 4070 tier has native CUDA evidence so far. Minimum driver by tier and hardware outside the tested host remain open. Keep the release candidate open until the three native gates are complete. Current installers use the existing app version in their filenames and are local artifacts.

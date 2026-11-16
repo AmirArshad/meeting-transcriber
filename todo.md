@@ -68,6 +68,17 @@ overestimates the native model footprint by including legacy runtime bytes.
 See the [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
 for evidence and next steps. macOS 15 arm64 remains open.
 
+### v2.11 Windows continuation · 2026-11-16
+
+The rebuilt Windows candidate passed the full suite, packaged CLI loader trace,
+scratch NSIS install/uninstall, synthetic legacy-profile repair and a longer
+packaged guided CUDA run. Controlled service checks covered cancellation,
+failure/retry, no-downloader repeat and removal. The Speakrs model footprint
+estimate is corrected. Natural multi-speaker audio, independently isolated
+offline execution, other GPU/driver tiers and macOS 15 arm64 remain open; the
+[qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
+distinguishes the evidence from these remaining release gates.
+
 ### v2.11 plan review — 2026-11-15
 
 Plan review only; no product implementation or new platform acceptance.

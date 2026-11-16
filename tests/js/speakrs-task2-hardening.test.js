@@ -661,6 +661,32 @@ test('Windows native runtime ignores the legacy private DLL tree', async () => {
   }
 });
 
+test('native Speakrs storage estimates exclude unused legacy runtime artifacts', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-native-footprint-'));
+  try {
+    for (const [platform, arch] of [['win32', 'x64'], ['linux', 'x64'], ['darwin', 'arm64']]) {
+      const artifact = getSpeakrsSetupArtifactsForPlatform(platform, arch);
+      const expected = artifact.modelFiles.reduce((total, file) => total + file.sizeBytes, 0);
+      const status = await checkAiAddonSetupStatus({ userDataDir, platform, arch });
+      const storage = status.features.diarization.storage;
+      assert.equal(storage.estimatedInstalledBytes, expected, platform);
+      assert.equal(storage.estimatedDownloadBytes, expected, platform);
+      assert.deepEqual(storage.runtimeFamilies, [], platform);
+    }
+
+    const legacyCatalog = createPinnedTestCatalog();
+    const legacy = getSpeakrsSetupArtifactsForPlatform('win32', 'x64', legacyCatalog);
+    const status = await checkAiAddonSetupStatus({ userDataDir, platform: 'win32', arch: 'x64', catalog: legacyCatalog });
+    const expected = [...legacy.modelFiles, ...legacy.runtimeArtifacts]
+      .reduce((total, file) => total + file.sizeBytes, 0);
+    assert.equal(status.features.diarization.storage.estimatedInstalledBytes, expected);
+    assert.equal(status.features.diarization.storage.estimatedDownloadBytes, expected);
+    assert.deepEqual(status.features.diarization.storage.runtimeFamilies, ['speakrs-ort']);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test('Windows Speakrs runtime rejects an unpinned DLL in its loader directory', async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-unpinned-windows-loader-'));
   const catalog = createPinnedTestCatalog();
