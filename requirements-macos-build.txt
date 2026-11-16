@@ -40,7 +40,7 @@ PyYAML==6.0.3
 tqdm==4.70.1
 typer==0.27.3
 annotated-doc==0.0.5
-click==8.5.0
+click==8.5.1
 rich==15.0.0
 Pygments==2.21.0
 markdown-it-py==4.2.0
