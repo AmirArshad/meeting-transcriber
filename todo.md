@@ -19,14 +19,48 @@ implementation or acceptance evidence.
 
 ### v2.11 release review follow-up
 
-Before tagging, run the release workflow manually on the final committed SHA and
-verify all three Linux packages and checksum-verified legal staging; verify the
-full installer matrix and CI for that SHA. Recheck the Electron release and npm
-availability immediately before tagging; if the pin changes, requalify
-safeStorage. Track a separate CPython 3.11.18 runtime update and platform
-qualification. The Windows pending-transcription banner and remaining manual
-coverage gaps stay open in the qualification record. Manual workflow runs do not
-publish; publication requires a separately authorized tag.
+The [hosted release dry run](https://github.com/AmirArshad/meeting-transcriber/actions/runs/43787045494)
+passed on `38fbea7` for Windows, macOS, all three Linux packages on Ubuntu 24.04,
+Speakrs model checksums, and FFmpeg legal staging. The publication job was skipped.
+Recheck Electron releases and npm availability before tagging. A runtime pin
+change requires new qualification. The Windows pending-transcription banner and
+remaining manual coverage gaps are in the
+[qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md).
+
+### Security maintenance after v2.11.0 · reviewed 2026-11-16
+
+The review found no demonstrated exploit path through AvaNevis that warrants
+delaying v2.11.0 for these updates. Prioritize the runtime fixes below.
+
+- [ ] **Electron:** Qualify a published Electron 46 build with Node 26.13.1
+  or newer. The qualified `46.0.0-alpha.10` embeds Node 26.13.0. The November
+  fixes are already on the 46 branch. The reviewed app paths do not run HTTP/2
+  or TLS servers or mix HTTPS Agent certificate policies. Alpha.10 contains
+  the exploited Chromium XML fix (CVE-2026-125350) and the revoked eMudhra RSA
+  block in Chromium and Node. Recheck the Linux keyring provider mapping and
+  fixed-key rejection against the new pin, then rerun token migration smokes.
+  [Node advisories](https://nodejs.org/en/blog/vulnerability/november-2026-security-releases/),
+  [Electron Node update](https://github.com/electron/electron/pull/55755),
+  [Chromium fix](https://github.com/chromium/chromium/blob/159.0.8153.0/third_party/libxslt/chromium/0008-Fix-use-after-free-in-direct-pattern-match-cache.patch),
+  [Electron certificate fix](https://github.com/electron/electron/pull/55741).
+- [ ] **Bundled CPython:** Qualify 3.11.18 or newer on all three platforms,
+  starting with Windows. The Windows embedded runtime is 3.11.9 and macOS/Linux
+  use 3.11.17. They lack 3.11.18 fixes for eMudhra distrust in `ssl`, Expat, and
+  `tarfile`. The Hugging Face HTTPS path uses patched certifi with native Xet
+  disabled. Qualify the replacement Windows embedded layout, packaged
+  transcription, and add-on setup before switching the release pins.
+  [Runtime pins](build/download-manifest.js),
+  [CPython security fixes](https://www.python.org/downloads/release/python-31118/).
+- [ ] **Python package updates:** Review filelock (#146), numba/llvmlite (#147),
+  torch (#150), and click (#152) against current advisories and packaged
+  inventories. The November 16 `pip-audit` rerun found zero findings in the
+  platform build pins, managed Parakeet locks, direct Pyannote pins, bootstrap
+  pip, and local macOS payload inventory. The upstream PyTorch advisory lacks a
+  package mapping and was identified separately. It covers attacker-controlled
+  checkpoints loaded under Torch 2.14.1 and is fixed in 2.15.0. Packaging removes
+  macOS build-time Torch 2.14.1, which was confirmed absent from the local app's
+  import path. Optional Windows/macOS Pyannote pins Torch 2.13.0, outside this
+  advisory's affected range. [PyTorch advisory](https://github.com/pytorch/pytorch/security/advisories/GHSA-v32g-mr63-3j83).
 
 ### Agent usage improvements — 2026-11-15
 
