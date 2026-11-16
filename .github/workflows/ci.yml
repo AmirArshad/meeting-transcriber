@@ -221,7 +221,7 @@ jobs:
       run: cargo build --release --locked --features ci-cpu-smoke
 
     - name: Speakrs CPU-mode inference smoke
-      run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cpu-smoke/target/release/speakrs-cpu-smoke
+      run: node scripts/run-speakrs-cpu-smoke.js
 
     - name: Build packaged macOS app smoke test
       env:
@@ -303,7 +303,7 @@ jobs:
       run: cargo build --release --locked --features ci-cpu-smoke
 
     - name: Speakrs CPU-mode inference smoke
-      run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cpu-smoke/target/release/speakrs-cpu-smoke.exe
+      run: node scripts/run-speakrs-cpu-smoke.js
 
     - name: Validate JavaScript syntax under src/
       run: npm run test:syntax
@@ -447,7 +447,7 @@ jobs:
       run: cargo build --release --locked --features ci-cpu-smoke
 
     - name: Speakrs CPU-mode inference smoke (non-GPU structural check)
-      run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cpu-smoke/target/release/speakrs-cpu-smoke
+      run: node scripts/run-speakrs-cpu-smoke.js
 
     - name: Run the full automated suite
       run: xvfb-run -a npm run test:all

@@ -337,7 +337,7 @@ test('CI and release workflows install explicit Rust targets and pin-safe smoke 
   assert.match(CI_WORKFLOW, /cargo build --release --locked --target x86_64-pc-windows-msvc/);
   assert.match(CI_WORKFLOW, /cargo build --release --locked --target x86_64-unknown-linux-gnu/);
   assert.equal((CI_WORKFLOW.match(/cargo build --release --locked --features ci-cpu-smoke/g) || []).length, 3);
-  assert.match(CI_WORKFLOW, /speakrs-cpu-smoke\/target\/release\/speakrs-cpu-smoke\.exe/);
+  assert.equal((CI_WORKFLOW.match(/run: node scripts\/run-speakrs-cpu-smoke\.js\s*$/gm) || []).length, 3);
   assert.match(CI_WORKFLOW, /hashFiles\('native\/speakrs-cpu-smoke\/Cargo\.lock'/);
   assert.match(RELEASE_WORKFLOW, /rust-target: x86_64-pc-windows-msvc/);
   assert.match(RELEASE_WORKFLOW, /rust-target: aarch64-apple-darwin/);
