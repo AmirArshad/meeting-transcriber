@@ -185,8 +185,50 @@ The packaged-layout verifier and `npm run test:all` passed: 1,136 JS passed /
 4 skipped and 854 Python passed / 5 skipped. The npm registry still lists
 46.0.0-alpha.10 as the latest Electron 46 alpha on this date.
 
+## 2026-11-16 · macOS arm64 continuation
+
+Source `be8d3c0` plus the accompanying architecture-aware test fixes. Apple
+M4 Pro, macOS 26.7.3, Node 26.13.1, npm 11.20.0, repo Python 3.11.18,
+Rust 1.89.0 and Electron 46.0.0-alpha.10. This is not a macOS 15 host.
+The npm registry's Electron 46 alpha tag still selected alpha.10 on this date.
+
+`npm ci` restored the locked Electron after a stale 45.2.1 installation was
+found. The initial suite exposed five host-dependent Speakrs test failures:
+simulated x64 platforms used the real arm64 architecture, and two tests
+expected CUDA on macOS. The accompanying fix makes the architecture explicit
+for simulated platforms and asserts CoreML on Apple Silicon. The focused 83
+tests and `npm run test:all` passed: 1,137 JavaScript passed / 3 skipped and
+849 Python passed / 10 skipped. `python3 scripts/agents/validate_setup.py` and
+`npm audit --audit-level=high` passed; npm reported six moderate advisories.
+
+`AVANEVIS_SKIP_DIST_CLEAN=1 npm run build:mac` produced an ad-hoc signed,
+non-notarized DMG, still versioned 2.10.3. `npm run verify:mac:packaged` and
+`node scripts/verify-speakrs-packaging.js --packaged` passed. The DMG checksum
+verified with `hdiutil`; its read-only mounted app passed deep strict signature
+verification and contained the same CLI as the unpacked app. The packaged
+verifier checked the 15.0 plist and CLI deployment floors, nested signatures,
+helper and CLI inherit entitlements, MLX imports, and Opus encoding. DMG
+SHA-256 `64d0f513847721902270036167bfa3f8c902af139ad8f18d4759596bc3d1a8b4`;
+packaged CLI SHA-256
+`77ece0622e2469ff14f014b80df50c33db19f92d3ff6504eae27915dc7bc8fb2`.
+
+All 67 CoreML model leaves at revision `67f963b6a1d94fcd4678948237b3cc8bd69bf1d8`
+matched their pinned sizes and hashes. Both an isolated locked native build
+and the packaged CLI ran the repository fixture on CoreML and returned six
+segments, all labeled `SPEAKER_00`. This establishes model loading and native
+execution on this host, not speaker separation or natural-speech quality.
+The fixture SHA-256 is
+`1eed9687badcdd0d554638c8229fdb48d5c80e21ed1393c3bb5621f0c83bd998`.
+The packaged Python backend also transcribed 4.576 seconds of synthetic `say`
+speech from a copied local base model with local-files-only enabled, reporting
+`metal` / `float16`. The output contained a recognition error; this direct
+backend smoke is not a recording or Electron UI acceptance test.
+The Keychain migration was not exercised: the current user's login Keychain
+is the default, and the available fixture isolates profile files but not the
+Keychain. Use an isolated Keychain session and consistent identity.
+
 ### Open release gates
 
 - **Windows x64 NVIDIA remains open.** Qualify representative consented multi-speaker audio and a longer natural recording; current speaker evidence is synthetic. Verify installed-app UI cancellation/removal, network-isolated offline inference, missing/old drivers and other GPU tiers; the controlled tests above do not establish those cases. Minimum driver per tier remains unqualified. Check the transient pending-transcription banner observed after the earlier completed recording if reproducible.
-- **macOS 15 arm64 follows.** The app plist and bundled Rust CLI floor are 15.0. Native CoreML model load, packaged DMG, signature/entitlements, recording/MLX, and Keychain migration with a consistent app identity remain open.
+- **macOS 15 arm64 remains open.** The 26.7.3 host evidence above covers native CoreML fixture inference and packaged DMG/signature checks, but not execution on macOS 15. Packaged setup, representative speaker quality, recording/MLX and Keychain migration with a consistent app identity remain open.
 - **Release-wide.** Recheck the latest published Electron 46 and repeat affected checks on a pin change. Only the CachyOS RTX 4070 tier has native CUDA evidence so far. Minimum driver by tier and hardware outside the tested host remain open. Keep the release candidate open until the three native gates are complete. Current installers use the existing app version in their filenames and are local artifacts.

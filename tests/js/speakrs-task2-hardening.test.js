@@ -353,6 +353,7 @@ test('packaged buildSpeakrsSpawnEnv pins Resources/bin and ignores decoys', () =
       userDataDir,
       requiredDevice: 'cuda',
       platform: 'win32',
+      arch: 'x64',
       env: packagedEnv,
       resourcesPath,
       projectRoot: root,
@@ -424,7 +425,7 @@ test('Windows native Speakrs leaves the legacy private runtime off the loader pa
   const userDataDir = path.join(os.tmpdir(), 'avanevis-speakrs-windows');
   const currentPath = 'C:\\Windows\\System32';
   const spawned = buildSpeakrsSpawnEnv({
-    userDataDir, platform: 'win32', requiredDevice: 'cuda',
+    userDataDir, platform: 'win32', arch: 'x64', requiredDevice: 'cuda',
     extra: { PATH: currentPath },
     env: { ORT_DYLIB_PATH: 'untrusted-onnxruntime.dll' },
   });

@@ -228,7 +228,7 @@ test('speakrs validation clears HF env and does not write a token to stdin', asy
   assert.equal(options.env.HF_HOME, undefined);
   assert.equal(options.env.HF_HUB_CACHE, undefined);
   assert.equal(options.env.SPEAKRS_EXCLUSIVE, '1');
-  assert.equal(options.env.SPEAKRS_MODE, 'cuda');
+  assert.equal(options.env.SPEAKRS_MODE, process.platform === 'darwin' && process.arch === 'arm64' ? 'coreml' : 'cuda');
   // No installed model is represented in this fixture; do not invent an active path.
   assert.equal(options.env.SPEAKRS_MODELS_DIR, undefined);
 

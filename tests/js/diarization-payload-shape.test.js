@@ -199,7 +199,7 @@ test('speakrs child env skips HF cache vars and does not inherit exclusive=0', (
     assert.equal(speakrsEnv.HF_HOME, undefined);
     assert.equal(speakrsEnv.PYTHONPATH, undefined);
     assert.equal(speakrsEnv.SPEAKRS_EXCLUSIVE, '1');
-    assert.equal(speakrsEnv.SPEAKRS_MODE, 'cuda');
+    assert.equal(speakrsEnv.SPEAKRS_MODE, process.platform === 'darwin' && process.arch === 'arm64' ? 'coreml' : 'cuda');
     if (process.platform === 'linux') {
       assert.equal(
         speakrsEnv.AVANEVIS_LINUX_CUDA_REQUIRED,

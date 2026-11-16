@@ -473,6 +473,7 @@ function buildSpeakrsSpawnEnv({
   userDataDir,
   requiredDevice,
   platform = process.platform,
+  arch = process.arch,
   env = process.env,
   fsModule = fs,
   resourcesPath = process.resourcesPath,
@@ -494,7 +495,7 @@ function buildSpeakrsSpawnEnv({
       resourcesPath,
       projectRoot,
     }));
-  const artifact = getSpeakrsSetupArtifactsForPlatform(platform, process.arch);
+  const artifact = getSpeakrsSetupArtifactsForPlatform(platform, arch);
   const directFiles = artifact?.modelPack?.transport === 'files';
   const installId = directFiles
     ? loadManifest({ userDataDir, fsModule }).features.diarization.speakrsInstallId
@@ -503,7 +504,7 @@ function buildSpeakrsSpawnEnv({
     ? getNativeSpeakrsModelDir(userDataDir, artifact.revision, installId)
     : getSpeakrsModelRevisionDir(userDataDir));
   const mode = directFiles
-    ? artifact.runtime.modeByPlatform[`${platform}-${process.arch}`]
+    ? artifact.runtime.modeByPlatform[`${platform}-${arch}`]
     : platform === 'linux' ? 'cuda' : resolveSpeakrsMode(requiredDevice, env);
   const { LD_LIBRARY_PATH: _ignoredLibraryPath, ...restExtra } = extra || {};
   const speakrsEnv = {
