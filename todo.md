@@ -1,6 +1,7 @@
-# AvaNevis v2.10
+# AvaNevis release status
 
-Release version: **v2.10.3** — dependency and download maintenance.
+Latest published version: **v2.10.3** — dependency and download maintenance.
+Next release prepared on this branch: **v2.11.0**, pending authorized tag and publication.
 See the [v2.10.3 release notes](docs/releases/v2.10.3.md) and
 [dependency qualification evidence](docs/development/DEPENDENCY_SWEEP_2026-11-03.md).
 Previous release: **v2.10.2**, published 2026-10-21.
@@ -27,9 +28,9 @@ semantics. The ignored local Codex configuration disables the duplicate plugin;
 the [setup guide](.agents/README.md) and tracked example cover other machines.
 Setup/link tests pass (17); confirm plugin discovery after restarting Codex.
 
-### Next version — speaker identification and runtime maintenance — 2026-11-10
+### Historical v2.11 proposal — 2026-11-10
 
-Provisional target **v2.11**: upgrade to Speakrs 0.7 on Windows CUDA, Linux
+The original provisional target **v2.11** was: upgrade to Speakrs 0.7 on Windows CUDA, Linux
 CUDA and macOS CoreML; migrate safeStorage to its asynchronous API and target
 the latest Electron 46; and take separately qualified, compatible dependency
 updates. The file-level
@@ -45,26 +46,38 @@ On Linux, `npm run test:all` passed under an isolated X display: 1,133 JS and
 `npm audit --audit-level=high` passed with six moderate packaging-toolchain
 findings. Native installers and hardware checks for Electron 45.2.3 remain open.
 
+### v2.11 dependency review · 2026-11-16
+
+GitHub returned no open Dependabot alerts. Applied the pytest minimum 9.2.0
+(#149) and pinned release action 3.0.4 (#151). The Electron 45.2.3 PR (#148)
+would downgrade the qualified 46 alpha and was not applied. Deferred filelock
+(#146), numba (#147), torch (#150), and click (#152): these affect packaged
+Python closures and require platform and bundled inventory verification beyond
+the available evidence. Their PR checks include Linux/Cargo failures and
+cancelled macOS jobs. `npm audit --audit-level=high` passed with six moderate
+minimatch findings in the build toolchain; the suggested forced fix changes
+major packaging dependencies, so it was deferred pending compatibility testing.
+
 ### v2.11 acceptance · 2026-11-16
 
 The user accepted the release with the documented qualification limits and
 waived additional macOS-version and NVIDIA GPU-tier testing. Untested cases
 remain identified as such in the [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md).
-Release versioning, documentation, dependency review and publication preparation
-remain to be completed.
+Release preparation is recorded in the [v2.11.0 release notes](docs/releases/v2.11.0.md).
+Publication requires a separately authorized tag; acceptance does not turn
+unperformed checks into passing results.
 
-### v2.11 local release candidate · CachyOS, 2026-11-15
+### Historical v2.11 local release candidate · CachyOS, 2026-11-15
 
 CachyOS built and verified the AppImage, pacman and deb candidates under the
 existing app version. Native Speakrs 0.7 CUDA, disposable-profile repair and
 removal, synthetic short and long guided transcription, PipeWire capture, and
-the Electron 46 alpha secure-storage smoke ran locally. The release candidate
-is open. Take the source-only patch to native Windows x64 NVIDIA for the
-upstream CUDA/MSVC and loader probe first, then continue to macOS 15 arm64.
+the Electron 46 alpha secure-storage smoke ran locally. Subsequent Windows and
+macOS checks and accepted limits are recorded below and in the qualification record.
 The [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
 has the test evidence, hashes and pending gates.
 
-### v2.11 Windows qualification · 2026-11-15
+### Historical v2.11 Windows qualification · 2026-11-15
 
 The Windows RTX 4070 native loader is restricted to System32; a decoy test,
 image-load trace, synthetic 0.5/0.7 comparison and packaged guided recording
@@ -76,7 +89,7 @@ overestimates the native model footprint by including legacy runtime bytes.
 See the [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
 for evidence and next steps. macOS 15 arm64 remains open.
 
-### v2.11 Windows continuation · 2026-11-16
+### Historical v2.11 Windows continuation · 2026-11-16
 
 The rebuilt Windows candidate passed the full suite, packaged CLI loader trace,
 scratch NSIS install/uninstall, synthetic legacy-profile repair and a longer
@@ -87,7 +100,7 @@ offline execution, other GPU/driver tiers and macOS 15 arm64 remain open; the
 [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
 distinguishes the evidence from these remaining release gates.
 
-### v2.11 plan review — 2026-11-15
+### Historical v2.11 plan review — 2026-11-15
 
 Plan review only; no product implementation or new platform acceptance.
 The [revised plan](docs/superpowers/plans/2026-11-10-v2.11-speaker-upgrade.md)

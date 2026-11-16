@@ -198,8 +198,8 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) or [open an issue on GitHub](https:
 
 ## 📋 macOS Version Requirements
 
-- **Minimum:** macOS 14 (Sonoma)
-- **Recommended:** macOS 14.2 or later for CoreAudio system-audio capture
+- **Minimum for v2.11:** macOS 15 (Sequoia) on Apple Silicon
+- CoreAudio system-audio capture is available on this supported baseline; the helper retains its separate compatibility checks.
 - **Architecture:**
   - ✅ Apple Silicon (M1 or newer) - Full GPU acceleration
   - ❌ Intel Mac (x64) - packaged releases are not supported

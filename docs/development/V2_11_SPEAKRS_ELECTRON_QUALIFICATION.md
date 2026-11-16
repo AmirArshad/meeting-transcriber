@@ -238,7 +238,30 @@ independently isolated offline inference, missing/old drivers, macOS packaged
 setup and live recording/permission flows, and Keychain migration. The earlier
 transient Windows pending-transcription banner was not resolved by this sign-off.
 
-Release preparation still needs the final version, documentation and artifact
-checks. Recheck the Electron pin and repeat affected checks if it changes.
-Existing candidates are local, ad-hoc signed or unsigned, and carry the old
-2.10.3 version; they are not published release artifacts.
+At acceptance, release preparation still needed final versioning, documentation
+and artifact checks. The candidates described above are local, ad-hoc signed or
+unsigned, and carry the old 2.10.3 version; they are not published artifacts.
+
+### Final-version preparation · 2026-11-16
+
+On the same macOS 26.7.3 M4 Pro host, the npm registry's `alpha-46-x-y`
+tag still selected `46.0.0-alpha.10`; the qualified pin was unchanged. This
+is an Electron prerelease. The Linux safeStorage provider mapping and native
+migration evidence above therefore still refer to the same Chromium build.
+`npm audit --audit-level=high` exited 0 with six moderate minimatch findings in
+the packaging toolchain; the suggested forced fix changes major dependencies.
+Open Dependabot alerts were empty. The dependency decisions are in [todo.md](../../todo.md).
+
+After the version and dependency changes, `npm run test:all` passed on this
+host: 1,137 JavaScript passed / 3 skipped and 849 Python passed / 10 skipped.
+`AVANEVIS_SKIP_DIST_CLEAN=1 npm run build:mac` built an ad-hoc signed,
+non-notarized `AvaNevis-Setup-2.11.0.dmg`. The packaged macOS and Speakrs
+verifiers passed; `hdiutil verify` reported a valid checksum. The mounted app
+reported version 2.11.0 and passed deep strict signature verification. Its CLI
+hash matched the unpacked CLI. DMG SHA-256:
+`8cc2c4dbbf95fd662c8f0062d4b14d4ee9dd1c161c35957d8201fdd9cfc82907`.
+CLI SHA-256:
+`77ece0622e2469ff14f014b80df50c33db19f92d3ff6504eae27915dc7bc8fb2`.
+These checks do not add live recording, setup or Keychain migration evidence.
+No final-version Windows or Linux installers were built on this macOS host.
+The local DMG is a preparation artifact, not a published release.

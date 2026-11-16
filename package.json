@@ -1,6 +1,6 @@
 {
   "name": "avanevis",
-  "version": "2.10.3",
+  "version": "2.11.0",
   "description": "AvaNevis private meeting recorder and local AI transcriber",
   "main": "src/main.js",
   "scripts": {
