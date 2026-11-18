@@ -96,6 +96,20 @@ test('resumable pending excludes busy queue jobs and never counts failed', () =>
   ]), 2);
 });
 
+test('resume banner ignores stale pending snapshots for terminal session jobs', () => {
+  const meetings = ['ready', 'failed', 'cancelled', 'orphan'].map((id) => ({
+    id, transcriptionStatus: 'pending',
+  }));
+  meetings.push({ id: 'excluded', transcriptionStatus: 'pending', transcriptionResumeExcluded: true });
+  assert.equal(countResumablePendingMeetings(meetings, {
+    jobs: [
+      { meetingId: 'ready', status: 'ready' },
+      { meetingId: 'failed', status: 'failed' },
+      { meetingId: 'cancelled', status: 'failed', phase: 'cancelled' },
+    ],
+  }), 1);
+});
+
 test('buildActivityRows merges queue + durable, caps Ready, and exposes rename/delete', () => {
   const readyJobs = Array.from({ length: SESSION_READY_CAP + 2 }, (_, i) => ({
     meetingId: `ready_${i}`,

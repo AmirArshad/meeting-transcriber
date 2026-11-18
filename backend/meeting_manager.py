@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 import sys
 import shutil
+import stat
 import threading
 
 from filelock import FileLock
@@ -66,9 +67,11 @@ class MeetingManager:
         self._corrupt_metadata_backup_path: Optional[Path] = None
         self._corrupt_metadata_signature: Optional[tuple[int, int]] = None
 
-        # Create empty metadata file if it doesn't exist
+        # Another process can initialize and write History while we wait for the lock.
         if not self.metadata_file.exists():
-            self._save_meetings([])
+            with self._metadata_guard():
+                if not self.metadata_file.exists():
+                    self._save_meetings_unlocked([])
 
     @contextmanager
     def _metadata_guard(self):
@@ -310,7 +313,10 @@ class MeetingManager:
 
                 if marker:
                     for path in (new_audio_path, new_transcript_path):
-                        with path.open('rb') as persisted:
+                        # Windows requires a writable handle for FlushFileBuffers.
+                        # copy2 may preserve the source's read-only attribute.
+                        path.chmod(path.stat().st_mode | stat.S_IWRITE)
+                        with path.open('r+b') as persisted:
                             os.fsync(persisted.fileno())
                     self._sync_recordings_dir()
 

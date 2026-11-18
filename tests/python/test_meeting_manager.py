@@ -1,6 +1,7 @@
 import json
 import hashlib
 import os
+from contextlib import contextmanager
 from datetime import datetime as real_datetime
 from pathlib import Path
 
@@ -15,6 +16,25 @@ def _create_source_files(recordings_dir: Path, stem: str):
     audio_path.write_bytes(b'audio-bytes')
     transcript_path.write_text('# Transcript\n\nHello world', encoding='utf-8')
     return audio_path, transcript_path
+
+
+def test_initialization_preserves_a_meeting_committed_while_waiting_for_the_lock(tmp_path):
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings, 'first_recording')
+    committed = []
+
+    class DelayedMeetingManager(MeetingManager):
+        @contextmanager
+        def _metadata_guard(self):
+            if not committed:
+                writer = MeetingManager(str(recordings))
+                committed.append(writer.add_meeting(str(audio), str(transcript), 1))
+            with super()._metadata_guard():
+                yield
+
+    manager = DelayedMeetingManager(str(recordings))
+    assert len(committed) == 1
+    assert manager.list_meetings() == committed
 
 
 def test_add_meeting_persists_files_and_removes_originals(tmp_path):
@@ -1353,6 +1373,23 @@ MeetingManager(sys.argv[1]).add_meeting(sys.argv[2], sys.argv[3], 1)
     assert saved[0]['transcriptionStatus'] == 'pending'
     assert Path(saved[0]['audioPath']).read_bytes() == b'audio-bytes'
     assert not list(recordings.glob('.meeting-import-*'))
+
+
+def test_staged_import_flushes_read_only_copies(tmp_path):
+    import stat
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings / '.audio-import-test', 'audio')
+    audio.chmod(stat.S_IREAD)
+    transcript.chmod(stat.S_IREAD)
+    try:
+        meeting = MeetingManager(str(recordings)).add_meeting(str(audio), str(transcript), 1)
+        assert Path(meeting['audioPath']).is_file()
+        assert Path(meeting['transcriptPath']).is_file()
+    finally:
+        for path in (audio, transcript):
+            if path.exists():
+                path.chmod(stat.S_IREAD | stat.S_IWRITE)
 
 
 def test_scan_waits_for_staged_import_metadata_lock(tmp_path, monkeypatch):

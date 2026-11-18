@@ -13,8 +13,10 @@ See the [release plan](docs/superpowers/plans/2026-11-18-v2.12.md) for prioritie
 - [x] Apply #146, #147, #150 and #152, resolve the affected minimatch graph and re-query bot PRs and alerts after integration.
 - [x] Record dependency candidates and holds in the [v2.12 qualification record](docs/development/V2_12_QUALIFICATION.md).
 - [x] Build and verify the three Linux package layouts and exercise the AppImage on CachyOS with disposable profile and audio fixtures.
-- [ ] Complete native Windows and macOS package, upgrade, secure storage and dependency qualification.
-- [ ] Investigate the transient Windows pending-transcription banner against durable job state.
+- [x] Qualify the Windows 11 package payload, disposable-profile upgrade, DPAPI and native dependencies. Fix and retest the Windows import commit and concurrent first-use writes.
+- [x] Investigate the Windows pending-transcription banner. Cover the stale History snapshot in a regression and check Activity through a packaged recording.
+- [ ] Run NSIS install/uninstall on a disposable Windows runner and finish the remaining Windows hardware/add-on acceptance.
+- [ ] Complete native macOS package, upgrade, secure storage and dependency qualification.
 - [ ] Preserve cue-scale timing in committed transcripts before shipping SRT and WebVTT together.
 
 ### Historical v2.11 release review follow-up

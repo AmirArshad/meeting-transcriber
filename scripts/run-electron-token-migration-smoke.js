@@ -16,7 +16,13 @@ const copy = path.join(root, 'downgrade-copy');
 const fixture = path.resolve(__dirname, '../tests/fixtures/electron/token-migration-smoke.js');
 fs.mkdirSync(profile);
 function run(binary, target, mode, backend = 'gnome-libsecret', unavailable = false) {
-  const child = spawnSync(binary, [fixture, target, mode, backend], { encoding: 'utf8', timeout: 30000, env: { ...process.env, ELECTRON_RUN_AS_NODE: '', ...(unavailable ? { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/nonexistent/avanevis-probe-bus' } : {}) } });
+  const env = { ...process.env };
+  // Electron checks whether the switch exists, including an empty value on Windows.
+  for (const name of Object.keys(env)) {
+    if (name.toUpperCase() === 'ELECTRON_RUN_AS_NODE') delete env[name];
+  }
+  if (unavailable) env.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent/avanevis-probe-bus';
+  const child = spawnSync(binary, [fixture, target, mode, backend], { encoding: 'utf8', timeout: 30000, env });
   const line = (child.stdout || '').split(/\r?\n/).find(value => value.startsWith('{'));
   let result;
   try { result = JSON.parse(line); } catch (_) { result = { mode, processFailed: true }; }
@@ -24,19 +30,22 @@ function run(binary, target, mode, backend = 'gnome-libsecret', unavailable = fa
   process.stdout.write(`${JSON.stringify(result)}\n`);
   return result;
 }
+function passedRoundTrip(result) {
+  return !result.processFailed && result.roundTrip === true;
+}
 try {
   let passed = true;
   const first = run(legacy, profile, 'legacy-write');
-  passed = passed && first.roundTrip === true;
-  if (first.roundTrip) {
+  passed = passedRoundTrip(first);
+  if (passed) {
     const upgrade = run(current, profile, 'upgrade');
-    passed = passed && upgrade.roundTrip === true && upgrade.protectedByAppPolicy === true;
-    if (upgrade.roundTrip) {
+    passed = passedRoundTrip(upgrade) && upgrade.protectedByAppPolicy === true;
+    if (passed) {
       const restart = run(current, profile, 'restart');
-      passed = passed && restart.roundTrip === true;
+      passed = passedRoundTrip(restart);
       fs.cpSync(profile, copy, { recursive: true });
       const downgrade = run(legacy, copy, 'legacy-read');
-      passed = passed && downgrade.roundTrip === true;
+      passed = passed && passedRoundTrip(downgrade);
     }
   }
   if (process.platform === 'linux') {
