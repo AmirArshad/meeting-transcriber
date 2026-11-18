@@ -69,7 +69,21 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ---
 
-## Current release: v2.10.1
+## Current release: v2.11.0
+
+Published November 16, 2026. Speakrs 0.7 adds native CUDA and CoreML execution.
+Electron now uses asynchronous secure token storage. The installer requires
+macOS 15 or later on Apple Silicon, and existing Speakrs users enable the new
+models through Repair. See the [release notes](../releases/v2.11.0.md).
+
+## Planned v2.12.0
+
+Import existing local recordings into History and transcribe them through Activity. Include a focused visual cleanup using the existing desktop design system.
+Add SRT and WebVTT export if timing coverage permits. Update applicable Dependabot dependencies, identify and qualify updates to manually pinned runtimes and build tools, and investigate the Windows queue-status banner. See [the release plan](../superpowers/plans/2026-11-18-v2.12.md).
+A candidate v3 milestone is local History search and questions with citations
+that open the source meeting at the relevant timestamp.
+
+### Earlier v2.10 releases
 
 The [v2.10.1 release notes](../releases/v2.10.1.md) cover the maintenance
 patch (History fixes, faster post-stop finalization, and the October 2026
@@ -107,7 +121,7 @@ historical evidence.
 
 ### Transcription
 
-- **Upload existing audio files.** Import user-provided `.mp3`, `.wav`, and `.opus` files, normalize them into the app's processing format, run transcription/summaries with the same local pipeline, and save results into Meeting History as first-class meetings. Should reuse the Activity / transcription queue once that ships.
+- **Import existing audio files.** Import user-provided `.mp3`, `.wav`, and `.opus` files, normalize them into the app's processing format, run transcription/summaries with the same local pipeline, and save results into Meeting History as first-class meetings. The planned v2.12 import flow reuses the shipped Activity queue.
 - **History chat over meetings.** Use the installed local summary runtime/model to ask questions about historical meetings, with responses grounded in saved transcript and summary artifacts.
 - **Real-time transcription.** Live captions during the recording itself. Trade-off: requires a streaming Whisper implementation, raises CPU/GPU usage during capture, and accuracy is below post-processing.
 - **Export formats.** SRT, VTT, DOCX, PDF, JSON in addition to today's Markdown + plain-text Save As.
@@ -154,9 +168,9 @@ Longer horizon, lower priority:
 - **Minor (1.X.0)** — New features, backwards compatible.
 - **Patch (1.2.X)** — Bug fixes and minor improvements.
 
-**Current release version:** v2.10.1. Hardware acceptance and its limits are recorded separately from CI.
+**Current release version:** v2.11.0. Hardware acceptance and its limits are recorded separately from CI.
 
-The rebrand introduces a new Electron `productName`, which changes the user-data folder. Existing Meeting Transcriber installs won't see their old recordings until the user manually moves the data folder, so this release uses a major version bump.
+The v2.0 rebrand introduced a new Electron `productName`, which changes the user-data folder. Existing Meeting Transcriber installs won't see their old recordings until the user manually moves the data folder, so that release used a major version bump.
 
 ---
 

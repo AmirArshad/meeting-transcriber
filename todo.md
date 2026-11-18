@@ -1,23 +1,22 @@
 # AvaNevis release status
 
-Latest published version: **v2.10.3** — dependency and download maintenance.
-Next release prepared on this branch: **v2.11.0**, pending authorized tag and publication.
-See the [v2.10.3 release notes](docs/releases/v2.10.3.md) and
-[dependency qualification evidence](docs/development/DEPENDENCY_SWEEP_2026-11-03.md).
-Previous release: **v2.10.2**, published 2026-10-21.
-The v2.10.0 notes and record below remain historical. See the
-[v2.10.0 release notes](docs/releases/v2.10.0.md) and
-[qualification record](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md).
-The dated entries below preserve implementation and acceptance history.
-
-This file is the **scope and status log**. It is not an implementation design.
-Sequencing, remaining investigations, and which machines they need live in the
-[v2.10 plan index](docs/superpowers/plans/2026-09-06-v2.10.md). Designs are not
-implementation or acceptance evidence.
+Latest published version: **[v2.11.0](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.11.0)**, November 16, 2026.
+Next planned release: **v2.12.0**, local audio import, dependency updates and conditional subtitle export.
+See the [release plan](docs/superpowers/plans/2026-11-18-v2.12.md) for priorities, sequencing and acceptance.
 
 ## Status
 
-### v2.11 release review follow-up
+### v2.12 planned scope · 2026-11-18
+
+- [ ] Design the History import flow against the v2.11 layout and scope a small visual cleanup using the [design prompt](docs/superpowers/plans/2026-11-18-audio-import-design-prompt.md).
+- [ ] Import one local MP3, WAV or Opus file into History, then transcribe through Activity.
+- [ ] Apply applicable Dependabot updates (#146, #147, #150, #152 at planning), address the minimatch alert, and reconcile new PRs and alerts at release cut.
+- [ ] Inventory upstream updates across shipped runtimes, platform and optional AI locks, native helpers, packaging and CI. Record adopted versions and specific reasons for holds.
+- [ ] Qualify the runtime maintenance candidates listed below, starting with the Windows embedded Python layout and the Electron key-store checks.
+- [ ] Investigate the transient Windows pending-transcription banner against durable job state.
+- [ ] Add SRT and WebVTT export for timestamped transcripts if import and runtime qualification stay on track.
+
+### Historical v2.11 release review follow-up
 
 The [hosted release dry run](https://github.com/AmirArshad/meeting-transcriber/actions/runs/43787045494)
 passed on `38fbea7` for Windows, macOS, all three Linux packages on Ubuntu 24.04,
