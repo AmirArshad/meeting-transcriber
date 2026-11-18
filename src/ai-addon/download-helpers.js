@@ -149,8 +149,9 @@ function isHuggingFaceSummaryArtifact(artifact) {
 function buildPythonEnvForBackend({ backendPath, extra = {} } = {}) {
   const separator = process.platform === 'win32' ? ';' : ':';
   const existingPythonPath = process.env.PYTHONPATH || '';
-  const pythonPathParts = [backendPath, existingPythonPath].filter(Boolean);
-  return {
+  const packaged = process.env.AVANEVIS_PACKAGED === '1';
+  const pythonPathParts = [backendPath, packaged ? '' : existingPythonPath].filter(Boolean);
+  const env = {
     ...process.env,
     ...extra,
     HF_TOKEN: '',
@@ -161,6 +162,13 @@ function buildPythonEnvForBackend({ backendPath, extra = {} } = {}) {
     HF_HUB_DISABLE_XET: '1',
     PYTHONPATH: pythonPathParts.join(separator),
   };
+  if (packaged) {
+    delete env.PYTHONHOME;
+    delete env.PYTHONUSERBASE;
+    env.PYTHONNOUSERSITE = '1';
+    env.PYTHONDONTWRITEBYTECODE = '1';
+  }
+  return env;
 }
 
 async function downloadHuggingFaceSummaryArtifact({ artifact, destinationPath, expectedSizeBytes, userDataDir, pythonExe, backendPath, onProgress, cancelSignal, fsModule = fs }) {

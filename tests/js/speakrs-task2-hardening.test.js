@@ -813,6 +813,35 @@ test('forged model-pack metadata cannot pass Speakrs compute admission', async (
   }
 });
 
+test('Speakrs model checksum is rechecked when content changes with the same size and mtime', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-model-ctime-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const modelPath = getSpeakrsSetupArtifactsForPlatform('win32', 'x64', catalog).modelFiles[0].path;
+    const target = path.join(getSpeakrsModelRevisionDir(userDataDir, SPEAKRS_MODEL_PACK_REVISION), modelPath);
+    let ctime = 1;
+    const fsModule = Object.create(fs);
+    fsModule.statSync = (filePath, ...args) => {
+      const stat = fs.statSync(filePath, ...args);
+      if (filePath === target) {
+        Object.defineProperty(stat, 'mtimeMs', { value: 1234 });
+        Object.defineProperty(stat, 'ctimeMs', { value: ctime });
+      }
+      return stat;
+    };
+    const options = { userDataDir, platform: 'win32', arch: 'x64', catalog, fsModule, verifyChecksum: true, verifyChecksumIfChanged: true };
+    assert.equal((await checkSpeakrsModelCache(options)).valid, true);
+    fs.writeFileSync(target, Buffer.alloc(MODEL_BYTES.length, 0x41));
+    ctime += 1;
+    const changed = await checkSpeakrsModelCache(options);
+    assert.equal(changed.valid, false);
+    assert.equal(changed.checksumStatus, 'mismatch');
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test('Speakrs compute admission caches unchanged DLL fingerprints and rehashes changed metadata', async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-runtime-fingerprint-'));
   const catalog = createPinnedTestCatalog();

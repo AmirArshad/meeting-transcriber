@@ -13,12 +13,13 @@ Public methods stay instance methods — the tests monkeypatch them as seams.
 Main converts and verifies a user-selected source into a unique app-owned
 `recordings/.audio-import-*/audio.opus` staging directory before passing it to
 the ordinary add path. The source is never passed to the destructive add path.
-For this staged import, the backend creates a durable `.meeting-import-<id>`
-marker under the metadata lock before copying either final file, flushes the
-final files before committing metadata, and retains the pending transcription
+For this staged import, the backend flushes both staged files before acquiring
+the metadata lock, then creates a durable `.meeting-import-<id>` marker before
+promoting the files by atomic rename. It retains the pending transcription
 request and attempt guard in that same atomic metadata write. Metadata is the
 commit point. Scan holds the metadata lock while reconciling markers and scanning:
 uncommitted final files are removed, while a committed meeting and its files are
-retained. Abandoned staging cleanup must leave these root markers alone. A failed
+retained. If the metadata cannot be trusted, recovery preserves both the files
+and markers. Abandoned staging cleanup must leave these root markers alone. A failed
 cleanup leaves its marker for a later reconciliation; it must not expose a partial
 import as a scanned meeting.

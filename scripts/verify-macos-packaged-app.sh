@@ -62,7 +62,7 @@ codesign -d --entitlements :- "$HELPER_PATH" | grep -q "com.apple.security.inher
 codesign --verify --strict --verbose=2 "$SPEAKRS_CLI_PATH"
 codesign -d --entitlements :- "$SPEAKRS_CLI_PATH" | grep -q "com.apple.security.inherit"
 
-helper_output="$(
+if ! helper_output="$(
 python3 - "$HELPER_PATH" 2>&1 <<'PY'
 import subprocess
 import sys
@@ -79,7 +79,11 @@ sys.stdout.write(result.stdout)
 sys.stderr.write(result.stderr)
 sys.exit(result.returncode)
 PY
-)"
+)"; then
+  echo "ERROR: Packaged audio helper failed to start:" >&2
+  printf '%s\n' "$helper_output" >&2
+  exit 1
+fi
 echo "$helper_output" | grep -q "AudioCaptureHelper"
 
 if [[ -d "$SITE_PACKAGES/torch" ]]; then

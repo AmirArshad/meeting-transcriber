@@ -1043,7 +1043,7 @@ function getArtifactFingerprint(filePath, fsModule = fs) {
     if (!stat) {
       return null;
     }
-    return `${filePath}\0${Number(stat.size)}\0${Number(stat.mtimeMs)}`;
+    return `${filePath}\0${Number(stat.size)}\0${Number(stat.mtimeMs)}\0${Number(stat.ctimeMs)}`;
   } catch (_error) {
     return null;
   }

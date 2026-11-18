@@ -31,4 +31,9 @@ test('sidebar opens History and the import dialog restores focus to its opener',
   assert.doesNotMatch(result.placeholderText, /recording was saved successfully/);
   assert.equal(result.hasActivity, true); assert.match(result.previousText, /A previous transcript/);
   assert.equal(result.cancelChip, 'Cancelled'); assert.equal(result.rowFocus, 'new');
+  assert.equal(result.failedRetryVisible, true); assert.match(result.failedText, /transcription/i);
+  assert.match(result.readyText, /Finished transcript/); assert.equal(result.readyRetryHidden, true);
+  assert.equal(result.focusAfterDismiss, 'import-audio-button');
+  assert.match(result.pickerMessage, /Could not choose a file/);
+  assert.equal(result.immediateOpenId, 'fresh'); assert.equal(result.immediateOpenFocus, 'cap-play-btn');
 });

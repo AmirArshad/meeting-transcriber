@@ -178,9 +178,28 @@ class MeetingManager:
         after it, the final files belong to the meeting and must be retained.
         """
         import re
-        meetings = self._list_meetings_locked()
-        referenced = {str(Path(m.get('audioPath', '')).resolve(strict=False)) for m in meetings}
-        for marker in self.recordings_dir.glob('.meeting-import-*'):
+        markers = list(self.recordings_dir.glob('.meeting-import-*'))
+        if not markers:
+            return
+        # An unreadable database cannot distinguish a committed import from an
+        # interrupted copy. Preserve both files and markers until it is repaired.
+        try:
+            with self.metadata_file.open(encoding='utf-8') as metadata:
+                meetings = json.load(metadata)
+        except json.JSONDecodeError as exc:
+            self._backup_corrupt_metadata(exc)
+            raise RuntimeError('Cannot reconcile audio imports with corrupt meeting metadata') from exc
+        if not isinstance(meetings, list) or any(
+            not isinstance(meeting, dict)
+            or not isinstance(meeting.get('audioPath'), str)
+            or not meeting['audioPath']
+            for meeting in meetings
+        ):
+            raise RuntimeError('Cannot reconcile audio imports with invalid meeting metadata')
+        # Read every raw record before deduplication, which may otherwise discard
+        # a record that still owns an import's audio.
+        referenced = {str(Path(m['audioPath']).resolve(strict=False)) for m in meetings}
+        for marker in markers:
             match = re.fullmatch(r'\.meeting-import-(\d{8}_\d{6}(?:_\d+)?)', marker.name)
             if not match or marker.is_symlink() or not marker.is_dir():
                 continue
@@ -258,6 +277,13 @@ class MeetingManager:
         if not self._wait_for_file(source_transcript):
             raise ValueError(f'Transcript file not found: {source_transcript}')
 
+        if is_import:
+            for source in (source_audio, source_transcript):
+                # Windows needs a writable handle for FlushFileBuffers.
+                source.chmod(source.stat().st_mode | stat.S_IWRITE)
+                with source.open('r+b') as staged:
+                    os.fsync(staged.fileno())
+
         with self._metadata_guard():
             self._reconcile_import_transactions_unlocked()
             meetings = self._list_meetings_locked()
@@ -301,23 +327,23 @@ class MeetingManager:
                 self._sync_recordings_dir()
 
             try:
-                shutil.copy2(source_audio, new_audio_path)
+                if marker:
+                    os.replace(source_audio, new_audio_path)
+                else:
+                    shutil.copy2(source_audio, new_audio_path)
                 copied_audio = True
                 persisted_audio_path = new_audio_path
                 print(f"Persisted audio to: {new_audio_path}", file=sys.stderr)
 
-                shutil.copy2(source_transcript, new_transcript_path)
+                if marker:
+                    os.replace(source_transcript, new_transcript_path)
+                else:
+                    shutil.copy2(source_transcript, new_transcript_path)
                 copied_transcript = True
                 persisted_transcript_path = new_transcript_path
                 print(f"Persisted transcript to: {new_transcript_path}", file=sys.stderr)
 
                 if marker:
-                    for path in (new_audio_path, new_transcript_path):
-                        # Windows requires a writable handle for FlushFileBuffers.
-                        # copy2 may preserve the source's read-only attribute.
-                        path.chmod(path.stat().st_mode | stat.S_IWRITE)
-                        with path.open('r+b') as persisted:
-                            os.fsync(persisted.fileno())
                     self._sync_recordings_dir()
 
                 meeting = {

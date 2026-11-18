@@ -248,6 +248,7 @@ function createTranscriptionService(deps) {
     spawnParakeetPython = null,
     runParakeetDiarizationProcessForJob = null,
     getParakeetStatusForJob = getParakeetComputeStatus,
+    getParakeetStatusForImport = getParakeetStatus,
     getGuidedDiarizationStatusForJob = null,
     probeParakeetRuntime = null,
     runParakeetProcessForJob = null,
@@ -2781,7 +2782,7 @@ function createTranscriptionService(deps) {
       transcriptionSelection: options.transcriptionSelection,
     });
     if (request.engine === 'parakeet') {
-      const status = await getParakeetStatus(parakeetTargetOptions());
+      const status = await getParakeetStatusForImport(parakeetTargetOptions());
       if (status.status !== 'ready') throw Object.assign(new Error('Parakeet needs setup in Settings.'), { code: 'IMPORT_SETUP_REQUIRED' });
     } else if (!isTranscriptionModelCached(request.modelSize)) {
       throw Object.assign(new Error('The selected Whisper model needs setup in Settings.'), { code: 'IMPORT_SETUP_REQUIRED' });
@@ -3107,17 +3108,17 @@ function createTranscriptionService(deps) {
     };
   }
 
+  function parakeetTargetOptions() {
+    return {
+      userDataDir: app.getPath('userData'),
+      platform: process.platform,
+      arch: process.arch,
+      osRelease: typeof os.release === 'function' ? os.release() : '',
+    };
+  }
+
   function registerIpc(ipcMain) {
     const parakeetSetupControllers = new Map();
-
-    function parakeetTargetOptions() {
-      return {
-        userDataDir: app.getPath('userData'),
-        platform: process.platform,
-        arch: process.arch,
-        osRelease: typeof os.release === 'function' ? os.release() : '',
-      };
-    }
 
     function assertParakeetOperationAllowed(cancelSignal, operation) {
       if (cancelSignal && cancelSignal.aborted) {

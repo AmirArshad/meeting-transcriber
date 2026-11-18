@@ -241,7 +241,7 @@ let currentMeetingId = null;
 // default filename used by the "Save" button.
 let currentRecordingMeeting = null;
 let currentRecordingTranscriptMarkdown = '';
-let pendingMeetingTranscriptId = null;
+let meetingDetailRequestEpoch = 0;
 let summaryGenerationMeetingId = null;
 let summaryGenerationCancelling = false;
 let historyLanguageCaptionMeeting = null;
@@ -2583,12 +2583,15 @@ async function selectMeeting(meetingId) {
     return;
   }
 
+  if (currentMeetingId !== null && String(currentMeetingId) !== targetId) {
+    document.dispatchEvent(new Event('history-selection-changed'));
+  }
+
   document.querySelectorAll('.meeting-item').forEach((item) => {
     item.classList.toggle('selected', item.dataset.id === targetId);
   });
 
   currentMeetingId = targetId;
-  pendingMeetingTranscriptId = targetId;
   updateSummaryLanguageCaptions(meeting);
 
   // Show meeting details
@@ -2628,14 +2631,31 @@ async function selectMeeting(meetingId) {
   loading.className = 'placeholder';
   loading.textContent = 'Loading transcript...';
   transcriptEl.appendChild(loading);
+  await refreshMeetingDetails(targetId);
+}
 
+async function refreshMeetingDetails(targetId) {
+  const requestEpoch = ++meetingDetailRequestEpoch;
+  const transcriptEl = document.getElementById('meeting-transcript');
+  const retryBtn = document.getElementById('retry-transcription-btn');
+  const retryWhisperBtn = document.getElementById('retry-whisper-transcription-btn');
   try {
     const fullMeeting = await window.electronAPI.getMeeting(targetId);
 
-    if (!fullMeeting || currentMeetingId !== targetId || pendingMeetingTranscriptId !== targetId) {
+    if (!fullMeeting || currentMeetingId !== targetId || requestEpoch !== meetingDetailRequestEpoch) {
       return;
     }
     updateSummaryLanguageCaptions(fullMeeting);
+    if (retryBtn) {
+      retryBtn.style.display = isMeetingTranscriptionRetryable(fullMeeting) ? 'inline-flex' : 'none';
+      retryBtn.disabled = false;
+      retryBtn.textContent = 'Retry Transcription';
+    }
+    if (retryWhisperBtn) {
+      retryWhisperBtn.hidden = !isMeetingTranscriptionRetryable(fullMeeting);
+      retryWhisperBtn.disabled = false;
+    }
+    clearElement(transcriptEl);
 
     const pending = fullMeeting.transcriptionStatus === 'pending';
     const transcript = String(fullMeeting.transcript || '');
@@ -2684,7 +2704,7 @@ async function selectMeeting(meetingId) {
     }
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
-    if (currentMeetingId === targetId && pendingMeetingTranscriptId === targetId) {
+    if (currentMeetingId === targetId && requestEpoch === meetingDetailRequestEpoch) {
       clearElement(transcriptEl);
       delete transcriptEl.dataset.markdown;
       const err = document.createElement('p');
@@ -2694,9 +2714,6 @@ async function selectMeeting(meetingId) {
       showSummaryMessage('Summary unavailable because the meeting details could not be loaded.', true);
     }
   } finally {
-    if (pendingMeetingTranscriptId === targetId) {
-      pendingMeetingTranscriptId = null;
-    }
     restoreInlineTitleEditorFocus();
   }
 
@@ -3149,17 +3166,9 @@ function setupEventListeners() {
         if (lastSeenTerminalTranscriptionStatuses.get(meetingId) !== status) {
           hasNewTerminalTransition = true;
           lastSeenTerminalTranscriptionStatuses.set(meetingId, status);
-          if (status === 'ready') {
-            showCompletionToast(job);
-            if (String(currentMeetingId) === meetingId) {
-              window.electronAPI.getMeeting(meetingId).then((meeting) => {
-                if (String(currentMeetingId) !== meetingId || !meeting?.transcript) return;
-                const transcript = document.getElementById('meeting-transcript');
-                transcript.dataset.markdown = meeting.transcript;
-                renderHistoryTranscriptMarkdown(transcript, meeting.transcript);
-                updateSummaryLanguageCaptions(meeting);
-              }).catch((error) => console.warn('Could not refresh transcript:', error));
-            }
+          if (status === 'ready') showCompletionToast(job);
+          if (String(currentMeetingId) === meetingId) {
+            void refreshMeetingDetails(meetingId);
           }
         }
       }
@@ -7841,7 +7850,12 @@ function setupAudioImport() {
   }
   async function chooseFile() {
     const previousDraft = phase === 'error' ? { engine: engine.value, language: language.value, model: model.value } : null;
-    const selected = await window.electronAPI.selectImportAudio();
+    let selected;
+    try {
+      selected = await window.electronAPI.selectImportAudio();
+    } catch (error) {
+      selected = { success: false, error: 'Could not choose a file. Try again.' };
+    }
     if (!selected || selected.canceled) { if (phase === 'closed') invoker?.focus(); return; }
     if (!selected.success) { if (phase === 'closed') { invoker?.focus(); alert(selected.error || 'Could not choose a file.'); } else status.textContent = selected.error || 'Could not choose a file.'; return; }
     byId('name').textContent = selected.name;
@@ -7891,13 +7905,19 @@ function setupAudioImport() {
     }
     const meeting = result.meeting || result.pendingMeeting;
     resultId = meeting?.id || result.meetingId;
+    if (meeting && resultId && !meetings.some((item) => String(item.id) === String(resultId))) {
+      meetings.unshift(meeting);
+      renderMeetingList();
+    }
     resultQueueSeq = 0;
     phase = 'result'; byId('title').textContent = 'Imported into History';
     byId('name').textContent = meeting?.title || byId('name').textContent.replace(/\.[^.]+$/, '');
     byId('description').hidden = true;
     status.textContent = result.success ? 'Transcription queued. You can play the audio now.' : 'Saved in History. Transcription hasn’t started.';
     cancel.textContent = 'Done'; cancel.disabled = false; open.hidden = !resultId;
+    const savedResultId = resultId;
     await loadMeetingHistory();
+    if (phase !== 'result' || resultId !== savedResultId) return;
     updateResultStatus();
     (open.hidden ? cancel : open).focus();
   }
@@ -7928,7 +7948,16 @@ function setupAudioImport() {
     if (!resultId) return;
     const id = resultId;
     if (isHistoryTitleEditorOpen()) {
-      document.addEventListener('history-title-edit-finished', () => { void openImportedMeeting(id); }, { once: true });
+      const cancelDeferredOpen = () => {
+        document.removeEventListener('history-title-edit-finished', finishDeferredOpen);
+        document.removeEventListener('history-selection-changed', cancelDeferredOpen);
+      };
+      const finishDeferredOpen = () => {
+        cancelDeferredOpen();
+        void openImportedMeeting(id);
+      };
+      document.addEventListener('history-title-edit-finished', finishDeferredOpen, { once: true });
+      document.addEventListener('history-selection-changed', cancelDeferredOpen, { once: true });
       close(); document.getElementById('meeting-title-input')?.focus(); return;
     }
     close(); void openImportedMeeting(id);

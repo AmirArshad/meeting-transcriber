@@ -54,7 +54,7 @@ the managed CUDA 12 admission, all local artifact checks, and packaged RTX
 ## Runtime Cache Locations
 
 - The canonical location is whatever `src/main.js` logs as `app.getPath("userData")` at startup. AI add-ons are stored below that path in `ai-addons/`.
-- On Windows `npm start`, local testing has placed the app-managed AI add-ons at `%APPDATA%\avanevis\Cache\avanevis\ai-addons`. In that tree, Qwen summaries live under `models\summary`, the llama.cpp runtime lives under the selected summary model's `runtime`, Speakrs models live under `models\diarization\speakrs\<revision>`, its private ONNX Runtime closure lives under `runtimes\speakrs-ort`, and pyannote/PyTorch dependencies live under `dependencies\diarization`.
+- On Windows `npm start`, local testing has placed the app-managed AI add-ons at `%APPDATA%\avanevis\Cache\avanevis\ai-addons`. In that tree, Qwen summaries live under `models\summary`, the llama.cpp runtime lives under the selected summary model's `runtime`, Speakrs models live under `models\diarization\speakrs\<revision>\<install-id>`, and pyannote/PyTorch dependencies live under `dependencies\diarization`. Older Speakrs installations can also have a private ONNX Runtime under `runtimes\speakrs-ort`.
 - Packaged Windows installs may resolve the same physical profile path because Windows paths are case-insensitive. Do not delete `ai-addons` when you intend to preserve installed Qwen/diarization setup for the packaged app.
 - Safe cleanup candidates for duplicate downloads are transient caches such as `%LOCALAPPDATA%\pip\cache`, `%LOCALAPPDATA%\Temp\pip-*`, incomplete `*.download` files, and stale Hugging Face/Xet transfer staging directories. These are redownloadable and are not the installed model/runtime cache.
 

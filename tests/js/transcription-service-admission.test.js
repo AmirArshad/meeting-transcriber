@@ -165,6 +165,25 @@ function createServiceHarness(overrides = {}) {
   };
 }
 
+test('Parakeet import checks readiness using the current service target', async () => {
+  let status = 'ready';
+  let target;
+  const harness = createServiceHarness({
+    getParakeetStatusForImport: async (options) => {
+      target = options;
+      return { status };
+    },
+  });
+  const options = { transcriptionSelection: { engine: 'parakeet', language: 'en' } };
+  const request = await harness.service.validateImportSelection(options);
+  assert.equal(request.engine, 'parakeet');
+  assert.equal(target.userDataDir, '/tmp/avanevis-test');
+  assert.equal(target.platform, process.platform);
+  assert.equal(target.arch, process.arch);
+  status = 'repair-required';
+  await assert.rejects(harness.service.validateImportSelection(options), { code: 'IMPORT_SETUP_REQUIRED' });
+});
+
 test('diarization process errors settle on close before the caller can start fallback', async () => {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
