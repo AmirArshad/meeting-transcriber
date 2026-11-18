@@ -95,7 +95,7 @@ test('electron-builder stays on 26.x and opts into the static FUSE-less AppImage
 });
 
 test('Electron uses the exact qualified 46 prerelease pin', () => {
-  assert.equal(packageJson.devDependencies.electron, '46.0.0-alpha.10');
+  assert.equal(packageJson.devDependencies.electron, '46.0.0-alpha.11');
 });
 
 test('Electron packages the Parakeet adapter lock files used by the runtime catalog', () => {

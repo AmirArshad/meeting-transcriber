@@ -23,7 +23,7 @@ test('BUILD_DOWNLOADS uses pinned direct download URLs', () => {
   assert.equal(BUILD_DOWNLOADS.ffmpegMac.sha256, 'e7b9fcd97f95f333512d6e8b8ac24d9dbc08f189f36047695499bd7b57214b22');
   assert.equal(
     BUILD_DOWNLOADS.pythonLinux.url,
-    'https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.11.17+20261003-x86_64-unknown-linux-gnu-install_only.tar.gz',
+    'https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18+20261110-x86_64-unknown-linux-gnu-install_only.tar.gz',
   );
   assert.match(BUILD_DOWNLOADS.pythonLinux.sha256, /^[a-f0-9]{64}$/);
   assert.equal(

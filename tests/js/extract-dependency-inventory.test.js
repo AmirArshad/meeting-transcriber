@@ -92,7 +92,7 @@ test('native runtimes are inventoried for review, never passed to the PyPI audit
   assert.deepEqual(native.entries.map((entry) => `${entry.source}=${entry.name}@${entry.version}`), [
     'pythonWin=cpython@3.11.9',
     'pythonMac=cpython@3.11.17',
-    'pythonLinux=cpython@3.11.17',
+    'pythonLinux=cpython@3.11.18',
     'ffmpegWin=ffmpeg@8.1.2',
     'ffmpegMac=ffmpeg@8.1.2',
     'ffmpegLinux=ffmpeg@8.1.2',
