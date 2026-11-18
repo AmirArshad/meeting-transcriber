@@ -6,6 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { createAudioImportService } = require('../../src/main/audio-import-service');
+const ffmpegPath = process.env.AVANEVIS_TEST_FFMPEG
+  ? path.resolve(process.env.AVANEVIS_TEST_FFMPEG) : 'ffmpeg';
 
 test('imports real WAV, MP3 and Opus as playable owned copies and preserves sources', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'avanevis-import-test-'));
@@ -15,18 +17,18 @@ test('imports real WAV, MP3 and Opus as playable owned copies and preserves sour
   const service = createAudioImportService({
     dialog: { showOpenDialog: async () => ({ filePaths: [source] }) },
     getMainWindow: () => null, getRecordingsDir: () => path.join(root, 'recordings'),
-    ffmpegPath: 'ffmpeg', isQuitCommitted: () => false, validateImportSelection: async () => {},
+    ffmpegPath, isQuitCommitted: () => false, validateImportSelection: async () => {},
     sendToRenderer: (_channel, payload) => phases.push(payload.phase),
     finalizeRecordingTranscription: async ({ audioPath, duration, title }) => {
       assert.ok(duration > 0);
       assert.equal(title, 'sample');
-      execFileSync('ffmpeg', ['-v', 'error', '-i', audioPath, '-f', 'null', '-']);
+      execFileSync(ffmpegPath, ['-v', 'error', '-i', audioPath, '-f', 'null', '-']);
       return { success: true, meeting: { id: '1' } };
     },
   });
   for (const ext of ['wav', 'mp3', 'opus']) {
     source = path.join(root, `sample.${ext}`);
-    execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.2', '-y', source]);
+    execFileSync(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.2', '-y', source]);
     const original = await fs.readFile(source);
     assert.equal((await service.select()).name, `sample.${ext}`);
     assert.equal((await service.start({})).success, true);
@@ -59,7 +61,7 @@ test('busy and cancellation settle before staging and never commit', async (t) =
   const service = createAudioImportService({
     dialog: { showOpenDialog: async () => ({ filePaths: [source] }) },
     getMainWindow: () => null, getRecordingsDir: () => path.join(root, 'recordings'),
-    ffmpegPath: 'ffmpeg', isQuitCommitted: () => false,
+    ffmpegPath, isQuitCommitted: () => false,
     validateImportSelection: () => gate, sendToRenderer: () => {},
     finalizeRecordingTranscription: async () => { commits += 1; },
   });
@@ -78,11 +80,11 @@ test('failed save can retry the same source; a saved admission failure clears it
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'avanevis-import-retry-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const source = path.join(root, 'private.wav');
-  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'sine=duration=0.1', '-y', source]);
+  execFileSync(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=duration=0.1', '-y', source]);
   let calls = 0;
   const service = createAudioImportService({
     dialog: { showOpenDialog: async () => ({ filePaths: [source] }) }, getMainWindow: () => null,
-    getRecordingsDir: () => path.join(root, 'recordings'), ffmpegPath: 'ffmpeg',
+    getRecordingsDir: () => path.join(root, 'recordings'), ffmpegPath,
     isQuitCommitted: () => false, validateImportSelection: async () => {}, sendToRenderer: () => {},
     finalizeRecordingTranscription: async () => ++calls === 1
       ? { success: false, code: 'ENOSPC', error: `/secret/path ${source}` }
@@ -117,11 +119,11 @@ test('rejects Ogg Vorbis renamed Opus without exposing paths', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'avanevis-import-format-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const source = path.join(root, 'private.opus');
-  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'sine=duration=0.1', '-c:a', 'libvorbis', '-f', 'ogg', '-y', source]);
+  execFileSync(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=duration=0.1', '-c:a', 'libvorbis', '-f', 'ogg', '-y', source]);
   let commits = 0;
   const service = createAudioImportService({
     dialog: { showOpenDialog: async () => ({ filePaths: [source] }) }, getMainWindow: () => null,
-    getRecordingsDir: () => path.join(root, 'recordings'), ffmpegPath: 'ffmpeg',
+    getRecordingsDir: () => path.join(root, 'recordings'), ffmpegPath,
     isQuitCommitted: () => false, validateImportSelection: async () => {}, sendToRenderer: () => {},
     finalizeRecordingTranscription: async () => { commits++; },
   });
@@ -136,13 +138,13 @@ test('late cancel cannot interrupt the commit', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'avanevis-import-commit-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const source = path.join(root, 'test.wav');
-  execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'sine=duration=0.1', '-y', source]);
+  execFileSync(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=duration=0.1', '-y', source]);
   let release, entered;
   const inCommit = new Promise((resolve) => { entered = resolve; });
   const gate = new Promise((resolve) => { release = resolve; });
   const service = createAudioImportService({
     dialog: { showOpenDialog: async () => ({ filePaths: [source] }) }, getMainWindow: () => null,
-    getRecordingsDir: () => path.join(root, 'recordings'), ffmpegPath: 'ffmpeg',
+    getRecordingsDir: () => path.join(root, 'recordings'), ffmpegPath,
     isQuitCommitted: () => false, validateImportSelection: async () => {}, sendToRenderer: () => {},
     finalizeRecordingTranscription: async () => { entered(); await gate; return { success: true, meeting: { id: 'saved' } }; },
   });

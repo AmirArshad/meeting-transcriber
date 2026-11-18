@@ -210,9 +210,6 @@ jobs:
     - name: Install Node dependencies
       run: npm ci
 
-    - name: Run frontend regression tests
-      run: npm run test:js
-
     - name: Verify product Speakrs rejects CPU and fast modes
       run: node scripts/verify-speakrs-packaging.js --check-product-modes native/speakrs-cli/target/aarch64-apple-darwin/release/speakrs-cli
 
@@ -238,6 +235,11 @@ jobs:
         else
           npm run build:mac:dir
         fi
+
+    - name: Run frontend regression tests
+      env:
+        AVANEVIS_TEST_FFMPEG: build/resources/ffmpeg/ffmpeg
+      run: npm run test:js
 
     - name: Verify packaged macOS app smoke checks
       run: bash scripts/verify-macos-packaged-app.sh
@@ -308,9 +310,6 @@ jobs:
     - name: Validate JavaScript syntax under src/
       run: npm run test:syntax
 
-    - name: Run frontend regression tests
-      run: npm run test:js
-
     - name: Build packaged app smoke test
       shell: pwsh
       env:
@@ -319,6 +318,11 @@ jobs:
         if ($env:AVANEVIS_QUALIFY_INSTALLERS -eq 'true') { npm run build }
         else { npm run build:dir }
         if ($LASTEXITCODE -ne 0) { throw 'Windows packaging failed' }
+
+    - name: Run frontend regression tests
+      env:
+        AVANEVIS_TEST_FFMPEG: build/resources/ffmpeg/ffmpeg.exe
+      run: npm run test:js
 
     - name: Verify packaged build output
       shell: pwsh
@@ -449,9 +453,6 @@ jobs:
     - name: Speakrs CPU-mode inference smoke (non-GPU structural check)
       run: node scripts/run-speakrs-cpu-smoke.js
 
-    - name: Run the full automated suite
-      run: xvfb-run -a npm run test:all
-
     - name: Qualify CPU ONNX VAD against the previous runtime
       run: |
         python -m pip install --no-deps --target "$RUNNER_TEMP/ort-baseline" onnxruntime==1.31.0
@@ -461,6 +462,11 @@ jobs:
       run: |
         npm run prepare-build
         npx electron-builder build --linux dir AppImage pacman deb --x64 --publish never
+
+    - name: Run the full automated suite
+      env:
+        AVANEVIS_TEST_FFMPEG: build/resources/ffmpeg/ffmpeg
+      run: xvfb-run -a npm run test:all
 
     - name: Verify packaged Linux layout, AppImage runtime, pacman metadata, and deb control
       run: node scripts/verify-linux-packaging.js --unpacked --appimage --pacman --deb
