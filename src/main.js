@@ -112,6 +112,7 @@ const {
   createAiAddonCancelErrorStandalone,
 } = require('./main/ai-addon-ipc');
 const { createTranscriptionService } = require('./main/transcription-service');
+const { createAudioImportService } = require('./main/audio-import-service');
 const { createSummaryService } = require('./main/summary-service');
 const { createRecorderService } = require('./main/recorder-service');
 const { createRecordingsMaintenanceGate } = require('./main/recordings-maintenance-gate');
@@ -379,7 +380,7 @@ function assertTrustedRendererSender(event) {
 }
 
 function hasInFlightAiWork() {
-  return (aiAddonIpc ? aiAddonIpc.hasInFlightAiAddonSetup() : false)
+  return (audioImportService && audioImportService.hasActive()) || (aiAddonIpc ? aiAddonIpc.hasInFlightAiAddonSetup() : false)
     || (summaryService ? summaryService.hasActiveSummaryGeneration() : false)
     || aiComputeActionQueue.hasPendingWork()
     || gpuResourceActionQueue.hasPendingWork()
@@ -431,6 +432,7 @@ function getProtectedQuitProcess() {
 
 async function drainAiWorkBeforeQuit() {
   markQuitCommitted();
+  if (audioImportService) await audioImportService.drain();
   const busyTranscriptionCount = transcriptionService
     && typeof transcriptionService.getBusyTranscriptionJobCount === 'function'
     ? transcriptionService.getBusyTranscriptionJobCount()
@@ -825,6 +827,13 @@ transcriptionService = createTranscriptionService({
   resolveSpeakrsCliPath: resolveAppSpeakrsCliPath,
 });
 transcriptionService.registerIpc(ipcMain);
+const audioImportService = createAudioImportService({
+  dialog, getMainWindow: () => mainWindow, getRecordingsDir, ffmpegPath: pythonConfig.ffmpegPath,
+  finalizeRecordingTranscription: transcriptionService.finalizeRecordingTranscription,
+  validateImportSelection: transcriptionService.validateImportSelection,
+  assertTrustedRendererSender, sendToRenderer, isQuitCommitted,
+});
+audioImportService.registerIpc(ipcMain);
 const { cleanupGuidedTranscriptTempFiles } = transcriptionService;
 
 summaryService = createSummaryService({
@@ -1599,6 +1608,11 @@ app.whenReady().then(async () => {
   const checksOk = await runStartupChecks();
   if (!checksOk) {
     return; // App will quit if critical checks fail
+  }
+  try {
+    await audioImportService.cleanupStaging();
+  } catch (error) {
+    console.warn('Could not clean abandoned audio imports:', error.message);
   }
   await cleanupGuidedTranscriptTempFiles();
 

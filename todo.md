@@ -1,20 +1,21 @@
 # AvaNevis release status
 
 Latest published version: **[v2.11.0](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.11.0)**, November 16, 2026.
-Next planned release: **v2.12.0**, local audio import, dependency updates and conditional subtitle export.
+Next planned release: **v2.12.0**, local audio import and qualified dependency updates.
 See the [release plan](docs/superpowers/plans/2026-11-18-v2.12.md) for priorities, sequencing and acceptance.
 
 ## Status
 
-### v2.12 planned scope · 2026-11-18
+### v2.12 release candidate · 2026-11-18
 
-- [ ] Design the History import flow against the v2.11 layout and scope a small visual cleanup using the [design prompt](docs/superpowers/plans/2026-11-18-audio-import-design-prompt.md).
-- [ ] Import one local MP3, WAV or Opus file into History, then transcribe through Activity.
-- [ ] Apply applicable Dependabot updates (#146, #147, #150, #152 at planning), address the minimatch alert, and reconcile new PRs and alerts at release cut.
-- [ ] Inventory upstream updates across shipped runtimes, platform and optional AI locks, native helpers, packaging and CI. Record adopted versions and specific reasons for holds.
-- [ ] Qualify the runtime maintenance candidates listed below, starting with the Windows embedded Python layout and the Electron key-store checks.
+- [x] [Design the History import flow](docs/superpowers/plans/2026-11-18-local-audio-import-design.md).
+- [x] Import one local MP3, WAV or Opus into History and transcribe through Activity.
+- [x] Apply #146, #147, #150 and #152, resolve the affected minimatch graph and re-query bot PRs and alerts after integration.
+- [x] Record dependency candidates and holds in the [v2.12 qualification record](docs/development/V2_12_QUALIFICATION.md).
+- [x] Build and verify the three Linux package layouts and exercise the AppImage on CachyOS with disposable profile and audio fixtures.
+- [ ] Complete native Windows and macOS package, upgrade, secure storage and dependency qualification.
 - [ ] Investigate the transient Windows pending-transcription banner against durable job state.
-- [ ] Add SRT and WebVTT export for timestamped transcripts if import and runtime qualification stay on track.
+- [ ] Preserve cue-scale timing in committed transcripts before shipping SRT and WebVTT together.
 
 ### Historical v2.11 release review follow-up
 

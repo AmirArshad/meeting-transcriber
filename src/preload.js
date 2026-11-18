@@ -108,6 +108,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   generateSummary: (options) => ipcRenderer.invoke('generate-summary', options),
   cancelSummaryGeneration: (options) => ipcRenderer.invoke('cancel-summary-generation', options),
 
+  selectImportAudio: () => ipcRenderer.invoke('select-import-audio'),
+  startImportAudio: (options = {}) => ipcRenderer.invoke('start-import-audio', options),
+  cancelImportAudio: () => ipcRenderer.invoke('cancel-import-audio'),
+  onImportAudioProgress: (callback) => addListener('import-audio-progress', callback),
+
   // Meeting history
   listMeetings: () => ipcRenderer.invoke('list-meetings'),
   getMeeting: (meetingId) => ipcRenderer.invoke('get-meeting', meetingId),

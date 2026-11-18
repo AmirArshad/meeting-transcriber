@@ -2775,6 +2775,20 @@ function createTranscriptionService(deps) {
     return resolved.request;
   }
 
+  async function validateImportSelection(options = {}) {
+    const request = resolveFinalizeTranscriptionRequest({
+      audioPath: '', language: options.language, modelSize: options.modelSize,
+      transcriptionSelection: options.transcriptionSelection,
+    });
+    if (request.engine === 'parakeet') {
+      const status = await getParakeetStatus(parakeetTargetOptions());
+      if (status.status !== 'ready') throw Object.assign(new Error('Parakeet needs setup in Settings.'), { code: 'IMPORT_SETUP_REQUIRED' });
+    } else if (!isTranscriptionModelCached(request.modelSize)) {
+      throw Object.assign(new Error('The selected Whisper model needs setup in Settings.'), { code: 'IMPORT_SETUP_REQUIRED' });
+    }
+    return request;
+  }
+
   async function finalizeRecordingTranscription({
     audioPath,
     duration = 0,
@@ -2826,7 +2840,7 @@ function createTranscriptionService(deps) {
     } catch (persistError) {
       return {
         success: false,
-        code: 'PENDING_MEETING_PERSIST_FAILED',
+        code: persistError?.code === 'ENOSPC' ? 'ENOSPC' : 'PENDING_MEETING_PERSIST_FAILED',
         error: (persistError && persistError.message) || 'Failed to save pending meeting.',
       };
     }
@@ -2920,7 +2934,9 @@ function createTranscriptionService(deps) {
           pendingMeeting: savedMeeting,
         };
       }
-      throw admitError;
+      return { success: false, code: admitError.code || 'TRANSCRIPTION_ADMISSION_FAILED',
+        error: admitError.message || 'Transcription could not be queued.',
+        meeting: savedMeeting, pendingMeeting: savedMeeting };
     }
 
     return {
@@ -4075,6 +4091,7 @@ function createTranscriptionService(deps) {
     runMeetingTranscriptionJob,
     admitMeetingTranscriptionJob,
     finalizeRecordingTranscription,
+    validateImportSelection,
     resumePendingTranscriptions,
     // Slice A policy seams (wiring + tests): strict new-work validation and
     // canonical legacy-compat resolution.

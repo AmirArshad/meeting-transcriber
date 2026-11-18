@@ -59,11 +59,11 @@
     if (status === 'queued' || phase === 'queued') {
       return ACTIVITY_CHIP_LABELS.queued;
     }
-    if (status === 'failed' || phase === 'failed') {
-      return ACTIVITY_CHIP_LABELS.failed;
-    }
     if (status === 'cancelled' || phase === 'cancelled') {
       return ACTIVITY_CHIP_LABELS.cancelled;
+    }
+    if (status === 'failed' || phase === 'failed') {
+      return ACTIVITY_CHIP_LABELS.failed;
     }
     if (status === 'ready' || phase === 'completed') {
       return ACTIVITY_CHIP_LABELS.ready;

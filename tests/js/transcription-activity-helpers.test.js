@@ -61,6 +61,7 @@ test('activity chips map queue phases and optional percent', () => {
   assert.equal(getActivityChipLabel({ status: 'active', phase: 'waiting_resource' }), 'Waiting for GPU or model setup');
   assert.equal(getActivityChipLabel({ status: 'ready', phase: 'completed' }), 'Ready');
   assert.equal(getActivityChipLabel({ status: 'failed' }), 'Failed');
+  assert.equal(getActivityChipLabel({ status: 'failed', phase: 'cancelled' }), 'Cancelled');
   assert.equal(getActivityChipLabel({ status: 'active', phase: 'transcribing', percent: null }), 'Transcribing');
 });
 

@@ -5,6 +5,7 @@ Stores meeting records in a JSON database and provides
 operations for listing, retrieving, and deleting meetings.
 """
 
+import errno
 import json
 # Kept as module attributes so characterization tests can monkeypatch
 # ``meeting_manager.os.replace`` / ``meeting_manager.time.sleep``.
@@ -157,6 +158,37 @@ class MeetingManager:
     def _wait_for_file(self, file_path: Path, attempts: int = 5, delay_seconds: float = 0.1) -> bool:
         return meeting_delete.wait_for_file(file_path, attempts=attempts, delay_seconds=delay_seconds)
 
+    def _sync_recordings_dir(self):
+        try:
+            fd = os.open(self.recordings_dir, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        except (AttributeError, OSError):
+            pass  # Directory fsync is unavailable on Windows.
+
+    def _reconcile_import_transactions_unlocked(self):
+        """Roll back interrupted imports before a scan can see their final files.
+
+        A marker is created before either copy. Metadata is the commit point;
+        after it, the final files belong to the meeting and must be retained.
+        """
+        import re
+        meetings = self._list_meetings_locked()
+        referenced = {str(Path(m.get('audioPath', '')).resolve(strict=False)) for m in meetings}
+        for marker in self.recordings_dir.glob('.meeting-import-*'):
+            match = re.fullmatch(r'\.meeting-import-(\d{8}_\d{6}(?:_\d+)?)', marker.name)
+            if not match or marker.is_symlink() or not marker.is_dir():
+                continue
+            stem = f'meeting_{match.group(1)}'
+            audio = self.recordings_dir / f'{stem}.opus'
+            transcript = self.recordings_dir / f'{stem}.md'
+            if str(audio.resolve(strict=False)) not in referenced:
+                for path in (audio, transcript):
+                    path.unlink(missing_ok=True)
+            marker.rmdir()
+
     def add_meeting(
         self,
         audio_path: str,
@@ -209,6 +241,11 @@ class MeetingManager:
         source_audio = source_audio.resolve(strict=False)
         source_transcript = source_transcript.resolve(strict=False)
 
+        is_import = (source_audio.parent == source_transcript.parent
+                     and source_audio.parent.parent == self.recordings_dir.resolve(strict=False)
+                     and source_audio.parent.name.startswith('.audio-import-')
+                     and source_audio.name == 'audio.opus')
+
         if not self._is_recordings_path(source_audio):
             raise ValueError('Audio path must stay inside the recordings directory')
         if not self._is_recordings_path(source_transcript):
@@ -219,13 +256,16 @@ class MeetingManager:
             raise ValueError(f'Transcript file not found: {source_transcript}')
 
         with self._metadata_guard():
+            self._reconcile_import_transactions_unlocked()
             meetings = self._list_meetings_locked()
             existing_ids = {m['id'] for m in meetings}
 
             # Ensure unique ID (handle rare case of multiple adds in same second)
             meeting_id = base_id
             counter = 1
-            while meeting_id in existing_ids:
+            while (meeting_id in existing_ids
+                   or (self.recordings_dir / f'meeting_{meeting_id}{source_audio.suffix}').exists()
+                   or (self.recordings_dir / f'meeting_{meeting_id}.md').exists()):
                 meeting_id = f"{base_id}_{counter}"
                 counter += 1
                 if counter > 100:  # Safety limit
@@ -252,6 +292,11 @@ class MeetingManager:
             copied_audio = False
             copied_transcript = False
 
+            marker = self.recordings_dir / f'.meeting-import-{meeting_id}' if is_import else None
+            if marker:
+                marker.mkdir()
+                self._sync_recordings_dir()
+
             try:
                 shutil.copy2(source_audio, new_audio_path)
                 copied_audio = True
@@ -262,6 +307,12 @@ class MeetingManager:
                 copied_transcript = True
                 persisted_transcript_path = new_transcript_path
                 print(f"Persisted transcript to: {new_transcript_path}", file=sys.stderr)
+
+                if marker:
+                    for path in (new_audio_path, new_transcript_path):
+                        with path.open('rb') as persisted:
+                            os.fsync(persisted.fileno())
+                    self._sync_recordings_dir()
 
                 meeting = {
                     "id": meeting_id,
@@ -295,16 +346,32 @@ class MeetingManager:
                 meetings.insert(0, meeting)
                 self._save_meetings_unlocked(meetings)
 
+                if marker:
+                    try:
+                        marker.rmdir()
+                    except OSError:
+                        pass  # Metadata is committed; restart removes the marker.
+
             except Exception:
-                if copied_audio and new_audio_path.exists():
+                # A committed metadata write owns its files even if marker
+                # cleanup fails. Recovery will remove the marker later.
+                if marker and any(m.get('id') == meeting_id for m in self._load_meetings_unlocked()):
+                    raise
+                if (copied_audio or marker) and new_audio_path.exists():
                     try:
                         new_audio_path.unlink()
                     except OSError:
                         pass
 
-                if copied_transcript and new_transcript_path.exists():
+                if (copied_transcript or marker) and new_transcript_path.exists():
                     try:
                         new_transcript_path.unlink()
+                    except OSError:
+                        pass
+
+                if marker and not new_audio_path.exists() and not new_transcript_path.exists():
+                    try:
+                        marker.rmdir()
                     except OSError:
                         pass
 
@@ -425,6 +492,11 @@ class MeetingManager:
         Returns:
             Dictionary with counts: {'scanned': N, 'added': M, 'skipped': K}
         """
+        with self._metadata_guard():
+            self._reconcile_import_transactions_unlocked()
+            return self._scan_and_sync_recordings_locked()
+
+    def _scan_and_sync_recordings_locked(self) -> Dict[str, int]:
         existing_meetings = self.list_meetings()
         existing_audio_paths = {Path(m['audioPath']).name for m in existing_meetings}
 
@@ -1217,6 +1289,11 @@ def main():
             )
         except meeting_norm.TranscriptionMetadataError as exc:
             print(exc.code, file=sys.stderr)
+            sys.exit(1)
+        except OSError as exc:
+            if exc.errno not in (errno.ENOSPC, errno.EDQUOT):
+                raise
+            print('MEETING_STORAGE_FULL', file=sys.stderr)
             sys.exit(1)
         print(json.dumps(meeting, indent=2))
 

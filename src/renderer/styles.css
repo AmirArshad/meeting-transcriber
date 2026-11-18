@@ -740,7 +740,6 @@ select.device-select:disabled {
   transition: transform 0.6s var(--ease-out);
 }
 
-.btn-icon-only:hover svg,
 .btn-icon-only.spinning svg {
   transform: rotate(360deg);
 }
@@ -4516,3 +4515,20 @@ select.device-select,
     transform: none;
   }
 }
+
+/* Import keeps the History header compact while allowing larger text to wrap. */
+.sidebar-header { flex-wrap: wrap; gap: 8px; }
+.history-header-actions { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+#import-audio-button { min-height: 34px; white-space: normal; }
+.import-audio-content { max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
+.import-audio-content .modal-body { overflow-y: auto; }
+.import-audio-content [hidden] { display: none; }
+.import-audio-name { overflow-wrap: anywhere; color: var(--text-primary); font-weight: 600; }
+.import-audio-actions { flex-wrap: wrap; }
+#import-audio-fields .ai-addon-field { margin-top: 12px; }
+.meeting-item:focus-within .meeting-checkbox { opacity: 1; }
+.meeting-item .meeting-info { text-align: left; border: 0; padding: 0; background: transparent; cursor: pointer; }
+.activity-row { flex-wrap: wrap; }
+.activity-row-main { min-width: 140px; }
+.activity-row-actions { flex-wrap: wrap; }
+@media (max-width: 900px) { .history-layout { grid-template-rows: minmax(max-content, 32vh) minmax(0, 1fr); } }

@@ -30,6 +30,7 @@ const {
   countResumablePendingMeetings,
   buildActivityRows,
   getActivityEmptyStateText,
+  getActivityChipLabel,
   shouldApplyTranscriptionQueueState,
   buildCompletionToastView,
   buildBackgroundTranscriptionTipView,
@@ -693,9 +694,13 @@ function createMeetingListItem(meeting) {
   item.dataset.id = meeting.id;
 
   const checkbox = createMeetingCheckbox(meeting.id);
+  checkbox.setAttribute('aria-label', `Select ${meeting.title}`);
 
-  const info = document.createElement('div');
+  const info = document.createElement('button');
+  info.type = 'button';
   info.className = 'meeting-info';
+  info.setAttribute('aria-label', meeting.title);
+  info.addEventListener('click', () => selectMeeting(meeting.id));
 
   const title = document.createElement('div');
   title.className = 'meeting-item-title';
@@ -726,12 +731,6 @@ function createMeetingListItem(meeting) {
   const deleteBtn = createDeleteButton();
 
   item.append(checkbox, info, deleteBtn);
-
-  item.addEventListener('click', (e) => {
-    if (e.target.closest('.delete-btn-list')) return;
-    if (e.target.closest('.meeting-checkbox')) return;
-    selectMeeting(meeting.id);
-  });
 
   checkbox.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -791,6 +790,9 @@ function renderActivityList() {
     meetings,
   });
   const activeBeforeRender = typeof document !== 'undefined' ? document.activeElement : null;
+  const focusedRow = activeBeforeRender?.closest?.('.activity-row');
+  const focusedRowId = focusedRow?.dataset.meetingId;
+  const focusedAction = activeBeforeRender?.tagName === 'BUTTON' ? activeBeforeRender.textContent : null;
   const restoreActivityRenameFocus = shouldRestoreInlineEditorFocus({
     editorOpen: Boolean(activityRenameMeetingId),
     activeElement: activeBeforeRender,
@@ -809,6 +811,12 @@ function renderActivityList() {
     empty.id = 'activity-empty';
     empty.textContent = getActivityEmptyStateText();
     activityListEl.appendChild(empty);
+    const importLink = document.createElement('button');
+    importLink.type = 'button';
+    importLink.className = 'btn btn-small';
+    importLink.textContent = 'Import audio in History';
+    importLink.addEventListener('click', () => { activateTab('history'); document.getElementById('import-audio-button').focus(); });
+    activityListEl.appendChild(importLink);
     updateResumePendingBanner();
     refreshIdleStatusPill();
     updateSoftQueueDepthWarning();
@@ -888,6 +896,7 @@ function renderActivityList() {
     } else {
       const title = document.createElement('div');
       title.className = 'activity-row-title';
+      title.tabIndex = -1;
       title.textContent = row.title;
       main.appendChild(title);
     }
@@ -986,6 +995,11 @@ function renderActivityList() {
   updateBackgroundTranscriptionTip();
   if (restoreActivityRenameFocus) {
     focusActivityRenameInput({ select: false });
+  } else if (focusedRowId) {
+    const row = activityListEl.querySelector(`.activity-row[data-meeting-id="${CSS.escape(focusedRowId)}"]`);
+    const action = focusedAction && [...(row?.querySelectorAll('button') || [])]
+      .find((button) => button.textContent === focusedAction && !button.disabled);
+    (action || row?.querySelector('.activity-row-title'))?.focus({ preventScroll: true });
   }
   restoreInlineTitleEditorFocus();
 }
@@ -1164,6 +1178,7 @@ function applyTranscriptionQueueState(payload) {
 
 function openMeetingInHistory(meetingId) {
   activateTab('history');
+  activateHistoryDetailTab('transcript');
   void selectMeeting(meetingId);
 }
 
@@ -2391,11 +2406,13 @@ async function loadMeetingHistory({ scan = false } = {}) {
     meetings = await window.electronAPI.listMeetings();
     renderMeetingList();
     renderActivityList();
+    const emptyDetail = document.getElementById('meeting-details-empty');
+    if (!currentMeetingId && emptyDetail) emptyDetail.style.display = meetings.length ? 'flex' : 'none';
   } catch (error) {
     console.error('Failed to load meeting history:', error);
-    meetings = [];
-    renderMeetingList();
+    setPlaceholder(meetingList, 'Could not load meetings. Refresh to try again.');
     renderActivityList();
+    return;
   }
 }
 
@@ -2409,7 +2426,7 @@ function renderMeetingList() {
   if (filtered.length === 0) {
     setPlaceholder(
       meetingList,
-      meetings.length === 0 ? 'No meetings recorded yet' : 'No matches for your search',
+      meetings.length === 0 ? 'No meetings yet. Record a meeting or import an audio file.' : 'No matches for your search',
     );
     updateSelectionToolbar();
     restoreInlineTitleEditorFocus();
@@ -2620,20 +2637,40 @@ async function selectMeeting(meetingId) {
     }
     updateSummaryLanguageCaptions(fullMeeting);
 
-    if (fullMeeting.transcript) {
-      transcriptEl.dataset.markdown = fullMeeting.transcript;
-      renderHistoryTranscriptMarkdown(transcriptEl, fullMeeting.transcript);
+    const pending = fullMeeting.transcriptionStatus === 'pending';
+    const transcript = String(fullMeeting.transcript || '');
+    const generatedPlaceholder = /^# Recording Awaiting Transcription\s*\n/.test(transcript)
+      && transcript.includes('The recording was saved successfully, but a transcript is not available yet.');
+    if (transcript && !(pending && generatedPlaceholder)) {
+      transcriptEl.dataset.markdown = transcript;
+      renderHistoryTranscriptMarkdown(transcriptEl, transcript);
     } else {
       delete transcriptEl.dataset.markdown;
       clearElement(transcriptEl);
-      const empty = document.createElement('p');
-      empty.className = 'placeholder';
-      empty.textContent = 'No transcript available';
-      transcriptEl.appendChild(empty);
+      if (!pending) {
+        const empty = document.createElement('p');
+        empty.className = 'placeholder';
+        empty.textContent = 'No transcript available';
+        transcriptEl.appendChild(empty);
+      }
+    }
+    if (pending) {
+      const waiting = document.createElement('p');
+      waiting.className = 'placeholder'; waiting.textContent = 'Awaiting transcription';
+      transcriptEl.appendChild(waiting);
+      const activity = document.createElement('button');
+      activity.type = 'button'; activity.className = 'btn btn-small'; activity.textContent = 'View in Activity';
+      activity.addEventListener('click', () => {
+        activateTab('record');
+        const row = activityListEl.querySelector(`.activity-row[data-meeting-id="${CSS.escape(targetId)}"]`);
+        const title = row?.querySelector('.activity-row-title');
+        if (title) { title.scrollIntoView({ block: 'nearest', behavior: getPreferredScrollBehavior() }); title.focus(); }
+      });
+      transcriptEl.appendChild(activity);
     }
     renderMeetingDiarizationStatus(fullMeeting, transcriptEl);
     const transcriptionStatusMessage = getMeetingTranscriptionStatusMessage(fullMeeting);
-    if (transcriptionStatusMessage) {
+    if (transcriptionStatusMessage && !pending) {
       const statusMessage = document.createElement('p');
       statusMessage.className = fullMeeting.transcriptionStatus === 'failed' ? 'placeholder error' : 'placeholder';
       statusMessage.textContent = transcriptionStatusMessage;
@@ -2719,6 +2756,7 @@ function wireInlineTitleEditor({
     // it until a meeting exists). We only restore it if the caller wanted it
     // visible — defer to applyCurrentRecordingTitle / selectMeeting to set it.
     editBtn.style.display = '';
+    if (formId === 'meeting-title-edit-form') document.dispatchEvent(new Event('history-title-edit-finished'));
   };
 
   editBtn.addEventListener('click', (e) => {
@@ -2788,7 +2826,7 @@ function wireInlineTitleEditor({
     if (form.style.display !== 'flex') {
       return;
     }
-    if (e.relatedTarget && form.contains(e.relatedTarget)) {
+    if (e.relatedTarget && (form.contains(e.relatedTarget) || e.relatedTarget.id === 'import-audio-button')) {
       return;
     }
     void commitTitleEdit();
@@ -3112,6 +3150,15 @@ function setupEventListeners() {
           lastSeenTerminalTranscriptionStatuses.set(meetingId, status);
           if (status === 'ready') {
             showCompletionToast(job);
+            if (String(currentMeetingId) === meetingId) {
+              window.electronAPI.getMeeting(meetingId).then((meeting) => {
+                if (String(currentMeetingId) !== meetingId || !meeting?.transcript) return;
+                const transcript = document.getElementById('meeting-transcript');
+                transcript.dataset.markdown = meeting.transcript;
+                renderHistoryTranscriptMarkdown(transcript, meeting.transcript);
+                updateSummaryLanguageCaptions(meeting);
+              }).catch((error) => console.warn('Could not refresh transcript:', error));
+            }
           }
         }
       }
@@ -7727,6 +7774,191 @@ function setupCustomAudioPlayer() {
   };
 }
 
+// Import runs in main; the renderer only keeps the display name and per-file draft.
+function setupAudioImport() {
+  const byId = (id) => document.getElementById(`import-audio-${id}`);
+  const modal = byId('modal');
+  const form = byId('form');
+  const engine = byId('engine');
+  const language = byId('language');
+  const model = byId('model');
+  const cancel = byId('cancel');
+  const submit = byId('submit');
+  const retry = byId('retry');
+  const open = byId('open');
+  const status = byId('status');
+  let phase = 'closed';
+  let resultId = null;
+  let invoker = null;
+  let background = [];
+  let modelCheckEpoch = 0;
+
+  function setBackgroundInert(inert) {
+    if (inert) {
+      if (background.length) return;
+      background = [...document.body.children].filter((element) => element !== modal && !element.inert);
+      background.forEach((element) => { element.inert = true; });
+    } else {
+      background.forEach((element) => { element.inert = false; });
+      background = [];
+    }
+  }
+  function close() {
+    if (phase === 'saving' || phase === 'cancelling') return;
+    if (phase === 'preparing') {
+      phase = 'cancelling';
+      status.textContent = 'Cancelling import…';
+      cancel.disabled = true;
+      void window.electronAPI.cancelImportAudio();
+      return;
+    }
+    if (phase === 'confirm' || phase === 'error') void window.electronAPI.cancelImportAudio();
+    phase = 'closed';
+    modal.classList.add('hidden');
+    setBackgroundInert(false);
+    if (invoker?.isConnected) invoker.focus();
+  }
+  function updateFields() {
+    const isParakeet = engine.value === 'parakeet';
+    byId('whisper-fields').hidden = isParakeet;
+    byId('english').hidden = !isParakeet;
+    const validation = isParakeet ? { ok: parakeetEngineStatus?.status === 'ready' }
+      : validateNewTranscriptionSelection(language.value, model.value);
+    byId('guidance').textContent = isParakeet && !validation.ok
+      ? 'Parakeet needs setup in Settings. Choose Whisper or cancel to set it up.'
+      : (!validation.ok ? validation.message || 'Choose a supported language and model.' : '');
+    submit.disabled = !validation.ok;
+    if (!isParakeet && validation.ok && typeof window.electronAPI.checkModelDownloaded === 'function') {
+      const epoch = ++modelCheckEpoch;
+      submit.disabled = true;
+      window.electronAPI.checkModelDownloaded(model.value).then((result) => {
+        if (epoch !== modelCheckEpoch || engine.value !== 'whisper' || phase !== 'confirm') return;
+        submit.disabled = !result?.downloaded;
+        if (!result?.downloaded) byId('guidance').textContent = 'This Whisper model needs setup in Settings before importing.';
+      }).catch(() => { if (epoch === modelCheckEpoch) byId('guidance').textContent = 'Could not check the Whisper model. Check setup in Settings.'; });
+    } else { modelCheckEpoch++; }
+  }
+  async function chooseFile() {
+    const previousDraft = phase === 'error' ? { engine: engine.value, language: language.value, model: model.value } : null;
+    const selected = await window.electronAPI.selectImportAudio();
+    if (!selected || selected.canceled) { if (phase === 'closed') invoker?.focus(); return; }
+    if (!selected.success) { if (phase === 'closed') { invoker?.focus(); alert(selected.error || 'Could not choose a file.'); } else status.textContent = selected.error || 'Could not choose a file.'; return; }
+    byId('name').textContent = selected.name;
+    byId('title').textContent = 'Import audio';
+    byId('description').hidden = false;
+    byId('fields').hidden = false;
+    language.replaceChildren(...[...languageSelect.options].map((option) => option.cloneNode(true)));
+    model.replaceChildren(...[...modelSelect.options].map((option) => option.cloneNode(true)));
+    language.value = previousDraft?.language ?? transcriptionEnginePreferences.whisper.language;
+    model.value = previousDraft?.model ?? transcriptionEnginePreferences.whisper.modelSize;
+    engine.value = previousDraft?.engine ?? transcriptionEnginePreferences.activeEngine;
+    status.textContent = '';
+    cancel.textContent = 'Cancel'; cancel.disabled = false;
+    submit.hidden = false; retry.hidden = true; open.hidden = true;
+    phase = 'confirm';
+    modal.classList.remove('hidden'); setBackgroundInert(true);
+    updateFields(); engine.focus();
+    if (typeof window.electronAPI.getTranscriptionEngineStatus === 'function') {
+      await refreshTranscriptionEngineStatus();
+      if (phase === 'confirm') updateFields();
+    }
+  }
+  async function start() {
+    if (phase !== 'confirm' && phase !== 'error') return;
+    if (submit.disabled) return;
+    const selection = engine.value === 'parakeet' ? { engine: 'parakeet', language: 'en' }
+      : { engine: 'whisper', language: language.value, modelSize: model.value };
+    phase = 'preparing'; byId('fields').hidden = true; submit.hidden = true; retry.hidden = true;
+    cancel.textContent = 'Cancel import'; cancel.disabled = false;
+    status.textContent = 'Preparing audio…'; cancel.focus();
+    let result;
+    try { result = await window.electronAPI.startImportAudio({ language: selection.language, modelSize: selection.modelSize, transcriptionSelection: selection }); }
+    catch (error) { result = { success: false, error: error.message }; }
+    if (result?.code === 'IMPORT_CANCELLED') { phase = 'confirm'; close(); return; }
+    if (!result?.success && !result?.meeting && !result?.pendingMeeting) {
+      phase = 'error'; cancel.disabled = false; cancel.textContent = 'Cancel';
+      const invalidAudio = result?.code === 'IMPORT_INVALID_AUDIO';
+      const setupRequired = result?.code === 'IMPORT_SETUP_REQUIRED';
+      status.textContent = result?.code === 'ENOSPC' ? 'There isn’t enough space to save this recording. Free up space, then try again.'
+        : invalidAudio ? 'AvaNevis couldn’t read audio from this file. Choose another MP3, WAV or Opus file.'
+          : setupRequired ? (result.error || 'Check transcription setup in Settings before importing.')
+            : result?.code === 'IMPORT_DECODER_UNAVAILABLE' ? 'The audio decoder could not start. Check your installation, then try again.'
+              : (result?.error || 'Could not import this audio. Try again.');
+      retry.textContent = invalidAudio ? 'Choose another file' : 'Try again';
+      retry.dataset.choose = String(invalidAudio); retry.hidden = setupRequired;
+      (retry.hidden ? cancel : retry).focus(); return;
+    }
+    const meeting = result.meeting || result.pendingMeeting;
+    resultId = meeting?.id || result.meetingId;
+    resultQueueSeq = 0;
+    phase = 'result'; byId('title').textContent = 'Imported into History';
+    byId('name').textContent = meeting?.title || byId('name').textContent.replace(/\.[^.]+$/, '');
+    byId('description').hidden = true;
+    status.textContent = result.success ? 'Transcription queued. You can play the audio now.' : 'Saved in History. Transcription hasn’t started.';
+    cancel.textContent = 'Done'; cancel.disabled = false; open.hidden = !resultId;
+    await loadMeetingHistory();
+    updateResultStatus();
+    (open.hidden ? cancel : open).focus();
+  }
+  byId('button').addEventListener('click', () => { invoker = byId('button'); void chooseFile(); });
+  [engine, language, model].forEach((control) => control.addEventListener('change', updateFields));
+  form.addEventListener('submit', (event) => { event.preventDefault(); void start(); });
+  cancel.addEventListener('click', close);
+  retry.addEventListener('click', () => { if (retry.dataset.choose === 'true') void chooseFile(); else { phase = 'confirm'; void start(); } });
+  async function openImportedMeeting(id) {
+    id = String(id);
+    const meeting = meetings.find((item) => String(item.id) === id);
+    if (meeting && meetingSearchQueryNormalized && !meeting.title.toLowerCase().includes(meetingSearchQueryNormalized)) {
+      const search = document.getElementById('meeting-search'); search.value = '';
+      clearTimeout(meetingSearchDebounceTimer); meetingSearchQuery = ''; meetingSearchQueryNormalized = ''; renderMeetingList();
+    }
+    activateHistoryDetailTab('transcript'); await selectMeeting(id);
+    meetingList.querySelector(`.meeting-item[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' });
+    document.getElementById('cap-play-btn').focus();
+  }
+  open.addEventListener('click', () => {
+    if (!resultId) return;
+    const id = resultId;
+    if (isHistoryTitleEditorOpen()) {
+      document.addEventListener('history-title-edit-finished', () => { void openImportedMeeting(id); }, { once: true });
+      close(); document.getElementById('meeting-title-input')?.focus(); return;
+    }
+    close(); void openImportedMeeting(id);
+  });
+  modal.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); return; }
+    if (event.key !== 'Tab') return;
+    const controls = [...modal.querySelectorAll('button, select')].filter((el) => !el.disabled && !el.hidden && el.getClientRects().length);
+    if (!controls.length) { event.preventDefault(); byId('title').focus(); return; }
+    const index = controls.indexOf(document.activeElement);
+    if (event.shiftKey && index <= 0) { event.preventDefault(); controls[controls.length - 1].focus(); }
+    else if (!event.shiftKey && (index === controls.length - 1 || index < 0)) { event.preventDefault(); controls[0].focus(); }
+  });
+  let resultQueueSeq = 0;
+  function updateResultStatus(queue = transcriptionQueueState) {
+    if (phase !== 'result' || !resultId) return;
+    const seq = Number(queue?.seq) || 0;
+    if (seq && seq < resultQueueSeq) return;
+    resultQueueSeq = Math.max(resultQueueSeq, seq);
+    const job = (queue?.jobs || []).find((item) => String(item.meetingId) === String(resultId));
+    if (!job) return;
+    const label = getActivityChipLabel(job);
+    if (label === 'Ready') status.textContent = 'Transcript ready. You can play the audio now.';
+    else if (label === 'Failed' || label === 'Cancelled') status.textContent = 'Saved in History. Transcription has not completed.';
+    else if (label === 'Queued') status.textContent = 'Transcription queued. You can play the audio now.';
+    else if (label && label !== 'Unknown') status.textContent = `${label}. You can play the audio now.`;
+  }
+  if (typeof window.electronAPI.onTranscriptionQueueState === 'function') {
+    registerCleanup(window.electronAPI.onTranscriptionQueueState((payload) => updateResultStatus(payload)));
+  }
+  if (typeof window.electronAPI.onImportAudioProgress === 'function') {
+    registerCleanup(window.electronAPI.onImportAudioProgress((progress) => {
+      if (phase !== 'preparing' && phase !== 'saving' && phase !== 'cancelling') return;
+      if (progress.phase === 'saving') { phase = 'saving'; status.textContent = 'Saving to History…'; cancel.disabled = true; byId('title').focus(); }
+    }));
+  }
+}
+
 // Start the app
 init();
 setupTabs();
@@ -7736,3 +7968,4 @@ setupCustomAudioPlayer();
 setupTitleEditors();
 setupGPUCTA();
 setupHomeAiAddonCTA();
+setupAudioImport();

@@ -528,7 +528,7 @@ jobs:
     - name: Audit pinned Python build dependencies
       if: matrix.kind == 'pip'
       shell: bash
-      # macOS: torch==2.14.1 and setuptools==84.2.1 are installed only for
+      # macOS: torch==2.15.0 and setuptools==84.2.1 are installed only for
       # reproducible packaging resolution and removed before the app ships
       # (MACOS_RUNTIME_REMOVABLE_PACKAGES in prepare-resources.js).
       run: python -m pip_audit -r requirements-${{ matrix.target }}-build.txt

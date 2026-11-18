@@ -17,6 +17,32 @@
       </div>
     </div>
 
+    <div id="import-audio-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="import-audio-title" aria-describedby="import-audio-description">
+      <div class="modal-content import-audio-content">
+        <div class="modal-header"><h2 id="import-audio-title" tabindex="-1">Import audio</h2></div>
+        <form id="import-audio-form" class="modal-body">
+          <p id="import-audio-name" class="import-audio-name"></p>
+          <p id="import-audio-description" class="setting-description">AvaNevis saves a playable copy in History and transcribes it on this device. Your original stays where it is.</p>
+          <div id="import-audio-fields">
+            <div class="ai-addon-field compact"><label for="import-audio-engine">Engine</label><select id="import-audio-engine" class="device-select"><option value="whisper">Whisper</option><option value="parakeet">Parakeet v2</option></select></div>
+            <p id="import-audio-guidance" class="setting-description" aria-live="polite"></p>
+            <div id="import-audio-whisper-fields">
+              <div class="ai-addon-field compact"><label for="import-audio-language">Language</label><select id="import-audio-language" class="device-select"></select></div>
+              <div class="ai-addon-field compact"><label for="import-audio-model">Whisper model</label><select id="import-audio-model" class="device-select"></select></div>
+            </div>
+            <p id="import-audio-english" class="setting-description" hidden>Language: English only</p>
+          </div>
+          <p id="import-audio-status" role="status" aria-live="polite"></p>
+          <div class="modal-actions import-audio-actions">
+            <button type="button" id="import-audio-cancel" class="btn btn-secondary">Cancel</button>
+            <button type="button" id="import-audio-retry" class="btn btn-secondary" hidden>Try again</button>
+            <button type="button" id="import-audio-open" class="btn btn-primary" hidden>Open meeting</button>
+            <button type="submit" id="import-audio-submit" class="btn btn-primary">Import and transcribe</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <div id="summary-language-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="summary-language-title" aria-describedby="summary-language-description">
       <div class="modal-content whisper-retry-modal-content">
         <div class="modal-header"><h2 id="summary-language-title">Confirm transcript language</h2></div>
@@ -592,6 +618,7 @@
               <aside class="history-sidebar">
                 <div class="sidebar-header">
                   <h3>Meetings</h3>
+                  <div class="history-header-actions"><button type="button" id="import-audio-button" class="btn btn-small">Import audio</button>
                   <button
                     id="refresh-history"
                     class="btn-icon-only"
@@ -612,7 +639,7 @@
                         d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"
                       />
                     </svg>
-                  </button>
+                  </button></div>
                 </div>
 
                 <div class="sidebar-search">
