@@ -63,8 +63,12 @@ Windows 11 Pro build 26300, RTX 4070 driver 621.24, Node 22.15.0 and npm 10.9.2.
 
 The first hosted Windows and Ubuntu jobs failed in the real audio-import regressions because their runners had no FFmpeg on `PATH`. All three packaging jobs now run those regressions with the manifest-pinned FFmpeg prepared during the build. The focused Windows audio-import tests passed with FFmpeg removed from `PATH`. [First hosted qualification](https://github.com/AmirArshad/meeting-transcriber/actions/runs/44365327992)
 
+The Ubuntu rerun reached the pinned binary and found that it lacked the `libvorbis` encoder used by one test. That test now generates real FLAC audio in an Ogg container under an `.opus` filename, preserving the codec-mismatch check. All six focused audio-import tests passed against the pinned Windows binary and the SHA-verified Linux binary under WSL Ubuntu. [Ubuntu qualification rerun](https://github.com/AmirArshad/meeting-transcriber/actions/runs/44366846406)
+
+The disposable Windows runner passed the frontend suite, built the NSIS installer and verified install, payload hashes, embedded Python and FFmpeg, and uninstall. The hosted Windows backend also passed the ONNX ETW positive control, telemetry opt-out and VAD comparison. These hosted checks ran on `758b1c3`. The subsequent fixture change affects test input only and passed the full Windows local suite. [Windows installer job](https://github.com/AmirArshad/meeting-transcriber/actions/runs/44366846406/job/135022795359)
+
 ## Remaining native acceptance
 
-- **Windows x64.** Run the actual NSIS install and uninstall on a disposable Windows runner. Complete the full hardware and add-on setup/repair acceptance where required, including gated Pyannote with an authorized test token. Windows 10 was outside this host pass.
+- **Windows x64.** Complete the remaining physical-device and add-on setup/repair acceptance, including gated Pyannote with an authorized test token. Windows 10 was outside this host pass.
 - **macOS 15+ arm64.** Run native closure and audit, build the DMG and run `npm run verify:mac:packaged`. Confirm Torch is pruned and validate the Numba/llvmlite pair. Upgrade a disposable v2.11 profile and exercise capture permissions, native picker, playback, Metal transcription, restart, Keychain migration, concurrent metadata writes and explicit Parakeet repair with the regenerated lock.
 - Re-query open bot PRs, alerts and registry candidates at publication. The local installer and legal assets are preparation results.

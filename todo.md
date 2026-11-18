@@ -15,7 +15,8 @@ See the [release plan](docs/superpowers/plans/2026-11-18-v2.12.md) for prioritie
 - [x] Build and verify the three Linux package layouts and exercise the AppImage on CachyOS with disposable profile and audio fixtures.
 - [x] Qualify the Windows 11 package payload, disposable-profile upgrade, DPAPI and native dependencies. Fix and retest the Windows import commit and concurrent first-use writes.
 - [x] Investigate the Windows pending-transcription banner. Cover the stale History snapshot in a regression and check Activity through a packaged recording.
-- [ ] Run NSIS install/uninstall on a disposable Windows runner and finish the remaining Windows hardware/add-on acceptance.
+- [x] Verify NSIS install, installed payload and uninstall on a disposable Windows runner.
+- [ ] Finish the remaining Windows physical-device and add-on setup/repair acceptance.
 - [ ] Complete native macOS package, upgrade, secure storage and dependency qualification.
 - [ ] Preserve cue-scale timing in committed transcripts before shipping SRT and WebVTT together.
 

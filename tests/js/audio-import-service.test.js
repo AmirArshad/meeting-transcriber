@@ -115,11 +115,11 @@ test('picker cannot race start, and cancel invalidates a pending picker', async 
   assert.equal((await service.start({})).success, false);
 });
 
-test('rejects Ogg Vorbis renamed Opus without exposing paths', async (t) => {
+test('rejects Ogg FLAC renamed Opus without exposing paths', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'avanevis-import-format-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const source = path.join(root, 'private.opus');
-  execFileSync(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=duration=0.1', '-c:a', 'libvorbis', '-f', 'ogg', '-y', source]);
+  execFileSync(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'sine=duration=0.1', '-c:a', 'flac', '-f', 'ogg', '-y', source]);
   let commits = 0;
   const service = createAudioImportService({
     dialog: { showOpenDialog: async () => ({ filePaths: [source] }) }, getMainWindow: () => null,

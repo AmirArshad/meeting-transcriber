@@ -135,7 +135,7 @@ py -3.11 -m pytest tests/python
 ### Run everything
 
 The audio-import regressions generate real fixtures with FFmpeg. Use an FFmpeg
-build with MP3, Opus and Vorbis encoders on `PATH`, or set
+build with MP3, Opus and FLAC encoders and an Ogg muxer on `PATH`, or set
 `AVANEVIS_TEST_FFMPEG` to the prepared binary. The packaging jobs use the
 manifest-pinned binary from `build/resources/ffmpeg`.
 
