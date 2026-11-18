@@ -2826,7 +2826,8 @@ function wireInlineTitleEditor({
     if (form.style.display !== 'flex') {
       return;
     }
-    if (e.relatedTarget && (form.contains(e.relatedTarget) || e.relatedTarget.id === 'import-audio-button')) {
+    if (e.relatedTarget && (form.contains(e.relatedTarget) || e.relatedTarget.id === 'import-audio-button'
+      || (formId === 'meeting-title-edit-form' && e.relatedTarget.id === 'import-audio-rail-button'))) {
       return;
     }
     void commitTitleEdit();
@@ -7900,7 +7901,14 @@ function setupAudioImport() {
     updateResultStatus();
     (open.hidden ? cancel : open).focus();
   }
-  byId('button').addEventListener('click', () => { invoker = byId('button'); void chooseFile(); });
+  const railButton = byId('rail-button');
+  [byId('button'), railButton].forEach((button) => {
+    button.addEventListener('click', () => {
+      if (button === railButton) activateTab('history');
+      invoker = button;
+      void chooseFile();
+    });
+  });
   [engine, language, model].forEach((control) => control.addEventListener('change', updateFields));
   form.addEventListener('submit', (event) => { event.preventDefault(); void start(); });
   cancel.addEventListener('click', close);

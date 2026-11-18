@@ -8,9 +8,12 @@ app.whenReady().then(async () => {
     await win.loadFile(path.join(__dirname, '../../src/renderer/index.html'));
     result = await win.webContents.executeJavaScript(`(async () => {
       document.getElementById('loading-screen')?.remove();
-      activateTab('history');
+      activateTab('record');
       const button = document.getElementById('import-audio-button');
-      button.focus(); button.click();
+      const railButton = document.getElementById('import-audio-rail-button');
+      railButton.focus(); railButton.click();
+      const railHistory = document.querySelector('.rail-btn[data-tab="history"]');
+      const historyOpened = document.getElementById('history-tab').classList.contains('active') && railHistory.getAttribute('aria-current') === 'page';
       await new Promise(resolve => setTimeout(resolve, 30));
       const modal = document.getElementById('import-audio-modal');
       const opened = !modal.classList.contains('hidden');
@@ -52,7 +55,7 @@ app.whenReady().then(async () => {
       activateTab('history');
       document.getElementById('meeting-title-edit').click();
       const titleInput = document.getElementById('meeting-title-input');
-      titleInput.value = 'Draft title'; titleInput.focus(); button.focus(); button.click();
+      titleInput.value = 'Draft title'; titleInput.focus(); railButton.focus(); railButton.click();
       await new Promise(resolve => setTimeout(resolve, 30));
       const draftPreserved = document.getElementById('meeting-title-edit-form').style.display === 'flex' && titleInput.value === 'Draft title';
       document.getElementById('import-audio-submit').click();
@@ -69,7 +72,7 @@ app.whenReady().then(async () => {
       const diskRetry = document.getElementById('import-audio-retry').textContent;
       document.getElementById('import-audio-retry').click(); await new Promise(resolve => setTimeout(resolve, 30));
       const retryResult = document.getElementById('import-audio-title').textContent;
-      return { opened, name, focus, inert, resultActionsHidden, resultTitle, resultFocus, activeStatus, readyStatus, staleStatus, call, closed, restored, draftPreserved, returnedToEdit, finalFocus, diskMessage, diskRetry, retryResult, placeholderText, hasActivity, previousText, cancelChip, rowFocus };
+      return { historyOpened, opened, name, focus, inert, resultActionsHidden, resultTitle, resultFocus, activeStatus, readyStatus, staleStatus, call, closed, restored, draftPreserved, returnedToEdit, finalFocus, diskMessage, diskRetry, retryResult, placeholderText, hasActivity, previousText, cancelChip, rowFocus };
     })()`, true);
   } catch (error) { result = { error: error.stack || String(error) }; }
   process.stdout.write('IMPORT_RENDERER_RESULT ' + JSON.stringify(result) + '\n');
