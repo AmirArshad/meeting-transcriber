@@ -5,6 +5,41 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 
 ## Status
 
+### Mandatory gates before the next release
+
+All items below must be completed and their evidence recorded before the next
+release is published. The v2.12 acceptance of coverage limits does not waive
+these gates for a later release.
+
+- [ ] Upgrade and qualify bundled CPython to 3.11.18 or newer on Windows and
+  macOS. Port the Windows isolated runtime layout and verify packaged startup,
+  transcription and add-on closures; qualify macOS startup, native dependencies
+  and Metal. Linux already ships 3.11.18; retain platform qualification.
+- [ ] Fix the History metadata lock contention during long recorder recovery
+  scans, preserving recovery and atomicity guarantees. Add a regression for a
+  concurrent metadata operation during slow recovery.
+- [ ] Complete Windows physical-device recording and end-to-end add-on
+  setup/repair acceptance, including gated Pyannote with an authorized test
+  token, and qualify Windows 10 as well as Windows 11.
+- [ ] Qualify macOS 15 on Apple Silicon, isolated Keychain migration and
+  permission-prompt variants.
+- [ ] Move from the Electron 46 prerelease to a suitable stable Electron build
+  and qualify all platforms. Recheck Linux keyring provider mapping and fixed-key
+  rejection, and token migration on Linux, Windows and macOS.
+- [ ] Qualify the Linux managed CUDA repair/uninstall escape paths and the
+  separate transcription, Speakrs and summary admission gates. Preserve the
+  intentional platform-specific recording behavior when desktop audio is lost.
+- [ ] Update and qualify FFmpeg on all three platforms with pinned binaries and
+  corresponding source; verify import decoding, recording finalization and recovery.
+- [ ] Preserve caption-scale timing tied to committed transcripts, provide a
+  path for older meetings, and ship accurate SRT and WebVTT exports together.
+- [ ] Resolve the development packaging graph's picomatch audit finding with a
+  compatible qualified dependency update and verify production and full audits.
+- [ ] Sign the Windows installer and sign and notarize the macOS build; verify
+  the resulting distribution artifacts.
+- [ ] Test Speakrs multi-speaker separation with representative speech on each
+  supported native platform and record the results.
+
 ### v2.12 released · 2026-11-19
 
 [Release PR #154](https://github.com/AmirArshad/meeting-transcriber/pull/154) passed all 13 jobs and merged; the [tagged release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/runs/44431149100) published all installers and legal assets. The user accepted the documented native coverage limits. The four superseded Dependabot PRs were closed and GitHub reported no open alerts after the merge.
