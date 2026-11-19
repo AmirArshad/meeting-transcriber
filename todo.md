@@ -17,7 +17,7 @@ See the [release plan](docs/superpowers/plans/2026-11-18-v2.12.md) for prioritie
 - [x] Investigate the Windows pending-transcription banner. Cover the stale History snapshot in a regression and check Activity through a packaged recording.
 - [x] Verify NSIS install, installed payload and uninstall on a disposable Windows runner.
 - [ ] Finish the remaining Windows physical-device and add-on setup/repair acceptance.
-- [ ] Complete native macOS package, upgrade, secure storage and dependency qualification.
+- [x] Qualify the macOS arm64 package, upgrade and dependencies on macOS 26; Keychain migration and macOS 15 remain unverified.
 - [ ] Preserve cue-scale timing in committed transcripts before shipping SRT and WebVTT together.
 
 ### Historical v2.11 release review follow-up
