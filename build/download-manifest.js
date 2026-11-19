@@ -13,9 +13,9 @@ const BUILD_DOWNLOADS = Object.freeze({
     sha256: '3663b71c18364eccfbad74c4f21f9f6149e40b07329cd776287410cc1da5d612',
   }),
   pythonLinux: Object.freeze({
-    label: 'Linux standalone Python 3.11.17+20261003',
-    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.11.17+20261003-x86_64-unknown-linux-gnu-install_only.tar.gz',
-    sha256: 'c624af93ad62a596806bbd2404e1fb80744a407ca7279854445ede16d93858b8',
+    label: 'Linux standalone Python 3.11.18+20261110',
+    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18+20261110-x86_64-unknown-linux-gnu-install_only.tar.gz',
+    sha256: 'ac0b758b6ae4ba1cb87f7091eb6bb17c9a383a9bcdb5c18493cdd4f34e35ae8c',
   }),
   ffmpegWin: Object.freeze({
     label: 'Windows ffmpeg 8.1.2 essentials build',

@@ -553,6 +553,28 @@ test('isPathInsideDirectory allows a missing sidecar when native realpath uses a
   }
 });
 
+test('missing sidecars accept an alias of the recordings directory and reject escapes', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Directory symlinks require additional Windows privileges.');
+    return;
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-recordings-alias-'));
+  try {
+    const recordingsDir = path.join(root, 'recordings');
+    const alias = path.join(root, 'alias');
+    fs.mkdirSync(recordingsDir);
+    fs.symlinkSync(recordingsDir, alias);
+    const realDir = fs.realpathSync(recordingsDir);
+    assert.equal(isPathInsideDirectory(path.join(realDir, 'candidate.md'), alias), true);
+    assert.equal(isPathInsideDirectory(path.join(root, 'outside.md'), alias), false);
+    const escape = path.join(recordingsDir, 'escape.md');
+    fs.symlinkSync(path.join(root, 'outside.md'), escape);
+    assert.equal(isPathInsideDirectory(escape, alias), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 
 test('isSafeRecordingsAudioPath rejects symlinks that resolve outside recordings', (t) => {
   if (process.platform === 'win32') {

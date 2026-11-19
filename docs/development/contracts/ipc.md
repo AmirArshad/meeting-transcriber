@@ -25,6 +25,7 @@ Not inferable from the tree, and the highest-risk surface in the repo. Renaming 
 |---|---|
 | `recorder-service.js` | `run-recording-preflight`, `start-recording`, `stop-recording`, `cancel-recording`, `get-recording-state` |
 | `transcription-service.js` | `check-model-downloaded`, `download-model`, `transcribe-audio`, `transcribe-audio-with-speakers`, `diarize-transcript`, `retry-transcription`, `finalize-recording-transcription`, `cancel-pending-transcription` |
+| `audio-import-service.js` | `select-import-audio`, `start-import-audio`, `cancel-import-audio`, `import-audio-progress` (event) |
 | `summary-service.js` | `generate-summary`, `cancel-summary-generation` |
 | `meeting-manager-client.js` | `list-meetings`, `get-meeting`, `delete-meeting`, `scan-recordings`, `add-meeting`, `update-meeting`, `update-meeting-ai` |
 | `device-ipc.js` | `validate-devices`, `check-disk-space`, `check-audio-output`, `get-audio-devices`, `warm-up-audio-system`, `get-macos-permission-status` |
@@ -35,6 +36,10 @@ Not inferable from the tree, and the highest-risk surface in the repo. Renaming 
 | `recording-presence-service.js` | none — tray/Dock/taskbar presentation only |
 
 Phase 0 source-scan tests treat `src/main.js` + `src/main/**/*.js` as one combined surface, so channel names and payloads stay pinned across the split.
+
+### Local audio import
+
+The native picker returns the basename of one selected MP3, WAV or Opus file. Main owns the selected path and staging directory. Start accepts the same transcription selection used for recording finalization. Progress carries the preparing and saving phases. Cancellation waits for conversion and cleanup before acknowledging, and becomes unavailable when saving begins. A committed result includes the saved meeting even if queue admission fails. After saving, use the ordinary Activity cancellation and retry channels.
 
 ### Summary language payload
 

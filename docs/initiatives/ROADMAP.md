@@ -76,10 +76,9 @@ Electron now uses asynchronous secure token storage. The installer requires
 macOS 15 or later on Apple Silicon, and existing Speakrs users enable the new
 models through Repair. See the [release notes](../releases/v2.11.0.md).
 
-## Planned v2.12.0
+## v2.12.0 release candidate
 
-Import existing local recordings into History and transcribe them through Activity. Include a focused visual cleanup using the existing desktop design system.
-Add SRT and WebVTT export if timing coverage permits. Update applicable Dependabot dependencies, identify and qualify updates to manually pinned runtimes and build tools, and investigate the Windows queue-status banner. See [the release plan](../superpowers/plans/2026-11-18-v2.12.md).
+Import WAV, MP3 and Opus into History and transcribe them through Activity. The candidate includes keyboard access to History meetings and qualified dependency updates. Native cross-platform acceptance and the Windows queue-status banner investigation remain open. SRT and WebVTT move to a later release, when the saved transcript can retain cue-scale timing. See the [qualification record](../development/V2_12_QUALIFICATION.md).
 A candidate v3 milestone is local History search and questions with citations
 that open the source meeting at the relevant timestamp.
 

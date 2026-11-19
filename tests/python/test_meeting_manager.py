@@ -1,6 +1,7 @@
 import json
 import hashlib
 import os
+from contextlib import contextmanager
 from datetime import datetime as real_datetime
 from pathlib import Path
 
@@ -15,6 +16,25 @@ def _create_source_files(recordings_dir: Path, stem: str):
     audio_path.write_bytes(b'audio-bytes')
     transcript_path.write_text('# Transcript\n\nHello world', encoding='utf-8')
     return audio_path, transcript_path
+
+
+def test_initialization_preserves_a_meeting_committed_while_waiting_for_the_lock(tmp_path):
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings, 'first_recording')
+    committed = []
+
+    class DelayedMeetingManager(MeetingManager):
+        @contextmanager
+        def _metadata_guard(self):
+            if not committed:
+                writer = MeetingManager(str(recordings))
+                committed.append(writer.add_meeting(str(audio), str(transcript), 1))
+            with super()._metadata_guard():
+                yield
+
+    manager = DelayedMeetingManager(str(recordings))
+    assert len(committed) == 1
+    assert manager.list_meetings() == committed
 
 
 def test_add_meeting_persists_files_and_removes_originals(tmp_path):
@@ -1312,3 +1332,155 @@ def test_save_after_corrupt_metadata_preserves_backup_and_writes_new_file(tmp_pa
     assert len(backups) == 1
     assert backups[0].read_text(encoding='utf-8') == '{not valid json'
     assert saved[0]['id'] == meeting['id']
+
+
+def test_interrupted_staged_import_is_not_scanned_and_committed_import_survives(tmp_path):
+    import subprocess
+    import sys
+
+    recordings = tmp_path / 'recordings'
+    staging = recordings / '.audio-import-test'
+    audio, transcript = _create_source_files(staging, 'audio')
+    manager = MeetingManager(str(recordings))
+    script = '''
+import os, sys
+from meeting_manager import MeetingManager
+original = os.replace
+def crash_after_promotion(src, dst, *args, **kwargs):
+    original(src, dst, *args, **kwargs)
+    if str(dst).endswith('.opus'):
+        os._exit(73)
+os.replace = crash_after_promotion
+MeetingManager(sys.argv[1]).add_meeting(sys.argv[2], sys.argv[3], 1)
+'''
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / 'backend'))
+    result = subprocess.run([sys.executable, '-c', script, str(recordings), str(audio), str(transcript)], env=env)
+    assert result.returncode == 73
+    assert list(recordings.glob('meeting_*.opus'))
+    assert manager.scan_and_sync_recordings()['added'] == 0
+    assert not list(recordings.glob('meeting_*.opus'))
+    assert not audio.exists()
+
+    audio, transcript = _create_source_files(staging, 'audio')
+    request = {'schemaVersion': 1, 'attemptId': '11111111-1111-4111-8111-111111111111',
+               'engine': 'whisper', 'language': 'fr', 'modelSize': 'medium', 'artifactRevision': None}
+    meeting = manager.add_meeting(str(audio), str(transcript), 1, title='Imported', transcription_request=request)
+    # Simulate interruption after metadata commit and before marker removal.
+    (recordings / f".meeting-import-{meeting['id']}").mkdir()
+    restarted = MeetingManager(str(recordings))
+    restarted.scan_and_sync_recordings()
+    saved = restarted.list_meetings()
+    assert len(saved) == 1
+    assert saved[0]['transcriptionRequest'] == request
+    assert saved[0]['transcriptionStatus'] == 'pending'
+    assert Path(saved[0]['audioPath']).read_bytes() == b'audio-bytes'
+    assert not list(recordings.glob('.meeting-import-*'))
+
+
+def test_staged_import_flushes_read_only_copies(tmp_path):
+    import stat
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings / '.audio-import-test', 'audio')
+    audio.chmod(stat.S_IREAD)
+    transcript.chmod(stat.S_IREAD)
+    try:
+        meeting = MeetingManager(str(recordings)).add_meeting(str(audio), str(transcript), 1)
+        assert Path(meeting['audioPath']).is_file()
+        assert Path(meeting['transcriptPath']).is_file()
+    finally:
+        for path in (audio, transcript):
+            if path.exists():
+                path.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_import_recovery_preserves_files_when_metadata_is_corrupt(tmp_path):
+    import pytest
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings / '.audio-import-test', 'audio')
+    manager = MeetingManager(str(recordings))
+    meeting = manager.add_meeting(str(audio), str(transcript), 1)
+    marker = recordings / f".meeting-import-{meeting['id']}"
+    marker.mkdir()
+    manager.metadata_file.write_text('{corrupt', encoding='utf-8')
+
+    with pytest.raises(RuntimeError, match='corrupt meeting metadata'):
+        manager.scan_and_sync_recordings()
+
+    assert Path(meeting['audioPath']).read_bytes() == b'audio-bytes'
+    assert Path(meeting['transcriptPath']).is_file()
+    assert marker.is_dir()
+    assert list(recordings.glob('meetings.corrupt.*.json'))
+
+
+def test_import_recovery_rejects_invalid_metadata_structure(tmp_path):
+    import pytest
+
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(str(recordings))
+    audio = recordings / 'meeting_20261118_120000.opus'
+    audio.write_bytes(b'preserve')
+    marker = recordings / '.meeting-import-20261118_120000'
+    marker.mkdir()
+    for invalid in ({}, [None], [{'id': 'missing-path'}]):
+        manager.metadata_file.write_text(json.dumps(invalid), encoding='utf-8')
+        with pytest.raises(RuntimeError, match='invalid meeting metadata'):
+            manager.scan_and_sync_recordings()
+        assert audio.read_bytes() == b'preserve'
+        assert marker.is_dir()
+
+
+def test_import_recovery_checks_duplicate_records_before_deduplication(tmp_path):
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(str(recordings))
+    audio = recordings / 'meeting_20261118_120000.opus'
+    audio.write_bytes(b'preserve')
+    marker = recordings / '.meeting-import-20261118_120000'
+    marker.mkdir()
+    records = [
+        {'id': 'duplicate', 'audioPath': str(recordings / 'other.opus')},
+        {'id': 'duplicate', 'audioPath': str(audio)},
+    ]
+    manager.metadata_file.write_text(json.dumps(records), encoding='utf-8')
+    with manager._metadata_guard():
+        manager._reconcile_import_transactions_unlocked()
+    assert audio.read_bytes() == b'preserve'
+    assert not marker.exists()
+    assert json.loads(manager.metadata_file.read_text(encoding='utf-8')) == records
+
+
+def test_scan_waits_for_staged_import_metadata_lock(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings / '.audio-import-test', 'audio')
+    writer = MeetingManager(str(recordings))
+    scanner = MeetingManager(str(recordings))
+    copied = threading.Event()
+    release = threading.Event()
+    original = meeting_manager_module.os.replace
+
+    def pause_after_promotion(src, dst, *args, **kwargs):
+        result = original(src, dst, *args, **kwargs)
+        if Path(dst).suffix == '.opus':
+            copied.set()
+            assert release.wait(5)
+        return result
+
+    monkeypatch.setattr(meeting_manager_module.os, 'replace', pause_after_promotion)
+    writer_thread = threading.Thread(target=lambda: writer.add_meeting(str(audio), str(transcript), 1))
+    writer_thread.start()
+    assert copied.wait(5)
+    scan_results = []
+    scan_thread = threading.Thread(target=lambda: scan_results.append(scanner.scan_and_sync_recordings()))
+    scan_thread.start()
+    time.sleep(0.2)
+    assert scan_thread.is_alive()
+    release.set()
+    writer_thread.join(5)
+    scan_thread.join(5)
+    assert not writer_thread.is_alive() and not scan_thread.is_alive()
+    assert scan_results[0]['added'] == 0
+    assert len(scanner.list_meetings()) == 1

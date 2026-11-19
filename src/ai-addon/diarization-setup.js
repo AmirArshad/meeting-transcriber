@@ -331,6 +331,20 @@ async function setupNativeSpeakrs({
   try {
     if (staging) {
       ensureNativeSpeakrsDirectory(userDataDir, path.dirname(staging), fsModule);
+      const cleanInterruptedAttempts = () => {
+        throwIfAiAddonCanceled(cancelSignal, cancelMessage);
+        const revisionDir = path.dirname(staging);
+        for (const entry of fsModule.readdirSync(revisionDir, { withFileTypes: true })) {
+          if (!entry.isDirectory() || !/^[0-9a-f]{32}(?:\.install)?$/.test(entry.name)
+              || entry.name === previousDiarizationState.speakrsInstallId) continue;
+          fsModule.rmSync(path.join(revisionDir, entry.name), { recursive: true, force: true });
+        }
+      };
+      if (typeof withExclusiveDiskMutation === 'function') {
+        await withExclusiveDiskMutation(cleanInterruptedAttempts);
+      } else {
+        cleanInterruptedAttempts();
+      }
       // The previous revision stays in place, so budget the entire candidate separately.
       if (typeof fsModule.statfsSync === 'function') {
         const { bavail, bsize } = fsModule.statfsSync(path.dirname(staging), { bigint: true });

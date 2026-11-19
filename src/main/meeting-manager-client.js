@@ -94,7 +94,7 @@ function createMeetingManagerClient(deps) {
       ]);
 
       if (title) {
-        args.push('--title', title);
+        args.push(`--title=${title}`);
       }
       if (transcriptionStatus) {
         args.push('--transcription-status', String(transcriptionStatus));
@@ -138,7 +138,12 @@ function createMeetingManagerClient(deps) {
           return;
         }
 
-        reject(new Error(`Failed to save meeting: ${processOutput.getStderr().trim() || 'Unknown error'}`));
+        const diagnostic = processOutput.getStderr().trim();
+        if (diagnostic.split(/\r?\n/).includes('MEETING_STORAGE_FULL')) {
+          reject(Object.assign(new Error('There is not enough space to save the meeting.'), { code: 'ENOSPC' }));
+          return;
+        }
+        reject(new Error(`Failed to save meeting: ${diagnostic || 'Unknown error'}`));
       });
 
       python.on('error', reject);

@@ -126,7 +126,7 @@ async function runLinuxSafeStorageSmoke(safeStorage) {
       const encrypted = await safeStorage.encryptStringAsync(SAFESTORAGE_SMOKE_CANARY);
       const protectedFormat = Buffer.isBuffer(encrypted)
         && ['v11', 'v12'].includes(encrypted.subarray(0, 3).toString('ascii'))
-        && (!process.versions.electron || process.versions.electron === '46.0.0-alpha.10');
+        && (!process.versions.electron || process.versions.electron === '46.0.0-alpha.11');
       roundTrip = protectedFormat
         && (await safeStorage.decryptStringAsync(encrypted)).result === SAFESTORAGE_SMOKE_CANARY;
     } catch (err) {

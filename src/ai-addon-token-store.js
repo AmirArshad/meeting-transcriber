@@ -47,7 +47,7 @@ function releaseState(tokenPath, state) {
   }
 }
 
-// Electron 46.0.0-alpha.10 / Chromium 159: v10 uses a fixed POSIX key;
+// Electron 46.0.0-alpha.11 / Chromium 160: v10 uses a fixed POSIX key;
 // v11 and v12 identify the desktop keyring and Secret portal respectively.
 function isProtectedLinuxCiphertext(value) {
   return Buffer.isBuffer(value) && (value.subarray(0, 3).equals(Buffer.from('v11'))
@@ -62,7 +62,7 @@ async function isTokenEncryptionAvailable({ safeStorage, checkAvailability = tru
         || !['gnome_libsecret', 'kwallet', 'kwallet5', 'kwallet6'].includes(safeStorage.getSelectedStorageBackend()))) return false;
     if ((await safeStorage.isAsyncEncryptionAvailable()) !== true) return false;
     if (process.platform === 'linux') {
-      if (process.versions.electron && process.versions.electron !== '46.0.0-alpha.10') return false;
+      if (process.versions.electron && process.versions.electron !== '46.0.0-alpha.11') return false;
       if (typeof safeStorage.encryptStringAsync !== 'function') return false;
       return isProtectedLinuxCiphertext(await safeStorage.encryptStringAsync('avanevis-storage-probe'));
     }

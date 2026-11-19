@@ -196,6 +196,18 @@ app.whenReady().then(async () => {
       undefined;
     `, true);
     await win.webContents.executeJavaScript('window.__showHistoryMeeting()', true);
+    // Explicitly park the synthetic pointer before measuring the unhovered state.
+    // Its initial location can otherwise coincide with the button in a hidden window.
+    await dbg.sendCommand('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 0, y: 0, button: 'none' });
+    await win.webContents.executeJavaScript(`new Promise((resolve, reject) => {
+      const deadline = performance.now() + 2000;
+      function check() {
+        if (!document.getElementById('generate-summary-btn').matches(':hover')) return resolve();
+        if (performance.now() >= deadline) return reject(new Error('Pointer did not leave summary button'));
+        requestAnimationFrame(check);
+      }
+      check();
+    })`, true);
     result.short = await win.webContents.executeJavaScript(`window.__measureHistory(${buttonIds})`, true);
     result.summary = await win.webContents.executeJavaScript('window.__prepareSummaryCancellation()', true);
     const center = await win.webContents.executeJavaScript("window.__buttonCenter('generate-summary-btn')", true);
@@ -210,6 +222,16 @@ app.whenReady().then(async () => {
       });
     };
     await pointerAt('mouseMoved', center);
+    // CDP dispatch completion precedes Chromium's hover/style update on some runs.
+    await win.webContents.executeJavaScript(`new Promise((resolve, reject) => {
+      const deadline = performance.now() + 2000;
+      function check() {
+        if (document.getElementById('generate-summary-btn').matches(':hover')) return resolve();
+        if (performance.now() >= deadline) return reject(new Error('Pointer did not enter summary button'));
+        requestAnimationFrame(check);
+      }
+      check();
+    })`, true);
     result.hoverAfter = await win.webContents.executeJavaScript('window.__hoverLabelContent()', true);
     await pointerAt('mousePressed', center, 1);
     await pointerAt('mouseReleased', center, 1);

@@ -61,6 +61,7 @@ test('activity chips map queue phases and optional percent', () => {
   assert.equal(getActivityChipLabel({ status: 'active', phase: 'waiting_resource' }), 'Waiting for GPU or model setup');
   assert.equal(getActivityChipLabel({ status: 'ready', phase: 'completed' }), 'Ready');
   assert.equal(getActivityChipLabel({ status: 'failed' }), 'Failed');
+  assert.equal(getActivityChipLabel({ status: 'failed', phase: 'cancelled' }), 'Cancelled');
   assert.equal(getActivityChipLabel({ status: 'active', phase: 'transcribing', percent: null }), 'Transcribing');
 });
 
@@ -93,6 +94,20 @@ test('resumable pending excludes busy queue jobs and never counts failed', () =>
     { status: 'active' },
     { status: 'ready' },
   ]), 2);
+});
+
+test('resume banner ignores stale pending snapshots for terminal session jobs', () => {
+  const meetings = ['ready', 'failed', 'cancelled', 'orphan'].map((id) => ({
+    id, transcriptionStatus: 'pending',
+  }));
+  meetings.push({ id: 'excluded', transcriptionStatus: 'pending', transcriptionResumeExcluded: true });
+  assert.equal(countResumablePendingMeetings(meetings, {
+    jobs: [
+      { meetingId: 'ready', status: 'ready' },
+      { meetingId: 'failed', status: 'failed' },
+      { meetingId: 'cancelled', status: 'failed', phase: 'cancelled' },
+    ],
+  }), 1);
 });
 
 test('buildActivityRows merges queue + durable, caps Ready, and exposes rename/delete', () => {

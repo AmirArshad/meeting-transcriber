@@ -59,11 +59,11 @@
     if (status === 'queued' || phase === 'queued') {
       return ACTIVITY_CHIP_LABELS.queued;
     }
-    if (status === 'failed' || phase === 'failed') {
-      return ACTIVITY_CHIP_LABELS.failed;
-    }
     if (status === 'cancelled' || phase === 'cancelled') {
       return ACTIVITY_CHIP_LABELS.cancelled;
+    }
+    if (status === 'failed' || phase === 'failed') {
+      return ACTIVITY_CHIP_LABELS.failed;
     }
     if (status === 'ready' || phase === 'completed') {
       return ACTIVITY_CHIP_LABELS.ready;
@@ -154,19 +154,22 @@
   }
 
   function countResumablePendingMeetings(meetings = [], queueState = {}) {
-    const busyIds = new Set(
+    // A session job supersedes a potentially stale History snapshot. Terminal
+    // rows remain visible in Activity while History refreshes asynchronously.
+    const sessionJobIds = new Set(
       (queueState.jobs || [])
         .filter((job) => {
           const status = String(job && job.status || '');
-          return status === 'queued' || status === 'active';
+          return ['queued', 'active', 'ready', 'failed', 'cancelled'].includes(status);
         })
         .map((job) => String(job.meetingId || '')),
     );
     return (meetings || []).filter((meeting) => {
-      if (!meeting || String(meeting.transcriptionStatus || '') !== 'pending') {
+      if (!meeting || !meeting.id || meeting.transcriptionResumeExcluded === true
+        || String(meeting.transcriptionStatus || '') !== 'pending') {
         return false;
       }
-      return !busyIds.has(String(meeting.id || ''));
+      return !sessionJobIds.has(String(meeting.id));
     }).length;
   }
 

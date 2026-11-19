@@ -726,6 +726,36 @@ test('Hugging Face downloader kills child process and rejects on cancellation', 
   }
 });
 
+test('packaged summary downloads isolate Python imports from the ambient environment', async () => {
+  const saved = {};
+  for (const key of ['AVANEVIS_PACKAGED', 'PYTHONPATH', 'PYTHONHOME', 'PYTHONUSERBASE']) saved[key] = process.env[key];
+  Object.assign(process.env, { AVANEVIS_PACKAGED: '1', PYTHONPATH: '/untrusted', PYTHONHOME: '/untrusted', PYTHONUSERBASE: '/untrusted' });
+  const fsModule = createMemoryFs();
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 }));
+  fsModule.writeFileSync('/tmp/model.gguf', 'fixture');
+  fsModule.__spawn = (_command, _args, options) => {
+    assert.equal(options.env.PYTHONPATH, '/app/backend');
+    assert.equal(options.env.PYTHONHOME, undefined);
+    assert.equal(options.env.PYTHONUSERBASE, undefined);
+    assert.equal(options.env.PYTHONNOUSERSITE, '1');
+    assert.equal(options.env.PYTHONDONTWRITEBYTECODE, '1');
+    assert.equal(options.env.HF_HUB_DISABLE_XET, '1');
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    setImmediate(() => child.emit('close', 0));
+    return child;
+  };
+  try {
+    await downloadHuggingFaceSummaryArtifact({ artifact, destinationPath: '/tmp/model.gguf', userDataDir: '/tmp', pythonExe: '/python', backendPath: '/app/backend', fsModule });
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 test('zip extraction rejects unsafe archive entry names', () => {
   assert.throws(
     () => extractZipArchive(createMemoryZip(['bin/llama-cli.exe', '../escape.txt']), '/tmp/runtime'),
@@ -3473,9 +3503,17 @@ test('native Speakrs repair validates staged files and preserves the old manifes
   const orphan = path.join(revisionDir, 'e'.repeat(32));
   fs.mkdirSync(path.dirname(path.join(orphan, file.path)), { recursive: true });
   fs.writeFileSync(path.join(orphan, file.path), SPEAKRS_TEST_BYTES);
+  const interrupted = path.join(revisionDir, `${'f'.repeat(32)}.install`);
+  fs.mkdirSync(interrupted);
+  fs.writeFileSync(path.join(interrupted, 'partial'), SPEAKRS_TEST_BYTES);
+  const unrelated = path.join(revisionDir, 'other-directory');
+  fs.mkdirSync(unrelated);
   const beforeRepair = await checkAiAddonSetupStatus(options);
   assert.equal(beforeRepair.features.diarization.setupComplete, false);
   const repaired = await setupDiarizationAddon({ ...options, runtimeValidator });
+  assert.equal(fs.existsSync(orphan), false);
+  assert.equal(fs.existsSync(interrupted), false);
+  assert.equal(fs.existsSync(unrelated), true);
   assert.equal(repaired.features.diarization.setupComplete, true);
   const active = JSON.parse(fs.readFileSync(manifestPath, 'utf8')).features.diarization.speakrsInstallId;
   assert.match(active, /^[a-f0-9]{32}$/);

@@ -72,10 +72,15 @@ function isPathInsideDirectory(filePath, directoryPath, fsImpl = fs) {
   }
 
   if (resolvedDirectory && !resolvedPath) {
-    if (!isSameOrInsideDirectory(filePath, directoryPath)) {
-      return false;
+    // realpath reports ENOENT for a dangling symlink too. A future write must
+    // not follow such a link outside the validated directory.
+    if (typeof fsImpl.lstatSync === 'function') {
+      try {
+        if (fsImpl.lstatSync(filePath).isSymbolicLink()) return false;
+      } catch (error) {
+        if (!error || error.code !== 'ENOENT') throw error;
+      }
     }
-
     const parentRealPath = resolveExistingRealPath(path.dirname(filePath), fsImpl);
     return Boolean(
       parentRealPath

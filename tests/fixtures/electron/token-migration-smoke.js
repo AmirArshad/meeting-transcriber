@@ -52,5 +52,6 @@ const tokenPath = path.join(profile, 'synthetic-token.bin');
     }
   } catch (_) { /* Only report failure state; never emit native error text. */ }
   process.stdout.write(`${JSON.stringify({ mode, electron: process.versions.electron, backend, available, protectedByAppPolicy, roundTrip, rotation, format })}\n`);
-  app.exit(0);
+  // Chromium persists the Windows encryption key on normal shutdown.
+  app.quit();
 })().catch(() => { process.stdout.write('{"fixtureError":true}\n'); app.exit(1); });
