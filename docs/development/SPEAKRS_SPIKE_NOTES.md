@@ -109,7 +109,7 @@ Escalate-or-not: **do not bundle in installer** — keep setup-time download.
 
 ## Meetings / DER / RSS (0a)
 
-Private corpus only (not in git). Longest valid local file is **55.9 min** (`20260722_073706`); `20260516_160249` is tagged 68.5 min but the opus is 0.6 MB / corrupt — not used.
+Private corpus only (not in git). Longest valid local file is **55.9 min** (`private meeting C`); `private meeting D` is tagged 68.5 min but the opus is 0.6 MB / corrupt — not used.
 
 Pinned VoxConverse dev subset (every 21st of sorted `dev/*.rttm`, n=10, 50.8 min): `abjxc,cmfyw,exymw,hiyis,jyflp,mekog,oenox,qsfzo,tjkfn,wjhgf`. Scored with `pyannote.metrics.DiarizationErrorRate` vs official RTTMs. Duration-weighted: speakrs `coreml` **8.46% / 6.74%** vs pyannote MPS **7.93% / 6.31%** (Δ **+0.53 / +0.43** abs). Gate was ≤ +1.0 abs — **PASS** both collars. Not a publishable claim (n=10). `wjhgf` is the outlier (+8.5 both collars, 91 s / 5 speakers).
 
@@ -117,11 +117,11 @@ Cold-start (1 s silence, `coreml`): **1.84 s**, CLI RSS 246 MB.
 
 | file | duration | speakers | engine | mode | DER 0 | DER 250ms | seconds | RTFx | cold-start | CLI RSS | combined RSS |
 |------|----------|----------|--------|------|-------|-----------|---------|------|------------|---------|--------------|
-| 20260812_072216 Andrew Aurison Hypercare Sync | 31.6 min | 2 | speakrs | coreml | — | — | 6.20 | 306× | 1.84 s | 3.56 GB | — |
-| 20260812_072216 | 31.6 min | 2 | speakrs | coreml-fast | — | — | 3.83 | 495× | — | 3.92 GB | — |
-| 20260812_072216 | 31.6 min | 2 | pyannote | mps | — | — | 69.35 run / 74.43 total | 27.3× run | 5.06 s load | 1.59 GB | — |
-| 20260709_074020 Radiology Company Onboarding | 24.9 min | 4 (overlap) | speakrs | coreml | — | — | 3.52 | 425× | 1.84 s | 3.50 GB | — |
-| 20260722_073706 Andrew Onboarding Call 2 | 55.9 min | 2 | speakrs | coreml | — | — | 6.57 | 510× | 1.84 s | **3.81 GB** | **3.64 GB** thin Python spawn; +~215 MB if Python also holds f32 |
+| private meeting A | 31.6 min | 2 | speakrs | coreml | — | — | 6.20 | 306× | 1.84 s | 3.56 GB | — |
+| private meeting A | 31.6 min | 2 | speakrs | coreml-fast | — | — | 3.83 | 495× | — | 3.92 GB | — |
+| private meeting A | 31.6 min | 2 | pyannote | mps | — | — | 69.35 run / 74.43 total | 27.3× run | 5.06 s load | 1.59 GB | — |
+| private meeting B | 24.9 min | 4 (overlap) | speakrs | coreml | — | — | 3.52 | 425× | 1.84 s | 3.50 GB | — |
+| private meeting C | 55.9 min | 2 | speakrs | coreml | — | — | 6.57 | 510× | 1.84 s | **3.81 GB** | **3.64 GB** thin Python spawn; +~215 MB if Python also holds f32 |
 | voxconverse `abjxc` | 68.4 s | 1 | speakrs / pyannote | coreml / mps | 0.7 / 0.6 | 0.3 / 0.2 | 1.87 / 2.75 | — | — | — | — |
 | voxconverse `cmfyw` | 483.9 s | 5 | speakrs / pyannote | coreml / mps | 21.3 / 20.9 | 19.0 / 18.9 | 1.68 / 17.41 | — | — | — | — |
 | voxconverse `exymw` | 116.4 s | 5 | speakrs / pyannote | coreml / mps | 6.4 / 6.9 | 4.8 / 5.3 | 0.87 / 4.29 | — | — | — | — |
@@ -231,7 +231,7 @@ Candidate archive **602.8 MB**. Models 220 MB + archive 603 MB = **823 MB**. Ove
 
 ## Meetings / DER / RSS (0b)
 
-Private corpus only (not in git). Long file `20260527_143226` / `recording_2026-05-27T14-32-26.opus` is **82.4 min**.
+Private corpus only (not in git). Long file `private meeting G` / `private audio file` is **82.4 min**.
 
 Pinned VoxConverse subset (same IDs as 0a): `abjxc,cmfyw,exymw,hiyis,jyflp,mekog,oenox,qsfzo,tjkfn,wjhgf`. Duration-weighted: speakrs `cuda` **8.41% / 6.67%** vs pyannote CUDA **5.45% / 3.84%** (Δ **+2.96 / +2.82** abs). Gate was ≤ +1.0 abs — **FAIL** both collars. Speakrs per-file DERs match 0a CoreML; Windows pyannote CUDA is a stronger baseline than Mac MPS (e.g. `cmfyw` pyannote 9.3% here vs 20.9% MPS). Not a publishable claim (n=10).
 
@@ -239,11 +239,11 @@ Cold-start (1 s silence, `cuda`): **0.74 s**, CLI RSS 391 MB.
 
 | file | duration | speakers | engine | mode | DER 0 | DER 250ms | seconds | RTFx | cold-start | CLI RSS | combined RSS |
 |------|----------|----------|--------|------|-------|-----------|---------|------|------------|---------|--------------|
-| 20260618_153139 Persona Pricing Call | 27.2 min | 2 | speakrs | cuda | — | — | 47.13 | 34.6× | 0.74 s | 1.10 GB | — |
-| 20260618_153139 | 27.2 min | 2 | speakrs | cuda-fast | — | — | 23.60 | 69.1× | — | 1.08 GB | — |
-| 20260618_153139 | 27.2 min | 2 | pyannote | cuda | — | — | 26.32 run / 35.09 total | 61.9× run | 8.77 s load | — | — |
-| 20260716_170118 Pain Points Discussion | 53.0 min | 6 (overlap) | speakrs | cuda | — | — | 89.97 | 35.3× | 0.74 s | 1.22 GB | — |
-| 20260527_143226 ADHD Assessment | 82.4 min | — | speakrs | cuda | — | — | 141.91 | 34.8× | 0.74 s | **1.39 GB** | **1.40 GB** thin Python spawn |
+| private meeting E | 27.2 min | 2 | speakrs | cuda | — | — | 47.13 | 34.6× | 0.74 s | 1.10 GB | — |
+| private meeting E | 27.2 min | 2 | speakrs | cuda-fast | — | — | 23.60 | 69.1× | — | 1.08 GB | — |
+| private meeting E | 27.2 min | 2 | pyannote | cuda | — | — | 26.32 run / 35.09 total | 61.9× run | 8.77 s load | — | — |
+| private meeting F | 53.0 min | 6 (overlap) | speakrs | cuda | — | — | 89.97 | 35.3× | 0.74 s | 1.22 GB | — |
+| private meeting G | 82.4 min | — | speakrs | cuda | — | — | 141.91 | 34.8× | 0.74 s | **1.39 GB** | **1.40 GB** thin Python spawn |
 | voxconverse `abjxc` | 68.4 s | 1 | speakrs / pyannote | cuda / cuda | 0.6 / 0.6 | 0.2 / 0.2 | 3.25 / 1.39 | — | — | — | — |
 | voxconverse `cmfyw` | 483.9 s | 5 | speakrs / pyannote | cuda / cuda | 21.4 / 9.3 | 19.1 / 7.3 | 13.99 / 7.40 | — | — | — | — |
 | voxconverse `exymw` | 116.4 s | 5 | speakrs / pyannote | cuda / cuda | 6.9 / 9.9 | 5.3 / 8.3 | 4.15 / 1.72 | — | — | — | — |

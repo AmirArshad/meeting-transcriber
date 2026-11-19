@@ -62,7 +62,7 @@ The AUR package requires two files: `PKGBUILD` and `.SRCINFO`.
 Create `PKGBUILD` in the repository root:
 
 ```bash
-# Maintainer: Amir Arshad <amir.arshad.dev@gmail.com>
+# Maintainer: Package Maintainer <maintainer@example.com>
 
 pkgname=avanevis-bin
 pkgver=2.9.0

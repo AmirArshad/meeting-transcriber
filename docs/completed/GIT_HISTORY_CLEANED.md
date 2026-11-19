@@ -1,3 +1,5 @@
+> Historical note: earlier claims that personal email was absent from all history are not reliable; some local refs still contain it. Redaction from the current files does not remove it from older commits or existing copies.
+
 # Git History Cleaning - Complete ✅
 
 **Date:** 2025-11-19
@@ -13,7 +15,7 @@
 
 ### ✅ Option 3: Rewrote Git History
 - **All 14 commits** in repository history rewritten
-- Old email `amirshareh@gmail.com` → `shareh@users.noreply.github.com`
+- Old email `[personal email redacted]` → `shareh@users.noreply.github.com`
 - Old commit references purged and garbage collected
 
 ---
@@ -22,7 +24,7 @@
 
 **Before cleanup:**
 ```
-Author: shareh <amirshareh@gmail.com>  ❌
+Author: shareh <[personal email redacted]>  ❌
 ```
 
 **After cleanup:**

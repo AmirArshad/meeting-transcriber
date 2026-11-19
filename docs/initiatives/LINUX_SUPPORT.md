@@ -523,7 +523,7 @@ Proven on dummy Pulse:
 
 #### Phase 1 evidence — 2026-08-24 Omarchy 4 / Hyprland / PipeWire (closes hardware exit criteria)
 
-Ran `scripts/linux-audio-spike.py --omarchy --seconds 4` on host `amiromarchy` (Omarchy 4.0.0, Hyprland/Wayland, PipeWire 1.6.8 via `pipewire-pulse`, Python 3.11.16 venv, SoundCard 0.4.6, pulsectl 24.12.0). Hardware: Haswell-ULT MacBook-class machine — analog duplex on `alsa_card.pci-0000_00_1b.0` (Cirrus Logic CS4208) plus HDMI card `alsa_card.pci-0000_00_03.0` with no display attached. Full JSON: `/tmp/avanevis-linux-spike/spike-report.json` (not in git; host device names only).
+Ran `scripts/linux-audio-spike.py --omarchy --seconds 4` on host `test host` (Omarchy 4.0.0, Hyprland/Wayland, PipeWire 1.6.8 via `pipewire-pulse`, Python 3.11.16 venv, SoundCard 0.4.6, pulsectl 24.12.0). Hardware: Haswell-ULT MacBook-class machine — analog duplex on `alsa_card.pci-0000_00_1b.0` (Cirrus Logic CS4208) plus HDMI card `alsa_card.pci-0000_00_03.0` with no display attached. Full JSON: `/tmp/avanevis-linux-spike/spike-report.json` (not in git; host device names only).
 
 Proven on this host:
 
@@ -621,7 +621,7 @@ Exit criteria:
 
 #### Phase 3 evidence — 2026-08-27 Omarchy 4.0.1 / Hyprland / PipeWire 1.6.8 (closed)
 
-Host `amiromarchy`, branch `release/linux` (morning CLI rows @ `b6adf0a`; afternoon Electron/headphone @ `2eb90ca`). Product recorder is `backend/audio/linux_recorder.py` via `.venv` 3.11.16 (SoundCard 0.4.6, pulsectl 24.12.0). Same Pulse ids as Phase 2: `pulse-source:alsa_input.pci-0000_00_1b.0.analog-stereo` and `pulse-monitor:alsa_output.pci-0000_00_1b.0.analog-stereo.monitor`. Artifacts under `/tmp/avanevis-linux-smoke/` (morning CLI) and `/home/amir/avanevis-linux-smoke/` (afternoon headphone + Electron; not in git). `/tmp` is 3.9 GB tmpfs — do not put a 60-minute spool there.
+Host `test host`, branch `release/linux` (morning CLI rows @ `b6adf0a`; afternoon Electron/headphone @ `2eb90ca`). Product recorder is `backend/audio/linux_recorder.py` via `.venv` 3.11.16 (SoundCard 0.4.6, pulsectl 24.12.0). Same Pulse ids as Phase 2: `pulse-source:alsa_input.pci-0000_00_1b.0.analog-stereo` and `pulse-monitor:alsa_output.pci-0000_00_1b.0.analog-stereo.monitor`. Artifacts under `/tmp/avanevis-linux-smoke/` (morning CLI) and `<home>/avanevis-linux-smoke/` (afternoon headphone + Electron; not in git). `/tmp` is 3.9 GB tmpfs — do not put a 60-minute spool there.
 
 Proven on this host with the **product** recorder (not the spike):
 
@@ -688,7 +688,7 @@ Exit criteria:
 
 ### Phase 4 Omarchy evidence (2026-08-27)
 
-Host: `amiromarchy`, Omarchy 4, Hyprland (`XDG_CURRENT_DESKTOP=Hyprland`, `WAYLAND_DISPLAY=wayland-1`), laptop panel `eDP-1` scale **1.6**. `org.freedesktop.secrets` is running. The session SNI host is **quickshell** (`org.kde.StatusNotifierWatcher`); Waybar was not running this session.
+Host: `test host`, Omarchy 4, Hyprland (`XDG_CURRENT_DESKTOP=Hyprland`, `WAYLAND_DISPLAY=wayland-1`), laptop panel `eDP-1` scale **1.6**. `org.freedesktop.secrets` is running. The session SNI host is **quickshell** (`org.kde.StatusNotifierWatcher`); Waybar was not running this session.
 
 Switches live in `src/main-process/linux-electron-bootstrap.js` and are applied from `src/main.js` **before** `app.requestSingleInstanceLock()` so Chromium does not already bind XWayland / `basic_text`.
 
@@ -747,7 +747,7 @@ Exit criteria:
 
 ### Phase 5 Omarchy / Ubuntu evidence (2026-08-28)
 
-Host: `amiromarchy`, Omarchy 4.0.1, Hyprland. `fuse2` / `libfuse.so.2` **not** installed; `fuse3` + `/dev/fuse` are present. Artifacts (gitignored, not committed): `dist/AvaNevis-Setup-2.7.0.AppImage` (~312 MB), `dist/AvaNevis-Setup-2.7.0.pkg.tar.zst` (~284 MB), `dist/linux-unpacked/`.
+Host: `test host`, Omarchy 4.0.1, Hyprland. `fuse2` / `libfuse.so.2` **not** installed; `fuse3` + `/dev/fuse` are present. Artifacts (gitignored, not committed): `dist/AvaNevis-Setup-2.7.0.AppImage` (~312 MB), `dist/AvaNevis-Setup-2.7.0.pkg.tar.zst` (~284 MB), `dist/linux-unpacked/`.
 
 **Verifier.** `node scripts/verify-linux-packaging.js --unpacked --appimage --pacman` passed. `.PKGINFO` depends: `alsa-lib`, `at-spi2-core`, `dbus`, `gtk3`, `libnotify`, `libpulse`, `libsecret`, `libxss`, `libxtst`, `nss`, `xdg-utils`. No `libappindicator`, no `ffmpeg`.
 

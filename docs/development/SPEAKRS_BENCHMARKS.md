@@ -33,11 +33,11 @@ The Mac 10:22 in-room+YouTube clip was not on the Windows checkout used for Task
 
 | Clip | Duration | pyannote `speakerCount` | Speakrs unique speakers | Speakrs turns vs pyannote segs | wall (s) |
 |------|----------|-------------------------|-------------------------|--------------------------------|----------|
-| `meeting_20260813_101743` | 21.9 s | 2 | 2 | 14 vs 5 | 4.19 |
-| `meeting_20260527_181446` | 27.0 s | 2 | 2 | 4 vs 4 | 1.95 |
-| `meeting_20260527_183953` | 28.3 s | 2 | 2 | 4 vs 3 | 1.73 |
-| `meeting_20260527_175205` | 23.9 s | 2 | 2 | 4 vs 3 | 1.65 |
-| `meeting_20260518_132721` | 84.3 s | 3 | 3 | 14 vs 9 | 3.44 |
+| `private sample 1` | 21.9 s | 2 | 2 | 14 vs 5 | 4.19 |
+| `private sample 2` | 27.0 s | 2 | 2 | 4 vs 4 | 1.95 |
+| `private sample 3` | 28.3 s | 2 | 2 | 4 vs 3 | 1.73 |
+| `private sample 4` | 23.9 s | 2 | 2 | 4 vs 3 | 1.65 |
+| `private sample 5` | 84.3 s | 3 | 3 | 14 vs 9 | 3.44 |
 
 Windows CUDA did **not** reproduce the Mac +1 speaker over-cluster on these shorts. Speakrs can still emit more exclusive turns (14 vs 5 on 21.9 s), which coarsens or fragments guided Whisper windows even when `speakerCount` matches.
 
@@ -45,7 +45,7 @@ Keep pyannote selectable. The same-audio Mac 10:22 A/B and 2×50-turn bar were n
 
 ## Windows CUDA soak 2026-08-14
 
-Guided Speakrs CUDA on a ~39 s mic-then-YouTube clip (`meeting_20260814_111755`). Sidecar `speakerCount` **2**, `device` `cuda`, wall clock felt much faster than prior pyannote CUDA on this machine (anecdotal; do not publish a Windows speed claim).
+Guided Speakrs CUDA on a ~39 s mic-then-YouTube clip (`private sample 6`). Sidecar `speakerCount` **2**, `device` `cuda`, wall clock felt much faster than prior pyannote CUDA on this machine (anecdotal; do not publish a Windows speed claim).
 
 Exclusive turns: SPEAKER_00 on the mic intro, SPEAKER_01 on the YouTube stretch **and** the user’s closing line, plus a **0.14 s** SPEAKER_00 fragment at 38.98–39.11 s. Merge labeled that closing as Speaker 2. This is the same split-identity class as the Mac 10:22 YouTube clip (plan risk #4), not a `Speaker N` remapping bug and not something a `--speaker-count` flag can fix (0.5.0 has none). Do not add a “last turn belongs to Speaker 1” heuristic.
 

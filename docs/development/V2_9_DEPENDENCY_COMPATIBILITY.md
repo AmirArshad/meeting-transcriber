@@ -954,7 +954,7 @@ The fixture `tests/fixtures/speakrs-two-speaker-16k.wav` is SHA-256
 `1eed9687badcdd0d554638c8229fdb48d5c80e21ed1393c3bb5621f0c83bd998`.
 
 The packaged app used isolated userData
-`C:\Users\Amirs\AppData\Local\Temp\avanevis-task5-win-20260904` with local CDP.
+`C:\Users\<user>\AppData\Local\Temp\avanevis-task5-win-20260904` with local CDP.
 Speakrs was never configured. Before transcription,
 `features.diarization.status` was `"notConfigured"`, engine `"speakrs"`,
 `cliPresent: true`, and `setupComplete: false`. Retry of imported meeting
@@ -1828,7 +1828,7 @@ Sanitized late-loss event:
 | Playback | looping `tests/fixtures/speakrs-two-speaker-16k.wav` via `pw-play --target alsa_output.pci-0000_01_00.1.hdmi-stereo` |
 | Transcription | local cached Whisper `tiny`, CPU / `int8`; no cloud or upload path |
 
-Renderer IPC was driven through local CDP (`file:///home/shareh/Projects/meeting-transcriber/src/renderer/index.html`). `window.confirm` / `window.alert` were stubbed only to capture copy and accept Discard.
+Renderer IPC was driven through local CDP (`file://<repo>/src/renderer/index.html`). `window.confirm` / `window.alert` were stubbed only to capture copy and accept Discard.
 
 ### Renderer split-button / hydration
 
@@ -1974,7 +1974,7 @@ Artifacts: `%TEMP%\avanevis-windows-capture-modes-20260905\`.
 | same with stdin `cancel` | each exit **0**, `{ success: true, cancelled: true }` |
 | silent `desktop-only` stdin `stop` (no fixture, `desktop_max=0`) | exit **1**, structured `RECORDER_FAILED` carrying `DESKTOP_ONLY_NO_AUDIO_MESSAGE` |
 | `TerminateProcess` of `windows_recorder` mid capture, then `audio.capture_recovery --recover` | leftover `{stem}.capture`; recover exit **0** for mixed / mic-only / desktop-only |
-| `npx electron . --remote-debugging-port=9222` | Electron 44.1.0; CDP `file://…/src/renderer/index.html`; `userData` `C:\Users\Amirs\AppData\Roaming\avanevis` |
+| `npx electron . --remote-debugging-port=9222` | Electron 44.1.0; CDP `file://…/src/renderer/index.html`; `userData` `C:\Users\<user>\AppData\Roaming\avanevis` |
 
 ### Manual mode results
 

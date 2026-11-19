@@ -13,7 +13,7 @@
 Your repository can be made public, but you should address **one item** first:
 
 **Personal Information Found:**
-- ✅ Your email address: `amirshareh@gmail.com` (in git commits)
+- ✅ Your email address: `[personal email redacted]` (in git commits)
 
 **Recommendation:** Choose option below before making public.
 
@@ -44,8 +44,8 @@ Your repository can be made public, but you should address **one item** first:
 **Your email is visible in commits:**
 
 ```
-Author: shareh <amirshareh@gmail.com>
-Author: Amir Arshadnejad <amirshareh@gmail.com>
+Author: shareh <[personal email redacted]>
+Author: [name redacted] <[personal email redacted]>
 ```
 
 **Visible in:**
@@ -55,13 +55,13 @@ Author: Amir Arshadnejad <amirshareh@gmail.com>
 
 **Is this a problem?**
 - ⚠️ **Medium concern** - Email will be publicly visible
-- Anyone can see: `amirshareh@gmail.com`
+- Anyone can see: `[personal email redacted]`
 - Email scrapers will find it
 - Spam/phishing risk increases
 
 **What's exposed:**
-- Email address: `amirshareh@gmail.com`
-- Name: "shareh" and "Amir Arshadnejad"
+- Email address: `[personal email redacted]`
+- Name: "shareh" and "[name redacted]"
 - Commit timestamps and messages
 
 ---
@@ -113,8 +113,8 @@ If you make the repo public, people will see:
 - ✅ Session notes
 
 ### Git History
-- ⚠️ Your email: `amirshareh@gmail.com`
-- ⚠️ Your name: "Amir Arshadnejad" / "shareh"
+- ⚠️ Your email: `[personal email redacted]`
+- ⚠️ Your name: "[name redacted]" / "shareh"
 - ✅ Commit messages (no sensitive info)
 - ✅ Commit timestamps
 
@@ -285,7 +285,7 @@ git push --force --all
 
 ### 📧 Personal Information
 - Status: ⚠️ **EMAIL VISIBLE**
-- Your email in git commits: `amirshareh@gmail.com`
+- Your email in git commits: `[personal email redacted]`
 - Decision needed before going public
 
 ### 📁 File Privacy
@@ -396,7 +396,7 @@ git push --force --all
 ✅ **Safe to make public** with one decision:
 
 **The only concern:**
-- Your email `amirshareh@gmail.com` will be visible in commit history
+- Your email `[personal email redacted]` will be visible in commit history
 
 **Everything else is clean:**
 - ✅ No API keys or secrets
@@ -414,7 +414,7 @@ git push --force --all
    git config user.email "yourusername@users.noreply.github.com"
    ```
 
-2. Accept that existing commits show `amirshareh@gmail.com`
+2. Accept that existing commits show `[personal email redacted]`
    - This is normal for open source
    - Most developers don't mind
    - Easy to filter spam
