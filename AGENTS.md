@@ -22,7 +22,7 @@ No lint/typecheck/E2E npm target. Setup and native checks: README.md and docs/de
 
 - `src/main.js`: lifecycle, tray, quit drain and wiring; keep it a composition root.
 - Follow `src/renderer/app.js` → `window.electronAPI` in `src/preload.js` → owning `src/main/` service → `src/main/python-runtime.js` → Python. Read both process sides for contract changes.
-- Start recorder work in `src/main/recorder-service.js` and `backend/audio/`; persistence in `backend/meeting_manager.py` and `backend/meetings/`.
+- Start recorder work in `src/main/recorder-service.js` and `backend/audio/`; local audio import in `src/main/audio-import-service.js`; persistence in `backend/meeting_manager.py` and `backend/meetings/`.
 - Local AI: `src/main/transcription-service.js`, `backend/transcription/`, `src/ai-addon/`, `backend/diarization/`, `backend/summaries/`.
 - Packaging: `build/prepare-resources.js`, `build/download-manifest.js`, package.json, `.github/workflows/`. Native: `swift/AudioCaptureHelper/`, `native/speakrs-cli/`.
 - Pure renderer logic: `src/renderer/*-helpers.js`, matching `tests/js/*-helpers.test.js`. Keep plain JS and explicit platforms. Python is spawned per invocation.

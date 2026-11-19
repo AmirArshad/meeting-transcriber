@@ -8,14 +8,14 @@ This document explains how to build AvaNevis from source for the supported packa
 - Internet connection (for downloading Python and ffmpeg during build)
 - Rust/`cargo` with the toolchain in `native/speakrs-cli/rust-toolchain.toml` for the bundled `speakrs-cli` on Windows, macOS, and Linux
 - Windows 10/11 (64-bit) for Windows builds
-- macOS 15+ on Apple Silicon for v2.11 macOS builds
+- macOS 15+ on Apple Silicon for packaged macOS builds
 - Linux x86_64 for AppImage, pacman, and experimental deb builds (cannot cross-compile AppImages)
 - ~2GB free disk space for build artifacts
 
 ## Step 1: Install Dependencies
 
 ```bash
-npm install
+npm ci
 ```
 
 Install Python dependencies for your platform:

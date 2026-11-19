@@ -1,12 +1,13 @@
 # AvaNevis release status
 
-Latest published version: **[v2.11.0](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.11.0)**, November 16, 2026.
-Next planned release: **v2.12.0**, local audio import and qualified dependency updates.
-See the [release plan](docs/superpowers/plans/2026-11-18-v2.12.md) for priorities, sequencing and acceptance.
+Latest published version: **[v2.12.0](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.12.0)**, November 19, 2026.
+See the [release notes](docs/releases/v2.12.0.md) and [qualification record](docs/development/V2_12_QUALIFICATION.md) for shipped scope and accepted limits.
 
 ## Status
 
-### v2.12 release candidate · 2026-11-18
+### v2.12 released · 2026-11-19
+
+[Release PR #154](https://github.com/AmirArshad/meeting-transcriber/pull/154) passed all 13 jobs and merged; the [tagged release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/runs/44431149100) published all installers and legal assets. The user accepted the documented native coverage limits. The four superseded Dependabot PRs were closed and GitHub reported no open alerts after the merge.
 
 - [x] [Design the History import flow](docs/superpowers/plans/2026-11-18-local-audio-import-design.md).
 - [x] Import one local MP3, WAV or Opus into History and transcribe through Activity.
@@ -25,15 +26,17 @@ See the [release plan](docs/superpowers/plans/2026-11-18-v2.12.md) for prioritie
 The [hosted release dry run](https://github.com/AmirArshad/meeting-transcriber/actions/runs/43787045494)
 passed on `38fbea7` for Windows, macOS, all three Linux packages on Ubuntu 24.04,
 Speakrs model checksums, and FFmpeg legal staging. The publication job was skipped.
-Recheck Electron releases and npm availability before tagging. A runtime pin
+The review called for rechecking Electron releases and npm availability before tagging. A runtime pin
 change requires new qualification. The Windows pending-transcription banner and
 remaining manual coverage gaps are in the
 [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md).
 
-### Security maintenance after v2.11.0 · reviewed 2026-11-16
+### Historical security maintenance after v2.11.0 · reviewed 2026-11-16
+
+For subsequent decisions, including the Linux CPython update and the qualified Electron and Python package updates, see the [v2.12 qualification record](docs/development/V2_12_QUALIFICATION.md).
 
 The review found no demonstrated exploit path through AvaNevis that warrants
-delaying v2.11.0 for these updates. Prioritize the runtime fixes below.
+delaying v2.11.0 for these updates. The following items describe the review at that time.
 
 - [ ] **Electron:** Qualify a published Electron 46 build with Node 26.13.1
   or newer. The qualified `46.0.0-alpha.10` embeds Node 26.13.0. The November

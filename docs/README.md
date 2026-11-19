@@ -4,8 +4,8 @@ This directory separates current guides, maintainer references, completed implem
 
 ## Current Release
 
-- [AvaNevis v2.11.0 prepared release notes](releases/v2.11.0.md) and [qualification](development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
-- [AvaNevis v2.10.3 latest published release notes](releases/v2.10.3.md)
+- [AvaNevis v2.12.0 release notes](releases/v2.12.0.md) and [qualification](development/V2_12_QUALIFICATION.md)
+- [AvaNevis v2.11.0 release notes](releases/v2.11.0.md) and [qualification](development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
 - [Certificate trust maintenance and release gates](development/CERTIFICATE_TRUST_MAINTENANCE_2026-10.md)
 - [v2.10 qualification and manual acceptance](development/V2_10_LINUX_RELEASE_QUALIFICATION.md)
 - [Release scope/status](../todo.md)

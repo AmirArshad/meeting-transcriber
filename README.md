@@ -11,7 +11,7 @@
 
 AvaNevis (formerly Meeting Transcriber) records your microphone *and* desktop audio at the same time, then transcribes everything on-device with Whisper. No cloud, no telemetry, no account.
 
-**Latest published release:** [v2.10.3](docs/releases/v2.10.3.md). **Prepared next release:** [v2.11.0](docs/releases/v2.11.0.md) upgrades Speakrs and Electron; see its [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md) and [release status](todo.md). Tagged installers are published by the [release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/workflows/build-release.yml).
+**Latest published release:** [v2.12.0](docs/releases/v2.12.0.md) adds local audio import and qualified dependency updates. See its [qualification record](docs/development/V2_12_QUALIFICATION.md) and [release status](todo.md). Tagged installers are published by the [release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/workflows/build-release.yml).
 
 ## Why
 
@@ -26,6 +26,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - **Transcription choices** — Whisper Small (default), Medium and Large v3; optional English-only Parakeet v2 on Windows CUDA, Apple Silicon Metal and Linux managed CUDA 12. Setup is explicit; queued and recovered work retains its captured selection.
 - **Premium dark UI** — vertical icon rail, top-bar app pane, dense waveform visualizer with peak-hold and DPR-aware rendering, and a stutter-free custom audio scrubber driven by `requestAnimationFrame`.
 - **Markdown transcripts** — saved transcripts are real Markdown (timestamps, headings, lists), and the in-app viewer renders them inline with chip-style timestamp pills.
+- **Import local audio** — add a WAV, MP3 or Opus file to History, confirm the transcription selection and queue it locally while keeping the original file intact.
 - **Editable meetings** — rename meetings inline (history *and* immediately after recording) without renaming any files; metadata stays anchored to the meeting ID.
 - **Save As anywhere** — export any transcript through Electron's native save dialog as `.md` or `.txt`.
 - **Search and bulk-manage history** — filter the meeting list, multi-select, bulk delete, replay with synchronized audio.
@@ -56,9 +57,9 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 4. Pick your microphone and desktop-audio loopback device on the Record tab.
 5. First transcription downloads the Whisper model (~500MB) once and caches it.
 
-### macOS (Apple Silicon, macOS 15+ for v2.11)
+### macOS (Apple Silicon, macOS 15+)
 
-**macOS 14:** Stay on [v2.10.3](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.10.3). The v2.11 installer requires macOS 15 or later, even if the older app offers the update.
+**macOS 14:** Stay on [v2.10.3](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.10.3). The v2.12 installer requires macOS 15 or later, even if the older app offers the update.
 
 1. Download `AvaNevis-Setup-<version>.dmg` from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases).
 2. Open the DMG and drag *AvaNevis* into Applications.
@@ -85,7 +86,7 @@ Transcription defaults to local CPU `faster-whisper`. On x86_64 Linux with a ver
 git clone https://github.com/AmirArshad/meeting-transcriber.git
 cd meeting-transcriber
 
-npm install
+npm ci
 ```
 
 Create a repo-local Python virtual environment named `.venv`. The Electron main process auto-detects this path in development, so you do not need to activate it before running `npm start`.
@@ -203,7 +204,7 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
 
 ### macOS
 
-- macOS 15 (Sequoia) or later for v2.11
+- macOS 15 (Sequoia) or later
 - Apple Silicon (M1 or newer) — Intel Macs have a CPU fallback path in dev but are not a packaged target
 - 4 GB RAM minimum, 8 GB recommended
 - Speaker identification (optional): **8 GB RAM minimum, 16 GB recommended** (Speakrs CLI peaked at 3.81 GB RSS on a 56 min Mac meeting)
@@ -211,7 +212,7 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
 
 ## Tech stack
 
-- **Frontend:** Electron 46.0.0-alpha.10, plain HTML / CSS / JavaScript (no UI framework)
+- **Frontend:** Electron 46.0.0-alpha.11, plain HTML / CSS / JavaScript (no UI framework)
 - **Backend:** Python 3.11, bundled with the installer
 - **Transcription:** `faster-whisper` (Windows/Linux, CUDA optional), `lightning-whisper-mlx` (macOS, Metal); optional Parakeet v2 with pinned platform runtimes
 - **Local AI add-ons:** Speakrs (token-free native CLI) or `pyannote.audio` for Windows CUDA and macOS Apple Silicon speaker identification; pinned `llama.cpp` + GGUF for user-triggered summaries
@@ -236,6 +237,7 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
   - [Local AI model catalog](docs/development/LOCAL_AI_MODEL_CATALOG.md)
   - [v2.9 dependency compatibility and acceptance evidence](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) (historical)
   - [Speakrs soak / benchmarks](docs/development/SPEAKRS_BENCHMARKS.md)
+  - [v2.12.0 release notes](docs/releases/v2.12.0.md) and [qualification record](docs/development/V2_12_QUALIFICATION.md)
   - [v2.11.0 release notes](docs/releases/v2.11.0.md) and [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
   - [v2.10.0 release notes](docs/releases/v2.10.0.md)
   - [v2.10 Linux qualification and manual acceptance](docs/development/V2_10_LINUX_RELEASE_QUALIFICATION.md)
@@ -263,9 +265,10 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
 
 ## Roadmap (short version)
 
-**Prepared and shipped releases**
+**Shipped releases**
 
-- **v2.11.0 (prepared)** — native Speakrs 0.7, Electron 46 alpha and asynchronous secure storage. [Release notes](docs/releases/v2.11.0.md).
+- **v2.12.0 (November 2026)** — local audio import, Activity integration and qualified dependency updates. [Release notes](docs/releases/v2.12.0.md).
+- **v2.11.0 (November 2026)** — native Speakrs 0.7, Electron 46 alpha and asynchronous secure storage. [Release notes](docs/releases/v2.11.0.md).
 - **v2.10.0 (October 2026)** — optional Parakeet with integrity/provenance protection, Whisper Large v3, checked transcript-language Qwen summaries, durable recovery selection, and Settings/navigation shortcuts. [Release notes](docs/releases/v2.10.0.md).
 - **v2.9.0 (September 2026)** — Electron 44, explicit mic-only / desktop-only capture, Omarchy-inspired visual refresh, and optional Linux CUDA 12 (fail-closed Whisper, Speakrs-only speaker labels, CUDA-only Qwen summaries). [Release notes](docs/releases/v2.9.0.md).
 - **v2.8.0 (August 2026)** — Linux x86_64 Core Beta: Omarchy 4 support, Pulse/PipeWire microphone and desktop-audio capture, CPU-only local transcription, AppImage and pacman packages plus an experimental `.deb`. AI add-ons remain unsupported on Linux. [Release notes](docs/releases/v2.8.0.md).

@@ -9,6 +9,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 - **Dual audio capture** — microphone + desktop audio recorded in parallel and mixed after the recording stops. WASAPI loopback on Windows; native Swift helper on macOS using CoreAudio process taps on macOS 14.2+ with Swift/PyObjC ScreenCaptureKit fallback.
 - **Local Whisper transcription** — `faster-whisper` on Windows with optional CUDA, `lightning-whisper-mlx` on Apple Silicon with Metal. CPU fallback path for non-GPU machines.
 - **Local AI add-ons (optional)** — speaker diarization and transcript summaries with explicit setup and local-only execution. Speaker identification is exclusive **Speakrs** (token-free; Windows CUDA / macOS Apple Silicon CoreML) or **Pyannote** (`pyannote/speaker-diarization-community-1`; Windows CUDA / macOS Apple Silicon MPS). Summaries use pinned local `llama.cpp` runtime/model setup with History integration.
+- **Import local audio** — add WAV, MP3 or Opus to History and queue local transcription while preserving the source file.
 - **Meeting history** — persisted under the user-data folder with a unique meeting ID, browseable list, transcript viewer, and synchronized audio playback.
 - **Cross-platform installers** — Windows NSIS, macOS DMG, and Linux x86_64 AppImage/pacman/experimental `.deb` packages with bundled runtimes.
 - **GPU acceleration** — CUDA on Windows, Metal/MLX on Apple Silicon.
@@ -69,18 +70,24 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ---
 
-## Current release: v2.11.0
+## Current release: v2.12.0
 
-Published November 16, 2026. Speakrs 0.7 adds native CUDA and CoreML execution.
-Electron now uses asynchronous secure token storage. The installer requires
-macOS 15 or later on Apple Silicon, and existing Speakrs users enable the new
-models through Repair. See the [release notes](../releases/v2.11.0.md).
+Published November 19, 2026. Import WAV, MP3 and Opus into History and
+transcribe them through Activity. This release includes keyboard access to
+History meetings, the Windows queue-status fix and qualified dependency updates.
+SRT and WebVTT remain deferred until saved transcripts retain cue-scale timing.
+See the [release notes](../releases/v2.12.0.md) and
+[qualification record](../development/V2_12_QUALIFICATION.md) for tested
+platforms and accepted limits.
 
-## v2.12.0 release candidate
-
-Import WAV, MP3 and Opus into History and transcribe them through Activity. The candidate includes keyboard access to History meetings and qualified dependency updates. Native cross-platform acceptance and the Windows queue-status banner investigation remain open. SRT and WebVTT move to a later release, when the saved transcript can retain cue-scale timing. See the [qualification record](../development/V2_12_QUALIFICATION.md).
 A candidate v3 milestone is local History search and questions with citations
 that open the source meeting at the relevant timestamp.
+
+### Earlier v2.11 release
+
+Speakrs 0.7 added native CUDA and CoreML execution and asynchronous secure token
+storage. Existing Speakrs users enable the new models through Repair. See the
+[v2.11 release notes](../releases/v2.11.0.md).
 
 ### Earlier v2.10 releases
 
@@ -120,7 +127,6 @@ historical evidence.
 
 ### Transcription
 
-- **Import existing audio files.** Import user-provided `.mp3`, `.wav`, and `.opus` files, normalize them into the app's processing format, run transcription/summaries with the same local pipeline, and save results into Meeting History as first-class meetings. The planned v2.12 import flow reuses the shipped Activity queue.
 - **History chat over meetings.** Use the installed local summary runtime/model to ask questions about historical meetings, with responses grounded in saved transcript and summary artifacts.
 - **Real-time transcription.** Live captions during the recording itself. Trade-off: requires a streaming Whisper implementation, raises CPU/GPU usage during capture, and accuracy is below post-processing.
 - **Export formats.** SRT, VTT, DOCX, PDF, JSON in addition to today's Markdown + plain-text Save As.
@@ -167,7 +173,7 @@ Longer horizon, lower priority:
 - **Minor (1.X.0)** — New features, backwards compatible.
 - **Patch (1.2.X)** — Bug fixes and minor improvements.
 
-**Current release version:** v2.11.0. Hardware acceptance and its limits are recorded separately from CI.
+**Current release version:** v2.12.0. Hardware acceptance and its limits are recorded separately from CI.
 
 The v2.0 rebrand introduced a new Electron `productName`, which changes the user-data folder. Existing Meeting Transcriber installs won't see their old recordings until the user manually moves the data folder, so that release used a major version bump.
 

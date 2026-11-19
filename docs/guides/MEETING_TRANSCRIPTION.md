@@ -61,6 +61,15 @@ silently switching to another engine.
 
 Recovery never auto-runs, never deletes capture files on dismiss or failure, and shares one maintenance gate with scan/start so an active recording always wins. Failed recoveries keep all capture files and offer **Retry**.
 
+## Importing Local Audio
+
+Use **Import audio** in History or the sidebar to choose one local WAV, MP3 or
+Opus file. Confirm the engine and language, then start the import. AvaNevis
+creates a playable copy in its own storage and queues transcription in Activity;
+the original file stays in place. You can cancel preparation before the copy is
+saved. After it is saved, use Activity to cancel or retry transcription without
+deleting the imported audio. Summaries remain a separate user-triggered action.
+
 ## Metadata Safety
 
 `backend/meeting_manager.py` protects `meetings.json` with:

@@ -81,8 +81,8 @@ Apple M4 Pro, macOS 26.7.3 (25G342), Node 26.13.1 and Electron 46.0.0-alpha.11. 
 
 This run leaves macOS 15 hardware, Keychain migration in an isolated session, and permission-prompt variants unverified. The recording scan still serializes filesystem recovery with History metadata operations. Large recovery scans on slow storage can hold the lock long enough for a concurrent metadata waiter to time out.
 
-## Remaining native acceptance
+## Accepted native coverage limits
 
 - **Windows x64.** Complete the remaining physical-device and add-on setup/repair acceptance, including gated Pyannote with an authorized test token. Windows 10 was outside this host pass.
 - **macOS 15+ arm64.** Exercise permission-prompt variants and Keychain migration in an isolated session. Repeat on a macOS 15 host.
-- Re-query open bot PRs, alerts and registry candidates at publication. The local installer and legal assets are preparation results.
+- The user accepted these documented limits for publication on November 19, 2026. [PR #154](https://github.com/AmirArshad/meeting-transcriber/pull/154) passed all 13 jobs; the [tagged release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/runs/44431149100) built and published the installers and legal assets. After merging, GitHub reported no open Dependabot alerts or PRs.
