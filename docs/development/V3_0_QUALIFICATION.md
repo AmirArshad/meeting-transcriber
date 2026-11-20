@@ -25,7 +25,22 @@ Host environment: CachyOS Linux x86_64, Node `v26.13.1`, npm `11.20.0`, `.venv` 
 ### Phase 2 — Runtime Upgrades, Upstream Audits & Signing Wiring
 - **Task 2.1 (`333ceef`):** Downloaded and verified live Astral `3.11.18+20261110` Windows & macOS archives (`sha256` match verified locally), ported `build/prepare-resources.js` Windows extraction to traversal-guarded `tar -tzf`/`tar -xzf` + deterministic isolated `python311._pth`, updated inventory/Parakeet/installer scripts and unit tests (`66 passed, 1 skipped` prepared-Windows test), and verified `check-build-requirements-closure.py linux windows` (`ok` for both).
 - **Task 2.2:** Verified Linux FFmpeg import (`audio-import-service.test.js` `6/6` passed), SIGKILL/temp recovery (`test_capture_recovery.py` + `test_recorder_temp_and_scan_recovery.py` `57/57` passed), `npm audit` & `npm audit --omit=dev` (`0 vulnerabilities`), and `npm run legal:release-assets` (`ffmpeg-8.1.2.tar.xz` verified and staged).
-- **Task 2.3:** Implemented repo-side Windows Authenticode & macOS Developer ID signing/notarization wiring (`build/after-pack.js`, `build/mac-sign.js`, `scripts/check-win-signing-config.js`, `scripts/check-mac-signing-identity.js`, `scripts/notarize-macos-dmg.sh`, `scripts/verify-macos-*.sh`, `scripts/verify-windows-installer.ps1`, `package.json`, `.github/workflows/build-release.yml`, `tests/js/signing-packaging.test.js`); native signed artifact builds & `AVANEVIS_REQUIRE_SIGNED_RELEASE=1` verification remain open pending signing credentials and Windows/macOS runs.
+- **Task 2.3 (`1a78c8c` + `84f4a68`):** Implemented repo-side Windows Authenticode & macOS Developer ID signing/notarization wiring (`build/after-pack.js`, `build/mac-sign.js`, `scripts/check-win-signing-config.js`, `scripts/check-mac-signing-identity.js`, `scripts/notarize-macos-dmg.sh`, `scripts/verify-macos-*.sh`, `scripts/verify-windows-installer.ps1`, `package.json`, `.github/workflows/build-release.yml`, `tests/js/signing-packaging.test.js`, plus `tests/js/renderer-helper-characterization.test.js` helper registration fix); native signed artifact builds & `AVANEVIS_REQUIRE_SIGNED_RELEASE=1` verification remain open pending signing credentials and Windows/macOS runs.
+
+### Final CachyOS Release-Gate Evidence (HEAD `84f4a68` + final qualification record)
+- `npm run test:all` -> **exit 0**: `test:syntax` checked 73 files under `src/`, `test:js` **1181 passed / 0 failed / 1 skipped** (platform skip), `test:python` **889 passed / 8 skipped** (39.86s), `test:python-syntax` checked `backend/` cleanly.
+- `npm audit --omit=dev` -> `found 0 vulnerabilities`; `npm audit` -> `found 0 vulnerabilities`.
+- `.venv/bin/python scripts/check-build-requirements-closure.py linux` -> `ok requirements-linux-build.txt`.
+- `npm run legal:release-assets` -> **exit 0** (`ffmpeg-8.1.2.tar.xz` SHA-256 verified, 68 direct Python pins).
+- `npm run build:linux` & `npm run verify:linux:packaged -- --unpacked --appimage --pacman --deb` -> **exit 0** (packaged Astral CPython `3.11.18`, FFmpeg `n8.1.2`, Speakrs `0.7.0` CUDA):
+  - `dist/AvaNevis-Setup-2.12.0.AppImage` (`360M`): `384aee88595b11935ce474e30c518eeec9f18ec64d41e73e9fa291ef87063d7c`
+  - `dist/AvaNevis-Setup-2.12.0.pkg.tar.zst` (`330M`): `dd94d6ae5795d6d797c97c054dae51055c87543e9e4936395c91c8d14b398b4d`
+  - `dist/AvaNevis-Setup-2.12.0.deb` (`271M`): `4838896c7d29ae9b7801290ecee83b1220aa6ea0699566b23acd37379f9853de`
+- Packaged binary smokes on `dist/linux-unpacked/resources`:
+  - `AVANEVIS_TEST_FFMPEG="$PWD/build/resources/ffmpeg/ffmpeg" node --test tests/js/audio-import-service.test.js` -> **6 passed / 0 failed**.
+  - `HF_HUB_OFFLINE=1` packaged CPython `3.11.18` `faster_whisper_transcriber` (`small`, CPU `int8`, `tests/fixtures/speakrs-two-speaker-16k.wav`) -> **1** merged Markdown segment vs **4** segment cues (`sourceTranscriptHash` matched `sha256` cleanly, `serializeCuesToSrt` / `serializeCuesToVtt` -> valid `.srt` and `WEBVTT`).
+  - `tests/python/test_recorder_temp_and_scan_recovery.py` -> **16 passed**.
+- `python3 scripts/agents/validate_setup.py` -> **exit 0** (16 canonical skills validated).
 
 ## Open Windows & macOS Qualification Gates (Cannot Run on Linux)
 
