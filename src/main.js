@@ -115,6 +115,8 @@ const { createTranscriptionService } = require('./main/transcription-service');
 const { createAudioImportService } = require('./main/audio-import-service');
 const { createSummaryService } = require('./main/summary-service');
 const { createHistorySearchService } = require('./main/history-search-service');
+const { createChatThreadStore } = require('./main/chat-thread-store');
+const { createHistoryQaService } = require('./main/history-qa-service');
 const { createRecorderService } = require('./main/recorder-service');
 const { createRecordingsMaintenanceGate } = require('./main/recordings-maintenance-gate');
 const {
@@ -177,6 +179,7 @@ let pendingUpdateInfo = null;
 let aiAddonIpc = null;
 let gpuRuntimeService = null;
 let summaryService = null;
+let historyQaService = null;
 let transcriptionService = null;
 let recorderService = null;
 let recordingPresenceService = null;
@@ -245,8 +248,21 @@ const {
 // deliberately stay outside the compute queue. Serialize only those resource
 // actions so neither can begin while the other is active.
 const gpuResourceActionQueue = createAsyncActionQueue();
+const enqueueGpuResourceActionWithUnload = (action) => (
+  gpuResourceActionQueue.enqueue(async () => {
+    if (historyQaService) {
+      await historyQaService.ensureUnloadedForCompetingWork('gpu_resource_action');
+    }
+    return action();
+  })
+);
 const enqueueGpuExclusiveComputeAction = (action) => (
-  enqueueAiComputeAction(() => gpuResourceActionQueue.enqueue(action))
+  enqueueAiComputeAction(() => gpuResourceActionQueue.enqueue(async () => {
+    if (historyQaService) {
+      await historyQaService.ensureUnloadedForCompetingWork('competing_compute');
+    }
+    return action();
+  }))
 );
 const createGpuExclusiveAbortableComputeAction = ({ cancelSignal, cancelMessage, onWaiting, action }) => (
   waitForAiComputeQueueIdle({ cancelSignal, cancelMessage, onWaiting })
@@ -270,11 +286,14 @@ const enqueueGpuExclusiveRemovalAction = (action) => {
   }
   // Reserve the resource queue synchronously. New compute/preload/runtime work
   // queues behind this deletion instead of racing files that are being removed.
-  return gpuResourceActionQueue.enqueue(() => {
+  return gpuResourceActionQueue.enqueue(async () => {
     if (quitCommitted) {
       const error = new Error('Cannot remove local AI files while the app is quitting.');
       error.code = 'QUIT_IN_PROGRESS';
       throw error;
+    }
+    if (historyQaService) {
+      await historyQaService.ensureUnloadedForCompetingWork('addon_removal');
     }
     return action();
   });
@@ -383,6 +402,7 @@ function assertTrustedRendererSender(event) {
 function hasInFlightAiWork() {
   return (audioImportService && audioImportService.hasActive()) || (aiAddonIpc ? aiAddonIpc.hasInFlightAiAddonSetup() : false)
     || (summaryService ? summaryService.hasActiveSummaryGeneration() : false)
+    || (historyQaService ? historyQaService.hasLoadedOrActiveWork() : false)
     || aiComputeActionQueue.hasPendingWork()
     || gpuResourceActionQueue.hasPendingWork()
     || (gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false);
@@ -421,6 +441,9 @@ function abortInFlightAiWork() {
   }
   if (summaryService) {
     summaryService.abortActiveSummaryForQuit('Summary generation was canceled because the app is quitting.');
+  }
+  if (historyQaService) {
+    historyQaService.cancelActiveQuestion('Local Q&A was canceled because the app is quitting.');
   }
 }
 
@@ -480,6 +503,9 @@ async function drainAiWorkBeforeQuit() {
   const drainTimeoutMs = metadataPhaseActive || gpuRuntimeBusy ? 90000 : 30000;
   try {
     const drains = [];
+    if (historyQaService) {
+      drains.push(historyQaService.abortActiveAndUnloadForQuit());
+    }
     if (!skipComputeDrain) {
       drains.push(aiComputeActionQueue.drain());
     }
@@ -745,7 +771,7 @@ gpuRuntimeService = createGpuRuntimeService({
       : 0
   ),
   formatQueuedTranscriptionBusyMessage,
-  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
+  enqueueGpuResourceAction: enqueueGpuResourceActionWithUnload,
   isQuitCommitted,
   isLinuxCudaProfileEnabled: () => isLinuxCudaOffered({ userDataPath: app.getPath('userData') }),
 });
@@ -773,12 +799,17 @@ aiAddonIpc = createAiAddonIpc({
   resolveSpeakrsCliPath: resolveAppSpeakrsCliPath,
   getCachedCudaStatus,
   resolveCudaStatusForTranscription,
+  beforeSummaryAddonMutation: () => (
+    historyQaService
+      ? historyQaService.ensureUnloadedForCompetingWork('addon_mutation')
+      : Promise.resolve()
+  ),
   buildSummaryArgs,
   summarizeDiarizationError,
   summarizeSummaryValidationError,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   hasPendingGpuResourceWork: () => gpuResourceActionQueue.hasPendingWork(),
-  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
+  enqueueGpuResourceAction: enqueueGpuResourceActionWithUnload,
   enqueueGpuExclusiveRemovalAction,
   isQuitCommitted,
 });
@@ -812,7 +843,7 @@ transcriptionService = createTranscriptionService({
   enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
   createAbortableComputeAction: createGpuExclusiveAbortableComputeAction,
   waitForAiComputeQueueIdle,
-  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
+  enqueueGpuResourceAction: enqueueGpuResourceActionWithUnload,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   getCachedCudaStatus,
   resolveCudaStatusForTranscription,
@@ -886,6 +917,34 @@ summaryService = createSummaryService({
   },
 });
 summaryService.registerIpc(ipcMain);
+
+const chatThreadStore = createChatThreadStore({
+  app,
+  path,
+  fs,
+});
+
+historyQaService = createHistoryQaService({
+  app,
+  path,
+  fs,
+  pythonConfig,
+  spawnTrackedPython,
+  getBackendModuleArgs,
+  collectPythonProcessOutput,
+  enqueueAiComputeAction,
+  enqueueGpuResourceActionForQa: gpuResourceActionQueue.enqueue,
+  getAiAddonRuntimeOptions,
+  buildSummaryRuntimeEnv,
+  resolveCudaStatusForTranscription,
+  historySearchService,
+  chatThreadStore,
+  sendToRenderer,
+  assertTrustedRendererSender,
+  terminateProcessBestEffort,
+  isQuitCommitted,
+});
+historyQaService.registerIpc(ipcMain);
 
 recorderService = createRecorderService({
   app,
@@ -1732,6 +1791,9 @@ app.on('before-quit', (event) => {
 
       if (recorderService) {
         recorderService.forceKillRecordingOnShutdown();
+      }
+      if (historyQaService) {
+        historyQaService.forceKillOnShutdown();
       }
 
       const protectedProcess = getProtectedQuitProcess();

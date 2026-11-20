@@ -128,6 +128,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   rebuildHistoryIndex: () => ipcRenderer.invoke('rebuild-history-index'),
   getHistoryIndexStatus: () => ipcRenderer.invoke('get-history-index-status'),
 
+  // Grounded local Q&A & threaded Chat
+  getHistoryQaEligibility: () => ipcRenderer.invoke('get-history-qa-eligibility'),
+  getHistoryQaModelState: () => ipcRenderer.invoke('get-history-qa-model-state'),
+  unloadHistoryQaModel: () => ipcRenderer.invoke('unload-history-qa-model'),
+  askHistory: (options = {}) => ipcRenderer.invoke('ask-history', options),
+  cancelHistoryQa: () => ipcRenderer.invoke('cancel-history-qa'),
+  listChatThreads: () => ipcRenderer.invoke('list-chat-threads'),
+  getChatThread: (threadId) => ipcRenderer.invoke('get-chat-thread', { threadId }),
+  createChatThread: (options = {}) => ipcRenderer.invoke('create-chat-thread', options),
+  renameChatThread: (threadId, title) => ipcRenderer.invoke('rename-chat-thread', { threadId, title }),
+  deleteChatThread: (threadId) => ipcRenderer.invoke('delete-chat-thread', { threadId }),
+  updateChatThreadScope: (threadId, scope) => ipcRenderer.invoke('update-chat-thread-scope', { threadId, scope }),
+
   // GPU acceleration
   checkGPU: () => ipcRenderer.invoke('check-gpu'),
   checkCUDA: () => ipcRenderer.invoke('check-cuda'),
@@ -175,6 +188,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onAiAddonProgress: (callback) => addListener('ai-addon-progress', callback),
   onDiarizationProgress: (callback) => addListener('diarization-progress', callback),
   onSummaryProgress: (callback) => addListener('summary-progress', callback),
+  onHistoryQaModelState: (callback) => addListener('history-qa-model-state', callback),
+  onHistoryQaProgress: (callback) => addListener('history-qa-progress', callback),
   onAudioLevels: (callback) => addListener('audio-levels', callback),
   onRecordingWarning: (callback) => addListener('recording-warning', callback),
   onRecordingFailed: (callback) => addListener('recording-failed', callback),

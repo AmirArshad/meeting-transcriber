@@ -22,6 +22,7 @@ const COMPUTE_QUEUE_HANDLERS = [
   'transcribe-audio-with-speakers',
   'diarize-transcript',
   'generate-summary',
+  'ask-history',
 ];
 
 /** Handlers / setup paths that must NOT enqueue on the compute queue. */
@@ -125,6 +126,7 @@ test('AI_COMPUTE_TIMEOUT_MS pins diarization, guided transcription, summary, mee
   assert.equal(AI_COMPUTE_TIMEOUT_MS.diarization, 30 * 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.guidedTranscription, 120 * 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.summary, 90 * 60 * 1000);
+  assert.equal(AI_COMPUTE_TIMEOUT_MS.historyQa, 10 * 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.meetingPreflight, 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait, 15 * 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.modelDownload, 30 * 60 * 1000);

@@ -9,6 +9,7 @@ const AI_COMPUTE_TIMEOUT_MS = Object.freeze({
   parakeetTranscription: 60 * 60 * 1000,
   guidedParakeetTranscription: 90 * 60 * 1000,
   summary: 90 * 60 * 1000,
+  historyQa: 10 * 60 * 1000,
   meetingPreflight: 60 * 1000,
   // Max time download-model may block waiting for GPU compute to go idle.
   modelDownloadIdleWait: 15 * 60 * 1000,
