@@ -14,7 +14,7 @@ Progress across mandatory post-v2.12 gates and v3.0 feature tracks:
 - [x] **Task 1.2 — Caption-scale timing sidecars + SRT & WebVTT export (`534007e`):** Schema-v1 `{stem}.captions.json` bound by `sourceTranscriptHash` across faster-whisper, MLX Whisper, Parakeet, and guided transcription; pure SRT/WebVTT/TXT serializers, hash-verified export IPC, and format-picker UI (offline Whisper fixture -> `.captions.json` -> `.srt`/`.vtt` + `CAPTIONS_STALE` + delete verified on CachyOS Linux).
 - [x] **Task 2.1 — Bundled CPython `3.11.18+20261110` on Windows & macOS (`333ceef`):** Live SHA-256s verified (`5ca7e23b...` Windows, `73f1ed14...` macOS); `build/prepare-resources.js` ported to traversal-guarded `.tar.gz` extraction + isolated Windows `python311._pth`; **needs Windows & macOS host `prepare-build` + packaged runtime smoke**.
 - [x] **Task 2.2 — Upstream holds & audit checks (2026-11-20):** Live upstream checks confirm Electron 46 stable is not yet published (latest stable `45.4.1`, `46.0.0-alpha.12` latest alpha -> hold on qualified `46.0.0-alpha.11`), FFmpeg matched > `8.1.2` is not yet available across all 3 OSes (`shaka-project` tops at `n8.1.2-2` which is still `8.1.2` -> hold on `8.1.2`), and both `npm audit --omit=dev` and `npm audit` report `0 vulnerabilities` with `picomatch@4.0.7`.
-- [ ] **Task 2.3 — Windows Authenticode & macOS Developer ID signing/notarization wiring:** In progress on `release/3.0` (needs signing secrets & native Windows/macOS runs).
+- [ ] **Task 2.3 — Windows Authenticode & macOS Developer ID signing/notarization wiring:** Repo-side hooks, preflight wrappers, verifier scripts, unit tests, and `.github/workflows/build-release.yml` wiring complete on `release/3.0`; **needs signing secrets and native Windows/macOS runs**.
 - [ ] **Modern in-app auto-updater (Phase 3):** Signed differential in-app download, integrity verification, release notes/progress UX, and recording/AI-safe **Restart to Update** on Windows (NSIS), macOS (notarized `.zip` via Squirrel.Mac), and Linux AppImage, with a clean manual-package update flow on Linux `pacman`/`.deb`.
 - [ ] **Local History search & Q&A with timestamp citations (Phase 4):** Disposable local SQLite FTS5 full-text search index across transcripts/summaries (zero AI add-on required) with instant timestamp jump, plus local grounded Q&A via the installed `llama.cpp` + Qwen summary runtime with verified clickable citations that seek playback to the exact timestamp.
 
@@ -58,7 +58,11 @@ these gates for a later release.
   _(Resolved cleanly: `npm audit --omit=dev` and `npm audit` both report `0
   vulnerabilities` with `picomatch@4.0.7` as of 2026-11-20.)_
 - [ ] Sign the Windows installer and sign and notarize the macOS build; verify
-  the resulting distribution artifacts.
+  the resulting distribution artifacts. _(Repo wiring in `build/after-pack.js`,
+  `build/mac-sign.js`, `scripts/check-*-signing-*.js`,
+  `scripts/notarize-macos-dmg.sh`, `scripts/verify-*.{ps1,sh}`, and
+  `build-release.yml` complete on `release/3.0`; pending CI secrets & native
+  signed build verification on Windows and macOS.)_
 - [ ] Test Speakrs multi-speaker separation with representative speech on each
   supported native platform and record the results.
 

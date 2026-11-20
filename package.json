@@ -18,11 +18,12 @@
     "prepare-build": "npm run clean && node build/prepare-resources.js",
     "legal:sbom": "node scripts/generate-python-sbom.js",
     "legal:release-assets": "node scripts/stage-release-legal-assets.js",
-    "build": "npm run prepare-build && electron-builder build --win --publish never",
-    "build:dir": "npm run prepare-build && electron-builder build --win --dir",
-    "build:mac": "node scripts/check-mac-signing-identity.js && npm run prepare-build && electron-builder build --mac --publish never",
-    "build:mac:dir": "npm run prepare-build && electron-builder build --mac --dir",
+    "build": "node scripts/check-win-signing-config.js --preflight && npm run prepare-build && node scripts/check-win-signing-config.js --run -- --win --publish never",
+    "build:dir": "node scripts/check-win-signing-config.js --preflight && npm run prepare-build && node scripts/check-win-signing-config.js --run -- --win --dir",
+    "build:mac": "node scripts/check-mac-signing-identity.js --preflight && npm run prepare-build && node scripts/check-mac-signing-identity.js --run -- --mac --publish never",
+    "build:mac:dir": "node scripts/check-mac-signing-identity.js --preflight && npm run prepare-build && node scripts/check-mac-signing-identity.js --run -- --mac --dir",
     "verify:mac:packaged": "bash scripts/verify-macos-packaged-app.sh",
+    "verify:mac:installer": "bash scripts/verify-macos-installer.sh",
     "build:linux": "npm run prepare-build && electron-builder build --linux --x64 --publish never",
     "build:linux:dir": "npm run prepare-build && electron-builder build --linux dir --x64 --publish never",
     "verify:linux:packaged": "node scripts/verify-linux-packaging.js"
@@ -61,6 +62,7 @@
   "build": {
     "appId": "com.avanevis.app",
     "productName": "AvaNevis",
+    "afterPack": "build/after-pack.js",
     "win": {
       "target": [
         {
@@ -70,7 +72,14 @@
           ]
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "rfc3161TimeStampServer": "http://timestamp.digicert.com",
+        "timeStampServer": "http://timestamp.digicert.com"
+      }
     },
     "linux": {
       "target": [
@@ -156,6 +165,7 @@
     },
     "mac": {
       "identity": "-",
+      "sign": "build/mac-sign.js",
       "target": [
         {
           "target": "dmg",

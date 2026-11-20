@@ -152,7 +152,7 @@ Do not commit `dist/` or downloaded `build/resources/` runtimes.
 The installer includes:
 
 - ✅ Electron application (UI)
-- ✅ Embedded Python 3.11.9 runtime
+- ✅ Bundled CPython 3.11.18+ standalone runtime (`Lib/`, `DLLs/`, and isolated `python311._pth` on Windows)
 - ✅ Platform Python stack from `requirements-*-build.txt` (Windows: `faster-whisper`, `soxr`, `numpy`, …; macOS: `lightning-whisper-mlx`, `soxr`, `scipy`, `mlx`, …; Linux: `faster-whisper` CPU plus Pulse/SoundCard; `torch` is installed during macOS build then removed). See [installer size notes](../completed/INSTALLER_SIZE_NOTES.md).
 - ✅ ffmpeg binary
 - ✅ `speakrs-cli` (Speakrs 0.7.0; Windows and Linux x64 CUDA, macOS arm64 CoreML). Setup downloads the pinned model files separately.
@@ -299,46 +299,37 @@ npm run verify:mac:packaged
 
 Checks arm64 ffmpeg, ad-hoc codesign validity, `libopus` encode, bundled MLX imports, absence of bundled `torch`, and prints bundle sizes.
 
-### macOS signing identity guard
+### macOS & Windows signing identity guards
 
-`build.mac.identity` is pinned to `"-"` so certificate-less builds produce a **complete ad-hoc bundle signature** instead of electron-builder silently skipping signing (the Gate B / [issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76) root cause).
+`package.json` keeps `build.mac.identity: "-"` and `build.mac.notarize: false` so certificate-less builds produce a **complete ad-hoc bundle signature** instead of electron-builder silently skipping signing (the Gate B / [issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76) root cause). `npm run build:mac` runs `scripts/check-mac-signing-identity.js --preflight` / `--run`, which:
 
-That pin is itself a trap after Apple Developer enrollment: an explicit `identity` takes precedence over `CSC_LINK` and keychain discovery, so a "signed" build would still come out ad-hoc. `npm run build:mac` therefore runs `scripts/check-mac-signing-identity.js` first, which **fails the build** when `identity` is `"-"` while any of `CSC_LINK`, `CSC_NAME`, `CSC_KEY_PASSWORD`, `APPLE_TEAM_ID`, `APPLEID`, or `APPLE_API_KEY` is set. Resolve it one of three ways:
+- Uses ad-hoc signing (`identity: "-"`) for cert-less local/PR builds when `AVANEVIS_REQUIRE_SIGNED_RELEASE` is unset/`0`.
+- Fails closed if `identity: "-"` is invoked directly alongside signing env vars (`CSC_LINK`, `CSC_NAME`, `CSC_KEY_PASSWORD`, `APPLE_TEAM_ID`, `APPLEID`, `APPLE_API_KEY`) unless managed by `--preflight`/`--run` or acknowledged with `AVANEVIS_ALLOW_ADHOC_MAC_SIGNING=1`.
+- Dynamically injects `-c.forceCodeSigning=true`, `-c.mac.gatekeeperAssess=true`, `-c.mac.identity=...`, and `-c.mac.notarize=true` when Developer ID + notarization credentials are set (`build/mac-sign.js` signs with `@electron/osx-sign`, refreshes `speakrs-integrity.json`, and re-seals only outer `.app` without `--deep` before notarization).
+- Rejects ad-hoc builds (`AVANEVIS_REQUIRE_SIGNED_RELEASE=1`) unless both Developer ID signing and Apple notarization credentials are present.
 
-```bash
-# Sign with the real certificate (leave package.json alone):
-npx electron-builder build --mac -c.mac.identity="Developer ID Application: … (TEAMID)"
+On Windows, `npm run build` / `build:dir` runs `scripts/check-win-signing-config.js --preflight` / `--run` (`build/after-pack.js` refreshes `resources/bin/speakrs-integrity.json` after `extraResources` Authenticode signing so Speakrs raw-byte checks pass).
 
-# Or remove the "identity" pin from package.json build.mac once enrollment is permanent.
+## Code Signing & Notarization (Paid Apple / Windows Certs)
 
-# Or deliberately ad-hoc sign anyway:
-AVANEVIS_ALLOW_ADHOC_MAC_SIGNING=1 npm run build:mac
-```
+**Default PR/local builds remain unsigned/ad-hoc signed** so contributors and PR CI do not need paid signing certificates (users on unsigned local builds use the Gatekeeper note in [MACOS_INSTALLATION.md](../guides/MACOS_INSTALLATION.md)).
 
-## Code Signing (Optional — paid Apple / Windows certs)
+To enable signed/notarized CI builds in `.github/workflows/build-release.yml` (tags `v*.*.*` always enforce `AVANEVIS_REQUIRE_SIGNED_RELEASE=1`; `workflow_dispatch` supports a `require_signed_release` toggle), configure GitHub Actions repository secrets:
 
-**Default builds are unsigned/ad-hoc signed.** Users install via the Gatekeeper workaround documented in [MACOS_INSTALLATION.md](../guides/MACOS_INSTALLATION.md). No Apple Developer Program ($99/year) is required for local builds or CI smoke tests.
+| Platform | Secret | Purpose |
+|---|---|---|
+| macOS | `CSC_LINK` | Base64 `.p12` Developer ID Application certificate |
+| macOS | `CSC_KEY_PASSWORD` | `.p12` export password |
+| macOS | `CSC_NAME` | Optional certificate name qualifier when multiple certs exist |
+| macOS | `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID` | Apple ID `notarytool` credentials (or `APPLE_API_KEY` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER`) |
+| Windows (PFX) | `WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD` | Base64 Authenticode PFX certificate & password (`signtool` SHA-256 + RFC 3161 DigiCert timestamp) |
+| Windows (Azure) | `WINDOWS_AZURE_ENDPOINT` + `WINDOWS_AZURE_CODE_SIGNING_ACCOUNT` + `WINDOWS_AZURE_CERT_PROFILE` + `AZURE_TENANT_ID` + `AZURE_CLIENT_ID` + `AZURE_CLIENT_SECRET` (+ optional `WINDOWS_AZURE_PUBLISHER_NAME`) | Microsoft Azure Trusted Signing (`TrustedSigning` module) |
 
-When you enroll in the Apple Developer Program later, set GitHub Actions secrets and uncomment the env block in `.github/workflows/build-release.yml`:
+Verification scripts:
 
-| Secret | Purpose |
-|--------|---------|
-| `MACOS_CERTIFICATE_BASE64` | Developer ID Application `.p12` (base64) |
-| `MACOS_CERTIFICATE_PASSWORD` | Certificate export password |
-| `APPLE_ID` | Apple ID for notarization |
-| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password |
-| `APPLE_TEAM_ID` | Team ID |
-
-Then set `"notarize": true` in `package.json` `build.mac` (currently `false` so CI/release builds do not require Apple credentials).
-
-Windows EV/standard code signing (optional, separate cost):
-
-```json
-"win": {
-  "certificateFile": "path/to/cert.pfx",
-  "certificatePassword": "..."
-}
-```
+- `bash scripts/notarize-macos-dmg.sh` — signs DMG with `--timestamp` (when cert is available), submits to `xcrun notarytool submit --wait`, staples, and validates.
+- `bash scripts/verify-macos-packaged-app.sh` and `bash scripts/verify-macos-installer.sh` — verify `codesign --verify --deep --strict`, Developer ID `Authority`, `xcrun stapler validate`, and `spctl --assess` when Developer ID signed or `AVANEVIS_REQUIRE_SIGNED_RELEASE=1`.
+- `./scripts/verify-windows-installer.ps1 -SignaturesOnly` — validates `Get-AuthenticodeSignature` (`Valid` + RFC 3161 `TimeStamperCertificate`) on `AvaNevis-Setup-<ver>.exe`, `dist/win-unpacked/AvaNevis.exe`, and `resources/bin/speakrs-cli.exe`.
 
 ## Next Steps
 

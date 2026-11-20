@@ -6,6 +6,12 @@ on:
     tags:
       - "v*.*.*" # Triggers on version tags like v1.0.0
   workflow_dispatch: # Allows manual trigger from GitHub UI
+    inputs:
+      require_signed_release:
+        description: "Require signed Windows installer and signed/notarized macOS DMG (keep false for unsigned dry-runs)"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
@@ -160,19 +166,55 @@ jobs:
       # 2. Downloads Python runtime, ffmpeg, and prepares dependencies
       - name: Build installer (Windows)
         if: matrix.os == 'Windows'
+        env:
+          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WINDOWS_AZURE_ENDPOINT: ${{ secrets.WINDOWS_AZURE_ENDPOINT }}
+          WINDOWS_AZURE_CODE_SIGNING_ACCOUNT: ${{ secrets.WINDOWS_AZURE_CODE_SIGNING_ACCOUNT }}
+          WINDOWS_AZURE_CERT_PROFILE: ${{ secrets.WINDOWS_AZURE_CERT_PROFILE }}
+          WINDOWS_AZURE_PUBLISHER_NAME: ${{ secrets.WINDOWS_AZURE_PUBLISHER_NAME }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: ${{ matrix.build-script }}
         timeout-minutes: 75
 
       - name: Build installer (macOS)
         if: matrix.os == 'macOS'
-        # Optional Apple Developer signing (omit until enrolled — builds ad-hoc sign today):
-        # CSC_LINK / CSC_KEY_PASSWORD / APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+        env:
+          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_NAME: ${{ secrets.CSC_NAME }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
           echo "Open file limit before: $(ulimit -n)"
           ulimit -n 10240 || true
           echo "Open file limit after: $(ulimit -n)"
           ${{ matrix.build-script }}
         timeout-minutes: 75
+
+      - name: Notarize and staple macOS DMG
+        if: matrix.os == 'macOS'
+        env:
+          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_NAME: ${{ secrets.CSC_NAME }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: bash scripts/notarize-macos-dmg.sh
+        timeout-minutes: 30
 
       - name: Build installers (Linux)
         if: matrix.os == 'Linux'
@@ -183,9 +225,33 @@ jobs:
         if: matrix.os != 'Linux'
         run: node scripts/verify-speakrs-packaging.js --packaged
 
+      - name: Verify Windows Authenticode signatures
+        if: matrix.os == 'Windows'
+        shell: pwsh
+        env:
+          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WINDOWS_AZURE_ENDPOINT: ${{ secrets.WINDOWS_AZURE_ENDPOINT }}
+        run: |
+          if ($env:AVANEVIS_REQUIRE_SIGNED_RELEASE -eq '1' -or -not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK) -or -not [string]::IsNullOrWhiteSpace($env:WINDOWS_AZURE_ENDPOINT)) {
+            & ./scripts/verify-windows-installer.ps1 -SignaturesOnly
+          } else {
+            Write-Host "Skipping Windows Authenticode verification (no signing credentials configured)"
+          }
+
       - name: Verify packaged macOS app smoke checks
         if: matrix.os == 'macOS'
+        env:
+          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: bash scripts/verify-macos-packaged-app.sh
+
+      - name: Verify packaged macOS installer
+        if: matrix.os == 'macOS'
+        env:
+          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
+        run: bash scripts/verify-macos-installer.sh
 
       - name: Verify packaged Linux artifacts
         if: matrix.os == 'Linux'

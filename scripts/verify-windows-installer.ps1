@@ -1,12 +1,56 @@
-# Run only on the disposable Windows CI runner: install, verify, then uninstall.
+# Verify packaged/installed Windows NSIS artifacts.
+# Use -SignaturesOnly to verify Authenticode signatures on dist/ without installing,
+# or run without switches on a disposable GitHub Actions runner to test full install/uninstall.
+param(
+    [switch]$SignaturesOnly
+)
+
 $ErrorActionPreference = 'Stop'
-if ($env:CI -ne 'true' -or $env:GITHUB_ACTIONS -ne 'true' -or -not $env:RUNNER_TEMP) {
-    throw 'Installer qualification requires a disposable GitHub Actions runner'
+
+function Assert-AuthenticodeSigned {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath
+    )
+    if (-not (Test-Path $FilePath)) {
+        throw "Missing file for Authenticode verification: $FilePath"
+    }
+    $sig = Get-AuthenticodeSignature -FilePath $FilePath
+    if ($sig.Status -ne 'Valid') {
+        throw "Invalid Authenticode signature on ${FilePath}: Status=$($sig.Status) Message=$($sig.StatusMessage)"
+    }
+    if (-not $sig.SignerCertificate) {
+        throw "Missing SignerCertificate on $FilePath"
+    }
+    if (-not $sig.TimeStamperCertificate) {
+        throw "Missing RFC 3161 TimeStamperCertificate on $FilePath"
+    }
+    Write-Host "Authenticode OK: $FilePath (Subject=$($sig.SignerCertificate.Subject))"
 }
+
 $version = node -p "require('./package.json').version"
 if ($LASTEXITCODE -ne 0) { throw 'Could not read package version' }
 $installer = Join-Path (Get-Location) "dist/AvaNevis-Setup-$version.exe"
 if (-not (Test-Path $installer)) { throw "Missing NSIS installer: $installer" }
+
+$unpackedExe = Join-Path (Get-Location) 'dist/win-unpacked/AvaNevis.exe'
+$unpackedSpeakrs = Join-Path (Get-Location) 'dist/win-unpacked/resources/bin/speakrs-cli.exe'
+$requireSignedRaw = [string]$env:AVANEVIS_REQUIRE_SIGNED_RELEASE
+$requireSigned = $requireSignedRaw -eq '1' -or $requireSignedRaw.ToLowerInvariant() -eq 'true'
+
+if ($SignaturesOnly -or $requireSigned) {
+    Assert-AuthenticodeSigned -FilePath $installer
+    Assert-AuthenticodeSigned -FilePath $unpackedExe
+    Assert-AuthenticodeSigned -FilePath $unpackedSpeakrs
+    if ($SignaturesOnly) {
+        Write-Host 'Windows Authenticode signature checks passed'
+        exit 0
+    }
+}
+
+if ($env:CI -ne 'true' -or $env:GITHUB_ACTIONS -ne 'true' -or -not $env:RUNNER_TEMP) {
+    throw 'Installer qualification requires a disposable GitHub Actions runner'
+}
+
 $installDir = Join-Path $env:RUNNER_TEMP ('avanevis-install-' + [guid]::NewGuid().ToString('N'))
 $uninstaller = Join-Path $installDir 'Uninstall AvaNevis.exe'
 try {
@@ -15,6 +59,10 @@ try {
     if ($process.ExitCode -ne 0) { throw "NSIS install failed: $($process.ExitCode)" }
     $exe = Join-Path $installDir 'AvaNevis.exe'
     if (-not (Test-Path $exe)) { throw 'Installed executable missing' }
+    if ($requireSigned) {
+        Assert-AuthenticodeSigned -FilePath $exe
+        Assert-AuthenticodeSigned -FilePath (Join-Path $installDir 'resources/bin/speakrs-cli.exe')
+    }
     foreach ($relative in @('resources/app.asar', 'resources/python/python.exe', 'resources/python/python311._pth',
                            'resources/python/DLLs/_ctypes.pyd', 'resources/ffmpeg/ffmpeg.exe',
                            'resources/bin/speakrs-cli.exe', 'resources/bin/speakrs-two-speaker-16k.wav')) {

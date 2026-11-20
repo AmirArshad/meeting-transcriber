@@ -4,7 +4,9 @@
 
 ### Meeting metadata persistence
 
-Changing `backend/meeting_manager.py` must preserve: `FileLock` cross-process locking; atomic temp-file + `os.replace()` writes; transactional add that removes originals only **after** metadata is saved; corrupt-metadata backups named `meetings.corrupt.*.json`; scan/import preservation of suffixed IDs like `meeting_20260107_104555_1`; and recorder-temp recovery before selecting scannable `.opus`/`.wav` files (never import `.pcm.tmp` or legacy `*.temp.wav` as meetings). Delete must tolerate Windows file locking with retry.
+Changing `backend/meeting_manager.py` must preserve: `FileLock` cross-process locking (`meetings.json.lock` for atomic metadata transactions, plus separate `scan_recovery.lock` serialized outside `meetings.json.lock` for slow recorder-temp recovery and filesystem/duration probing so `list_meetings`, `update_meeting`, `add_meeting`, and `delete_meeting` never wait behind recovery scans); atomic temp-file + `os.replace()` writes; transactional add that removes originals only **after** metadata is saved; corrupt-metadata backups named `meetings.corrupt.*.json`; scan/import preservation of suffixed IDs like `meeting_20260107_104555_1`; and recorder-temp recovery before selecting scannable `.opus`/`.wav` files (never import `.pcm.tmp` or legacy `*.temp.wav` as meetings). Delete must tolerate Windows file locking with retry and clean up `{stem}.captions.json` alongside `.md`/audio.
+
+Schema-v1 caption timing sidecars (`{stem}.captions.json`) store pre-merge fine-grained millisecond cues (and optional word timings) bound to the committed transcript via LF-normalized `sourceTranscriptHash` (`sha256`). Saved Markdown remains the human-readable source of truth; sidecars are written/replaced atomically with transcript commit, removed on delete or audio-only add, and ignored/rejected when stale so subtitle exporters never fabricate millisecond timings for edited or legacy transcripts.
 
 Public methods stay instance methods — the tests monkeypatch them as seams.
 

@@ -51,6 +51,10 @@ runner. Successful `ai.summary` metadata may add `language`, `languageSource`
 (`userConfirmed`), `modelId`, and `languagePolicyVersion`. Missing fields mean
 legacy/unconfirmed output. Channel names and preload export shape are unchanged.
 
+### Transcript & subtitle export
+
+`save-transcript-as` accepts `{ format, suggestedName, title?, content?, meetingId? }`, where `format` is one of `md`, `txt`, `srt`, or `vtt`, and sanitizes the dialog filename with `buildSafeSaveDialogDefaultPath` (`WINDOWS_RESERVED_FILE_BASENAME`, preserving dotted directories via `path.parse` / `path.win32.basename`). For `srt` and `vtt`, main verifies `meetingId`, resolves the current on-disk Markdown SHA-256 against the `{stem}.captions.json` `sourceTranscriptHash` (`CAPTIONS_MISSING` / `CAPTIONS_STALE` when absent or edited without fabricating timings), and serializes cues via the shared `src/renderer/subtitle-export-helpers.js` UMD module. The separate Summary Save As flow remains Markdown-only.
+
 ### Facades whose export shape is pinned
 
 `src/main-process-helpers.js` (re-exports `src/main-process/`) and `src/ai-addon-setup.js` (re-exports `src/ai-addon/`) have characterization tests over their `module.exports` key sets. Keep the key sets stable, plus the `AI_ADDON_PROGRESS_CHANNEL` / `AI_ADDON_CANCEL_CODE` string values.
