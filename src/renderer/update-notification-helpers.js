@@ -3,10 +3,51 @@
   const RAIL_UPDATE_RING_RADIUS = 15;
   const RAIL_UPDATE_RING_CIRCUMFERENCE = 2 * Math.PI * RAIL_UPDATE_RING_RADIUS;
 
+  function hasUnsafeUpdateUrlPath(rawUrl, parsedUrl) {
+    const str = String(rawUrl || '').trim();
+    const schemeMatch = str.match(/^https:\/\/[^/?#]+(\/[^?#]*)?/i);
+    const rawPath = (schemeMatch && schemeMatch[1]) ? schemeMatch[1] : '';
+    const pathname = String((parsedUrl && parsedUrl.pathname) || '');
+
+    if (/%2f|%5c|\\/i.test(rawPath) || /%2f|%5c|\\/i.test(pathname)) {
+      return true;
+    }
+
+    let decodedRawPath;
+    let decodedPathname;
+    try {
+      decodedRawPath = decodeURIComponent(rawPath);
+      decodedPathname = decodeURIComponent(pathname);
+    } catch (_error) {
+      return true;
+    }
+
+    if (
+      decodedRawPath.includes('\\')
+      || decodedRawPath.includes('\0')
+      || decodedPathname.includes('\\')
+      || decodedPathname.includes('\0')
+    ) {
+      return true;
+    }
+
+    if (decodedRawPath.split('/').some((seg) => seg === '.' || seg === '..')) {
+      return true;
+    }
+
+    return decodedPathname.split('/').some((seg) => seg === '.' || seg === '..');
+  }
+
   function isTrustedUpdateDownloadUrl(url) {
     try {
       const parsedUrl = new URL(String(url || ''));
       if (parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== 'github.com') {
+        return false;
+      }
+      if (parsedUrl.username || parsedUrl.password || parsedUrl.port) {
+        return false;
+      }
+      if (hasUnsafeUpdateUrlPath(url, parsedUrl)) {
         return false;
       }
 
@@ -140,12 +181,22 @@
     if (nextState.manualCheck !== true) {
       return false;
     }
-    const surfaceableStatuses = new Set(['available', 'manual-required', 'up-to-date', 'error']);
+    const prevStatus = prevState && typeof prevState === 'object' ? prevState.status : null;
+    const prevManualCheck = Boolean(prevState && typeof prevState === 'object' && prevState.manualCheck === true);
+    if (nextState.status === 'downloading') {
+      return !prevManualCheck;
+    }
+    const surfaceableStatuses = new Set([
+      'available',
+      'ready-to-install',
+      'manual-required',
+      'up-to-date',
+      'error',
+    ]);
     if (!surfaceableStatuses.has(nextState.status)) {
       return false;
     }
-    const prevStatus = prevState && typeof prevState === 'object' ? prevState.status : null;
-    return prevStatus !== nextState.status;
+    return prevStatus !== nextState.status || !prevManualCheck;
   }
 
   function clampPercent(value) {

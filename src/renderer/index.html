@@ -449,8 +449,15 @@
             <p>Recording in progress — restart once recording stops.</p>
           </div>
 
-          <div id="update-popover-ai-confirm" class="update-ai-confirm" role="alertdialog" aria-label="Confirm restart during local AI work" hidden>
-            <p class="update-ai-confirm-text">Local AI work is running. Your audio is saved and will resume after restart.</p>
+          <div
+            id="update-popover-ai-confirm"
+            class="update-ai-confirm"
+            role="region"
+            aria-label="Confirm restart during local AI work"
+            aria-describedby="update-ai-confirm-text"
+            hidden
+          >
+            <p id="update-ai-confirm-text" class="update-ai-confirm-text">Local AI work is running. Your audio is saved and will resume after restart.</p>
             <div class="update-ai-confirm-actions">
               <button type="button" id="update-ai-confirm-restart" class="btn btn-update-ready btn-small">Restart anyway</button>
               <button type="button" id="update-ai-confirm-wait" class="btn btn-secondary btn-small">Wait</button>

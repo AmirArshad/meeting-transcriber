@@ -141,8 +141,13 @@ function readOsRelease() {
   }
 }
 
+function isValidLinuxAppImageEnvPath(env) {
+  const raw = env && typeof env.APPIMAGE === 'string' ? env.APPIMAGE.trim() : '';
+  return Boolean(raw && raw.startsWith('/') && !raw.includes('\0'));
+}
+
 function resolveLinuxInstallerOrder({ env = process.env, osReleaseText = readOsRelease() } = {}) {
-  if (env && env.APPIMAGE) {
+  if (isValidLinuxAppImageEnvPath(env)) {
     return ['.AppImage'];
   }
 
@@ -211,8 +216,20 @@ function findInstallerAsset(assets, options = {}) {
  * @returns {boolean} True if latest is newer than current
  */
 function isNewerVersion(latest, current) {
-  const latestParts = latest.split('.').map(Number);
-  const currentParts = current.split('.').map(Number);
+  if (typeof latest !== 'string' || typeof current !== 'string') {
+    return false;
+  }
+  const cleanLatest = latest.trim().replace(/^v/, '');
+  const cleanCurrent = current.trim().replace(/^v/, '');
+  if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(cleanLatest)) {
+    return false;
+  }
+  if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(cleanCurrent)) {
+    return false;
+  }
+
+  const latestParts = cleanLatest.split('-')[0].split('.').map(Number);
+  const currentParts = cleanCurrent.split('-')[0].split('.').map(Number);
 
   for (let i = 0; i < 3; i++) {
     const latestPart = latestParts[i] || 0;
@@ -232,7 +249,11 @@ function isNewerVersion(latest, current) {
  */
 function openDownloadPage(url) {
   const trustedUrl = resolveExternalUrl(url);
-  if (!trustedUrl) {
+  const repoPrefix = `https://github.com/${REPO_OWNER}/${REPO_NAME}`;
+  if (
+    !trustedUrl
+    || !(trustedUrl === repoPrefix || trustedUrl.startsWith(`${repoPrefix}/`))
+  ) {
     throw new Error(`Refusing to open untrusted update URL: ${url}`);
   }
 

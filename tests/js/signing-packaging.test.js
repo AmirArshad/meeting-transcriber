@@ -192,6 +192,21 @@ test('evaluateWindowsSigningConfig handles unsigned local, strict release, PFX, 
   assert.ok(azure.builderArgs.includes('-c.win.azureSignOptions.certificateProfileName=avanevis-public'));
   assert.ok(azure.builderArgs.includes('-c.win.azureSignOptions.publisherName=CN=AvaNevis'));
 
+  const strictAzureMissingPublisher = evaluateWindowsSigningConfig({
+    env: {
+      AVANEVIS_REQUIRE_SIGNED_RELEASE: '1',
+      WINDOWS_AZURE_ENDPOINT: 'https://eus.codesigning.azure.net/',
+      WINDOWS_AZURE_CODE_SIGNING_ACCOUNT: 'avanevis-signing',
+      WINDOWS_AZURE_CERT_PROFILE: 'avanevis-public',
+      AZURE_TENANT_ID: 'tenant-id',
+      AZURE_CLIENT_ID: 'client-id',
+      AZURE_CLIENT_SECRET: 'client-secret',
+    },
+  });
+  assert.equal(strictAzureMissingPublisher.ok, false);
+  assert.equal(strictAzureMissingPublisher.mode, 'missing-azure-publisher');
+  assert.match(strictAzureMissingPublisher.reason, /WINDOWS_AZURE_PUBLISHER_NAME/);
+
   const partialAzure = evaluateWindowsSigningConfig({
     env: { WINDOWS_AZURE_ENDPOINT: 'https://eus.codesigning.azure.net/' },
   });

@@ -427,6 +427,7 @@ function markQuitCommitted() {
 
 function clearQuitCommitted() {
   quitCommitted = false;
+  pendingUpdateInstall = false;
 }
 
 function abortInFlightAiSetup() {
@@ -1031,6 +1032,13 @@ updaterService = createUpdaterService({
     allowImmediateQuit = true;
     isQuitting = true;
     markQuitCommitted();
+  },
+  disarmUpdateQuit: () => {
+    pendingUpdateInstall = false;
+    allowImmediateQuit = false;
+    isQuitting = false;
+    clearQuitCommitted();
+    sendToRenderer('app-quit-progress', { code: 'QUIT_CANCELLED' });
   },
 });
 updaterService.registerIpcHandlers(ipcMain, assertTrustedRendererSender);

@@ -16,7 +16,10 @@
  */
 
 const { spawnSync } = require('node:child_process');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
 const path = require('node:path');
+const yaml = require('js-yaml');
 
 const AD_HOC_IDENTITY = '-';
 
@@ -293,6 +296,108 @@ function main() {
   process.exit(child.status === null ? 1 : child.status);
 }
 
+function computeFileSha512Base64(filePath) {
+  const hash = crypto.createHash('sha512');
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('base64');
+}
+
+/**
+ * Rebuild `<dmgPath>.blockmap` and refresh the DMG entry's sha512 and size in
+ * `latest-mac.yml` after post-build DMG signing and notarization stapling.
+ *
+ * @param {{ dmgPath: string, latestMacYmlPath?: string }} options
+ * @returns {Promise<{ blockmapPath: string, sha512: string, size: number, updatedYml: boolean }>}
+ */
+async function refreshMacDmgUpdateMetadata({ dmgPath, latestMacYmlPath } = {}) {
+  if (!dmgPath || !fs.existsSync(dmgPath)) {
+    throw new Error(`refreshMacDmgUpdateMetadata: DMG not found at ${dmgPath}`);
+  }
+  // eslint-disable-next-line global-require
+  const { buildBlockMap } = require('app-builder-lib/out/targets/blockmap/blockmap');
+  const blockmapPath = `${dmgPath}.blockmap`;
+  const blockmapInfo = await buildBlockMap(dmgPath, 'gzip', blockmapPath);
+  const dmgBasename = path.basename(dmgPath);
+  let updatedYml = false;
+
+  if (latestMacYmlPath && fs.existsSync(latestMacYmlPath)) {
+    const parsed = yaml.load(fs.readFileSync(latestMacYmlPath, 'utf8'));
+    if (parsed && typeof parsed === 'object') {
+      if (Array.isArray(parsed.files)) {
+        for (const entry of parsed.files) {
+          if (entry && path.basename(String(entry.url || '')) === dmgBasename) {
+            entry.sha512 = blockmapInfo.sha512;
+            entry.size = blockmapInfo.size;
+            updatedYml = true;
+          }
+        }
+      }
+      if (parsed.path && path.basename(String(parsed.path)) === dmgBasename) {
+        parsed.sha512 = blockmapInfo.sha512;
+        updatedYml = true;
+      }
+      if (updatedYml) {
+        const serialized = yaml.dump(parsed, { lineWidth: -1, noRefs: true });
+        fs.writeFileSync(latestMacYmlPath, serialized, 'utf8');
+      }
+    }
+  }
+
+  return {
+    blockmapPath,
+    sha512: blockmapInfo.sha512,
+    size: blockmapInfo.size,
+    updatedYml,
+  };
+}
+
+/**
+ * Verify that `latest-mac.yml` and the macOS `.zip`, `.dmg`, and `.blockmap`
+ * artifacts exist and have matching SHA-512 digests and byte sizes.
+ *
+ * @param {{ distDir: string, version: string }} options
+ */
+function verifyMacUpdateMetadata({ distDir, version } = {}) {
+  if (!distDir || !version) {
+    throw new Error('verifyMacUpdateMetadata requires distDir and version');
+  }
+  const zipName = `AvaNevis-Setup-${version}.zip`;
+  const dmgName = `AvaNevis-Setup-${version}.dmg`;
+  const zipPath = path.join(distDir, zipName);
+  const dmgPath = path.join(distDir, dmgName);
+  const zipBlockmapPath = `${zipPath}.blockmap`;
+  const dmgBlockmapPath = `${dmgPath}.blockmap`;
+  const latestMacYmlPath = path.join(distDir, 'latest-mac.yml');
+
+  for (const requiredFile of [zipPath, dmgPath, zipBlockmapPath, dmgBlockmapPath, latestMacYmlPath]) {
+    if (!fs.existsSync(requiredFile) || fs.statSync(requiredFile).size <= 0) {
+      throw new Error(`Missing or empty macOS updater artifact: ${requiredFile}`);
+    }
+  }
+
+  const parsed = yaml.load(fs.readFileSync(latestMacYmlPath, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.files)) {
+    throw new Error(`Invalid latest-mac.yml structure at ${latestMacYmlPath}`);
+  }
+
+  for (const [artifactName, artifactPath] of [[zipName, zipPath], [dmgName, dmgPath]]) {
+    const entry = parsed.files.find((item) => item && path.basename(String(item.url || '')) === artifactName);
+    if (!entry) {
+      throw new Error(`latest-mac.yml is missing files entry for ${artifactName}`);
+    }
+    const actualSha512 = computeFileSha512Base64(artifactPath);
+    const actualSize = fs.statSync(artifactPath).size;
+    if (entry.sha512 !== actualSha512) {
+      throw new Error(`latest-mac.yml sha512 mismatch for ${artifactName}: expected ${actualSha512}, got ${entry.sha512}`);
+    }
+    if (Number(entry.size) !== actualSize) {
+      throw new Error(`latest-mac.yml size mismatch for ${artifactName}: expected ${actualSize}, got ${entry.size}`);
+    }
+  }
+
+  return true;
+}
+
 module.exports = {
   AD_HOC_IDENTITY,
   SIGNING_CREDENTIAL_ENV_KEYS,
@@ -300,6 +405,8 @@ module.exports = {
   evaluateNotarizationCredentials,
   notarizationEnvironment,
   isStrictSignedRelease,
+  refreshMacDmgUpdateMetadata,
+  verifyMacUpdateMetadata,
 };
 
 if (require.main === module) {

@@ -6,6 +6,7 @@ version="$(node -p "require('./package.json').version")"
 dmg="dist/AvaNevis-Setup-${version}.dmg"
 test -s "$dmg"
 hdiutil verify "$dmg"
+node -e "require('./scripts/check-mac-signing-identity').verifyMacUpdateMetadata({ distDir: 'dist', version: process.argv[1] })" "$version"
 
 REQUIRE_SIGNED_RAW="$(printf '%s' "${AVANEVIS_REQUIRE_SIGNED_RELEASE:-0}" | tr '[:upper:]' '[:lower:]')"
 DMG_CODESIGN_INFO="$(codesign -dv --verbose=4 "$dmg" 2>&1 || true)"

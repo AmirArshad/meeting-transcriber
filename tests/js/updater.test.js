@@ -212,6 +212,38 @@ test('openDownloadPage rejects untrusted update URLs', () => {
     () => openDownloadPage('javascript:alert(1)'),
     /Refusing to open untrusted update URL/,
   );
+  assert.throws(
+    () => openDownloadPage('https://github.com.evil.tld/AmirArshad/meeting-transcriber/releases'),
+    /Refusing to open untrusted update URL/,
+  );
+  assert.throws(
+    () => openDownloadPage('https://github.com/AmirArshad/meeting-transcriber/..'),
+    /Refusing to open untrusted update URL/,
+  );
+  assert.throws(
+    () => openDownloadPage('https://github.com/AmirArshad/meeting-transcriber/..%2fevil/repo'),
+    /Refusing to open untrusted update URL/,
+  );
+  assert.throws(
+    () => openDownloadPage('https://github.com/AmirArshad/meeting-transcriber/%2e%2e%2fevil/repo'),
+    /Refusing to open untrusted update URL/,
+  );
+  assert.throws(
+    () => openDownloadPage('https://evil:pass@github.com/AmirArshad/meeting-transcriber/releases'),
+    /Refusing to open untrusted update URL/,
+  );
+  assert.throws(
+    () => openDownloadPage('https://github.com:8443/AmirArshad/meeting-transcriber/releases'),
+    /Refusing to open untrusted update URL/,
+  );
+  assert.throws(
+    () => openDownloadPage('https://huggingface.co/settings/tokens'),
+    /Refusing to open untrusted update URL/,
+  );
+  assert.throws(
+    () => openDownloadPage('x-apple.systempreferences:com.apple.preference.security?Privacy'),
+    /Refusing to open untrusted update URL/,
+  );
   assert.deepEqual(openedUrls, []);
 });
 
@@ -343,4 +375,92 @@ test('legacy v2.x findInstallerAsset ignores zip, blockmap, and latest*.yml meta
     }),
     { name: 'AvaNevis-Setup-3.0.0.deb' },
   );
+});
+
+test('refreshMacDmgUpdateMetadata and verifyMacUpdateMetadata / assertLinuxUpdateMetadata keep post-sign blockmap and latest*.yml in sync', async () => {
+  const crypto = require('node:crypto');
+  const os = require('node:os');
+  const yaml = require('js-yaml');
+  const { buildBlockMap } = require('app-builder-lib/out/targets/blockmap/blockmap');
+  const {
+    refreshMacDmgUpdateMetadata,
+    verifyMacUpdateMetadata,
+  } = require('../../scripts/check-mac-signing-identity');
+  const {
+    assertLinuxUpdateMetadata,
+  } = require('../../scripts/verify-linux-packaging');
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-updater-meta-'));
+  try {
+    const version = '3.0.0';
+    const zipName = `AvaNevis-Setup-${version}.zip`;
+    const dmgName = `AvaNevis-Setup-${version}.dmg`;
+    const appImageName = `AvaNevis-Setup-${version}.AppImage`;
+    const zipPath = path.join(tmpDir, zipName);
+    const dmgPath = path.join(tmpDir, dmgName);
+    const appImagePath = path.join(tmpDir, appImageName);
+    const latestMacYmlPath = path.join(tmpDir, 'latest-mac.yml');
+    const latestLinuxYmlPath = path.join(tmpDir, 'latest-linux.yml');
+
+    fs.writeFileSync(zipPath, crypto.randomBytes(40 * 1024));
+    fs.writeFileSync(dmgPath, crypto.randomBytes(48 * 1024));
+    fs.writeFileSync(appImagePath, crypto.randomBytes(36 * 1024));
+
+    const zipInfo = await buildBlockMap(zipPath, 'gzip', `${zipPath}.blockmap`);
+    const preNotarizedDmgInfo = await buildBlockMap(dmgPath, 'gzip', `${dmgPath}.blockmap`);
+    const appImageSha512 = crypto.createHash('sha512').update(fs.readFileSync(appImagePath)).digest('base64');
+    const appImageSize = fs.statSync(appImagePath).size;
+
+    fs.writeFileSync(
+      latestMacYmlPath,
+      yaml.dump({
+        version,
+        files: [
+          { url: zipName, sha512: zipInfo.sha512, size: zipInfo.size },
+          { url: dmgName, sha512: preNotarizedDmgInfo.sha512, size: preNotarizedDmgInfo.size },
+        ],
+        path: zipName,
+        sha512: zipInfo.sha512,
+        releaseDate: '2026-11-20T00:00:00.000Z',
+      }),
+      'utf8',
+    );
+
+    assert.equal(verifyMacUpdateMetadata({ distDir: tmpDir, version }), true);
+
+    // Simulate post-build DMG codesign + notarization stapling mutating the DMG file.
+    fs.appendFileSync(dmgPath, Buffer.from('stapled-notarization-ticket-bytes'));
+    assert.throws(
+      () => verifyMacUpdateMetadata({ distDir: tmpDir, version }),
+      /sha512 mismatch/,
+    );
+
+    const refreshed = await refreshMacDmgUpdateMetadata({ dmgPath, latestMacYmlPath });
+    assert.equal(refreshed.updatedYml, true);
+    assert.equal(verifyMacUpdateMetadata({ distDir: tmpDir, version }), true);
+
+    // Verify Linux latest-linux.yml check passes when valid and rejects tampered hash.
+    fs.writeFileSync(
+      latestLinuxYmlPath,
+      yaml.dump({
+        version,
+        files: [
+          { url: appImageName, sha512: appImageSha512, size: appImageSize },
+        ],
+        path: appImageName,
+        sha512: appImageSha512,
+        releaseDate: '2026-11-20T00:00:00.000Z',
+      }),
+      'utf8',
+    );
+    assert.equal(assertLinuxUpdateMetadata(tmpDir, appImagePath), latestLinuxYmlPath);
+
+    fs.appendFileSync(appImagePath, Buffer.from('tampered'));
+    assert.throws(
+      () => assertLinuxUpdateMetadata(tmpDir, appImagePath),
+      /sha512 mismatch/,
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

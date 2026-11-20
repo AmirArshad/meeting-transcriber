@@ -31,9 +31,15 @@ $version = node -p "require('./package.json').version"
 if ($LASTEXITCODE -ne 0) { throw 'Could not read package version' }
 $installer = Join-Path (Get-Location) "dist/AvaNevis-Setup-$version.exe"
 if (-not (Test-Path $installer)) { throw "Missing NSIS installer: $installer" }
+$installerBlockmap = Join-Path (Get-Location) "dist/AvaNevis-Setup-$version.exe.blockmap"
+if (-not (Test-Path $installerBlockmap)) { throw "Missing NSIS differential blockmap: $installerBlockmap" }
+$latestYml = Join-Path (Get-Location) 'dist/latest.yml'
+if (-not (Test-Path $latestYml)) { throw "Missing Windows updater metadata: $latestYml" }
 
 $unpackedExe = Join-Path (Get-Location) 'dist/win-unpacked/AvaNevis.exe'
 $unpackedSpeakrs = Join-Path (Get-Location) 'dist/win-unpacked/resources/bin/speakrs-cli.exe'
+$appUpdateYml = Join-Path (Get-Location) 'dist/win-unpacked/resources/app-update.yml'
+if (-not (Test-Path $appUpdateYml)) { throw "Missing packaged app-update.yml: $appUpdateYml" }
 $requireSignedRaw = [string]$env:AVANEVIS_REQUIRE_SIGNED_RELEASE
 $requireSigned = $requireSignedRaw -eq '1' -or $requireSignedRaw.ToLowerInvariant() -eq 'true'
 
@@ -41,6 +47,10 @@ if ($SignaturesOnly -or $requireSigned) {
     Assert-AuthenticodeSigned -FilePath $installer
     Assert-AuthenticodeSigned -FilePath $unpackedExe
     Assert-AuthenticodeSigned -FilePath $unpackedSpeakrs
+    $appUpdateContent = Get-Content -Path $appUpdateYml -Raw
+    if ($appUpdateContent -notmatch '(?m)^publisherName:') {
+        throw "Signed Windows build must record publisherName in $appUpdateYml for electron-updater signature verification"
+    }
     if ($SignaturesOnly) {
         Write-Host 'Windows Authenticode signature checks passed'
         exit 0

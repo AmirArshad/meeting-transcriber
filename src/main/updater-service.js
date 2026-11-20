@@ -34,7 +34,8 @@ function resolveUpdateMode({
   }
 
   if (platform === 'linux') {
-    if (Boolean(env && env.APPIMAGE)) {
+    const appImagePath = env && typeof env.APPIMAGE === 'string' ? env.APPIMAGE.trim() : '';
+    if (appImagePath && !appImagePath.includes('\0') && path.posix.isAbsolute(appImagePath)) {
       return { mode: 'in-app', manualPackageKind: null };
     }
 
@@ -124,9 +125,25 @@ function resolveTrustedUpdateUrl(url) {
   return null;
 }
 
-function buildReleaseTagUrl(version) {
+function normalizeSemverTag(version) {
   const cleaned = String(version || '').trim().replace(/^v/, '');
   if (!cleaned || !SEMVER_TAG_REGEX.test(cleaned)) {
+    return null;
+  }
+  return cleaned;
+}
+
+function normalizeInstallerName(installerName) {
+  if (typeof installerName !== 'string') {
+    return null;
+  }
+  const trimmed = installerName.trim();
+  return INSTALLER_NAME_REGEX.test(trimmed) ? trimmed : null;
+}
+
+function buildReleaseTagUrl(version) {
+  const cleaned = normalizeSemverTag(version);
+  if (!cleaned) {
     return DEFAULT_RELEASES_URL;
   }
   return resolveTrustedUpdateUrl(`${REPO_URL_PREFIX}/releases/tag/v${cleaned}`) || DEFAULT_RELEASES_URL;
@@ -139,7 +156,9 @@ function isCancellationError(error) {
   const message = String(error.message || '');
   return name === 'CancellationError'
     || code === 'ERR_UPDATER_CANCELLED'
-    || /\bcancell?ed\b/i.test(message);
+    || code === 'ERR_ABORTED'
+    || code === 'ECONNABORTED'
+    || /\b(cancell?ed|aborted)\b/i.test(message);
 }
 
 function sanitizeUpdaterError(error) {
@@ -225,6 +244,7 @@ function createUpdaterService(deps = {}) {
     hasInFlightAiWork = () => false,
     drainAiWorkBeforeQuit = async () => {},
     armUpdateQuit = () => {},
+    disarmUpdateQuit = () => {},
     log = console,
     now = () => Date.now(),
     startupDelayMs = STARTUP_CHECK_DELAY_MS,
@@ -309,10 +329,12 @@ function createUpdaterService(deps = {}) {
   let autoUpdater = null;
   let CancellationTokenCtor = injectedCancellationToken;
   let activeCancellationToken = null;
+  let activeDownloadId = 0;
   let downloadCancelledByUser = false;
   let lastProgressEmitAt = 0;
   let checkInFlightPromise = null;
   let installInFlight = false;
+  let updateQuitArmed = false;
   let startupTimer = null;
   let periodicTimer = null;
   const attachedListeners = [];
@@ -340,6 +362,63 @@ function createUpdaterService(deps = {}) {
     return new Date(now()).toISOString();
   }
 
+  function clearArmedUpdateQuit() {
+    if (updateQuitArmed) {
+      updateQuitArmed = false;
+    }
+    disarmUpdateQuit();
+  }
+
+  function attachDownloadPromiseHandler(downloadPromise, token, downloadId) {
+    if (!downloadPromise || typeof downloadPromise.then !== 'function') {
+      return;
+    }
+    void downloadPromise.catch((error) => {
+      if (downloadId !== activeDownloadId) {
+        return;
+      }
+      const wasCancelled = downloadCancelledByUser
+        || Boolean(token && token.cancelled)
+        || isCancellationError(error);
+      if (activeCancellationToken === token) {
+        activeCancellationToken = null;
+      }
+      if (wasCancelled) {
+        downloadCancelledByUser = false;
+        if (state.status !== 'available') {
+          emitState({
+            status: 'available',
+            progress: null,
+            error: null,
+          });
+        }
+        return;
+      }
+      if (state.status !== 'error' && state.status !== 'ready-to-install') {
+        emitState({
+          status: 'error',
+          progress: null,
+          error: sanitizeUpdaterError(error),
+        });
+      }
+    });
+  }
+
+  function removeLegacyStagingIdFile() {
+    if (!userDataPath || !fsImpl || typeof fsImpl.unlinkSync !== 'function') {
+      return;
+    }
+    try {
+      const legacyIdPath = path.join(userDataPath, '.updaterId');
+      if (typeof fsImpl.existsSync === 'function' && !fsImpl.existsSync(legacyIdPath)) {
+        return;
+      }
+      fsImpl.unlinkSync(legacyIdPath);
+    } catch (_error) {
+      // Best-effort cleanup of legacy electron-updater staging UUID file.
+    }
+  }
+
   function initInAppUpdater() {
     if (mode !== 'in-app') {
       return;
@@ -365,6 +444,29 @@ function createUpdaterService(deps = {}) {
     autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.allowPrerelease = false;
     autoUpdater.allowDowngrade = false;
+    autoUpdater.disableWebInstaller = true;
+    autoUpdater.forceDevUpdateConfig = false;
+    autoUpdater.fullChangelog = false;
+
+    // Enforce AvaNevis's zero-telemetry / no-user-identifiers privacy contract:
+    // prevent electron-updater from generating or transmitting a persistent
+    // userData/.updaterId UUID via the x-user-staging-id request header.
+    removeLegacyStagingIdFile();
+    autoUpdater.isUserWithinRollout = () => true;
+    autoUpdater.getOrCreateStagingUserId = async () => null;
+    autoUpdater.stagingUserIdPromise = { value: Promise.resolve(null) };
+    autoUpdater.computeFinalHeaders = (headers = {}) => {
+      const cleaned = { ...headers };
+      if (autoUpdater.requestHeaders && typeof autoUpdater.requestHeaders === 'object') {
+        Object.assign(cleaned, autoUpdater.requestHeaders);
+      }
+      for (const key of Object.keys(cleaned)) {
+        if (key.toLowerCase() === 'x-user-staging-id') {
+          delete cleaned[key];
+        }
+      }
+      return cleaned;
+    };
 
     const addUpdaterListener = (eventName, handler) => {
       if (typeof autoUpdater.on === 'function') {
@@ -383,7 +485,7 @@ function createUpdaterService(deps = {}) {
     });
 
     addUpdaterListener('update-available', (info = {}) => {
-      const version = String(info.version || '').trim().replace(/^v/, '') || null;
+      const version = normalizeSemverTag(info.version);
       const releaseDate = info.releaseDate ? String(info.releaseDate) : null;
       const releaseNotes = normalizeReleaseNotes(info.releaseNotes);
       const releaseUrl = buildReleaseTagUrl(version);
@@ -442,9 +544,10 @@ function createUpdaterService(deps = {}) {
     });
 
     addUpdaterListener('update-downloaded', (info = {}) => {
+      activeDownloadId += 1;
       activeCancellationToken = null;
       downloadCancelledByUser = false;
-      const version = String(info.version || state.availableVersion || '').trim().replace(/^v/, '') || null;
+      const version = normalizeSemverTag(info.version) || state.availableVersion || null;
       const releaseDate = info.releaseDate ? String(info.releaseDate) : state.releaseDate;
       const releaseNotes = info.releaseNotes !== undefined
         ? normalizeReleaseNotes(info.releaseNotes)
@@ -471,6 +574,22 @@ function createUpdaterService(deps = {}) {
       if (downloadCancelledByUser || isCancellationError(err)) {
         return;
       }
+      // Do not allow a late error event to clobber an already downloaded update
+      // or an idle 'available' state when no check, download, or install is active.
+      if (state.status === 'ready-to-install') {
+        return;
+      }
+      if (
+        state.status === 'available'
+        && !checkInFlightPromise
+        && !activeCancellationToken
+        && !installInFlight
+      ) {
+        return;
+      }
+      if (state.status === 'installing' || updateQuitArmed) {
+        clearArmedUpdateQuit();
+      }
       activeCancellationToken = null;
       if (log && typeof log.warn === 'function') {
         log.warn('Updater error:', (err && err.message) || err);
@@ -491,6 +610,9 @@ function createUpdaterService(deps = {}) {
       || state.status === 'ready-to-install'
       || state.status === 'installing'
     ) {
+      if (manual) {
+        return emitState({ manualCheck: true });
+      }
       return cloneState();
     }
 
@@ -510,23 +632,49 @@ function createUpdaterService(deps = {}) {
     checkInFlightPromise = (async () => {
       try {
         if (mode === 'in-app' && autoUpdater) {
-          await autoUpdater.checkForUpdates();
+          const checkResult = await autoUpdater.checkForUpdates();
+          if (checkResult && checkResult.downloadPromise) {
+            const token = checkResult.cancellationToken || null;
+            activeDownloadId += 1;
+            const downloadId = activeDownloadId;
+            activeCancellationToken = token;
+            downloadCancelledByUser = false;
+            lastProgressEmitAt = now();
+            if (state.status === 'available') {
+              emitState({
+                status: 'downloading',
+                progress: {
+                  percent: 0,
+                  bytesPerSecond: 0,
+                  transferred: 0,
+                  total: 0,
+                },
+                error: null,
+              });
+            }
+            attachDownloadPromiseHandler(checkResult.downloadPromise, token, downloadId);
+          } else if (
+            state.autoDownload
+            && state.status === 'available'
+            && !activeCancellationToken
+            && typeof autoUpdater.downloadUpdate === 'function'
+          ) {
+            await downloadUpdate();
+          }
           return cloneState();
         }
 
         const release = await checkManualRelease();
         const checkedAt = nowIso();
         const latestVersion = release && release.version
-          ? String(release.version).trim().replace(/^v/, '')
+          ? (normalizeSemverTag(release.version) || '')
           : '';
 
         if (latestVersion && isNewerVersion(latestVersion, currentVersion)) {
           const releaseUrl = resolveTrustedUpdateUrl(release.releaseUrl)
             || buildReleaseTagUrl(latestVersion);
           const downloadUrl = resolveTrustedUpdateUrl(release.downloadUrl) || releaseUrl;
-          const installerName = typeof release.installerName === 'string'
-            ? release.installerName
-            : null;
+          const installerName = normalizeInstallerName(release.installerName);
           const manualInstallCommand = buildManualInstallCommand(installerName, state.manualPackageKind);
 
           return emitState({
@@ -615,6 +763,8 @@ function createUpdaterService(deps = {}) {
     const token = CancellationTokenCtor
       ? new CancellationTokenCtor()
       : createFallbackCancellationToken();
+    activeDownloadId += 1;
+    const downloadId = activeDownloadId;
     activeCancellationToken = token;
     downloadCancelledByUser = false;
     lastProgressEmitAt = now();
@@ -632,34 +782,7 @@ function createUpdaterService(deps = {}) {
 
     try {
       const downloadPromise = autoUpdater.downloadUpdate(token);
-      if (downloadPromise && typeof downloadPromise.then === 'function') {
-        void downloadPromise.catch((error) => {
-          const wasCancelled = downloadCancelledByUser
-            || Boolean(token && token.cancelled)
-            || isCancellationError(error);
-          if (activeCancellationToken === token) {
-            activeCancellationToken = null;
-          }
-          if (wasCancelled) {
-            downloadCancelledByUser = false;
-            if (state.status !== 'available') {
-              emitState({
-                status: 'available',
-                progress: null,
-                error: null,
-              });
-            }
-            return;
-          }
-          if (state.status !== 'error') {
-            emitState({
-              status: 'error',
-              progress: null,
-              error: sanitizeUpdaterError(error),
-            });
-          }
-        });
-      }
+      attachDownloadPromiseHandler(downloadPromise, token, downloadId);
       return { ok: true, state: cloneState() };
     } catch (error) {
       activeCancellationToken = null;
@@ -688,6 +811,7 @@ function createUpdaterService(deps = {}) {
       };
     }
 
+    activeDownloadId += 1;
     downloadCancelledByUser = true;
     const token = activeCancellationToken;
     activeCancellationToken = null;
@@ -708,7 +832,15 @@ function createUpdaterService(deps = {}) {
     return { ok: true, state: cloneState() };
   }
 
-  async function installUpdateNow({ confirmAiInterrupt = false } = {}) {
+  async function installUpdateNow(options = {}) {
+    if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+      throw new TypeError('installUpdateNow options must be a plain object.');
+    }
+    const { confirmAiInterrupt = false } = options;
+    if (typeof confirmAiInterrupt !== 'boolean') {
+      throw new TypeError('confirmAiInterrupt must be a boolean.');
+    }
+
     if (state.status !== 'ready-to-install') {
       return {
         ok: false,
@@ -755,7 +887,7 @@ function createUpdaterService(deps = {}) {
       };
     }
 
-    if (hasInFlightAiWork() && !confirmAiInterrupt) {
+    if (hasInFlightAiWork() && confirmAiInterrupt !== true) {
       return {
         ok: false,
         code: 'UPDATE_CONFIRM_AI_INTERRUPT',
@@ -765,16 +897,22 @@ function createUpdaterService(deps = {}) {
     }
 
     installInFlight = true;
+    let drainedAiWork = false;
     try {
       emitState({ status: 'installing', error: null });
 
       if (hasInFlightAiWork()) {
+        drainedAiWork = true;
         await drainAiWorkBeforeQuit();
       }
 
-      // Re-verify recording did not start while draining AI work.
+      // Re-verify recording, audio import commit, and summary metadata write
+      // did not start (or remain active) while draining AI work.
       const postDrainIntercept = getQuitInterceptState(getRecorderQuitInputs());
       if (postDrainIntercept && postDrainIntercept.interceptQuit) {
+        if (drainedAiWork) {
+          clearArmedUpdateQuit();
+        }
         emitState({ status: 'ready-to-install', error: null });
         return {
           ok: false,
@@ -784,6 +922,33 @@ function createUpdaterService(deps = {}) {
         };
       }
 
+      if (hasActiveAudioImport()) {
+        if (drainedAiWork) {
+          clearArmedUpdateQuit();
+        }
+        emitState({ status: 'ready-to-install', error: null });
+        return {
+          ok: false,
+          code: 'UPDATE_BLOCKED_IMPORT_SAVE',
+          message: 'Wait for the audio import to finish saving before restarting to update.',
+          state: cloneState(),
+        };
+      }
+
+      if (hasProtectedSummaryWrite()) {
+        if (drainedAiWork) {
+          clearArmedUpdateQuit();
+        }
+        emitState({ status: 'ready-to-install', error: null });
+        return {
+          ok: false,
+          code: 'UPDATE_BLOCKED_SUMMARY_FINALIZING',
+          message: 'Wait a moment while your summary finishes saving before restarting to update.',
+          state: cloneState(),
+        };
+      }
+
+      updateQuitArmed = true;
       armUpdateQuit();
       if (autoUpdater && typeof autoUpdater.quitAndInstall === 'function') {
         autoUpdater.quitAndInstall(false, true);
@@ -791,6 +956,9 @@ function createUpdaterService(deps = {}) {
 
       return { ok: true, state: cloneState() };
     } catch (error) {
+      if (drainedAiWork || updateQuitArmed) {
+        clearArmedUpdateQuit();
+      }
       const sanitized = sanitizeUpdaterError(error);
       emitState({ status: 'ready-to-install', error: sanitized });
       return {
@@ -805,12 +973,19 @@ function createUpdaterService(deps = {}) {
   }
 
   async function setAutoDownloadUpdates(enabled) {
-    const normalized = Boolean(enabled);
+    if (typeof enabled !== 'boolean') {
+      throw new TypeError('autoDownload enabled flag must be a boolean.');
+    }
+    const normalized = enabled;
     writePreferences({ autoDownload: normalized });
     if (autoUpdater) {
       autoUpdater.autoDownload = normalized;
     }
     const nextState = emitState({ autoDownload: normalized });
+    if (normalized && mode === 'in-app' && state.status === 'available') {
+      const downloadRes = await downloadUpdate();
+      return { ok: true, autoDownload: normalized, state: downloadRes.state };
+    }
     return { ok: true, autoDownload: normalized, state: nextState };
   }
 
@@ -856,6 +1031,17 @@ function createUpdaterService(deps = {}) {
 
   function dispose() {
     stopTimers();
+    if (activeCancellationToken && typeof activeCancellationToken.cancel === 'function') {
+      activeDownloadId += 1;
+      downloadCancelledByUser = true;
+      const token = activeCancellationToken;
+      activeCancellationToken = null;
+      try {
+        token.cancel();
+      } catch (_error) {
+        // Ignore cancellation token errors on shutdown.
+      }
+    }
     if (autoUpdater && typeof autoUpdater.removeListener === 'function') {
       for (const [eventName, handler] of attachedListeners) {
         autoUpdater.removeListener(eventName, handler);
@@ -887,7 +1073,7 @@ function createUpdaterService(deps = {}) {
 
     ipcMain.handle('install-update-now', async (event, options = {}) => {
       assertTrustedRendererSender(event);
-      return installUpdateNow(options && typeof options === 'object' ? options : {});
+      return installUpdateNow(options);
     });
 
     ipcMain.handle('set-auto-download-updates', async (event, enabled) => {

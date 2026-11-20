@@ -8019,6 +8019,12 @@ function initUpdateUi() {
     };
     document.addEventListener('mousedown', handleGlobalPointerDown);
     registerCleanup(() => document.removeEventListener('mousedown', handleGlobalPointerDown));
+    registerCleanup(() => {
+      if (updateManualCopyTimer) {
+        clearTimeout(updateManualCopyTimer);
+        updateManualCopyTimer = null;
+      }
+    });
   }
 
   if (typeof window.electronAPI?.onUpdateStateChanged === 'function') {
@@ -8090,6 +8096,25 @@ function openUpdatePopover({ focus = true } = {}) {
   }
 }
 
+function focusFallbackAfterUpdateSurfaceClose() {
+  const settingsTab = document.getElementById('settings-tab');
+  const settingsPrimaryBtn = document.getElementById('update-settings-primary-btn');
+  if (
+    settingsTab
+    && settingsTab.classList.contains('active')
+    && settingsPrimaryBtn
+    && !settingsPrimaryBtn.disabled
+    && typeof settingsPrimaryBtn.focus === 'function'
+  ) {
+    settingsPrimaryBtn.focus();
+    return;
+  }
+  const settingsRailBtn = document.querySelector('.rail-btn[data-tab="settings"]');
+  if (settingsRailBtn && typeof settingsRailBtn.focus === 'function') {
+    settingsRailBtn.focus();
+  }
+}
+
 function closeUpdatePopover({ returnFocus = false, markDismissed = false } = {}) {
   const popover = document.getElementById('update-popover');
   const railBtn = document.getElementById('rail-update-btn');
@@ -8102,10 +8127,14 @@ function closeUpdatePopover({ returnFocus = false, markDismissed = false } = {})
   }
   if (markDismissed && updateUiState && updateUiState.availableVersion) {
     dismissedUpdateVersion = String(updateUiState.availableVersion);
-    renderUpdateUi();
   }
-  if (returnFocus && railBtn && !railBtn.hidden && typeof railBtn.focus === 'function') {
-    railBtn.focus();
+  renderUpdateUi();
+  if (returnFocus) {
+    if (railBtn && !railBtn.hidden && typeof railBtn.focus === 'function') {
+      railBtn.focus();
+    } else {
+      focusFallbackAfterUpdateSurfaceClose();
+    }
   }
 }
 
@@ -8133,7 +8162,15 @@ function renderUpdateUi() {
   // Surface 1: Left-rail indicator
   const railBtn = document.getElementById('rail-update-btn');
   if (railBtn) {
-    railBtn.hidden = !vm.rail.visible;
+    const shouldShowRailBtn = Boolean(vm.rail.visible || updatePopoverOpen);
+    if (
+      !shouldShowRailBtn
+      && !railBtn.hidden
+      && (document.activeElement === railBtn || (typeof railBtn.contains === 'function' && railBtn.contains(document.activeElement)))
+    ) {
+      focusFallbackAfterUpdateSurfaceClose();
+    }
+    railBtn.hidden = !shouldShowRailBtn;
     railBtn.dataset.tone = vm.rail.tone;
     railBtn.setAttribute('aria-label', vm.rail.ariaLabel);
     railBtn.setAttribute('aria-expanded', updatePopoverOpen ? 'true' : 'false');
@@ -8407,9 +8444,13 @@ async function handleInstallUpdateNow({ confirmAiInterrupt = false } = {}) {
       if (result.code === 'UPDATE_CONFIRM_AI_INTERRUPT') {
         updateAiConfirmPending = true;
         if (!updatePopoverOpen) {
-          openUpdatePopover({ focus: true });
+          openUpdatePopover({ focus: false });
         } else {
           renderUpdateUi();
+        }
+        const aiConfirmRestartBtn = document.getElementById('update-ai-confirm-restart');
+        if (aiConfirmRestartBtn && typeof aiConfirmRestartBtn.focus === 'function') {
+          aiConfirmRestartBtn.focus();
         }
         return;
       }

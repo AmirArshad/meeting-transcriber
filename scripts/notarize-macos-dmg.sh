@@ -149,4 +149,18 @@ echo "Stapling notarization ticket to DMG: $DMG_PATH"
 xcrun stapler staple "$DMG_PATH"
 xcrun stapler validate "$DMG_PATH"
 
+echo "Refreshing macOS DMG differential blockmap and latest-mac.yml metadata..."
+node - "$ROOT_DIR" "$DMG_PATH" "$DIST_DIR" <<'NODE'
+const path = require('node:path');
+const [rootDir, dmgPath, distDir] = process.argv.slice(2);
+const { refreshMacDmgUpdateMetadata } = require(path.join(rootDir, 'scripts', 'check-mac-signing-identity.js'));
+refreshMacDmgUpdateMetadata({
+  dmgPath,
+  latestMacYmlPath: path.join(distDir, 'latest-mac.yml'),
+}).catch((err) => {
+  console.error(err && err.stack ? err.stack : String(err));
+  process.exit(1);
+});
+NODE
+
 echo "macOS DMG signed, notarized, and stapled: $DMG_PATH"

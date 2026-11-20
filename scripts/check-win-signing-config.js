@@ -155,6 +155,17 @@ function evaluateWindowsSigningConfig({ env = process.env } = {}) {
   }
 
   if (azure.configured) {
+    if (requireSigned && !azure.publisherName) {
+      return {
+        ok: false,
+        mode: 'missing-azure-publisher',
+        requireSigned,
+        builderArgs: [],
+        reason:
+          'AVANEVIS_REQUIRE_SIGNED_RELEASE=1 with Azure Trusted Signing requires WINDOWS_AZURE_PUBLISHER_NAME '
+          + 'so app-update.yml records publisherName for electron-updater signature verification.',
+      };
+    }
     return {
       ok: true,
       mode: 'azure-trusted-signing',

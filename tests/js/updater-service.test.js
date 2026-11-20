@@ -102,6 +102,18 @@ test('resolveUpdateMode detects dev, win32, darwin, Linux AppImage, pacman, deb,
     { mode: 'in-app', manualPackageKind: null },
   );
   assert.deepEqual(
+    resolveUpdateMode({ isPackaged: true, platform: 'linux', env: { APPIMAGE: '1' }, osReleaseText: 'ID=arch\n' }),
+    { mode: 'manual-package', manualPackageKind: 'pacman' },
+  );
+  assert.deepEqual(
+    resolveUpdateMode({ isPackaged: true, platform: 'linux', env: { APPIMAGE: './AvaNevis.AppImage' }, osReleaseText: 'ID=ubuntu\n' }),
+    { mode: 'manual-package', manualPackageKind: 'deb' },
+  );
+  assert.deepEqual(
+    resolveUpdateMode({ isPackaged: true, platform: 'linux', env: { APPIMAGE: '/tmp/AvaNevis.AppImage\0evil' }, osReleaseText: 'ID=steamos\n' }),
+    { mode: 'manual-package', manualPackageKind: 'appimage' },
+  );
+  assert.deepEqual(
     resolveUpdateMode({ isPackaged: true, platform: 'linux', env: {}, osReleaseText: 'ID=cachyos\nID_LIKE=arch\n' }),
     { mode: 'manual-package', manualPackageKind: 'pacman' },
   );
@@ -493,4 +505,239 @@ test('sanitizeUpdaterError classifies network, verification, disk, and redacts U
   const redacted = sanitizeUpdaterError(new Error('Failed fetching https://secret.example/token=abc'));
   assert.equal(redacted.code, 'UPDATE_ERROR');
   assert.equal(redacted.message.includes('secret.example'), false);
+});
+
+test('initInAppUpdater enforces privacy contract by disabling .updaterId and stripping x-user-staging-id headers', async () => {
+  const userDataPath = makeTempUserData();
+  const legacyIdPath = path.join(userDataPath, '.updaterId');
+  fs.writeFileSync(legacyIdPath, '11111111-2222-5333-8444-555555555555', 'utf8');
+
+  const fakeUpdater = createFakeAutoUpdater();
+  fakeUpdater.requestHeaders = {
+    'x-user-staging-id': 'leaked-id',
+    'X-Custom-Header': 'kept',
+  };
+
+  const service = createUpdaterService({
+    app: { isPackaged: true, getVersion: () => '3.0.0' },
+    platform: 'win32',
+    userDataPath,
+    autoUpdater: fakeUpdater,
+    CancellationToken: FakeCancellationToken,
+  });
+
+  assert.equal(fs.existsSync(legacyIdPath), false, 'legacy .updaterId file must be removed');
+  assert.equal(fakeUpdater.disableWebInstaller, true);
+  assert.equal(fakeUpdater.forceDevUpdateConfig, false);
+  assert.equal(fakeUpdater.fullChangelog, false);
+  assert.equal(fakeUpdater.isUserWithinRollout(), true);
+  assert.equal(await fakeUpdater.getOrCreateStagingUserId(), null);
+  assert.equal(await fakeUpdater.stagingUserIdPromise.value, null);
+
+  const computedHeaders = fakeUpdater.computeFinalHeaders({
+    'x-user-staging-id': 'staging-uuid',
+    'X-User-Staging-Id': 'staging-uuid-2',
+    Accept: 'application/json',
+  });
+  assert.deepEqual(computedHeaders, {
+    Accept: 'application/json',
+    'X-Custom-Header': 'kept',
+  });
+
+  service.dispose();
+});
+
+test('setAutoDownloadUpdates(true) starts download immediately when an update is already available', async () => {
+  const userDataPath = makeTempUserData();
+  const fakeUpdater = createFakeAutoUpdater();
+  const service = createUpdaterService({
+    app: { isPackaged: true, getVersion: () => '3.0.0' },
+    platform: 'win32',
+    userDataPath,
+    autoUpdater: fakeUpdater,
+    CancellationToken: FakeCancellationToken,
+  });
+
+  fakeUpdater.emit('update-available', { version: '3.1.0' });
+  assert.equal(service.getState().status, 'available');
+  assert.equal(fakeUpdater.downloadCalls.length, 0);
+
+  const res = await service.setAutoDownloadUpdates(true);
+  assert.equal(res.ok, true);
+  assert.equal(res.autoDownload, true);
+  assert.equal(res.state.status, 'downloading');
+  assert.equal(fakeUpdater.downloadCalls.length, 1);
+
+  service.dispose();
+});
+
+test('cancel-then-redownload generation race and late error events never clobber active download or ready-to-install', async () => {
+  const userDataPath = makeTempUserData();
+  const fakeUpdater = createFakeAutoUpdater();
+  const downloadRejectors = [];
+  fakeUpdater.downloadUpdate = (token) => {
+    fakeUpdater.downloadCalls.push(token);
+    return new Promise((_resolve, reject) => {
+      downloadRejectors.push(reject);
+    });
+  };
+
+  const service = createUpdaterService({
+    app: { isPackaged: true, getVersion: () => '3.0.0' },
+    platform: 'win32',
+    userDataPath,
+    autoUpdater: fakeUpdater,
+    CancellationToken: FakeCancellationToken,
+  });
+
+  fakeUpdater.emit('update-available', { version: '3.1.0' });
+
+  // Start Download #1, cancel it, then immediately start Download #2 before #1 rejects.
+  await service.downloadUpdate();
+  await service.cancelUpdateDownload();
+  assert.equal(service.getState().status, 'available');
+
+  await service.downloadUpdate();
+  assert.equal(service.getState().status, 'downloading');
+  assert.equal(fakeUpdater.downloadCalls.length, 2);
+
+  // Late rejection of Download #1 must NOT revert Download #2 back to 'available'.
+  downloadRejectors[0](Object.assign(new Error('Cancelled'), { name: 'CancellationError' }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(service.getState().status, 'downloading');
+
+  // Complete Download #2 -> ready-to-install.
+  fakeUpdater.emit('update-downloaded', { version: '3.1.0' });
+  assert.equal(service.getState().status, 'ready-to-install');
+
+  // Late error event after update-downloaded must not overwrite ready-to-install.
+  fakeUpdater.emit('error', new Error('net::ERR_CONNECTION_RESET'));
+  assert.equal(service.getState().status, 'ready-to-install');
+
+  // Manual check while ready-to-install emits manualCheck=true so the UI can surface the popover.
+  const prevSeq = service.getState().seq;
+  const manualSnap = await service.checkForUpdates({ manual: true });
+  assert.equal(manualSnap.status, 'ready-to-install');
+  assert.equal(manualSnap.manualCheck, true);
+  assert.ok(manualSnap.seq > prevSeq);
+
+  service.dispose();
+});
+
+test('installUpdateNow re-verifies import save and summary metadata after drain and disarms quit on failure or post-drain block', async () => {
+  const userDataPath = makeTempUserData();
+  const fakeUpdater = createFakeAutoUpdater();
+  let audioImportActive = false;
+  let protectedSummaryWrite = false;
+  let shouldThrowInDrain = false;
+  let armedCount = 0;
+  let disarmedCount = 0;
+  let drainStep = 'none';
+
+  const service = createUpdaterService({
+    app: { isPackaged: true, getVersion: () => '3.0.0' },
+    platform: 'win32',
+    userDataPath,
+    autoUpdater: fakeUpdater,
+    CancellationToken: FakeCancellationToken,
+    hasActiveAudioImport: () => audioImportActive,
+    hasProtectedSummaryWrite: () => protectedSummaryWrite,
+    hasInFlightAiWork: () => true,
+    drainAiWorkBeforeQuit: async () => {
+      if (shouldThrowInDrain) {
+        throw new Error('Drain failed');
+      }
+      if (drainStep === 'import') {
+        audioImportActive = true;
+      } else if (drainStep === 'summary') {
+        protectedSummaryWrite = true;
+      }
+    },
+    armUpdateQuit: () => {
+      armedCount += 1;
+    },
+    disarmUpdateQuit: () => {
+      disarmedCount += 1;
+    },
+  });
+
+  fakeUpdater.emit('update-available', { version: '3.1.0' });
+  fakeUpdater.emit('update-downloaded', { version: '3.1.0' });
+
+  // 1. Audio import enters commit/save phase during drain -> blocked & disarmed.
+  drainStep = 'import';
+  let res = await service.installUpdateNow({ confirmAiInterrupt: true });
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'UPDATE_BLOCKED_IMPORT_SAVE');
+  assert.equal(service.getState().status, 'ready-to-install');
+  assert.equal(armedCount, 0);
+  assert.equal(disarmedCount, 1);
+  audioImportActive = false;
+
+  // 2. Summary enters metadata phase during drain -> blocked & disarmed.
+  drainStep = 'summary';
+  res = await service.installUpdateNow({ confirmAiInterrupt: true });
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'UPDATE_BLOCKED_SUMMARY_FINALIZING');
+  assert.equal(service.getState().status, 'ready-to-install');
+  assert.equal(armedCount, 0);
+  assert.equal(disarmedCount, 2);
+  protectedSummaryWrite = false;
+
+  // 3. Drain throws -> disarmed and reverted to ready-to-install.
+  drainStep = 'none';
+  shouldThrowInDrain = true;
+  res = await service.installUpdateNow({ confirmAiInterrupt: true });
+  assert.equal(res.ok, false);
+  assert.equal(service.getState().status, 'ready-to-install');
+  assert.equal(disarmedCount, 3);
+  shouldThrowInDrain = false;
+
+  // 4. Async error emitted after quitAndInstall is armed -> disarms wedged quit state.
+  res = await service.installUpdateNow({ confirmAiInterrupt: true });
+  assert.equal(res.ok, true);
+  assert.equal(armedCount, 1);
+  fakeUpdater.emit('error', new Error('Squirrel install error'));
+  assert.equal(disarmedCount, 4);
+  assert.equal(service.getState().status, 'error');
+
+  service.dispose();
+});
+
+test('IPC handlers validate argument types for set-auto-download-updates and install-update-now', async () => {
+  const userDataPath = makeTempUserData();
+  const service = createUpdaterService({
+    app: { isPackaged: false, getVersion: () => '3.0.0' },
+    userDataPath,
+    checkManualRelease: async () => null,
+  });
+
+  const handlers = {};
+  service.registerIpcHandlers(
+    { handle(ch, fn) { handlers[ch] = fn; } },
+    () => {},
+  );
+
+  await assert.rejects(
+    () => handlers['set-auto-download-updates']({}, 'false'),
+    /must be a boolean/i,
+  );
+  await assert.rejects(
+    () => handlers['set-auto-download-updates']({}, { enabled: false }),
+    /must be a boolean/i,
+  );
+  await assert.rejects(
+    () => handlers['install-update-now']({}, null),
+    /must be a plain object/i,
+  );
+  await assert.rejects(
+    () => handlers['install-update-now']({}, []),
+    /must be a plain object/i,
+  );
+  await assert.rejects(
+    () => handlers['install-update-now']({}, { confirmAiInterrupt: 'false' }),
+    /confirmAiInterrupt must be a boolean/i,
+  );
+
+  service.dispose();
 });

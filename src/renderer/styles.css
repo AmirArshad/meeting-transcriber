@@ -3873,6 +3873,7 @@ footer {
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4) var(--space-2);
   border-bottom: 1px solid var(--hairline-soft);
+  flex-shrink: 0;
 }
 
 .update-popover-heading {
@@ -3975,6 +3976,7 @@ footer {
   font-weight: 600;
   color: var(--text-primary);
   line-height: 1.3;
+  outline: none;
 }
 
 .update-popover-close {
@@ -4000,9 +4002,18 @@ footer {
   border-color: var(--hairline);
 }
 
+.update-popover-close:focus-visible {
+  outline: none;
+  color: var(--text-primary);
+  background: var(--surface-2);
+  border-color: var(--accent-line);
+  box-shadow: var(--focus-ring);
+}
+
 .update-popover-body {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   overflow-y: auto;
@@ -4010,7 +4021,7 @@ footer {
 }
 
 .update-release-notes {
-  max-height: 210px;
+  max-height: min(210px, 38vh);
   overflow-y: auto;
   padding: var(--space-2) var(--space-3);
   background: var(--surface-2);
@@ -4212,6 +4223,7 @@ footer {
   padding: var(--space-2) var(--space-4) var(--space-3);
   border-top: 1px solid var(--hairline-soft);
   background: var(--surface-1);
+  flex-shrink: 0;
 }
 
 .update-popover-footer-primary {
@@ -4254,6 +4266,13 @@ footer {
 .update-link-btn:hover {
   color: var(--text-primary);
   background: var(--surface-2);
+}
+
+.update-link-btn:focus-visible {
+  outline: none;
+  color: var(--text-primary);
+  background: var(--surface-2);
+  box-shadow: var(--focus-ring);
 }
 
 .update-link-btn[hidden] {

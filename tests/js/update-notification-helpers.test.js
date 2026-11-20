@@ -56,6 +56,12 @@ test('isTrustedUpdateDownloadUrl accepts only trusted GitHub repo release links'
   assert.equal(isTrustedUpdateDownloadUrl('https://example.com/AvaNevis-Setup-3.0.0.exe'), false);
   assert.equal(isTrustedUpdateDownloadUrl('https://github.com/electron/electron/releases/latest'), false);
   assert.equal(isTrustedUpdateDownloadUrl('https://github.com/AmirArshad/meeting-transcriber-malicious/releases/latest'), false);
+  assert.equal(isTrustedUpdateDownloadUrl('https://github.com.evil.tld/AmirArshad/meeting-transcriber/releases/latest'), false);
+  assert.equal(isTrustedUpdateDownloadUrl('https://github.com/AmirArshad/meeting-transcriber/..'), false);
+  assert.equal(isTrustedUpdateDownloadUrl('https://github.com/AmirArshad/meeting-transcriber/..%2fevil/repo'), false);
+  assert.equal(isTrustedUpdateDownloadUrl('https://github.com/AmirArshad/meeting-transcriber/%2e%2e%2fevil/repo'), false);
+  assert.equal(isTrustedUpdateDownloadUrl('https://evil:pass@github.com/AmirArshad/meeting-transcriber/releases/latest'), false);
+  assert.equal(isTrustedUpdateDownloadUrl('https://github.com:8443/AmirArshad/meeting-transcriber/releases/latest'), false);
   assert.equal(isTrustedUpdateDownloadUrl('mailto:updates@example.com'), false);
   assert.equal(isTrustedUpdateDownloadUrl('/local/installer.exe'), false);
 });
@@ -239,6 +245,17 @@ test('shouldAutoSurfaceUpdatePopover never pops during recording or background c
   assert.equal(shouldAutoSurfaceUpdatePopover(checking, availableManual, { isRecordingActive: true }), false);
   assert.equal(shouldAutoSurfaceUpdatePopover(checking, availableBg, { isRecordingActive: false }), false);
   assert.equal(shouldAutoSurfaceUpdatePopover(availableManual, availableManual, { isRecordingActive: false }), false);
+
+  // Manual check while already ready-to-install or downloading in the background surfaces once.
+  const readyBg = makeBaseState({ seq: 3, status: 'ready-to-install', availableVersion: '3.0.0', manualCheck: false });
+  const readyManual = makeBaseState({ seq: 4, status: 'ready-to-install', availableVersion: '3.0.0', manualCheck: true });
+  assert.equal(shouldAutoSurfaceUpdatePopover(readyBg, readyManual, { isRecordingActive: false }), true);
+  assert.equal(shouldAutoSurfaceUpdatePopover(readyManual, readyManual, { isRecordingActive: false }), false);
+
+  const downloadingBg = makeBaseState({ seq: 5, status: 'downloading', availableVersion: '3.0.0', manualCheck: false });
+  const downloadingManual = makeBaseState({ seq: 6, status: 'downloading', availableVersion: '3.0.0', manualCheck: true });
+  assert.equal(shouldAutoSurfaceUpdatePopover(downloadingBg, downloadingManual, { isRecordingActive: false }), true);
+  assert.equal(shouldAutoSurfaceUpdatePopover(downloadingManual, downloadingManual, { isRecordingActive: false }), false);
 });
 
 test('renderSafeReleaseNotes uses strict sanitizer and fails closed to plain text when absent', () => {

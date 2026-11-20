@@ -10,9 +10,11 @@
  */
 
 const fs = require('fs');
+const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const yaml = require('js-yaml');
 const {
   inspectPackagedSpeakrsLayout,
   SPEAKRS_VALIDATE_WAV_NAME,
@@ -698,6 +700,31 @@ function verifyPacmanArchivePayload(
   }
 }
 
+function assertLinuxUpdateMetadata(distDir, appImagePath) {
+  const latestLinuxYmlPath = path.join(distDir, 'latest-linux.yml');
+  if (!fs.existsSync(latestLinuxYmlPath) || fs.statSync(latestLinuxYmlPath).size <= 0) {
+    fail(`Missing or empty Linux auto-update metadata: ${latestLinuxYmlPath}`);
+  }
+  const parsed = yaml.load(fs.readFileSync(latestLinuxYmlPath, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.files)) {
+    fail(`Invalid latest-linux.yml structure: ${latestLinuxYmlPath}`);
+  }
+  const appImageName = path.basename(appImagePath);
+  const entry = parsed.files.find((item) => item && path.basename(String(item.url || '')) === appImageName);
+  if (!entry) {
+    fail(`latest-linux.yml is missing files entry for ${appImageName}`);
+  }
+  const actualSha512 = crypto.createHash('sha512').update(fs.readFileSync(appImagePath)).digest('base64');
+  const actualSize = fs.statSync(appImagePath).size;
+  if (entry.sha512 !== actualSha512) {
+    fail(`latest-linux.yml sha512 mismatch for ${appImageName}: expected ${actualSha512}, got ${entry.sha512}`);
+  }
+  if (Number(entry.size) !== actualSize) {
+    fail(`latest-linux.yml size mismatch for ${appImageName}: expected ${actualSize}, got ${entry.size}`);
+  }
+  return latestLinuxYmlPath;
+}
+
 function findLinuxArtifact(distDir, suffix) {
   if (!fs.existsSync(distDir)) {
     return null;
@@ -798,6 +825,7 @@ function main(argv = process.argv.slice(2)) {
     } finally {
       fs.rmSync(extractDir, { recursive: true, force: true });
     }
+    assertLinuxUpdateMetadata(distDir, appImage);
   }
 
   if (wantPacman) {
@@ -836,6 +864,7 @@ module.exports = {
   assertDebControl,
   assertLinuxPackagedLayout,
   assertLinuxPackagedRuntimeIsolation,
+  assertLinuxUpdateMetadata,
   assertNotForbiddenPackagedPath,
   assertPacmanPkginfo,
   extractAppImage,
