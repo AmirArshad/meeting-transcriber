@@ -25,3 +25,8 @@ retained. If the metadata cannot be trusted, recovery preserves both the files
 and markers. Abandoned staging cleanup must leave these root markers alone. A failed
 cleanup leaves its marker for a later reconciliation; it must not expose a partial
 import as a scanned meeting.
+
+### Derived History Search Index & Chat Thread Persistence (`userData` only)
+
+- **Search cache (`userData/search/history-index.sqlite`):** Disposable SQLite FTS5 cache (`journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, `unicode61 remove_diacritics 2`) rebuilt atomically via temp file + `os.replace()` whenever missing, stale in schema, or unreadable (`sqlite3.DatabaseError`). `meetings.json`, `.md`, `{stem}.captions.json`, and hash-matched summary sidecars remain the sole source of truth; hard deletes remove corresponding index rows immediately on sync so deleted recordings never surface in search or Q&A.
+- **Chat threads (`userData/chat/threads.json`):** Owned by main-process `src/main/chat-thread-store.js` with serialized mutations, same-directory temp file + `fsync` + atomic rename, and corrupt-file quarantine (`threads.corrupt.<timestamp>.json`). Deleting a meeting leaves historical chat messages intact while citation clicks verify live availability and show a non-blocking toast (`"This meeting is no longer in History."`) if missing.

@@ -27,6 +27,8 @@ Not inferable from the tree, and the highest-risk surface in the repo. Renaming 
 | `transcription-service.js` | `check-model-downloaded`, `download-model`, `transcribe-audio`, `transcribe-audio-with-speakers`, `diarize-transcript`, `retry-transcription`, `finalize-recording-transcription`, `cancel-pending-transcription` |
 | `audio-import-service.js` | `select-import-audio`, `start-import-audio`, `cancel-import-audio`, `import-audio-progress` (event) |
 | `summary-service.js` | `generate-summary`, `cancel-summary-generation` |
+| `history-search-service.js` | `search-history`, `rebuild-history-index`, `get-history-index-status` |
+| `history-qa-service.js` | `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, plus `history-qa-model-state` / `history-qa-progress` events |
 | `meeting-manager-client.js` | `list-meetings`, `get-meeting`, `delete-meeting`, `scan-recordings`, `add-meeting`, `update-meeting`, `update-meeting-ai` |
 | `device-ipc.js` | `validate-devices`, `check-disk-space`, `check-audio-output`, `get-audio-devices`, `warm-up-audio-system`, `get-macos-permission-status` |
 | `file-export-ipc.js` | `save-transcript-file`, `save-speaker-segments-file`, `save-transcript-as`, `open-legal-notices` |
@@ -54,6 +56,10 @@ legacy/unconfirmed output. Channel names and preload export shape are unchanged.
 ### Transcript & subtitle export
 
 `save-transcript-as` accepts `{ format, suggestedName, title?, content?, meetingId? }`, where `format` is one of `md`, `txt`, `srt`, or `vtt`, and sanitizes the dialog filename with `buildSafeSaveDialogDefaultPath` (`WINDOWS_RESERVED_FILE_BASENAME`, preserving dotted directories via `path.parse` / `path.win32.basename`). For `srt` and `vtt`, main verifies `meetingId`, resolves the current on-disk Markdown SHA-256 against the `{stem}.captions.json` `sourceTranscriptHash` (`CAPTIONS_MISSING` / `CAPTIONS_STALE` when absent or edited without fabricating timings), and serializes cues via the shared `src/renderer/subtitle-export-helpers.js` UMD module. The separate Summary Save As flow remains Markdown-only.
+
+### Local History search & threaded Chat
+
+`history-search-service.js` owns the disposable SQLite FTS5 cache (`userData/search/history-index.sqlite`) and exposes `search-history` (debounced renderer search returning BM25-ranked meetings with highlighted `snippetParts` and `[MM:SS]` timestamp jump coordinates), `rebuild-history-index`, and `get-history-index-status`. `history-qa-service.js` owns `userData/chat/threads.json` (`chat-thread-store.js`) and exposes `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, plus renderer push listeners `onHistoryQaModelState` (`history-qa-model-state`) and `onHistoryQaProgress` (`history-qa-progress`). The renderer renders Chat responses exclusively via bundled offline `marked` + strict-allowlist `DOMPurify` (`src/renderer/markdown-render-helpers.js`) and never sends bearer tokens, ports, or arbitrary file paths over IPC.
 
 ### Facades whose export shape is pinned
 

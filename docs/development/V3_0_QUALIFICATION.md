@@ -27,19 +27,26 @@ Host environment: CachyOS Linux x86_64, Node `v26.13.1`, npm `11.20.0`, `.venv` 
 - **Task 2.2:** Verified Linux FFmpeg import (`audio-import-service.test.js` `6/6` passed), SIGKILL/temp recovery (`test_capture_recovery.py` + `test_recorder_temp_and_scan_recovery.py` `57/57` passed), `npm audit` & `npm audit --omit=dev` (`0 vulnerabilities`), and `npm run legal:release-assets` (`ffmpeg-8.1.2.tar.xz` verified and staged).
 - **Task 2.3 (`1a78c8c` + `84f4a68`):** Implemented repo-side Windows Authenticode & macOS Developer ID signing/notarization wiring (`build/after-pack.js`, `build/mac-sign.js`, `scripts/check-win-signing-config.js`, `scripts/check-mac-signing-identity.js`, `scripts/notarize-macos-dmg.sh`, `scripts/verify-macos-*.sh`, `scripts/verify-windows-installer.ps1`, `package.json`, `.github/workflows/build-release.yml`, `tests/js/signing-packaging.test.js`, plus `tests/js/renderer-helper-characterization.test.js` helper registration fix); native signed artifact builds & `AVANEVIS_REQUIRE_SIGNED_RELEASE=1` verification remain open pending signing credentials and Windows/macOS runs.
 
-### Final CachyOS Release-Gate Evidence (HEAD `84f4a68` + final qualification record)
-- `npm run test:all` -> **exit 0**: `test:syntax` checked 73 files under `src/`, `test:js` **1181 passed / 0 failed / 1 skipped** (platform skip), `test:python` **889 passed / 8 skipped** (39.86s), `test:python-syntax` checked `backend/` cleanly.
-- `npm audit --omit=dev` -> `found 0 vulnerabilities`; `npm audit` -> `found 0 vulnerabilities`.
+### Phase 4 — Local History Search & Grounded Threaded Chat
+- **Design (`5827ac5`):** Authored `docs/superpowers/plans/2026-11-20-v3.0-chat-design.md` locking down the left-rail `Chat` workspace, SQLite FTS5 + BM25 search schema, lazy loopback `llama-server` + `llama-cli` fallback lifecycle, manual & automatic VRAM/unified-memory unloads, and fail-closed citation verification.
+- **Task 4.1 (`23a9aaf`):** Added local SQLite FTS5 index (`backend/search/history_index.py`, `backend/search/cli.py`), main-process `src/main/history-search-service.js`, pure `src/renderer/history-search-helpers.js`, debounced History full-text search with safe `<mark>` snippets, clickable `[MM:SS]` transcript buttons, and timestamp deep-link jump (`openMeetingAtTimestamp`).
+- **Task 4.2 (`bbeba81` + `a9fb129`):** Added grounded Q&A backend (`backend/history_qa/{retrieval.py,citation_verifier.py,qa_runner.py}`), atomic thread store (`src/main/chat-thread-store.js`), lazy loopback `llama-server` lifecycle with `LLAMA_API_KEY` env auth, 0-hit preflight (zero model load on zero retrieval hits), 10-minute idle auto-unload, manual/competing-GPU/add-on-mutation/quit unloads, and `llama-cli` fallback (`src/main/history-qa-service.js`).
+- **Task 4.3 (`36f243d`):** Added left-rail `Chat` module (`Ctrl/Cmd+Shift+3`), collapsible recency-grouped thread sidebar, live model memory status pill + one-click **Unload**, bundled `marked@18.2.1` + `dompurify@3.4.18` strict XSS-safe Markdown rendering (`src/renderer/markdown-render-helpers.js`, verified under real Chromium strict CSP), verified inline citation pills & Sources drawer with History deep-link jump, and History **"Ask in Chat"** action.
+
+### Final CachyOS Release-Gate Evidence (HEAD `36f243d` + Phase 4 docs/qualification record)
+- `npm run test:all` -> **exit 0**: `test:syntax` checked 79 files under `src/`, `test:js` **1202 tests (`1201 passed, 0 failed, 1 skipped`)** (platform skip), `test:python` **898 passed / 8 skipped** (40.72s), `test:python-syntax` checked `backend/` cleanly.
+- `npm audit --omit=dev` -> `found 0 vulnerabilities`; `npm audit` -> `found 0 vulnerabilities` (including runtime dependencies `marked@18.2.1` and `dompurify@3.4.18`).
 - `.venv/bin/python scripts/check-build-requirements-closure.py linux` -> `ok requirements-linux-build.txt`.
-- `npm run legal:release-assets` -> **exit 0** (`ffmpeg-8.1.2.tar.xz` SHA-256 verified, 68 direct Python pins).
-- `npm run build:linux` & `npm run verify:linux:packaged -- --unpacked --appimage --pacman --deb` -> **exit 0** (packaged Astral CPython `3.11.18`, FFmpeg `n8.1.2`, Speakrs `0.7.0` CUDA):
-  - `dist/AvaNevis-Setup-2.12.0.AppImage` (`360M`): `384aee88595b11935ce474e30c518eeec9f18ec64d41e73e9fa291ef87063d7c`
-  - `dist/AvaNevis-Setup-2.12.0.pkg.tar.zst` (`330M`): `dd94d6ae5795d6d797c97c054dae51055c87543e9e4936395c91c8d14b398b4d`
-  - `dist/AvaNevis-Setup-2.12.0.deb` (`271M`): `4838896c7d29ae9b7801290ecee83b1220aa6ea0699566b23acd37379f9853de`
+- `npm run legal:release-assets` -> **exit 0** (`ffmpeg-8.1.2.tar.xz` SHA-256 `464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c` verified).
+- `npm run build:linux` & `npm run verify:linux:packaged -- --unpacked --appimage --pacman --deb` -> **exit 0** (packaged Astral CPython `3.11.18`, FFmpeg `n8.1.2`, Speakrs `0.7.0` CUDA; `app.asar` confirmed to bundle `marked.umd.js`, `purify.min.js`, `history-qa-service.js`, and `chat-helpers.js`):
+  - `dist/AvaNevis-Setup-2.12.0.AppImage` (`360M`): `afdc9816697b9458bb080b5c996f88f3bfa048b4da8240e2928a72706d914e68`
+  - `dist/AvaNevis-Setup-2.12.0.pkg.tar.zst` (`330M`): `68a24d207096b374b049aea2174fc6671432377e8535142a3b2143be307a3f77`
+  - `dist/AvaNevis-Setup-2.12.0.deb` (`272M`): `ad0426ed6ba676b15fa962b92f07ea0f87a89ee8e92ec5223792567483580aff5`
 - Packaged binary smokes on `dist/linux-unpacked/resources`:
   - `AVANEVIS_TEST_FFMPEG="$PWD/build/resources/ffmpeg/ffmpeg" node --test tests/js/audio-import-service.test.js` -> **6 passed / 0 failed**.
   - `HF_HUB_OFFLINE=1` packaged CPython `3.11.18` `faster_whisper_transcriber` (`small`, CPU `int8`, `tests/fixtures/speakrs-two-speaker-16k.wav`) -> **1** merged Markdown segment vs **4** segment cues (`sourceTranscriptHash` matched `sha256` cleanly, `serializeCuesToSrt` / `serializeCuesToVtt` -> valid `.srt` and `WEBVTT`).
   - `tests/python/test_recorder_temp_and_scan_recovery.py` -> **16 passed**.
+  - Isolated-userData Phase 4 real local Qwen `llama-server` smoke using packaged CPython `3.11.18` (`dist/linux-unpacked/resources/python/bin/python3`) and installed `cuda-12.8/llama-server` + `Qwen3.5-9B-Q4_K_M.gguf` (read-only): verified FTS5 search (`startSec=133`, hard delete -> 0 hits), 0-hit preflight returned `insufficient_evidence` with `0` `llama-server` spawns (`modelState=unloaded`), grounded query lazily booted `llama-server` on `127.0.0.1` and returned `status: answered` with verified `[E1]` citation (`meetingId=m1`, `startSec=133`), and manual `unloadModel('manual')` terminated the spawned PID cleanly (`modelState=unloaded`).
 - `python3 scripts/agents/validate_setup.py` -> **exit 0** (16 canonical skills validated).
 
 ## Open Windows & macOS Qualification Gates (Cannot Run on Linux)
