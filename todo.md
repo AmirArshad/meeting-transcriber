@@ -7,11 +7,16 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 
 ### v3.0 release plan · 2026-11-20
 
-Phased implementation plan on `release/3.0`: [v3.0.0 release plan](docs/superpowers/plans/2026-11-20-v3.0-release-plan.md).
-Covers all mandatory post-v2.12 gates below plus two v3.0 feature tracks:
+Phased implementation plan on `release/3.0`: [v3.0.0 release plan](docs/superpowers/plans/2026-11-20-v3.0-release-plan.md) · [v3.0 qualification record](docs/development/V3_0_QUALIFICATION.md).
+Progress across mandatory post-v2.12 gates and v3.0 feature tracks:
 
-- [ ] **Modern in-app auto-updater:** Signed differential in-app download, integrity verification, release notes/progress UX, and recording/AI-safe **Restart to Update** on Windows (NSIS), macOS (notarized `.zip` via Squirrel.Mac), and Linux AppImage, with a clean manual-package update flow on Linux `pacman`/`.deb`.
-- [ ] **Local History search & Q&A with timestamp citations:** Disposable local SQLite FTS5 full-text search index across transcripts/summaries (zero AI add-on required) with instant timestamp jump, plus local grounded Q&A via the installed `llama.cpp` + Qwen summary runtime with verified clickable citations that seek playback to the exact timestamp.
+- [x] **Task 1.1 — History metadata lock contention (`75a7c28`):** Slow recorder-temp cleanup & filesystem/duration scans run outside `meetings.json.lock` under dedicated `scan_recovery.lock`; atomic Phase A/C reconciliation and multi-process contention tests pass on Linux.
+- [x] **Task 1.2 — Caption-scale timing sidecars + SRT & WebVTT export (`534007e`):** Schema-v1 `{stem}.captions.json` bound by `sourceTranscriptHash` across faster-whisper, MLX Whisper, Parakeet, and guided transcription; pure SRT/WebVTT/TXT serializers, hash-verified export IPC, and format-picker UI (offline Whisper fixture -> `.captions.json` -> `.srt`/`.vtt` + `CAPTIONS_STALE` + delete verified on CachyOS Linux).
+- [x] **Task 2.1 — Bundled CPython `3.11.18+20261110` on Windows & macOS (`333ceef`):** Live SHA-256s verified (`5ca7e23b...` Windows, `73f1ed14...` macOS); `build/prepare-resources.js` ported to traversal-guarded `.tar.gz` extraction + isolated Windows `python311._pth`; **needs Windows & macOS host `prepare-build` + packaged runtime smoke**.
+- [x] **Task 2.2 — Upstream holds & audit checks (2026-11-20):** Live upstream checks confirm Electron 46 stable is not yet published (latest stable `45.4.1`, `46.0.0-alpha.12` latest alpha -> hold on qualified `46.0.0-alpha.11`), FFmpeg matched > `8.1.2` is not yet available across all 3 OSes (`shaka-project` tops at `n8.1.2-2` which is still `8.1.2` -> hold on `8.1.2`), and both `npm audit --omit=dev` and `npm audit` report `0 vulnerabilities` with `picomatch@4.0.7`.
+- [ ] **Task 2.3 — Windows Authenticode & macOS Developer ID signing/notarization wiring:** In progress on `release/3.0` (needs signing secrets & native Windows/macOS runs).
+- [ ] **Modern in-app auto-updater (Phase 3):** Signed differential in-app download, integrity verification, release notes/progress UX, and recording/AI-safe **Restart to Update** on Windows (NSIS), macOS (notarized `.zip` via Squirrel.Mac), and Linux AppImage, with a clean manual-package update flow on Linux `pacman`/`.deb`.
+- [ ] **Local History search & Q&A with timestamp citations (Phase 4):** Disposable local SQLite FTS5 full-text search index across transcripts/summaries (zero AI add-on required) with instant timestamp jump, plus local grounded Q&A via the installed `llama.cpp` + Qwen summary runtime with verified clickable citations that seek playback to the exact timestamp.
 
 ### Mandatory gates before the next release
 
@@ -20,12 +25,12 @@ release is published. The v2.12 acceptance of coverage limits does not waive
 these gates for a later release.
 
 - [ ] Upgrade and qualify bundled CPython to 3.11.18 or newer on Windows and
-  macOS. Port the Windows isolated runtime layout and verify packaged startup,
-  transcription and add-on closures; qualify macOS startup, native dependencies
-  and Metal. Linux already ships 3.11.18; retain platform qualification.
-- [ ] Fix the History metadata lock contention during long recorder recovery
+  macOS. _(Repo port to Astral `3.11.18+20261110` implemented in `333ceef`;
+  Windows & macOS host `prepare-build`, startup, transcription, Metal, and
+  add-on closure verification pending on target hosts.)_
+- [x] Fix the History metadata lock contention during long recorder recovery
   scans, preserving recovery and atomicity guarantees. Add a regression for a
-  concurrent metadata operation during slow recovery.
+  concurrent metadata operation during slow recovery. _(Committed in `75a7c28`.)_
 - [ ] Complete Windows physical-device recording and end-to-end add-on
   setup/repair acceptance, including gated Pyannote with an authorized test
   token, and qualify Windows 10 as well as Windows 11.
@@ -33,16 +38,25 @@ these gates for a later release.
   permission-prompt variants.
 - [ ] Move from the Electron 46 prerelease to a suitable stable Electron build
   and qualify all platforms. Recheck Linux keyring provider mapping and fixed-key
-  rejection, and token migration on Linux, Windows and macOS.
+  rejection, and token migration on Linux, Windows and macOS. _(Hold on
+  `46.0.0-alpha.11`: npm still has no stable 46.x release as of 2026-11-20;
+  recheck before tagging v3.0.0.)_
 - [ ] Qualify the Linux managed CUDA repair/uninstall escape paths and the
   separate transcription, Speakrs and summary admission gates. Preserve the
   intentional platform-specific recording behavior when desktop audio is lost.
 - [ ] Update and qualify FFmpeg on all three platforms with pinned binaries and
   corresponding source; verify import decoding, recording finalization and recovery.
-- [ ] Preserve caption-scale timing tied to committed transcripts, provide a
+  _(Hold on matched `8.1.2`: Shaka binary provider tops at `n8.1.2-2` = `8.1.2`
+  as of 2026-11-20; Linux `8.1.2` legal staging and decode/import/recovery
+  tests pass.)_
+- [x] Preserve caption-scale timing tied to committed transcripts, provide a
   path for older meetings, and ship accurate SRT and WebVTT exports together.
-- [ ] Resolve the development packaging graph's picomatch audit finding with a
+  _(Committed in `534007e` and verified with offline fixture on CachyOS; repeat
+  manual spot-checks on Windows and macOS hosts.)_
+- [x] Resolve the development packaging graph's picomatch audit finding with a
   compatible qualified dependency update and verify production and full audits.
+  _(Resolved cleanly: `npm audit --omit=dev` and `npm audit` both report `0
+  vulnerabilities` with `picomatch@4.0.7` as of 2026-11-20.)_
 - [ ] Sign the Windows installer and sign and notarize the macOS build; verify
   the resulting distribution artifacts.
 - [ ] Test Speakrs multi-speaker separation with representative speech on each
