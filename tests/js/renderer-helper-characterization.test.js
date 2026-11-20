@@ -60,6 +60,7 @@ const EXPECTED_RENDERER_GLOBALS = [
   'canvasHelpers',
   'keyboardShortcutHelpers',
   'transcriptionEngineHelpers',
+  'subtitleExportHelpers',
   // v2.10 Slice A shared policy (src/transcription-policy.js, UMD) loads
   // before app.js so Record UI + main use one curated source of truth.
   'transcriptionPolicy',
@@ -82,6 +83,7 @@ const EXPECTED_SCRIPT_ORDER = [
   'canvas-helpers.js',
   'keyboard-shortcut-helpers.js',
   'transcription-engine-helpers.js',
+  'subtitle-export-helpers.js',
   '../transcription-policy.js',
   'app.js',
 ];
