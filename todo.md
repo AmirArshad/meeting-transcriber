@@ -8,6 +8,20 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 ### v3.0 release plan · 2026-11-20
 
 Phased implementation plan on `release/3.0`: [v3.0.0 release plan](docs/superpowers/plans/2026-11-20-v3.0-release-plan.md) · [v3.0 qualification record](docs/development/V3_0_QUALIFICATION.md).
+
+**Release direction, 2026-11-20:** v3.0 is still in development. The current
+plan and this list do not define its complete feature scope: more features and
+polish are planned before shipping. The user intends to merge the current
+development branch and continue that work. Windows signing certificates and
+Apple Developer ID credentials are not expected for a while; their absence is
+not a blocker to development, ordinary testing, or merging this branch. Use
+unsigned/ad-hoc builds where appropriate and describe their limits accurately.
+Obtain credentials and complete Windows signing, macOS signing/notarization,
+signed-artifact verification and the dependent live updater acceptance as the
+final release stage, after the additional v3.0 work and before publishing.
+Other outstanding release gates remain open and should be tested when feasible;
+repeat qualification for inputs changed by later work.
+
 Progress across mandatory post-v2.12 gates and v3.0 feature tracks:
 
 - [x] **Task 1.1 — History metadata lock contention (`75a7c28`):** Slow recorder-temp cleanup & filesystem/duration scans run outside `meetings.json.lock` under dedicated `scan_recovery.lock`; atomic Phase A/C reconciliation and multi-process contention tests pass on Linux.
@@ -61,8 +75,10 @@ these gates for a later release.
   compatible qualified dependency update and verify production and full audits.
   _(Resolved cleanly: `npm audit --omit=dev` and `npm audit` both report `0
   vulnerabilities` with `picomatch@4.0.7` as of 2026-11-20.)_
-- [ ] Sign the Windows installer and sign and notarize the macOS build; verify
-  the resulting distribution artifacts. _(Repo wiring in `build/after-pack.js`,
+- [ ] **Final v3.0 release stage:** obtain the Windows and Apple credentials,
+  sign the Windows installer, sign and notarize the macOS build, verify the
+  resulting distribution artifacts, and complete the dependent signed live
+  updater acceptance before publishing. _(Repo wiring in `build/after-pack.js`,
   `build/mac-sign.js`, `scripts/check-*-signing-*.js`,
   `scripts/notarize-macos-dmg.sh`, `scripts/verify-*.{ps1,sh}`, and
   `build-release.yml` complete on `release/3.0`; pending CI secrets & native

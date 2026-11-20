@@ -3,6 +3,16 @@
 Working branch: `release/3.0`  
 Last updated: 2026-11-20 (CachyOS and partial macOS native qualification; Windows and remaining macOS gates open)
 
+**Release timing:** The user intends to merge the current development branch
+and add more features and polish before v3.0 ships; the current plan and this
+record are not a complete feature scope. Windows signing credentials and Apple
+Developer ID are deferred until the final release stage. Continue development,
+merging, and feasible unsigned/ad-hoc qualification without them, recording
+artifact and test limits. Before publication, obtain the credentials, sign the
+Windows artifacts, sign and notarize macOS artifacts, verify the signed outputs,
+and perform the dependent live updater acceptance. Other open release gates
+remain in force, and later code or environment changes may require requalification.
+
 ## Dependency & Upstream Decisions (Checked 2026-11-20)
 
 | Surface | Decision & live upstream check | SHA-256 / package evidence |
