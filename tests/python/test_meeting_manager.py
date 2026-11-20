@@ -488,6 +488,36 @@ def test_scan_and_sync_recordings_recovers_audio_only_recordings_with_pending_st
     assert 'Recording Awaiting Transcription' in meeting['transcript']
 
 
+def test_scan_preserves_duration_from_matching_recovery_handoff(tmp_path):
+    from backend.audio.capture_recovery import write_recovery_handoff
+
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings))
+    audio = recordings / 'recording_2025-01-01T12-00-00.wav'
+    import shutil
+    shutil.copyfile(Path(__file__).resolve().parents[1] / 'fixtures' / 'speakrs-two-speaker-16k.wav', audio)
+    write_recovery_handoff(recordings, audio.stem, str(audio), 14.22, {'attemptId': 'synthetic'})
+
+    assert manager.scan_and_sync_recordings()['added'] == 1
+    meeting = manager.get_meeting('20250101_120000')
+    assert meeting['durationSeconds'] == 14.22
+    assert meeting['duration'] == '0:14'
+    assert meeting['transcriptionStatus'] == 'pending'
+
+
+def test_scan_ignores_mismatched_recovery_handoff_duration(tmp_path):
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings))
+    audio = recordings / 'recording_2025-01-01T12-00-00.wav'
+    audio.write_bytes(b'audio')
+    handoff = recordings / f'{audio.stem}.recovery-request.json'
+    handoff.write_text(json.dumps({'audioPath': str(recordings / 'other.wav'), 'duration': 99,
+                                   'transcriptionSelection': {'attemptId': 'synthetic'}}))
+
+    assert manager.scan_and_sync_recordings()['added'] == 1
+    assert manager.get_meeting('20250101_120000')['durationSeconds'] == 0.0
+
+
 def test_list_meetings_omits_inline_transcript_bodies(tmp_path):
     recordings_dir = tmp_path / 'recordings'
     manager = MeetingManager(recordings_dir=str(recordings_dir))

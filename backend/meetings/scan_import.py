@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
 import sys
@@ -26,6 +27,7 @@ class ScanCandidate:
     transcript_identity: object = None
     captions_identity: object = None
     matched_captions: Optional[Dict] = None
+    handoff_identity: object = None
 
 
 def file_identity(path: Path):
@@ -35,6 +37,25 @@ def file_identity(path: Path):
     except FileNotFoundError:
         return None
     return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def recovery_handoff_duration(audio_file: Path) -> Optional[float]:
+    """Read the durable recovery duration only for its matching audio file."""
+    handoff = audio_file.with_name(f"{audio_file.stem}.recovery-request.json")
+    if handoff.is_symlink():
+        return None
+    try:
+        payload = json.loads(handoff.read_text(encoding="utf-8"))
+        duration = payload.get("duration")
+        if (not isinstance(payload.get("transcriptionSelection"), dict)
+                or not isinstance(payload.get("audioPath"), str)
+                or Path(payload["audioPath"]).resolve(strict=False) != audio_file.resolve(strict=False)
+                or isinstance(duration, bool) or not isinstance(duration, (int, float))
+                or not math.isfinite(duration) or duration <= 0):
+            return None
+        return float(duration)
+    except (OSError, ValueError, TypeError, AttributeError, OverflowError):
+        return None
 
 
 @contextmanager

@@ -636,6 +636,8 @@ class MeetingManager:
                 try:
                     transcript_identity = meeting_scan.file_identity(transcript_file)
                     captions_identity = meeting_scan.file_identity(captions_file)
+                    handoff_file = audio_file.with_name(f"{audio_file.stem}.recovery-request.json")
+                    handoff_identity = meeting_scan.file_identity(handoff_file)
                     has_existing_transcript = transcript_file.is_file()
                     duration = 0.0
                     matched_captions = None
@@ -644,8 +646,11 @@ class MeetingManager:
                         transcript_text = self._read_transcript_text(resolved_transcript)
                         if transcript_text:
                             matched_captions = self._find_valid_sibling_captions(resolved_audio, transcript_text)
+                    else:
+                        duration = meeting_scan.recovery_handoff_duration(audio_file) or 0.0
                     if (transcript_identity != meeting_scan.file_identity(transcript_file)
-                            or captions_identity != meeting_scan.file_identity(captions_file)):
+                            or captions_identity != meeting_scan.file_identity(captions_file)
+                            or handoff_identity != meeting_scan.file_identity(handoff_file)):
                         skipped += 1
                         continue
                 except OSError:
@@ -663,6 +668,7 @@ class MeetingManager:
                         transcript_identity=transcript_identity,
                         captions_identity=captions_identity,
                         matched_captions=matched_captions,
+                        handoff_identity=handoff_identity,
                     )
                 )
 
@@ -716,7 +722,9 @@ class MeetingManager:
                             captions_file = transcript_captions.captions_sidecar_path_for_audio(resolved_audio)
                             try:
                                 if (candidate.transcript_identity != meeting_scan.file_identity(candidate.transcript_file)
-                                        or candidate.captions_identity != meeting_scan.file_identity(captions_file)):
+                                        or candidate.captions_identity != meeting_scan.file_identity(captions_file)
+                                        or candidate.handoff_identity != meeting_scan.file_identity(
+                                            candidate.audio_file.with_name(f"{candidate.audio_file.stem}.recovery-request.json"))):
                                     skipped += 1
                                     continue
                             except OSError:
@@ -746,7 +754,7 @@ class MeetingManager:
                                     f"Created pending transcript placeholder for {candidate.audio_file.name}",
                                     file=sys.stderr,
                                 )
-                                duration = 0.0
+                                duration = candidate.duration
 
                             meeting = self._build_direct_meeting_record(
                                 meeting_id=candidate.meeting_id,

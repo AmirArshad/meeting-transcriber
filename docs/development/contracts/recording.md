@@ -56,3 +56,8 @@ handoff only after the backend verifies the matching request in meeting metadata
 A lost response or failed staging/ack remains replayable; a matching completed
 attempt is acknowledged without resetting it to pending. Audio and prior outputs
 remain intact on failed recovery or transcription.
+
+When scan/import creates an audio-only meeting for a recovered capture, preserve
+the positive finite duration from its matching durable recovery handoff. Check
+the handoff identity across the unlocked scan and metadata commit; malformed,
+unmatched, or symlink handoffs must not supply a duration.
