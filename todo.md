@@ -5,6 +5,14 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 
 ## Status
 
+### v3.0 release plan · 2026-11-20
+
+Phased implementation plan on `release/3.0`: [v3.0.0 release plan](docs/superpowers/plans/2026-11-20-v3.0-release-plan.md).
+Covers all mandatory post-v2.12 gates below plus two v3.0 feature tracks:
+
+- [ ] **Modern in-app auto-updater:** Signed differential in-app download, integrity verification, release notes/progress UX, and recording/AI-safe **Restart to Update** on Windows (NSIS), macOS (notarized `.zip` via Squirrel.Mac), and Linux AppImage, with a clean manual-package update flow on Linux `pacman`/`.deb`.
+- [ ] **Local History search & Q&A with timestamp citations:** Disposable local SQLite FTS5 full-text search index across transcripts/summaries (zero AI add-on required) with instant timestamp jump, plus local grounded Q&A via the installed `llama.cpp` + Qwen summary runtime with verified clickable citations that seek playback to the exact timestamp.
+
 ### Mandatory gates before the next release
 
 All items below must be completed and their evidence recorded before the next
