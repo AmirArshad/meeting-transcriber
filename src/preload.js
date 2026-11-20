@@ -124,6 +124,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveSpeakerSegmentsFile: (options) => ipcRenderer.invoke('save-speaker-segments-file', options),
   saveTranscriptAs: (options) => ipcRenderer.invoke('save-transcript-as', options),
   scanRecordings: () => ipcRenderer.invoke('scan-recordings'),
+  searchHistory: (options = {}) => ipcRenderer.invoke('search-history', options),
+  rebuildHistoryIndex: () => ipcRenderer.invoke('rebuild-history-index'),
+  getHistoryIndexStatus: () => ipcRenderer.invoke('get-history-index-status'),
 
   // GPU acceleration
   checkGPU: () => ipcRenderer.invoke('check-gpu'),

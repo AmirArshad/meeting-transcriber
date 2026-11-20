@@ -691,8 +691,8 @@
                   <input
                     type="search"
                     id="meeting-search"
-                    placeholder="Search meetings..."
-                    aria-label="Search meetings"
+                    placeholder="Search titles, transcripts, speakers..."
+                    aria-label="Search meeting history"
                   />
                 </div>
 
@@ -1313,6 +1313,13 @@
       <footer>
         <p>Powered by Whisper AI &middot; All processing happens locally</p>
       </footer>
+      <div
+        id="app-toast"
+        class="app-toast"
+        hidden
+        role="status"
+        aria-live="polite"
+      ></div>
       </div><!-- /.app-pane -->
     </div>
 
@@ -1321,6 +1328,7 @@
     <script src="recovery-ui-helpers.js"></script>
     <script src="update-notification-helpers.js"></script>
     <script src="history-detail-helpers.js"></script>
+    <script src="history-search-helpers.js"></script>
     <script src="formatters.js"></script>
     <script src="summary-ui-helpers.js"></script>
     <script src="summary-language-helpers.js"></script>

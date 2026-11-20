@@ -114,6 +114,7 @@ const {
 const { createTranscriptionService } = require('./main/transcription-service');
 const { createAudioImportService } = require('./main/audio-import-service');
 const { createSummaryService } = require('./main/summary-service');
+const { createHistorySearchService } = require('./main/history-search-service');
 const { createRecorderService } = require('./main/recorder-service');
 const { createRecordingsMaintenanceGate } = require('./main/recordings-maintenance-gate');
 const {
@@ -582,6 +583,21 @@ function buildTranscriptionPlaceholderMarkdown({
 // ============================================================================
 const recordingsMaintenanceGate = createRecordingsMaintenanceGate();
 
+const historySearchService = createHistorySearchService({
+  app,
+  path,
+  fs,
+  pythonConfig,
+  spawnTrackedPython,
+  getBackendModuleArgs,
+  collectPythonProcessOutput,
+  assertTrustedRendererSender,
+  getRecordingsDir,
+  isQuitCommitted,
+  terminateProcessBestEffort,
+});
+historySearchService.registerIpc(ipcMain);
+
 const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
   app,
   path,
@@ -643,6 +659,9 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
         );
       });
     }
+  },
+  onMeetingsMutated: () => {
+    historySearchService.triggerBackgroundSync();
   },
 });
 const {
@@ -862,6 +881,9 @@ summaryService = createSummaryService({
   terminateProcessBestEffort,
   summarizeSummaryValidationError,
   isQuitCommitted,
+  onSummaryCommitted: () => {
+    historySearchService.triggerBackgroundSync();
+  },
 });
 summaryService.registerIpc(ipcMain);
 

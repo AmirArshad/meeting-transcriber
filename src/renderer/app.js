@@ -69,6 +69,15 @@ const {
   shouldSkipMeetingReselect,
 } = window.historyDetailHelpers;
 const {
+  buildHighlightSegmentsFromParts,
+  fallbackFilterMeetingsByTitle,
+  findClosestTranscriptSegmentIndex,
+  formatJumpTimestamp,
+  mergeSearchResultsWithMeetings,
+  normalizeHistorySearchQuery,
+  parseTimestampStringToSeconds,
+} = window.historySearchHelpers;
+const {
   hideUpdateNotificationBanner,
   replayPendingUpdateNotification,
   showUpdateNotificationBanner,
@@ -264,7 +273,11 @@ const checkedMeetingIds = new Set();
 let meetingSearchQuery = '';
 let meetingSearchQueryNormalized = '';
 let meetingSearchDebounceTimer = null;
-const MEETING_SEARCH_DEBOUNCE_MS = 200;
+let meetingSearchResults = null;
+let meetingSearchEpoch = 0;
+let pendingAudioSeekCleanup = null;
+let activeCitationHighlightTimer = null;
+const MEETING_SEARCH_DEBOUNCE_MS = 180;
 const cleanupFns = [];
 let aiAddonStatusRefreshPromise = null;
 let aiAddonStatusSnapshot = null;
@@ -699,6 +712,9 @@ function createMeetingListItem(meeting) {
   const checkbox = createMeetingCheckbox(meeting.id);
   checkbox.setAttribute('aria-label', `Select ${meeting.title}`);
 
+  const body = document.createElement('div');
+  body.className = 'meeting-item-body';
+
   const info = document.createElement('button');
   info.type = 'button';
   info.className = 'meeting-info';
@@ -730,10 +746,57 @@ function createMeetingListItem(meeting) {
     metaRow.append(date, duration);
   }
   info.append(title, metaRow);
+  body.appendChild(info);
+
+  const bestPassage = meeting && meeting.searchMeta && meeting.searchMeta.bestPassage;
+  if (bestPassage) {
+    const snippetRow = document.createElement('div');
+    snippetRow.className = 'meeting-item-snippet-row';
+
+    const snippetEl = document.createElement('div');
+    snippetEl.className = 'meeting-item-snippet';
+    const parts = buildHighlightSegmentsFromParts(bestPassage.snippetParts);
+    if (parts.length > 0) {
+      for (const part of parts) {
+        if (part.match) {
+          const mark = document.createElement('mark');
+          mark.textContent = part.text;
+          snippetEl.appendChild(mark);
+        } else {
+          snippetEl.appendChild(document.createTextNode(part.text));
+        }
+      }
+    } else if (bestPassage.excerpt || bestPassage.text) {
+      snippetEl.textContent = bestPassage.excerpt || bestPassage.text;
+    }
+
+    if (snippetEl.childNodes.length > 0) {
+      snippetRow.appendChild(snippetEl);
+    }
+
+    const jumpTimeLabel = formatJumpTimestamp(bestPassage.startSec);
+    if (jumpTimeLabel) {
+      const jumpBtn = document.createElement('button');
+      jumpBtn.type = 'button';
+      jumpBtn.className = 'meeting-item-jump-pill';
+      jumpBtn.textContent = jumpTimeLabel;
+      jumpBtn.title = `Jump to ${jumpTimeLabel} in transcript`;
+      jumpBtn.setAttribute('aria-label', `Jump to ${jumpTimeLabel} in ${meeting.title}`);
+      jumpBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void openMeetingAtTimestamp(meeting.id, bestPassage.startSec);
+      });
+      snippetRow.appendChild(jumpBtn);
+    }
+
+    if (snippetRow.childNodes.length > 0) {
+      body.appendChild(snippetRow);
+    }
+  }
 
   const deleteBtn = createDeleteButton();
 
-  item.append(checkbox, info, deleteBtn);
+  item.append(checkbox, body, deleteBtn);
 
   checkbox.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1266,6 +1329,10 @@ async function resumePendingTranscriptionsFromBanner() {
 }
 
 function setMeetingAudioSource(audioPath) {
+  if (typeof pendingAudioSeekCleanup === 'function') {
+    pendingAudioSeekCleanup();
+    pendingAudioSeekCleanup = null;
+  }
   const audioPlayer = document.getElementById('audio-player');
   audioPlayer.src = window.electronAPI.buildFileUrl(audioPath);
   audioPlayer.load();
@@ -1273,6 +1340,49 @@ function setMeetingAudioSource(audioPath) {
   if (typeof window.__resetCustomAudioPlayer === 'function') {
     window.__resetCustomAudioPlayer();
   }
+}
+
+function seekMeetingAudio(targetSeconds) {
+  const numeric = Number(targetSeconds);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return;
+  }
+  const audioPlayer = document.getElementById('audio-player');
+  if (!audioPlayer || !audioPlayer.getAttribute('src')) {
+    return;
+  }
+
+  if (typeof pendingAudioSeekCleanup === 'function') {
+    pendingAudioSeekCleanup();
+    pendingAudioSeekCleanup = null;
+  }
+
+  const applySeek = () => {
+    const duration = Number.isFinite(audioPlayer.duration) && audioPlayer.duration > 0
+      ? audioPlayer.duration
+      : null;
+    const clamped = duration !== null
+      ? Math.max(0, Math.min(duration, numeric))
+      : Math.max(0, numeric);
+    audioPlayer.currentTime = clamped;
+    if (typeof window.__syncCustomAudioPlayer === 'function') {
+      window.__syncCustomAudioPlayer();
+    }
+  };
+
+  if (audioPlayer.readyState >= 1) {
+    applySeek();
+    return;
+  }
+
+  const onLoadedMetadata = () => {
+    pendingAudioSeekCleanup = null;
+    applySeek();
+  };
+  audioPlayer.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
+  pendingAudioSeekCleanup = () => {
+    audioPlayer.removeEventListener('loadedmetadata', onLoadedMetadata);
+  };
 }
 
 function renderHistoryTranscriptMarkdown(transcriptEl, markdown) {
@@ -1289,11 +1399,25 @@ function renderHistoryTranscriptMarkdown(transcriptEl, markdown) {
   segments.forEach((segment) => {
     const segmentDiv = document.createElement('div');
     segmentDiv.className = 'history-transcript-segment';
+    const startSec = parseTimestampStringToSeconds(segment.start);
+    const endSec = parseTimestampStringToSeconds(segment.end);
+    if (startSec !== null) {
+      segmentDiv.dataset.startSec = String(startSec);
+    }
+    if (endSec !== null) {
+      segmentDiv.dataset.endSec = String(endSec);
+    }
 
     const meta = document.createElement('div');
     meta.className = 'history-transcript-meta';
 
-    const timestamp = document.createElement('span');
+    const timestamp = document.createElement(startSec !== null ? 'button' : 'span');
+    if (startSec !== null) {
+      timestamp.type = 'button';
+      timestamp.title = `Jump audio to ${segment.start}`;
+      timestamp.setAttribute('aria-label', `Jump audio to ${segment.start}`);
+      timestamp.addEventListener('click', () => seekMeetingAudio(startSec));
+    }
     timestamp.className = 'history-transcript-timestamp';
     timestamp.textContent = `[${segment.start} - ${segment.end}]`;
     meta.appendChild(timestamp);
@@ -1560,6 +1684,116 @@ function openSettingsAtAiAddons() {
   if (section) {
     section.scrollIntoView({ block: 'start', behavior: getPreferredScrollBehavior() });
   }
+}
+
+function showAppToast(message, variant = 'info', durationMs = 4000) {
+  const text = String(message || '').trim();
+  if (!text) {
+    return;
+  }
+  const toastEl = document.getElementById('app-toast');
+  if (!toastEl) {
+    return;
+  }
+  toastEl.textContent = text;
+  toastEl.classList.remove('is-warning', 'is-error', 'is-success');
+  if (variant === 'warning' || variant === 'error' || variant === 'success') {
+    toastEl.classList.add(`is-${variant}`);
+  }
+  toastEl.hidden = false;
+  toastEl.classList.add('is-visible');
+  clearTimeout(showAppToast._timer);
+  showAppToast._timer = setTimeout(() => {
+    toastEl.classList.remove('is-visible');
+    toastEl.hidden = true;
+  }, durationMs);
+}
+
+function highlightTranscriptSegmentAtTime(startSec) {
+  const transcriptEl = document.getElementById('meeting-transcript');
+  if (!transcriptEl) {
+    return;
+  }
+  transcriptEl.querySelectorAll('.history-transcript-segment.is-citation-highlight').forEach((el) => {
+    el.classList.remove('is-citation-highlight');
+  });
+  if (activeCitationHighlightTimer) {
+    clearTimeout(activeCitationHighlightTimer);
+    activeCitationHighlightTimer = null;
+  }
+
+  const segmentNodes = [...transcriptEl.querySelectorAll('.history-transcript-segment')];
+  if (!segmentNodes.length) {
+    return;
+  }
+
+  const descriptors = segmentNodes.map((node) => ({
+    startSec: node.dataset.startSec !== undefined && node.dataset.startSec !== ''
+      ? Number(node.dataset.startSec)
+      : null,
+    endSec: node.dataset.endSec !== undefined && node.dataset.endSec !== ''
+      ? Number(node.dataset.endSec)
+      : null,
+    node,
+  }));
+
+  const matchIdx = findClosestTranscriptSegmentIndex(descriptors, startSec);
+  if (matchIdx === -1 || !descriptors[matchIdx]) {
+    return;
+  }
+
+  const matchedNode = descriptors[matchIdx].node;
+  matchedNode.classList.add('is-citation-highlight');
+  matchedNode.scrollIntoView({ behavior: getPreferredScrollBehavior(), block: 'center' });
+  activeCitationHighlightTimer = setTimeout(() => {
+    matchedNode.classList.remove('is-citation-highlight');
+    activeCitationHighlightTimer = null;
+  }, 3600);
+}
+
+async function openMeetingAtTimestamp(meetingId, startSec = null) {
+  const targetId = String(meetingId || '').trim();
+  if (!targetId) {
+    return false;
+  }
+
+  let meeting = meetings.find((item) => String(item.id) === targetId);
+  if (!meeting) {
+    await loadMeetingHistory();
+    meeting = meetings.find((item) => String(item.id) === targetId);
+  }
+  if (!meeting) {
+    showAppToast('This meeting is no longer in History.', 'warning');
+    return false;
+  }
+
+  activateTab('history');
+  activateHistoryDetailTab('transcript');
+
+  if (String(currentMeetingId || '') !== targetId) {
+    await selectMeeting(targetId);
+  } else {
+    const transcriptEl = document.getElementById('meeting-transcript');
+    if (transcriptEl && !transcriptEl.querySelector('.history-transcript-segment')) {
+      await refreshMeetingDetails(targetId);
+    }
+  }
+
+  if (String(currentMeetingId || '') !== targetId) {
+    return false;
+  }
+
+  meetingList.querySelector(`.meeting-item[data-id="${CSS.escape(targetId)}"]`)
+    ?.scrollIntoView({ block: 'nearest', behavior: getPreferredScrollBehavior() });
+
+  const numericStart = startSec !== null && startSec !== undefined && startSec !== ''
+    ? Number(startSec)
+    : null;
+  if (numericStart !== null && Number.isFinite(numericStart) && numericStart >= 0) {
+    highlightTranscriptSegmentAtTime(numericStart);
+    seekMeetingAudio(numericStart);
+  }
+  return true;
 }
 
 function focusTabHeading(targetTab) {
@@ -2407,7 +2641,11 @@ async function loadMeetingHistory({ scan = false } = {}) {
 
     // Load the meeting list
     meetings = await window.electronAPI.listMeetings();
-    renderMeetingList();
+    if (meetingSearchQueryNormalized) {
+      void runHistorySearch(meetingSearchQuery);
+    } else {
+      renderMeetingList();
+    }
     renderActivityList();
     const emptyDetail = document.getElementById('meeting-details-empty');
     if (!currentMeetingId && emptyDetail) emptyDetail.style.display = meetings.length ? 'flex' : 'none';
@@ -2419,12 +2657,53 @@ async function loadMeetingHistory({ scan = false } = {}) {
   }
 }
 
+async function runHistorySearch(rawQuery) {
+  const normalized = normalizeHistorySearchQuery(rawQuery);
+  meetingSearchQuery = rawQuery || '';
+  meetingSearchQueryNormalized = normalized.toLowerCase();
+  const epoch = ++meetingSearchEpoch;
+
+  if (!normalized) {
+    meetingSearchResults = null;
+    renderMeetingList();
+    return;
+  }
+
+  try {
+    if (window.electronAPI && typeof window.electronAPI.searchHistory === 'function') {
+      const response = await window.electronAPI.searchHistory({
+        query: normalized,
+        limit: 50,
+        maxMatches: 3,
+      });
+      if (epoch !== meetingSearchEpoch) {
+        return;
+      }
+      meetingSearchResults = Array.isArray(response && response.meetings)
+        ? response.meetings
+        : [];
+      renderMeetingList();
+      return;
+    }
+  } catch (error) {
+    console.warn('History search failed, falling back to title filter:', error);
+  }
+
+  if (epoch !== meetingSearchEpoch) {
+    return;
+  }
+  meetingSearchResults = null;
+  renderMeetingList();
+}
+
 // Render meeting list
 function renderMeetingList() {
   const query = meetingSearchQueryNormalized;
-  const filtered = query
-    ? meetings.filter((m) => (m.title || '').toLowerCase().includes(query))
-    : meetings;
+  const filtered = !query
+    ? meetings
+    : (Array.isArray(meetingSearchResults)
+      ? mergeSearchResultsWithMeetings(meetings, { meetings: meetingSearchResults })
+      : fallbackFilterMeetingsByTitle(meetings, query));
 
   if (filtered.length === 0) {
     setPlaceholder(
@@ -3026,14 +3305,23 @@ function setupEventListeners() {
   const searchInput = document.getElementById('meeting-search');
   if (searchInput) {
     searchInput.addEventListener('input', () => {
-      meetingSearchQuery = searchInput.value || '';
+      const rawValue = searchInput.value || '';
+      const normalized = normalizeHistorySearchQuery(rawValue);
+      meetingSearchQuery = rawValue;
       if (meetingSearchDebounceTimer) {
         clearTimeout(meetingSearchDebounceTimer);
+        meetingSearchDebounceTimer = null;
+      }
+      if (!normalized) {
+        meetingSearchEpoch += 1;
+        meetingSearchQueryNormalized = '';
+        meetingSearchResults = null;
+        renderMeetingList();
+        return;
       }
       meetingSearchDebounceTimer = setTimeout(() => {
         meetingSearchDebounceTimer = null;
-        meetingSearchQueryNormalized = meetingSearchQuery.trim().toLowerCase();
-        renderMeetingList();
+        void runHistorySearch(rawValue);
       }, MEETING_SEARCH_DEBOUNCE_MS);
     });
   }
@@ -8117,7 +8405,12 @@ function setupCustomAudioPlayer() {
     });
   }
 
-  // Reset hook used by setMeetingAudioSource()
+  // Sync & reset hooks used by audio seeking / setMeetingAudioSource()
+  window.__syncCustomAudioPlayer = () => {
+    updateDuration();
+    updateProgress();
+  };
+
   window.__resetCustomAudioPlayer = () => {
     setIcon(PLAY_PATH);
     fill.style.width = '0%';
@@ -8280,9 +8573,10 @@ function setupAudioImport() {
   async function openImportedMeeting(id) {
     id = String(id);
     const meeting = meetings.find((item) => String(item.id) === id);
-    if (meeting && meetingSearchQueryNormalized && !meeting.title.toLowerCase().includes(meetingSearchQueryNormalized)) {
+    if (meeting && meetingSearchQueryNormalized) {
       const search = document.getElementById('meeting-search'); search.value = '';
-      clearTimeout(meetingSearchDebounceTimer); meetingSearchQuery = ''; meetingSearchQueryNormalized = ''; renderMeetingList();
+      clearTimeout(meetingSearchDebounceTimer); meetingSearchDebounceTimer = null;
+      meetingSearchEpoch += 1; meetingSearchQuery = ''; meetingSearchQueryNormalized = ''; meetingSearchResults = null; renderMeetingList();
     }
     activateHistoryDetailTab('transcript'); await selectMeeting(id);
     meetingList.querySelector(`.meeting-item[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' });

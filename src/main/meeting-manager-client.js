@@ -29,6 +29,7 @@
  * @param {Function} [deps.beforeDeleteMeeting] - cancel/terminate queued transcription before delete
  * @param {Function} [deps.afterDeleteMeeting] - clear delete tombstone after meeting_manager delete settles
  * @param {Function} [deps.afterUpdateMeeting] - sync queue job title after rename
+ * @param {Function} [deps.onMeetingsMutated] - notify derived caches (e.g. search index) on successful mutations
  * @param {number} [deps.recordingsScanTimeoutMs]
  * @param {object} [deps.recordingsMaintenanceGate]
  */
@@ -58,7 +59,16 @@ function createMeetingManagerClient(deps) {
     unrefRecordingsScanTimeout = true,
     recordingsMaintenanceGate = null,
     onScanSucceeded = () => {},
+    onMeetingsMutated = () => {},
   } = deps;
+
+  function notifyMeetingsMutated(detail) {
+    try {
+      onMeetingsMutated(detail);
+    } catch (_error) {
+      // Derived cache notifications must never break primary persistence.
+    }
+  }
 
   function addMeetingToHistory(meetingData) {
     let resolvedAudioPath;
@@ -131,7 +141,9 @@ function createMeetingManagerClient(deps) {
 
         if (code === 0) {
           try {
-            resolve(JSON.parse(processOutput.getStdout()));
+            const addedMeeting = JSON.parse(processOutput.getStdout());
+            notifyMeetingsMutated({ action: 'add', meeting: addedMeeting });
+            resolve(addedMeeting);
           } catch (error) {
             reject(new Error(`Failed to parse saved meeting: ${error.message}`));
           }
@@ -247,6 +259,7 @@ function createMeetingManagerClient(deps) {
               } catch (_) {
                 // Best-effort recovery banner cleanup.
               }
+              notifyMeetingsMutated({ action: 'scan', result });
               finish(resolve, result);
             } catch (e) {
               finish(reject, new Error(`Failed to parse scan result: ${e.message}`));
@@ -389,6 +402,7 @@ function createMeetingManagerClient(deps) {
 
           python.on('close', (code) => {
             if (code === 0) {
+              notifyMeetingsMutated({ action: 'delete', meetingId: id });
               resolve({ success: true });
             } else {
               const errorMsg = errorOutput.trim() || 'Unknown error';
@@ -471,6 +485,7 @@ function createMeetingManagerClient(deps) {
               } catch (syncError) {
                 console.warn('afterUpdateMeeting failed:', syncError && syncError.message);
               }
+              notifyMeetingsMutated({ action: 'update', meeting: updatedMeeting });
               resolve(updatedMeeting);
             } catch (e) {
               reject(new Error(`Failed to parse updated meeting: ${e.message}`));
@@ -542,7 +557,9 @@ function createMeetingManagerClient(deps) {
 
         if (code === 0) {
           try {
-            resolve(JSON.parse(processOutput.getStdout()));
+            const updatedAiMeeting = JSON.parse(processOutput.getStdout());
+            notifyMeetingsMutated({ action: 'update-ai', meeting: updatedAiMeeting });
+            resolve(updatedAiMeeting);
           } catch (e) {
             reject(new Error(`Failed to parse updated AI meeting metadata: ${e.message}`));
           }
@@ -647,7 +664,10 @@ function createMeetingManagerClient(deps) {
     return runMeetingManagerCommand([
       'exclude-incomplete-transcription',
       String(meetingId),
-    ]);
+    ]).then((result) => {
+      notifyMeetingsMutated({ action: 'exclude-incomplete', meetingId: String(meetingId) });
+      return result;
+    });
   }
 
   function failTranscriptionAttempt(meetingId, attemptId, errorMessage, registerProcess = null) {
@@ -658,7 +678,10 @@ function createMeetingManagerClient(deps) {
       'fail-transcription-attempt', String(meetingId),
       '--attempt-id', String(attemptId),
       '--error', String(errorMessage || 'Transcription failed.').slice(0, 500),
-    ], registerProcess);
+    ], registerProcess).then((result) => {
+      notifyMeetingsMutated({ action: 'fail-transcription', meetingId: String(meetingId) });
+      return result;
+    });
   }
 
   function commitTranscriptionAttempt(meetingId, payload = {}, registerProcess = null) {
@@ -678,7 +701,10 @@ function createMeetingManagerClient(deps) {
     if (payload.captionsCandidatePath) {
       args.push('--captions-candidate', String(payload.captionsCandidatePath));
     }
-    return runMeetingManagerCommand(args, registerProcess);
+    return runMeetingManagerCommand(args, registerProcess).then((result) => {
+      notifyMeetingsMutated({ action: 'commit-transcription', meetingId: String(meetingId), meeting: result });
+      return result;
+    });
   }
 
   return {
