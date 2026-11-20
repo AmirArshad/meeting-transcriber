@@ -366,3 +366,45 @@ def test_date_range_scope_and_cli_json_roundtrip(tmp_path):
         {"text": "Alpha", "match": True},
         {"text": " review", "match": False},
     ]
+
+
+def test_unbound_summary_is_not_indexed(tmp_path):
+    rec_dir = tmp_path / 'recordings'
+    index_path = tmp_path / 'search' / 'history-index.sqlite'
+    _seed_meeting(rec_dir, meeting_id='m1', title='Meeting', date_iso='2026-11-10',
+                  transcript_md='ordinary transcript', summary_md='secretunboundsummary')
+    metadata = json.loads((rec_dir / 'meetings.json').read_text())
+    del metadata[0]['ai']['summary']['sourceTranscriptHash']
+    (rec_dir / 'meetings.json').write_text(json.dumps(metadata))
+    result = search_history_index(rec_dir, index_path, query='secretunboundsummary')
+    assert result['matchedMeetingCount'] == 0
+
+
+def test_rebuild_refuses_live_wal_reader(tmp_path):
+    rec_dir = tmp_path / 'recordings'
+    index_path = tmp_path / 'search' / 'history-index.sqlite'
+    sync_history_index(rec_dir, index_path)
+    conn = sqlite3.connect(index_path)
+    try:
+        conn.execute('BEGIN')
+        conn.execute('SELECT * FROM index_meta').fetchall()
+        try:
+            rebuild_history_index(rec_dir, index_path)
+        except sqlite3.OperationalError:
+            pass
+        else:
+            raise AssertionError('rebuild replaced a live WAL')
+        assert index_path.exists()
+    finally:
+        conn.close()
+
+
+def test_cli_reads_leading_hyphen_query_from_stdin(tmp_path):
+    result = subprocess.run(
+        [sys.executable, '-m', 'backend.search.cli', '--recordings-dir', str(tmp_path / 'recordings'),
+         '--index-path', str(tmp_path / 'search' / 'history-index.sqlite'), 'search', '--stdin-json'],
+        input=json.dumps({'query': '-private'}), text=True, capture_output=True, cwd=ROOT,
+        env={**__import__('os').environ, 'PYTHONPATH': str(ROOT / 'backend')},
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)['query'] == '-private'

@@ -398,9 +398,8 @@ def test_extract_window_caption_cues_for_turn_clips_cues_and_falls_back_cleanly(
         {'startMs': 11300, 'endMs': 12400, 'text': 'second clipped phrase', 'speaker': 'SPEAKER_01'},
     ]
 
-    # 2. Falls back to segments when captionCues are absent or outside the turn
+    # 2. Falls back to segments when captionCues are absent
     seg_result = {
-        'captionCues': [{'startMs': 0, 'endMs': 200, 'text': 'only context'}],
         'segments': [
             {'start': 0.0, 'end': 0.25, 'text': 'outside'},
             {'start': 0.2, 'end': 2.5, 'text': 'segment fallback'},
@@ -544,3 +543,24 @@ def test_transcribe_with_diarization_guidance_writes_hash_bound_speaker_captions
     expected_hash = hash_transcript_text(output_path.read_text(encoding='utf-8'))
     assert validate_captions_payload(payload, expected_transcript_hash=expected_hash, require_non_empty=True) == (True, None)
     assert payload['cues'] == result['captionCues']
+
+
+def test_window_text_and_cues_select_same_fine_grained_content():
+    result = {"segments": [{"start": 0, "end": 3, "text": "outside inside"}],
+              "captionCues": [{"startMs": 0, "endMs": 500, "text": "outside"},
+                              {"startMs": 1000, "endMs": 1500, "text": "inside"}]}
+    window = {"start": 1, "end": 2, "audioStart": 0, "speaker": "A"}
+    cues = guided.extract_window_caption_cues_for_turn(result, window)
+    assert guided.extract_window_text_for_turn(result, window) == "inside"
+    assert [cue["text"] for cue in cues] == ["inside"]
+
+
+def test_window_timed_content_entirely_outside_turn_does_not_fall_back():
+    window = {"start": 1, "end": 2, "audioStart": 0, "speaker": "A"}
+    for timed in (
+        {"captionCues": [{"startMs": 0, "endMs": 500, "text": "outside"}]},
+        {"segments": [{"start": 0, "end": 0.5, "text": "outside"}]},
+    ):
+        result = {"text": "padded fallback", **timed}
+        assert guided.extract_window_caption_cues_for_turn(result, window) == []
+        assert guided.extract_window_text_for_turn(result, window) == ""

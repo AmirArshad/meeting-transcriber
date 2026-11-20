@@ -8690,7 +8690,36 @@ const chatState = {
   scopeFilter: '',
   scopeDraft: null,
   popoverOpen: false,
+  navigation: 0,
+  listRequest: 0,
+  draftKey: 'new:0',
+  nextDraft: 0,
+  newDraftKey: 'new:0',
+  drafts: new Map(),
+  sendingKey: null,
 };
+
+function saveChatDraft() {
+  const input = document.getElementById('chat-input');
+  if (input) chatState.drafts.set(chatState.draftKey, input.value);
+}
+
+function switchChatDraft(key) {
+  saveChatDraft();
+  chatState.draftKey = key;
+  const input = document.getElementById('chat-input');
+  if (input) input.value = chatState.drafts.get(key) || '';
+  autoResizeChatInput();
+}
+
+function chatThreadDetailPending() {
+  return chatState.draftKey.startsWith('thread:')
+    && chatState.draftKey !== `thread:${chatState.activeThread?.id}`;
+}
+
+function chatSendVisible() {
+  return chatState.sending && chatState.sendingKey === chatState.draftKey;
+}
 
 function getCurrentChatScope() {
   return (chatState.activeThread && chatState.activeThread.scope)
@@ -8766,11 +8795,11 @@ function renderChatOnboardingAndComposer() {
       sendBtn.textContent = 'Send';
       sendBtn.classList.remove('btn-danger');
       sendBtn.classList.add('btn-primary');
-      sendBtn.disabled = !eligible;
+      sendBtn.disabled = !eligible || chatThreadDetailPending();
     }
   }
   if (input) {
-    input.disabled = chatState.sending;
+    input.disabled = false;
   }
 }
 
@@ -8832,8 +8861,9 @@ function renderChatThreadSidebar() {
           }
           submitted = true;
           try {
-            const res = await window.electronAPI.renameChatThread(thread.id, nextTitle);
-            await refreshChatThreadList({ selectThreadId: res.thread.id });
+            const navigation = chatState.navigation;
+            await window.electronAPI.renameChatThread(thread.id, nextTitle);
+            await refreshChatThreadList({ selectThreadId: navigation === chatState.navigation && chatState.activeThread?.id === thread.id ? thread.id : null });
           } catch (error) {
             showAppToast(`Could not rename chat: ${error.message}`, 'error');
             renderChatThreadSidebar();
@@ -8940,7 +8970,7 @@ function renderChatStream() {
   const threadMessages = chatState.activeThread && Array.isArray(chatState.activeThread.messages)
     ? chatState.activeThread.messages
     : [];
-  const hasMessages = threadMessages.length > 0 || Boolean(chatState.optimisticQuestion);
+  const hasMessages = threadMessages.length > 0 || Boolean(chatSendVisible() && chatState.optimisticQuestion);
 
   if (emptyState) {
     emptyState.hidden = hasMessages;
@@ -8955,7 +8985,7 @@ function renderChatStream() {
       btn.type = 'button';
       btn.className = 'chat-starter-btn';
       btn.textContent = promptText;
-      btn.disabled = !eligible || meetings.length === 0;
+      btn.disabled = !eligible || meetings.length === 0 || chatThreadDetailPending();
       btn.addEventListener('click', () => {
         const input = document.getElementById('chat-input');
         if (!input) return;
@@ -9060,13 +9090,13 @@ function renderChatStream() {
     messagesEl.appendChild(wrap);
   }
 
-  if (chatState.optimisticQuestion) {
+  if (chatSendVisible() && chatState.optimisticQuestion) {
     renderUserTurn(chatState.optimisticQuestion);
   }
 
   if (progressBanner && progressText) {
-    progressBanner.hidden = !chatState.sending;
-    if (chatState.sending) {
+    progressBanner.hidden = !chatSendVisible();
+    if (chatSendVisible()) {
       progressText.textContent = (chatState.progress && chatState.progress.message)
         || 'Searching local meeting history…';
     }
@@ -9080,50 +9110,54 @@ function renderChatStream() {
 }
 
 async function refreshChatThreadList({ selectThreadId = null } = {}) {
-  if (!window.electronAPI || typeof window.electronAPI.listChatThreads !== 'function') {
-    return;
-  }
+  if (!window.electronAPI || typeof window.electronAPI.listChatThreads !== 'function') return;
+  const navigation = chatState.navigation;
+  const request = ++chatState.listRequest;
   const res = await window.electronAPI.listChatThreads();
+  if (request !== chatState.listRequest) return;
   chatState.threads = Array.isArray(res && res.threads) ? res.threads : [];
-
-  const targetId = selectThreadId || (chatState.activeThread && chatState.activeThread.id);
+  renderChatThreadSidebar();
+  if (navigation !== chatState.navigation) return;
+  const targetId = selectThreadId || chatState.activeThread?.id;
   if (targetId && chatState.threads.some((t) => t.id === targetId)) {
     const detail = await window.electronAPI.getChatThread(targetId);
+    if (navigation !== chatState.navigation || request !== chatState.listRequest) return;
     chatState.activeThread = detail && detail.thread ? detail.thread : null;
-  } else if (!chatState.activeThread && chatState.threads.length > 0 && selectThreadId === null) {
-    // Wait — when initializing fresh or after deleting, leave activeThread null if creating fresh or pick latest when none chosen.
   } else if (chatState.activeThread && !chatState.threads.some((t) => t.id === chatState.activeThread.id)) {
     chatState.activeThread = null;
   }
-
   renderChatThreadSidebar();
   renderChatOnboardingAndComposer();
   renderChatStream();
 }
 
 async function selectChatThread(threadId) {
-  if (!threadId) {
-    chatState.activeThread = null;
-    renderChatThreadSidebar();
-    renderChatOnboardingAndComposer();
-    renderChatStream();
-    return;
-  }
+  const navigation = ++chatState.navigation;
+  switchChatDraft(threadId ? `thread:${threadId}` : `new:${++chatState.nextDraft}`);
+  chatState.activeThread = null;
+  renderChatThreadSidebar();
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+  if (!threadId) return;
   try {
     const res = await window.electronAPI.getChatThread(threadId);
+    if (navigation !== chatState.navigation) return;
     chatState.activeThread = res && res.thread ? res.thread : null;
     closeChatMobileSidebar();
     renderChatThreadSidebar();
     renderChatOnboardingAndComposer();
     renderChatStream();
   } catch (error) {
-    showAppToast(`Could not load chat: ${error.message}`, 'error');
+    if (navigation === chatState.navigation) showAppToast(`Could not load chat: ${error.message}`, 'error');
   }
 }
 
 async function startNewChatThread(scope = null) {
+  ++chatState.navigation;
+  const wasNew = chatState.draftKey.startsWith('new:');
+  if (wasNew) chatState.newDraftKey = `new:${++chatState.nextDraft}`;
+  switchChatDraft(chatState.newDraftKey);
   chatState.activeThread = null;
-  chatState.optimisticQuestion = null;
   if (scope && typeof scope === 'object') {
     chatState.pendingScope = {
       type: scope.type === 'selected_meetings' ? 'selected_meetings' : 'all',
@@ -9140,14 +9174,13 @@ async function startNewChatThread(scope = null) {
 }
 
 async function deleteChatThreadWithConfirm(threadId, title) {
-  if (!confirm(`Delete "${title || 'New chat'}"? This cannot be undone.`)) {
-    return;
-  }
+  if (!confirm(`Delete "${title || 'New chat'}"? This cannot be undone.`)) return;
   try {
     await window.electronAPI.deleteChatThread(threadId);
-    if (chatState.activeThread && chatState.activeThread.id === threadId) {
-      chatState.activeThread = null;
+    if (chatState.draftKey === `thread:${threadId}`) {
+      await startNewChatThread();
     }
+    chatState.drafts.delete(`thread:${threadId}`);
     await refreshChatThreadList();
   } catch (error) {
     showAppToast(`Could not delete chat: ${error.message}`, 'error');
@@ -9235,6 +9268,7 @@ async function sendCurrentChatQuestion() {
     return;
   }
 
+  if (chatThreadDetailPending()) return;
   const input = document.getElementById('chat-input');
   if (!input) return;
   const question = input.value.replace(/\s+/g, ' ').trim();
@@ -9247,42 +9281,56 @@ async function sendCurrentChatQuestion() {
     return;
   }
 
+  const navigation = chatState.navigation;
+  const originKey = chatState.draftKey;
+  const originThreadId = chatState.activeThread?.id || null;
+  const scope = getCurrentChatScope();
   input.value = '';
+  chatState.drafts.set(originKey, '');
   autoResizeChatInput();
   chatState.sending = true;
+  chatState.sendingKey = originKey;
   chatState.optimisticQuestion = question;
   chatState.progress = { phase: 'retrieving', message: 'Searching local meeting history…' };
   renderChatOnboardingAndComposer();
   renderChatStream();
 
   try {
-    const res = await window.electronAPI.askHistory({
-      threadId: chatState.activeThread ? chatState.activeThread.id : null,
-      question,
-      scope: getCurrentChatScope(),
-    });
-    chatState.optimisticQuestion = null;
+    const res = await window.electronAPI.askHistory({ threadId: originThreadId, question, scope });
     if (res && res.thread) {
-      chatState.activeThread = res.thread;
+      const threadKey = `thread:${res.thread.id}`;
+      if (originKey !== threadKey) {
+        const draft = chatState.draftKey === originKey ? input.value : chatState.drafts.get(originKey);
+        if (draft) chatState.drafts.set(threadKey, draft);
+        if (chatState.draftKey === originKey) chatState.draftKey = threadKey;
+        if (chatState.newDraftKey === originKey) chatState.newDraftKey = `new:${++chatState.nextDraft}`;
+      }
+      if (navigation === chatState.navigation) chatState.activeThread = res.thread;
     }
-    await refreshChatThreadList({ selectThreadId: chatState.activeThread?.id || null });
+    chatState.optimisticQuestion = null;
+    try {
+      await refreshChatThreadList();
+    } catch (error) {
+      showAppToast(`Could not refresh chats: ${error.message}`, 'error');
+    }
   } catch (error) {
     chatState.optimisticQuestion = null;
-    const isCancelled = error && (error.code === 'HISTORY_QA_CANCELLED' || /stopped|canceled/i.test(error.message || ''));
-    if (isCancelled) {
-      input.value = question;
+    const currentDraft = chatState.draftKey === originKey ? input.value : (chatState.drafts.get(originKey) || '');
+    const restored = currentDraft ? `${question}\n${currentDraft}` : question;
+    chatState.drafts.set(originKey, restored);
+    if (chatState.draftKey === originKey) {
+      input.value = restored;
       autoResizeChatInput();
-      showAppToast('Response generation stopped.', 'info');
-    } else {
-      showAppToast(error?.message || 'Could not generate local answer.', 'error');
     }
-    await initChatTab();
+    const isCancelled = error && (error.code === 'HISTORY_QA_CANCELLED' || /stopped|canceled/i.test(error.message || ''));
+    showAppToast(isCancelled ? 'Response generation stopped.' : (error?.message || 'Could not generate local answer.'), isCancelled ? 'info' : 'error');
   } finally {
     chatState.sending = false;
+    chatState.sendingKey = null;
     chatState.progress = null;
     renderChatOnboardingAndComposer();
     renderChatStream();
-    input.focus();
+    if (navigation === chatState.navigation) input.focus();
   }
 }
 
@@ -9293,7 +9341,9 @@ async function openHistoryMeetingInChat(meetingId) {
   const scope = { type: 'selected_meetings', meetingIds: [targetId], dateFrom: null, dateTo: null };
 
   activateTab('chat');
+  const navigation = ++chatState.navigation;
   await initChatTab();
+  if (navigation !== chatState.navigation) return;
 
   // Reuse an empty thread already scoped solely to this meeting if present, else create one.
   const reusable = chatState.threads.find((t) => (
@@ -9309,7 +9359,9 @@ async function openHistoryMeetingInChat(meetingId) {
   } else if (window.electronAPI && typeof window.electronAPI.createChatThread === 'function') {
     const title = meeting?.title ? `Ask: ${meeting.title.slice(0, 60)}` : 'New chat';
     const created = await window.electronAPI.createChatThread({ title, scope });
+    if (navigation !== chatState.navigation) { void refreshChatThreadList(); return; }
     if (created && created.thread) {
+      switchChatDraft(`thread:${created.thread.id}`);
       chatState.activeThread = created.thread;
       await refreshChatThreadList({ selectThreadId: created.thread.id });
     }
@@ -9476,7 +9528,9 @@ function setupChatWorkspace() {
     };
     if (chatState.activeThread && window.electronAPI?.updateChatThreadScope) {
       try {
+        const navigation = chatState.navigation;
         const res = await window.electronAPI.updateChatThreadScope(chatState.activeThread.id, nextScope);
+        if (navigation !== chatState.navigation) { void refreshChatThreadList(); return; }
         if (res && res.thread) {
           chatState.activeThread = res.thread;
         }

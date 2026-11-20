@@ -3,7 +3,7 @@ const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 const https = require('https');
-const { execFileSync, execSync } = require('child_process');
+const { execFileSync, execSync, spawnSync } = require('child_process');
 const AdmZip = require('adm-zip');
 const { BUILD_DOWNLOADS, getBuildDownload, hashString, verifyFileChecksum } = require('./download-manifest');
 
@@ -303,6 +303,7 @@ function buildResourceManifest() {
     platform: process.platform,
     downloads: BUILD_DOWNLOADS,
     inputs: {
+      pythonArchiveExtractor: hashString(readTextOrEmpty(path.join(__dirname, 'extract-python-archive.py'))),
       requirementsMacos: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-macos.txt'))),
       requirementsWindows: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-windows.txt'))),
       requirementsLinux: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-linux.txt'))),
@@ -780,6 +781,42 @@ function validateTarArchiveEntries(entries) {
   }
 }
 
+const ARCHIVE_EXTRACTOR_PROBE_SCRIPT = 'import tarfile, sys; sys.exit(0 if hasattr(tarfile, "data_filter") else 1)';
+
+function resolveArchiveExtractorPython({
+  platform = process.platform,
+  repoRoot = REPO_ROOT,
+  existsSync = fs.existsSync,
+  spawnSync: runSpawnSync = spawnSync,
+} = {}) {
+  const isWin = platform === 'win32';
+  const venvPython = path.join(repoRoot, '.venv', isWin ? path.join('Scripts', 'python.exe') : path.join('bin', 'python'));
+  const candidates = [];
+  if (existsSync(venvPython)) {
+    candidates.push([venvPython, []]);
+  }
+  if (isWin) {
+    candidates.push(['python', []], ['py', ['-3.11']], ['py', ['-3']]);
+  } else {
+    candidates.push(['python3.11', []], ['python3', []], ['python', []]);
+  }
+
+  for (const [command, prefixArgs] of candidates) {
+    const result = runSpawnSync(
+      command,
+      [...prefixArgs, '-c', ARCHIVE_EXTRACTOR_PROBE_SCRIPT],
+      { stdio: 'ignore', timeout: 5000 },
+    );
+    if (!result.error && result.status === 0) {
+      return { command, args: prefixArgs };
+    }
+  }
+
+  throw new Error(
+    'Unable to find a Python 3 interpreter with tarfile.data_filter support for extracting Python archives.',
+  );
+}
+
 // Helper to extract tar.gz archives (for standalone Python builds on macOS, Linux, and Windows)
 function extractTarGz(tarPath, targetDir) {
   console.log(`Extracting: ${path.basename(tarPath)}`);
@@ -789,11 +826,8 @@ function extractTarGz(tarPath, targetDir) {
       fs.mkdirSync(targetDir, { recursive: true });
     }
 
-    const listing = execFileSync('tar', ['-tzf', tarPath], { encoding: 'utf8' });
-    validateTarArchiveEntries(listing.split(/\r?\n/));
-
-    // tar is available natively on macOS, Linux, and Windows 10/11 (bsdtar).
-    execFileSync('tar', ['-xzf', tarPath, '-C', targetDir], { stdio: 'inherit' });
+    const { command, args } = resolveArchiveExtractorPython();
+    execFileSync(command, [...args, path.join(__dirname, 'extract-python-archive.py'), tarPath, targetDir], { stdio: 'inherit' });
     console.log('  Extraction complete!\n');
   } catch (error) {
     throw new Error(`Failed to extract ${tarPath}: ${error.message}`);
@@ -1531,6 +1565,7 @@ module.exports = {
   buildMacOSSpeakrsCliVerificationCommands,
   ensureWindowsEmbeddedPythonPathConfig,
   extractTarGz,
+  resolveArchiveExtractorPython,
   validateTarArchiveEntries,
   installPinnedPipWheel,
   getMacOSPythonRuntimeRemovablePackages,

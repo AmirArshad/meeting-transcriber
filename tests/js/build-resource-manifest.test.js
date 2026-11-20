@@ -11,6 +11,8 @@ const {
   buildMacOSHelperVerificationCommands,
   buildMacOSPythonWheelhouseCommands,
   buildResourceManifest,
+  extractTarGz,
+  resolveArchiveExtractorPython,
   ensureWindowsEmbeddedPythonPathConfig,
   validateTarArchiveEntries,
   installPinnedPipWheel,
@@ -57,7 +59,6 @@ test('pinned pip replaces bundled pip and stale metadata without removing other 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 test('hashString returns a stable SHA-256 for resource manifest inputs', () => {
   assert.equal(
@@ -291,4 +292,106 @@ test('resource manifest tracks the vendored Speakrs dependency patch', () => {
   const changed = structuredClone(manifest);
   changed.inputs.speakrsVendor[0].sha256 = 'changed';
   assert.equal(manifestsMatch(manifest, changed), false);
+});
+
+test('production Python archive extraction enforces paths and link targets', () => {
+  const { execFileSync } = require('node:child_process');
+  const { command: python, args } = resolveArchiveExtractorPython();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-tar-'));
+  try {
+    const create = [
+      'import io, sys, tarfile',
+      'archive, name, kind, link, with_symlink = sys.argv[1:]',
+      'with tarfile.open(archive, "w:gz") as t:',
+      '    data = b"safe"',
+      '    target = tarfile.TarInfo("python/target")',
+      '    target.size = len(data)',
+      '    t.addfile(target, io.BytesIO(data))',
+      '    member = tarfile.TarInfo(name)',
+      '    member.type = {"file": tarfile.REGTYPE, "hard": tarfile.LNKTYPE, "sym": tarfile.SYMTYPE}[kind]',
+      '    member.linkname = link',
+      '    t.addfile(member)',
+      '    if with_symlink == "yes":',
+      '        member = tarfile.TarInfo("python/symlink")',
+      '        member.type = tarfile.SYMTYPE',
+      '        member.linkname = "target"',
+      '        t.addfile(member)',
+    ].join('\n');
+    const make = (name, kind, link, symlink = 'no') => {
+      const archive = path.join(dir, `${Math.random()}.tar.gz`);
+      execFileSync(python, [...args, '-c', create, archive, name, kind, link, symlink]);
+      return archive;
+    };
+    const out = path.join(dir, 'good');
+    extractTarGz(make('python/hardlink', 'hard', 'python/target', process.platform === 'win32' ? 'no' : 'yes'), out);
+    assert.equal(fs.readFileSync(path.join(out, 'python/hardlink'), 'utf8'), 'safe');
+    if (process.platform !== 'win32') assert.equal(fs.readFileSync(path.join(out, 'python/symlink'), 'utf8'), 'safe');
+    for (const [name, kind, link] of [
+      ['/absolute', 'file', ''], ['../escape', 'file', ''], ['C:/escape', 'file', ''],
+      ['python/link', 'sym', '../../escape'], ['python/link', 'hard', '../escape'],
+    ]) {
+      assert.throws(() => extractTarGz(make(name, kind, link), path.join(dir, `bad-${Math.random()}`)));
+    }
+    const manifest = buildResourceManifest();
+    assert.ok(manifest.inputs.pythonArchiveExtractor);
+    const changed = structuredClone(manifest);
+    changed.inputs.pythonArchiveExtractor = 'changed';
+    assert.equal(manifestsMatch(manifest, changed), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveArchiveExtractorPython probes Windows candidates in order and skips interpreters without tarfile.data_filter', () => {
+  const probed = [];
+  const resolved = resolveArchiveExtractorPython({
+    platform: 'win32',
+    repoRoot: '/repo',
+    existsSync: () => false,
+    spawnSync(command, args) {
+      probed.push([command, args]);
+      if (command === 'python') {
+        return { status: 0 };
+      }
+      throw new Error(`Unexpected fallback probe: ${command}`);
+    },
+  });
+  assert.deepEqual(resolved, { command: 'python', args: [] });
+  assert.equal(probed.length, 1);
+
+  const fallbackProbed = [];
+  const fallbackResolved = resolveArchiveExtractorPython({
+    platform: 'win32',
+    repoRoot: '/repo',
+    existsSync: () => false,
+    spawnSync(command, args) {
+      fallbackProbed.push([command, args[0] === '-c' ? [] : [args[0]]]);
+      if (command === 'python') {
+        return { status: 1 };
+      }
+      if (command === 'py' && args[0] === '-3.11') {
+        return { error: new Error('ENOENT'), status: null };
+      }
+      if (command === 'py' && args[0] === '-3') {
+        return { status: 0 };
+      }
+      return { status: 1 };
+    },
+  });
+  assert.deepEqual(fallbackResolved, { command: 'py', args: ['-3'] });
+  assert.deepEqual(fallbackProbed, [
+    ['python', []],
+    ['py', ['-3.11']],
+    ['py', ['-3']],
+  ]);
+
+  assert.throws(
+    () => resolveArchiveExtractorPython({
+      platform: 'win32',
+      repoRoot: '/repo',
+      existsSync: () => false,
+      spawnSync: () => ({ status: 1 }),
+    }),
+    /tarfile\.data_filter/,
+  );
 });

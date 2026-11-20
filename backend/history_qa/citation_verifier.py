@@ -158,32 +158,51 @@ def verify_grounded_response(
 
     cleaned_answer, inline_valid_ids = _normalize_inline_citations(raw_answer, set(evidence_map))
 
-    raw_listed = parsed.get("citedEvidenceIds")
-    listed_valid_ids: List[str] = []
-    if isinstance(raw_listed, list):
-        for raw_id in raw_listed:
-            eid = str(raw_id or "").strip()
-            if eid in evidence_map and eid not in listed_valid_ids:
-                listed_valid_ids.append(eid)
-
-    ordered_valid_ids: List[str] = list(inline_valid_ids)
-    for eid in listed_valid_ids:
-        if eid not in ordered_valid_ids:
-            ordered_valid_ids.append(eid)
-
-    # Fail closed if no retrieved passage ID actually supports the response.
-    if not ordered_valid_ids or not cleaned_answer.strip():
+    # Check each sentence or Markdown line independently. This establishes only
+    # marker placement, not whether a passage actually entails the statement.
+    has_content = False
+    unsupported = False
+    for line in cleaned_answer.splitlines():
+        line = line.strip()
+        line = re.sub(r"^(?:>\s*)*(?:[-+*]\s+|\d+[.)]\s+)", "", line)
+        if not line:
+            continue
+        # Do not split decimal points, initials, or common abbreviations.
+        boundaries = []
+        for match in re.finditer(r"[.!?]+(?=\s|$)", line):
+            prefix = line[:match.start()]
+            token = re.search(r"(?:[A-Za-z]\.)*[A-Za-z]+$", prefix)
+            abbreviation = token and (len(token.group()) == 1 or re.fullmatch(r"(?:[A-Za-z]\.)+[A-Za-z]", token.group()) or token.group().lower() in {
+                "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e"
+            })
+            if match.group() == "." and abbreviation:
+                continue
+            boundaries.append(match.end())
+        start = 0
+        segments = []
+        for end in boundaries:
+            # A marker immediately following punctuation belongs to that sentence.
+            suffix = re.match(r"(?:\s*\[E\d+\])+", line[end:])
+            if suffix:
+                end += suffix.end()
+            if end > start:
+                segments.append(line[start:end])
+                start = end
+        segments.append(line[start:])
+        for segment in segments:
+            content = _SINGLE_EVIDENCE_RE.sub("", segment)
+            # Markdown syntax and punctuation alone do not constitute an answer.
+            if not re.search(r"\w", content, re.UNICODE):
+                continue
+            has_content = True
+            if not _SINGLE_EVIDENCE_RE.search(segment):
+                unsupported = True
+    if not inline_valid_ids or not has_content or unsupported:
         return {
-            "ok": True,
-            "needsRepair": False,
-            "status": "insufficient_evidence",
-            "answerMarkdown": INSUFFICIENT_EVIDENCE_MESSAGE,
-            "citations": [],
+            "ok": True, "needsRepair": False, "status": "insufficient_evidence",
+            "answerMarkdown": INSUFFICIENT_EVIDENCE_MESSAGE, "citations": [],
         }
-
-    if not inline_valid_ids and listed_valid_ids:
-        suffix = " ".join(f"[{eid}]" for eid in listed_valid_ids)
-        cleaned_answer = f"{cleaned_answer} {suffix}".strip()
+    ordered_valid_ids = inline_valid_ids
 
     citations: List[Dict[str, Any]] = []
     for eid in ordered_valid_ids:

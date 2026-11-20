@@ -935,6 +935,7 @@ historyQaService = createHistoryQaService({
   enqueueAiComputeAction,
   enqueueGpuResourceActionForQa: gpuResourceActionQueue.enqueue,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
+  hasInFlightAiAddonSetup: () => Boolean(aiAddonIpc?.hasInFlightAiAddonSetup()),
   getAiAddonRuntimeOptions,
   buildSummaryRuntimeEnv,
   resolveCudaStatusForTranscription,

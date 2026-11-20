@@ -200,3 +200,14 @@ test('real Chromium strict CSP loads bundled marked + DOMPurify, strips XSS & fo
   assert.equal(r.clickedFirstStartSec, 862);
   assert.deepEqual(r.copiedCode, ['const marker = "[E1]";\n']);
 });
+
+test('recency uses calendar dates across daylight saving changes', () => {
+  const previous = process.env.TZ;
+  process.env.TZ = 'Europe/London';
+  try {
+    const groups = groupThreadsByRecency([{ id: 'before', updatedAt: '2026-03-29T12:00:00' }], new Date('2026-03-30T12:00:00'));
+    assert.equal(groups[0].id, 'yesterday');
+  } finally {
+    if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous;
+  }
+});

@@ -159,12 +159,18 @@ def build_qa_messages(
     return messages
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def format_chatml_prompt(messages: Sequence[Dict[str, str]]) -> str:
     """Format multi-turn messages into ChatML text for single-turn llama-cli fallback."""
     parts: List[str] = []
     for msg in messages:
         role = msg["role"]
-        parts.append(f"<|im_start|>{role}\n{msg['content']}<|im_end|>")
+        content = str(msg['content']).replace('<|', '<\u200b|')
+        parts.append(f"<|im_start|>{role}\n{content}<|im_end|>")
     parts.append("<|im_start|>assistant\n")
     return "\n".join(parts)
 
@@ -204,7 +210,7 @@ def call_llama_server(
         },
         method="POST",
     )
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirects())
     try:
         with opener.open(request, timeout=timeout_seconds) as response:
             raw_body = response.read().decode("utf-8", errors="replace")

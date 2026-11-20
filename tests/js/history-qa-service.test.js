@@ -45,6 +45,9 @@ function makeQaHarness({
   serverShaOverride = null,
   idleTimeoutMs = 60 * 1000,
   onQaRunnerPayload = null,
+  checkStatus = null,
+  queueAction = null,
+  getSummaryArtifactPath = null,
 } = {}) {
   const recordingsDir = path.join(tmpDir, 'recordings');
   const extractDir = path.join(tmpDir, 'ai-addons', 'models', 'summary', 'qwen3.5-9b-q4-k-m', 'runtime', `${platform}-${arch}`, 'extract', 'cuda-12.8');
@@ -79,6 +82,9 @@ function makeQaHarness({
   const chatThreadStore = createChatThreadStore({ app: { getPath: () => tmpDir }, path, fs });
   let syncCalls = 0;
   const historySearchService = {
+    getGeneration: () => 1,
+    enqueueOperation: (action) => action(),
+    retainProcessUntilExit: () => {},
     getIndexPath: () => path.join(tmpDir, 'search', 'history-index.sqlite'),
     async ensureSynced() {
       syncCalls += 1;
@@ -116,7 +122,7 @@ function makeQaHarness({
     pythonConfig: { backendPath: path.join(tmpDir, 'backend') },
     getBackendModuleArgs: (mod, args) => ['-m', mod, ...args],
     getAiAddonRuntimeOptions: (opts) => opts || {},
-    checkAiAddonSetupStatus: async () => aiStatus || ({
+    checkAiAddonSetupStatus: checkStatus || (async () => aiStatus || ({
       features: {
         summary: {
           status: 'ready',
@@ -126,14 +132,14 @@ function makeQaHarness({
           runtimeCache: { valid: true },
         },
       },
-    }),
+    })),
     getSummaryArtifactForPlatform: () => ({ id: 'qwen-artifact', fileName: 'Qwen3.5-9B-Q4_K_M.gguf' }),
     getSummaryRuntimeArtifactForPlatform: () => ({ id: 'llama-cpp-v0.3.0-linux-x64-cuda-12.8' }),
     getModelById: (feature, modelId) => {
       getModelByIdCalls.push([feature, modelId]);
       return { id: modelId, label: 'Qwen 3.5 9B (Q4_K_M)' };
     },
-    getSummaryArtifactPath: () => modelPath,
+    getSummaryArtifactPath: getSummaryArtifactPath || (() => modelPath),
     getSummaryRuntimeDir: () => path.dirname(path.dirname(extractDir)),
     buildSummaryRuntimeEnv: () => ({ LD_LIBRARY_PATH: extractDir }),
     resolveCudaStatusForTranscription: async () => (cudaReady ? {
@@ -155,7 +161,7 @@ function makeQaHarness({
     chatThreadStore,
     enqueueAiComputeAction: async (action) => {
       queueRuns += 1;
-      return action();
+      return queueAction ? queueAction(action) : action();
     },
     enqueueGpuResourceActionForQa: async (action) => action(),
     hasPendingAiComputeWork: () => computeBusy,
@@ -433,4 +439,107 @@ test('cancel-history-qa aborts in-flight generation and forceKillOnShutdown clea
   assert.equal(h.spawnedServers.length, 1);
   h.service.forceKillOnShutdown();
   assert.equal(h.spawnedServers[0].proc.killedSignal, 'SIGKILL');
+});
+
+
+test('admission reserves synchronously and cancellation interrupts pending eligibility', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-admission-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const harness = makeQaHarness({ tmpDir, checkStatus: () => new Promise(() => {}) });
+  const first = harness.service.askHistory({ question: 'first' });
+  await assert.rejects(harness.service.askHistory({ question: 'second' }), /already being generated/);
+  assert.equal(harness.service.cancelActiveQuestion().canceled, true);
+  await assert.rejects(first, (error) => error.code === HISTORY_QA_CANCEL_CODE);
+  assert.equal(harness.spawnedPython.length, 0);
+});
+
+test('canceled queued question never starts model work', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-queue-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  let release;
+  let queued;
+  const waiting = new Promise((resolve) => { queued = resolve; });
+  const harness = makeQaHarness({ tmpDir, queueAction: (action) => new Promise((resolve, reject) => {
+    release = () => Promise.resolve().then(action).then(resolve, reject);
+    queued();
+  }) });
+  const pending = harness.service.askHistory({ question: 'when?' });
+  await waiting;
+  harness.service.cancelActiveQuestion();
+  release();
+  await assert.rejects(pending, (error) => error.code === HISTORY_QA_CANCEL_CODE);
+  assert.equal(harness.spawnedServers.length, 0);
+  assert.equal(harness.spawnedPython.filter((entry) => entry.args.includes('history_qa.qa_runner')).length, 0);
+});
+
+test('idle unload waits until an active warm question finishes', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-warm-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  let count = 0;
+  let finish;
+  let signalStarted;
+  const started = new Promise((resolve) => { signalStarted = resolve; });
+  const harness = makeQaHarness({ tmpDir, idleTimeoutMs: 30, onQaRunnerPayload(_payload, proc) {
+    count += 1;
+    const respond = () => {
+      proc.stdout.emit('data', JSON.stringify({ status: 'answered', answerMarkdown: 'answer', citations: [], evidenceCount: 1 }));
+      proc.emit('close', 0);
+    };
+    if (count === 1) respond();
+    else { finish = respond; signalStarted(); }
+  } });
+  await harness.service.askHistory({ question: 'first' });
+  const pending = harness.service.askHistory({ question: 'second' });
+  await started;
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  assert.equal(harness.spawnedServers[0].proc.killedSignal, undefined);
+  finish();
+  await pending;
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  assert.ok(harness.spawnedServers[0].proc.killedSignal);
+});
+
+test('switching models unloads prior resident server with model_changed without self-canceling the new turn', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-model-switch-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const modelPathA = path.join(tmpDir, 'model-a.gguf');
+  const modelPathB = path.join(tmpDir, 'model-b.gguf');
+  fs.writeFileSync(modelPathA, 'gguf-a');
+  fs.writeFileSync(modelPathB, 'gguf-b');
+
+  let activeModelId = 'qwen3.5-9b-q4-k-m';
+  let activeModelPath = modelPathA;
+  const h = makeQaHarness({
+    tmpDir,
+    getSummaryArtifactPath: () => activeModelPath,
+    checkStatus: async () => ({
+      features: {
+        summary: {
+          status: 'ready',
+          setupComplete: true,
+          modelId: activeModelId,
+          cache: { valid: true },
+          runtimeCache: { valid: true },
+        },
+      },
+    }),
+  });
+
+  const first = await h.service.askHistory({ question: 'First model question?' });
+  assert.equal(first.status, 'answered');
+  assert.equal(h.spawnedServers.length, 1);
+
+  activeModelId = 'qwen3.5-4b-q4-k-m';
+  activeModelPath = modelPathB;
+  const second = await h.service.askHistory({ question: 'Second model question?' });
+  assert.equal(second.status, 'answered');
+  assert.equal(h.spawnedServers.length, 2);
+  assert.equal(h.spawnedServers[0].proc.killedSignal, 'SIGTERM');
+
+  const modelStates = h.events
+    .filter((e) => e.channel === 'history-qa-model-state')
+    .map((e) => ({ status: e.payload.status, reason: e.payload.reason }));
+  assert.ok(modelStates.some((s) => s.status === 'unloading' && s.reason === 'model_changed'));
+  assert.ok(modelStates.some((s) => s.status === 'unloaded' && s.reason === 'model_changed'));
 });

@@ -22,7 +22,6 @@ MIN_CUE_DURATION_MS = 100
 _SHA256_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
 _SENTENCE_END_RE = re.compile(r"[.!?。！？]$")
 _ATTACH_PUNCT_RE = re.compile(r"^[,.;:!?%)\]}…，。！？、；：]+$")
-_CJK_CHAR_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]")
 
 
 def hash_transcript_text(text: Any) -> str:
@@ -138,7 +137,6 @@ def _extract_valid_words(segment: Dict[str, Any]) -> Optional[List[Dict[str, Any
         end_ms = max(start_ms, int(round(end_f * scale)))
         join_no_space = explicit_join_no_space or (
             idx > 0
-            and isinstance(item, dict) is False
             and uses_leading_space_tokens
             and raw_str == raw_str.lstrip()
         )
@@ -205,157 +203,19 @@ def _cues_from_words(
     return cues
 
 
-def _break_oversized_piece(piece: str, *, max_chars: int) -> List[str]:
-    if len(piece) <= max_chars:
-        return [piece]
-
-    clauses = [part.strip() for part in re.split(r"(?<=[,;:\u3001\uff0c\uff1b])\s+", piece) if part.strip()]
-    if len(clauses) > 1:
-        expanded: List[str] = []
-        for clause in clauses:
-            expanded.extend(_break_oversized_piece(clause, max_chars=max_chars))
-        return expanded
-
-    tokens = [tok for tok in piece.split(" ") if tok]
-    if len(tokens) > 1:
-        expanded = []
-        for tok in tokens:
-            if len(tok) <= max_chars:
-                expanded.append(tok)
-            else:
-                expanded.extend(tok[i:i + max_chars] for i in range(0, len(tok), max_chars))
-        return expanded
-
-    return [piece[i:i + max_chars] for i in range(0, len(piece), max_chars)]
-
-
-def _split_segment_text(
-    text: str,
-    *,
-    duration_ms: int,
-    max_cue_duration_ms: int,
-    max_cue_chars: int,
-) -> List[str]:
-    cleaned = _clean_text(text)
-    if not cleaned:
-        return []
-
-    target_parts = max(
-        1,
-        math.ceil(duration_ms / max(1, max_cue_duration_ms)),
-        math.ceil(len(cleaned) / max(1, max_cue_chars)),
-    )
-    if target_parts == 1 and len(cleaned) <= max_cue_chars:
-        return [cleaned]
-
-    # Split into sentence-first units, then break long units cleanly.
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?。！？])\s+", cleaned) if part.strip()]
-    units: List[str] = []
-    # When we need multiple parts due to long duration, prefer clause/word granularity
-    # so we have natural breakpoints.
-    unit_limit = max_cue_chars if target_parts == 1 else min(max_cue_chars, max(16, math.ceil(len(cleaned) / target_parts)))
-
-    if len(sentences) >= target_parts and all(len(s) <= max_cue_chars for s in sentences):
-        units = sentences
-    else:
-        for sentence in sentences:
-            if len(sentence) <= unit_limit:
-                units.append(sentence)
-                continue
-            clauses = [part.strip() for part in re.split(r"(?<=[,;:\u3001\uff0c\uff1b])\s+", sentence) if part.strip()]
-            for clause in clauses:
-                if len(clause) <= unit_limit:
-                    units.append(clause)
-                    continue
-                words = [word for word in clause.split(" ") if word]
-                if len(words) > 1:
-                    for word in words:
-                        units.extend(_break_oversized_piece(word, max_chars=max_cue_chars))
-                elif len(clause) > max_cue_chars or (_CJK_CHAR_RE.search(clause) and len(clause) >= target_parts * 8):
-                    slice_size = min(max_cue_chars, max(8, math.ceil(len(clause) / target_parts)))
-                    units.extend(clause[i:i + slice_size] for i in range(0, len(clause), slice_size))
-                else:
-                    units.append(clause)
-
-    if len(units) <= 1:
-        return units or [cleaned]
-
-    # Pack units into chunks <= max_cue_chars while respecting target_parts.
-    ideal_chars = max_cue_chars if target_parts <= 1 else min(max_cue_chars, max(1, math.ceil(len(cleaned) / target_parts)))
-    chunks: List[str] = []
-    current_parts: List[str] = []
-    current_len = 0
-    joiner_is_space = " " in cleaned
-
-    for idx, unit in enumerate(units):
-        sep_len = 1 if (current_parts and joiner_is_space) else 0
-        next_len = current_len + sep_len + len(unit)
-        remaining_units = len(units) - idx
-        remaining_needed_chunks = max(0, target_parts - len(chunks) - 1)
-        exceeds_hard_limit = next_len > max_cue_chars
-        exceeds_ideal_with_room = (
-            target_parts > 1
-            and next_len > ideal_chars
-            and remaining_units >= remaining_needed_chunks
-            and current_len > 0
-        )
-        if current_parts and (exceeds_hard_limit or exceeds_ideal_with_room):
-            chunks.append((" " if joiner_is_space else "").join(current_parts).strip())
-            current_parts = [unit]
-            current_len = len(unit)
-        else:
-            current_parts.append(unit)
-            current_len = next_len
-
-    if current_parts:
-        chunks.append((" " if joiner_is_space else "").join(current_parts).strip())
-
-    return [chunk for chunk in chunks if chunk]
-
-
 def _cues_from_text_segment(
-    segment: Dict[str, Any],
     *,
     start_ms: int,
     end_ms: int,
     text: str,
     speaker: str,
-    max_cue_duration_ms: int,
-    max_cue_chars: int,
 ) -> List[Dict[str, Any]]:
-    duration_ms = max(0, end_ms - start_ms)
-    chunks = _split_segment_text(
-        text,
-        duration_ms=duration_ms,
-        max_cue_duration_ms=max_cue_duration_ms,
-        max_cue_chars=max_cue_chars,
-    )
-    if not chunks:
-        return []
-    if len(chunks) == 1:
-        cue: Dict[str, Any] = {"startMs": start_ms, "endMs": end_ms, "text": chunks[0]}
-        if speaker:
-            cue["speaker"] = speaker
-        return [cue]
+    # Segment boundaries are measured; subdividing by text length invents timing.
+    cue: Dict[str, Any] = {"startMs": start_ms, "endMs": end_ms, "text": text}
+    if speaker:
+        cue["speaker"] = speaker
+    return [cue]
 
-    weights = [max(1, len(re.sub(r"\s+", "", chunk))) for chunk in chunks]
-    total_weight = sum(weights)
-    cues: List[Dict[str, Any]] = []
-    cursor_ms = start_ms
-    accumulated_weight = 0
-    for idx, (chunk, weight) in enumerate(zip(chunks, weights)):
-        accumulated_weight += weight
-        if idx == len(chunks) - 1:
-            chunk_end_ms = end_ms
-        else:
-            chunk_end_ms = start_ms + int(round((duration_ms * accumulated_weight) / total_weight))
-        chunk_end_ms = max(cursor_ms, chunk_end_ms)
-        cue = {"startMs": cursor_ms, "endMs": chunk_end_ms, "text": chunk}
-        if speaker:
-            cue["speaker"] = speaker
-        cues.append(cue)
-        cursor_ms = chunk_end_ms
-    return cues
 
 
 def build_caption_cues(
@@ -411,13 +271,10 @@ def build_caption_cues(
         speaker = _clean_text(segment.get("speaker"))
         raw_cues.extend(
             _cues_from_text_segment(
-                segment,
                 start_ms=start_ms,
                 end_ms=end_ms,
                 text=text,
                 speaker=speaker,
-                max_cue_duration_ms=max_cue_duration_ms,
-                max_cue_chars=max_cue_chars,
             )
         )
 

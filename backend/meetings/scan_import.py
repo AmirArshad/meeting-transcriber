@@ -23,6 +23,18 @@ class ScanCandidate:
     title: str
     duration: float
     has_existing_transcript: bool
+    transcript_identity: object = None
+    captions_identity: object = None
+    matched_captions: Optional[Dict] = None
+
+
+def file_identity(path: Path):
+    """Snapshot a path without following links for inexpensive scan revalidation."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
 
 @contextmanager

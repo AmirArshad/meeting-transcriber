@@ -177,3 +177,22 @@ test('ensureSynced and rebuildIndex refuse new work once quit is committed', asy
   await assert.rejects(() => service.ensureSynced(), /while the app is quitting/);
   await assert.rejects(() => service.rebuildIndex(), /while the app is quitting/);
 });
+
+test('private query is passed on stdin and stale search results are rejected', async (t) => {
+  const tmpDir = makeTempDir();
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  let child;
+  let input;
+  const { service, spawned } = makeHarness({ userDataDir: tmpDir, spawnImpl(_args, proc) {
+    child = proc;
+    proc.stdin = { end(value) { input = JSON.parse(value); } };
+  } });
+  const pending = service.searchHistory({ query: '-private meeting' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(spawned[0].args.includes('-private meeting'), false);
+  assert.equal(input.query, '-private meeting');
+  service.markDirty();
+  child.stdout.emit('data', JSON.stringify({ meetings: [] }));
+  child.emit('close', 0);
+  await assert.rejects(pending, /History changed/);
+});

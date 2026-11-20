@@ -9,7 +9,7 @@
   const DAY_MS = 24 * 60 * 60 * 1000;
 
   function toStartOfLocalDay(dateObj) {
-    return new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate()).getTime();
+    return Date.UTC(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
   }
 
   function groupThreadsByRecency(threads, now = Date.now()) {

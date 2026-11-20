@@ -27,7 +27,8 @@ def main() -> None:
     subparsers.add_parser("status", help="Inspect index status")
 
     search_parser = subparsers.add_parser("search", help="Search indexed meetings and passages")
-    search_parser.add_argument("--query", required=True, help="Search query text")
+    search_parser.add_argument("--query", default=None, help="Search query text")
+    search_parser.add_argument("--stdin-json", action="store_true", help="Read search options from stdin")
     search_parser.add_argument("--limit", type=int, default=50, help="Max matched meetings")
     search_parser.add_argument("--max-matches", type=int, default=3, help="Max passages per meeting")
     search_parser.add_argument("--meeting-id", default=None, help="Optional single meeting ID scope")
@@ -46,6 +47,11 @@ def main() -> None:
     elif args.command == "status":
         result = get_history_index_status(recordings_dir, index_path)
     elif args.command == "search":
+        if args.stdin_json:
+            options = json.load(sys.stdin)
+            args.query = options.get("query", "")
+        if args.query is None:
+            parser.error("search requires --query or --stdin-json")
         result = search_history_index(
             recordings_dir,
             index_path,

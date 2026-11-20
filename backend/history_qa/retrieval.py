@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -131,12 +132,30 @@ def build_retrieval_query(question: str) -> Tuple[str, List[str]]:
 
 
 def normalize_scope(raw_scope: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    if not isinstance(raw_scope, dict):
+    if raw_scope is None:
         return {"type": "all", "meetingIds": None, "dateFrom": None, "dateTo": None}
 
-    scope_type = str(raw_scope.get("type") or "all").strip().lower()
+    if not isinstance(raw_scope, dict):
+        raise ValueError("Invalid history scope.")
+    if "type" not in raw_scope and ("meetingIds" in raw_scope or "meetingId" in raw_scope):
+        raise ValueError("Missing history scope type.")
+    scope_type = raw_scope.get("type", "all")
+    if not isinstance(scope_type, str) or scope_type.strip().lower() not in ("all", "single_meeting", "selected_meetings"):
+        raise ValueError("Invalid history scope type.")
+    scope_type = scope_type.strip().lower()
+    date_pattern = r"\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?"
+    for key in ("dateFrom", "dateTo"):
+        value = raw_scope.get(key)
+        if value is not None:
+            if not isinstance(value, str) or (value.strip() and not re.fullmatch(date_pattern, value.strip())):
+                raise ValueError("Invalid history scope date.")
     raw_ids = raw_scope.get("meetingIds")
+    if raw_ids is not None:
+        if not isinstance(raw_ids, list) or any(not isinstance(item, str) or not item.strip() for item in raw_ids):
+            raise ValueError("Invalid history scope meeting IDs.")
     meeting_id = raw_scope.get("meetingId")
+    if meeting_id is not None and (not isinstance(meeting_id, str) or not meeting_id.strip()):
+        raise ValueError("Invalid history scope meeting ID.")
 
     cleaned_ids: Optional[List[str]] = None
     if scope_type in ("single_meeting", "selected_meetings"):
@@ -395,30 +414,38 @@ def retrieve_evidence(
     selected: List[Dict[str, Any]] = []
     used_tokens = 0
     block_cap = max(1, int(max_evidence_blocks))
-    token_cap = max(256, int(max_evidence_tokens))
+    token_cap = max(0, int(max_evidence_tokens))
 
     for item in merged:
         if len(selected) >= block_cap:
             break
-        block_cost = estimate_token_count(
-            f"{item['meetingTitle']} {item['speaker']} {item['text']}"
-        ) + 32
-        if selected and used_tokens + block_cost > token_cap:
+        # Budget the actual serialized header as well as the passage, using UTF-8
+        # bytes so clipping never splits a Unicode code point.
+        remaining_bytes = (token_cap - used_tokens) * 4
+        title = item["meetingTitle"].encode("utf-8", errors="replace")[:512].decode("utf-8", errors="ignore")
+        speaker = item["speaker"].encode("utf-8", errors="replace")[:512].decode("utf-8", errors="ignore")
+        date = item["meetingDate"][:10]
+        overhead = len(f"[E{len(selected) + 1}] Meeting: {title} ({date}, 999999:59:59 | Speaker: {speaker})\n\n".encode("utf-8")) + 128
+        if remaining_bytes <= overhead:
             break
+        text = item["text"].encode("utf-8", errors="replace")[:remaining_bytes - overhead].decode("utf-8", errors="ignore")
+        if not text.strip():
+            break
+        block_cost = (overhead + len(text.encode("utf-8")) + 3) // 4
         evidence_id = f"E{len(selected) + 1}"
-        excerpt = item["text"] if len(item["text"]) <= 280 else f"{item['text'][:279]}…"
+        excerpt = text if len(text) <= 280 else f"{text[:279]}…"
         selected.append(
             {
                 "evidenceId": evidence_id,
                 "meetingId": item["meetingId"],
-                "meetingTitle": item["meetingTitle"],
+                "meetingTitle": title,
                 "meetingDate": item["meetingDate"],
                 "kind": item["kind"],
                 "startSec": item["startSec"],
                 "endSec": item["endSec"],
-                "speaker": item["speaker"],
+                "speaker": speaker,
                 "excerpt": excerpt,
-                "text": item["text"],
+                "text": text,
                 "sourceTranscriptHash": hash_lookup.get(item["meetingId"], ""),
             }
         )

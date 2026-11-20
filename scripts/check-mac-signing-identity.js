@@ -39,41 +39,21 @@ function nonEmpty(value) {
 }
 
 function evaluateNotarizationCredentials(env = {}) {
-  const appleId = nonEmpty(env.APPLE_ID);
-  const applePassword = nonEmpty(env.APPLE_APP_SPECIFIC_PASSWORD);
-  const appleTeamId = nonEmpty(env.APPLE_TEAM_ID);
-  const anyAppleId = Boolean(appleId || applePassword);
-  const fullAppleId = Boolean(appleId && applePassword && appleTeamId);
-
-  const apiKey = nonEmpty(env.APPLE_API_KEY);
-  const apiKeyId = nonEmpty(env.APPLE_API_KEY_ID);
-  const apiIssuer = nonEmpty(env.APPLE_API_ISSUER);
-  const anyApiKey = Boolean(apiKey || apiKeyId || apiIssuer);
-  const fullApiKey = Boolean(apiKey && apiKeyId && apiIssuer);
-
-  const keychainProfile = nonEmpty(env.APPLE_KEYCHAIN_PROFILE);
-
-  if (anyAppleId && !fullAppleId && !fullApiKey && !keychainProfile) {
-    return {
-      ok: false,
-      configured: false,
-      reason: 'Partial Apple ID notarization credentials set; require APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID.',
-    };
+  const apiValues = [env.APPLE_API_KEY, env.APPLE_API_KEY_ID, env.APPLE_API_ISSUER].map(nonEmpty);
+  const profile = nonEmpty(env.APPLE_KEYCHAIN_PROFILE);
+  // Complete API credentials take precedence, then a preconfigured Keychain profile.
+  // Never pass an Apple ID password to electron-builder: it forwards it on argv.
+  if (apiValues.every(Boolean)) return { ok: true, configured: true, mode: 'api', reason: null };
+  if (profile) return { ok: true, configured: true, mode: 'keychain', reason: null };
+  if (nonEmpty(env.APPLE_ID) || nonEmpty(env.APPLE_APP_SPECIFIC_PASSWORD)) {
+    return { ok: false, configured: false, mode: null,
+      reason: 'Apple ID notarization requires APPLE_KEYCHAIN_PROFILE; raw Apple ID passwords are not accepted.' };
   }
-
-  if (anyApiKey && !fullApiKey && !fullAppleId && !keychainProfile) {
-    return {
-      ok: false,
-      configured: false,
-      reason: 'Partial App Store Connect API notarization credentials set; require APPLE_API_KEY, APPLE_API_KEY_ID, and APPLE_API_ISSUER.',
-    };
+  if (apiValues.some(Boolean)) {
+    return { ok: false, configured: false, mode: null,
+      reason: 'Partial App Store Connect API notarization credentials set; require APPLE_API_KEY, APPLE_API_KEY_ID, and APPLE_API_ISSUER.' };
   }
-
-  return {
-    ok: true,
-    configured: Boolean(fullAppleId || fullApiKey || keychainProfile),
-    reason: null,
-  };
+  return { ok: true, configured: false, mode: null, reason: null };
 }
 
 /**
@@ -165,7 +145,7 @@ function evaluateMacSigningIdentity({ identity, env = {}, allowManagedOverride =
         builderArgs: [],
         reason:
           'AVANEVIS_REQUIRE_SIGNED_RELEASE=1 requires notarization credentials '
-          + '(APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID, APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, '
+          + '(APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, '
           + 'or APPLE_KEYCHAIN_PROFILE).',
       };
     }
@@ -246,6 +226,23 @@ function evaluateMacSigningIdentity({ identity, env = {}, allowManagedOverride =
   };
 }
 
+function notarizationEnvironment(env) {
+  const selected = evaluateNotarizationCredentials(env);
+  const result = { ...env };
+  delete result.APPLE_ID;
+  delete result.APPLE_APP_SPECIFIC_PASSWORD;
+  if (selected.mode !== 'api') {
+    delete result.APPLE_API_KEY;
+    delete result.APPLE_API_KEY_ID;
+    delete result.APPLE_API_ISSUER;
+  }
+  if (selected.mode !== 'keychain') {
+    delete result.APPLE_KEYCHAIN_PROFILE;
+    delete result.APPLE_KEYCHAIN;
+  }
+  return result;
+}
+
 function resolveElectronBuilderBin() {
   const pkgPath = require.resolve('electron-builder/package.json');
   const pkg = require(pkgPath);
@@ -288,9 +285,10 @@ function main() {
 
   const builderBin = resolveElectronBuilderBin();
   const finalArgs = [...passthroughArgs, ...result.builderArgs];
+  const builderEnv = notarizationEnvironment(process.env);
   const child = spawnSync(process.execPath, [builderBin, ...finalArgs], {
     stdio: 'inherit',
-    env: process.env,
+    env: builderEnv,
   });
   process.exit(child.status === null ? 1 : child.status);
 }
@@ -300,6 +298,7 @@ module.exports = {
   SIGNING_CREDENTIAL_ENV_KEYS,
   evaluateMacSigningIdentity,
   evaluateNotarizationCredentials,
+  notarizationEnvironment,
   isStrictSignedRelease,
 };
 

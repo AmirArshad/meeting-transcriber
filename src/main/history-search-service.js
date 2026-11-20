@@ -61,6 +61,12 @@ function createHistorySearchService(deps) {
   let dirtyGeneration = 1;
   let queueTail = Promise.resolve();
   let backgroundSyncScheduled = false;
+  const lingeringProcesses = new Set();
+
+  function retainProcessUntilExit(proc) {
+    lingeringProcesses.add(proc);
+    proc.once('close', () => lingeringProcesses.delete(proc));
+  }
 
   function getSearchDir() {
     return path.join(app.getPath('userData'), 'search');
@@ -76,12 +82,15 @@ function createHistorySearchService(deps) {
   }
 
   function enqueueOperation(action) {
-    const run = queueTail.catch(() => {}).then(action);
+    const run = queueTail.catch(() => {}).then(() => {
+      if (lingeringProcesses.size) throw new Error('Previous history operation is still stopping; please retry.');
+      return action();
+    });
     queueTail = run.catch(() => {});
     return run;
   }
 
-  function runSearchCli(args) {
+  function runSearchCli(args, payload = null) {
     return new Promise((resolve, reject) => {
       const indexPath = getIndexPath();
       const recordingsDir = getRecordingsDir();
@@ -98,6 +107,7 @@ function createHistorySearchService(deps) {
 
       const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
       let settled = false;
+      let timedOut = false;
       const finish = (callback, value) => {
         if (settled) {
           return;
@@ -109,11 +119,18 @@ function createHistorySearchService(deps) {
 
       const timeoutHandle = setTimeout(() => {
         void Promise.resolve(terminateProcessBestEffort(python)).catch(() => {});
+        timedOut = true;
+        retainProcessUntilExit(python);
         finish(reject, new Error('History search command timed out.'));
       }, commandTimeoutMs);
       timeoutHandle.unref?.();
 
+      if (payload && python.stdin) {
+        python.stdin.on?.('error', () => {});
+        python.stdin.end(JSON.stringify(payload));
+      }
       python.on('close', (code) => {
+        if (timedOut) { finish(reject, new Error('History search command timed out.')); return; }
         try {
           processOutput.assertStdoutWithinLimit();
         } catch (error) {
@@ -130,8 +147,7 @@ function createHistorySearchService(deps) {
           return;
         }
 
-        const stderr = processOutput.getStderr().trim();
-        finish(reject, new Error(stderr || `History search failed with exit code ${code}`));
+        finish(reject, new Error(`History search failed with exit code ${code}`));
       });
 
       python.on('error', (error) => {
@@ -196,8 +212,7 @@ function createHistorySearchService(deps) {
 
       const args = [
         'search',
-        '--query',
-        query,
+        '--stdin-json',
         '--limit',
         String(limit),
         '--max-matches',
@@ -216,7 +231,8 @@ function createHistorySearchService(deps) {
         args.push('--no-sync');
       }
 
-      const result = await runSearchCli(args);
+      const result = await runSearchCli(args, { query });
+      if (dirtyGeneration !== syncGen) throw new Error('History changed while searching; please retry.');
       if (shouldSync && dirtyGeneration === syncGen) {
         dirty = false;
       }
@@ -261,6 +277,9 @@ function createHistorySearchService(deps) {
 
   return {
     getIndexPath,
+    enqueueOperation,
+    retainProcessUntilExit,
+    getGeneration: () => dirtyGeneration,
     getSearchDir,
     markDirty,
     triggerBackgroundSync,

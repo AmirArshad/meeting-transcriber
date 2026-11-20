@@ -321,7 +321,7 @@ To enable signed/notarized CI builds in `.github/workflows/build-release.yml` (t
 | macOS | `CSC_LINK` | Base64 `.p12` Developer ID Application certificate |
 | macOS | `CSC_KEY_PASSWORD` | `.p12` export password |
 | macOS | `CSC_NAME` | Optional certificate name qualifier when multiple certs exist |
-| macOS | `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID` | Apple ID `notarytool` credentials (or `APPLE_API_KEY` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER`) |
+| macOS | `APPLE_API_KEY` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER` | App Store Connect API credentials; alternatively use a preconfigured `APPLE_KEYCHAIN_PROFILE` for Apple ID credentials |
 | Windows (PFX) | `WIN_CSC_LINK` + `WIN_CSC_KEY_PASSWORD` | Base64 Authenticode PFX certificate & password (`signtool` SHA-256 + RFC 3161 DigiCert timestamp) |
 | Windows (Azure) | `WINDOWS_AZURE_ENDPOINT` + `WINDOWS_AZURE_CODE_SIGNING_ACCOUNT` + `WINDOWS_AZURE_CERT_PROFILE` + `AZURE_TENANT_ID` + `AZURE_CLIENT_ID` + `AZURE_CLIENT_SECRET` (+ optional `WINDOWS_AZURE_PUBLISHER_NAME`) | Microsoft Azure Trusted Signing (`TrustedSigning` module) |
 
@@ -338,3 +338,5 @@ After building the installer:
 1. Test thoroughly on a clean target machine
 2. Verify packaged resources match the current platform/runtime inputs
 3. Set up or verify CI/CD release automation
+
+For Apple ID notarization, create a notarytool Keychain profile interactively with `xcrun notarytool store-credentials` (omit the password argument so it prompts securely), then set `APPLE_KEYCHAIN_PROFILE` and optionally `APPLE_KEYCHAIN`. Raw `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` credentials are rejected unless a complete API credential set or profile is selected. Complete API credentials take precedence over a profile for both app and DMG. Hosted CI requires App Store Connect API credentials: set the `APPLE_API_KEY` secret to the full `.p8` file contents, and set `APPLE_API_KEY_ID` and `APPLE_API_ISSUER` secrets. The workflow writes the key to a private temporary file and removes it after verification. Existing Apple ID CI configurations must migrate to these API secrets; a hosted runner does not retain Keychain profiles. On a runner with a preconfigured profile, set the `APPLE_KEYCHAIN_PROFILE` repository variable and optionally `APPLE_KEYCHAIN`. Build hosts need Python 3.11 with `tarfile.data_filter` available (`py -3.11` on Windows); the repo-local `.venv` is preferred.

@@ -253,30 +253,9 @@ def temporal_overlap(first: Dict[str, Any], second: Dict[str, Any]) -> float:
 
 
 def extract_window_text_for_turn(result: Dict[str, Any], window: Dict[str, Any]) -> str:
-    """Use Whisper sub-segment timestamps to drop padded context when possible."""
-    segments = result.get("segments")
-    if not isinstance(segments, list) or not segments:
-        return _extract_result_text(result)
-
-    turn = {"start": _to_float(window.get("start")), "end": _to_float(window.get("end"))}
-    audio_start = _to_float(window.get("audioStart"))
-    selected_text: List[str] = []
-    for segment in segments:
-        if not isinstance(segment, dict):
-            continue
-        text = normalize_whitespace(segment.get("text"))
-        if not text:
-            continue
-        absolute = {
-            "start": audio_start + _to_float(segment.get("start")),
-            "end": audio_start + _to_float(segment.get("end")),
-        }
-        if absolute["end"] <= absolute["start"]:
-            continue
-        if temporal_overlap(absolute, turn) > 0:
-            selected_text.append(text)
-
-    return normalize_whitespace(" ".join(selected_text))
+    """Use the same timed selection as the caption sidecar."""
+    cues = extract_window_caption_cues_for_turn(result, window)
+    return normalize_whitespace(" ".join(cue["text"] for cue in cues))
 
 
 def extract_window_caption_cues_for_turn(result: Dict[str, Any], window: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -320,17 +299,13 @@ def extract_window_caption_cues_for_turn(result: Dict[str, Any], window: Dict[st
 
     raw_cues = result.get("captionCues")
     if isinstance(raw_cues, list) and raw_cues:
-        clipped = _clip_items(raw_cues, is_ms=True)
-        if clipped:
-            return clipped
+        return _clip_items(raw_cues, is_ms=True)
 
     segments = result.get("segments")
     if isinstance(segments, list) and segments:
-        clipped = _clip_items(segments, is_ms=False)
-        if clipped:
-            return clipped
+        return _clip_items(segments, is_ms=False)
 
-    fallback_text = extract_window_text_for_turn(result, window)
+    fallback_text = _extract_result_text(result)
     if not fallback_text:
         return []
     cue = {
@@ -420,7 +395,8 @@ def transcribe_speaker_windows(
             ffmpeg_path=ffmpeg_path,
         )
         result = transcriber.transcribe_file(str(chunk_path), save_markdown=False)
-        text = extract_window_text_for_turn(result, window)
+        window_cues = extract_window_caption_cues_for_turn(result, window)
+        text = normalize_whitespace(" ".join(cue["text"] for cue in window_cues))
         if not text:
             continue
         transcript_segments.append({
@@ -430,25 +406,14 @@ def transcribe_speaker_windows(
             "speaker": str(window.get("speaker", "") or ""),
         })
         if out_caption_cues is not None:
-            window_cues = extract_window_caption_cues_for_turn(result, window)
-            if window_cues:
-                out_caption_cues.extend(window_cues)
-                if out_precision_flags is not None:
-                    used_raw_cues = isinstance(result.get("captionCues"), list) and bool(result.get("captionCues"))
-                    out_precision_flags.append(
-                        "word"
-                        if used_raw_cues and result.get("captionTimingPrecision") == "word"
-                        else "segment"
-                    )
-            else:
-                out_caption_cues.append({
-                    "start": _to_float(window.get("start")),
-                    "end": _to_float(window.get("end")),
-                    "text": text,
-                    "speaker": str(window.get("speaker", "") or ""),
-                })
-                if out_precision_flags is not None:
-                    out_precision_flags.append("segment")
+            out_caption_cues.extend(window_cues)
+            if out_precision_flags is not None:
+                used_raw_cues = isinstance(result.get("captionCues"), list) and bool(result.get("captionCues"))
+                out_precision_flags.append(
+                    "word"
+                    if used_raw_cues and result.get("captionTimingPrecision") == "word"
+                    else "segment"
+                )
 
     return transcript_segments
 

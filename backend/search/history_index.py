@@ -583,7 +583,7 @@ def _resolve_meeting_summary_text(
         return "", ""
 
     expected_hash = summary_meta.get("sourceTranscriptHash")
-    if expected_hash and expected_hash != transcript_hash:
+    if not expected_hash or expected_hash != transcript_hash:
         return "", ""
 
     summary_path = summary_meta.get("markdownPath")
@@ -606,12 +606,16 @@ def _resolve_meeting_summary_text(
 def _connect_sqlite(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=5.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode = WAL;")
-    conn.execute("PRAGMA synchronous = NORMAL;")
-    conn.execute("PRAGMA busy_timeout = 5000;")
-    conn.execute("PRAGMA foreign_keys = ON;")
-    return conn
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        conn.execute("PRAGMA foreign_keys = ON;")
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -687,6 +691,11 @@ def _create_schema(conn: sqlite3.Connection) -> None:
     )
 
 
+def _raise_if_busy(error: sqlite3.DatabaseError) -> None:
+    if getattr(error, "sqlite_errorcode", 0) & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+        raise error
+
+
 def _schema_is_valid(conn: sqlite3.Connection) -> bool:
     try:
         tables = {
@@ -704,7 +713,8 @@ def _schema_is_valid(conn: sqlite3.Connection) -> bool:
             return False
         conn.execute("SELECT count(*) FROM passages_fts").fetchone()
         return True
-    except sqlite3.DatabaseError:
+    except sqlite3.DatabaseError as error:
+        _raise_if_busy(error)
         return False
 
 
@@ -971,6 +981,24 @@ def rebuild_history_index(recordings_dir: str | Path, index_path: str | Path) ->
             conn.close()
 
         _remove_sqlite_sidecars(tmp_path)
+        if target.exists():
+            # Refuse replacement while another connection owns the WAL.  A
+            # successful mode switch checkpoints it before any sidecar removal.
+            existing = sqlite3.connect(str(target), timeout=5.0)
+            try:
+                existing.execute("PRAGMA busy_timeout = 5000")
+                checkpoint = existing.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                if checkpoint and checkpoint[0]:
+                    raise sqlite3.OperationalError("History index WAL is busy")
+                mode = existing.execute("PRAGMA journal_mode = DELETE").fetchone()
+                if not mode or mode[0].lower() != "delete":
+                    raise sqlite3.OperationalError("History index WAL could not be closed")
+            except sqlite3.DatabaseError as error:
+                if getattr(error, "sqlite_errorcode", 0) & 0xff not in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB):
+                    raise
+                # Corrupt databases cannot be checkpointed.
+            finally:
+                existing.close()
         _remove_sqlite_sidecars(target)
         os.replace(tmp_path, target)
     finally:
@@ -999,6 +1027,7 @@ def _ensure_synced_connection(
         conn = _connect_sqlite(index_path)
         return conn, stats
 
+    conn = None
     try:
         conn = _connect_sqlite(index_path)
         if not _schema_is_valid(conn):
@@ -1011,11 +1040,10 @@ def _ensure_synced_connection(
             stats["rebuilt"] = False
             return conn, stats
         return conn, None
-    except sqlite3.DatabaseError:
-        try:
+    except sqlite3.DatabaseError as error:
+        if conn is not None:
             conn.close()
-        except Exception:
-            pass
+        _raise_if_busy(error)
         stats = rebuild_history_index(recordings_dir, index_path)
         return _connect_sqlite(index_path), stats
 
@@ -1483,7 +1511,8 @@ def search_history_index(
     try:
         try:
             return run_search(conn)
-        except sqlite3.DatabaseError:
+        except sqlite3.DatabaseError as error:
+            _raise_if_busy(error)
             conn.close()
             rebuild_history_index(rec_dir, target)
             conn = _connect_sqlite(target)

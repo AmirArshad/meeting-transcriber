@@ -19,6 +19,8 @@ const {
 const {
   AD_HOC_IDENTITY,
   evaluateMacSigningIdentity,
+  evaluateNotarizationCredentials,
+  notarizationEnvironment,
 } = require('../../scripts/check-mac-signing-identity');
 const {
   getSpeakrsCliBinaryName,
@@ -256,9 +258,7 @@ test('evaluateMacSigningIdentity managed override supports ad-hoc dev, Developer
       AVANEVIS_REQUIRE_SIGNED_RELEASE: '1',
       CSC_LINK: 'base64-p12',
       CSC_KEY_PASSWORD: 'secret',
-      APPLE_ID: 'dev@example.com',
-      APPLE_APP_SPECIFIC_PASSWORD: 'app-pw',
-      APPLE_TEAM_ID: 'TEAM123456',
+      APPLE_KEYCHAIN_PROFILE: 'notary-profile',
     },
     allowManagedOverride: true,
   });
@@ -312,6 +312,12 @@ test('package.json, release workflow, and platform verifiers wire signing and no
   assert.match(RELEASE_WORKFLOW, /require_signed_release:/);
   assert.match(RELEASE_WORKFLOW, /AVANEVIS_REQUIRE_SIGNED_RELEASE:/);
   assert.match(RELEASE_WORKFLOW, /bash scripts\/notarize-macos-dmg\.sh/);
+  assert.match(RELEASE_WORKFLOW, /API_KEY_CONTENT: \${{ secrets\.APPLE_API_KEY }}/);
+  assert.match(RELEASE_WORKFLOW, /umask 077/);
+  assert.match(RELEASE_WORKFLOW, /APPLE_API_KEY=\$key_path/);
+  assert.match(RELEASE_WORKFLOW, /if: always\(\) && matrix\.os == 'macOS'/);
+  assert.match(RELEASE_WORKFLOW, /rm -f "\$RUNNER_TEMP\/avanevis-notary-key\.p8"/);
+  assert.equal((RELEASE_WORKFLOW.match(/APPLE_KEYCHAIN_PROFILE: \${{ vars\.APPLE_KEYCHAIN_PROFILE }}/g) || []).length, 3);
   assert.match(RELEASE_WORKFLOW, /bash scripts\/verify-macos-installer\.sh/);
   assert.match(RELEASE_WORKFLOW, /verify-windows-installer\.ps1 -SignaturesOnly/);
 
@@ -326,4 +332,21 @@ test('package.json, release workflow, and platform verifiers wire signing and no
   assert.match(MAC_DMG_VERIFY_SCRIPT, /Authority=Developer ID Application:/);
   assert.match(MAC_DMG_VERIFY_SCRIPT, /xcrun stapler validate "\$dmg"/);
   assert.match(MAC_DMG_VERIFY_SCRIPT, /spctl --assess --type open/);
+});
+
+
+test('notarization selects complete credentials and strips raw Apple passwords from builder', () => {
+  const env = { APPLE_ID: 'dev@example.com', APPLE_APP_SPECIFIC_PASSWORD: 'secret',
+    APPLE_TEAM_ID: 'TEAM', APPLE_API_KEY: '/tmp/key.p8', APPLE_API_KEY_ID: 'KEY',
+    APPLE_API_ISSUER: 'ISSUER', APPLE_KEYCHAIN_PROFILE: 'profile' };
+  assert.equal(evaluateNotarizationCredentials(env).mode, 'api');
+  const builderEnv = notarizationEnvironment(env);
+  assert.equal(builderEnv.APPLE_ID, undefined);
+  assert.equal(builderEnv.APPLE_APP_SPECIFIC_PASSWORD, undefined);
+  assert.equal(builderEnv.APPLE_KEYCHAIN_PROFILE, undefined);
+  assert.equal(builderEnv.APPLE_API_KEY, '/tmp/key.p8');
+  assert.equal(evaluateNotarizationCredentials({ APPLE_ID: 'dev', APPLE_APP_SPECIFIC_PASSWORD: 'secret', APPLE_TEAM_ID: 'TEAM' }).ok, false);
+  const profileEnv = notarizationEnvironment({ APPLE_KEYCHAIN_PROFILE: 'profile', APPLE_API_KEY: 'partial' });
+  assert.equal(profileEnv.APPLE_API_KEY, undefined);
+  assert.equal(profileEnv.APPLE_KEYCHAIN_PROFILE, 'profile');
 });

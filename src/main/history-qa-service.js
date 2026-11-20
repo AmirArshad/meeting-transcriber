@@ -273,6 +273,16 @@ function waitAbortableMs(ms, signal) {
   });
 }
 
+function awaitAbortable(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason || createQaCancelError());
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(signal.reason || createQaCancelError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
 /**
  * @param {object} deps
  */
@@ -306,10 +316,12 @@ function createHistoryQaService(deps) {
     assertTrustedRendererSender = () => {},
     terminateProcessBestEffort = async (proc) => proc?.kill?.(),
     isQuitCommitted = () => false,
+    hasInFlightAiAddonSetup = () => false,
     platform = process.platform,
     arch = process.arch,
     idleTimeoutMs = DEFAULT_IDLE_UNLOAD_MS,
     serverStartupTimeoutMs = DEFAULT_SERVER_STARTUP_TIMEOUT_MS,
+    serverStopTimeoutMs = 6000,
     allocateLoopbackPort = () => defaultAllocateLoopbackPort(netModule),
     probeServerHealth = ({ port, token }) => defaultHttpHealthProbe({ port, token, httpModule }),
     pinnedLinuxServer = PINNED_LINUX_LLAMA_SERVER,
@@ -514,14 +526,32 @@ function createHistoryQaService(deps) {
     return { canceled: true, threadId: req.threadId || null };
   }
 
-  async function unloadModel(reason = 'manual') {
+  async function stopServer(server) {
+    void Promise.resolve().then(() => terminateProcessBestEffort(server.proc)).catch(() => {});
+    let timer;
+    try {
+      await Promise.race([
+        server.exitPromise,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Local Q&A model server did not stop; please retry.')), serverStopTimeoutMs);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function unloadModel(reason = 'manual', { cancelActive = true } = {}) {
     if (activeUnloadPromise) {
       return activeUnloadPromise;
     }
 
     activeUnloadPromise = (async () => {
       clearIdleTimer();
-      cancelActiveQuestion('Response generation stopped because the local model is unloading.');
+      if (cancelActive) {
+        cancelActiveQuestion('Response generation stopped because the local model is unloading.');
+      }
 
       const server = residentServer;
       if (!server) {
@@ -539,28 +569,11 @@ function createHistoryQaService(deps) {
       }
 
       emitModelState({ status: 'unloading', reason });
-      residentServer = null;
       server.unloading = true;
+      server.unloadReason = reason;
       server.token = null;
 
-      try {
-        await Promise.all([
-          Promise.resolve(terminateProcessBestEffort(server.proc)).catch(() => {}),
-          Promise.race([
-            server.exitPromise,
-            new Promise((resolve) => setTimeout(resolve, 6000).unref?.()),
-          ]),
-        ]);
-      } finally {
-        emitModelState({
-          status: 'unloaded',
-          modelId: null,
-          modelName: null,
-          backend: null,
-          loadedAt: null,
-          reason,
-        });
-      }
+      await stopServer(server);
 
       return { unloaded: true, alreadyUnloaded: false };
     })().finally(() => {
@@ -609,7 +622,6 @@ function createHistoryQaService(deps) {
         }
       }
       residentServer.token = null;
-      residentServer = null;
     }
   }
 
@@ -656,7 +668,7 @@ function createHistoryQaService(deps) {
     }
 
     if (residentServer) {
-      await unloadModel('model_changed');
+      await unloadModel('model_changed', { cancelActive: false });
     }
 
     if (cancelSignal && cancelSignal.aborted) {
@@ -665,7 +677,8 @@ function createHistoryQaService(deps) {
 
     const userDataDir = app.getPath('userData');
     const token = crypto.randomBytes(32).toString('hex');
-    const port = await allocateLoopbackPort();
+    const port = await awaitAbortable(allocateLoopbackPort(), cancelSignal);
+    if (cancelSignal?.aborted || isQuitCommitted() || hasInFlightAiAddonSetup()) throw cancelSignal?.reason || createQaCancelError();
     const args = [
       '--host',
       '127.0.0.1',
@@ -743,9 +756,11 @@ function createHistoryQaService(deps) {
       runtimeDir,
       exited: false,
       unloading: false,
+      unloadReason: null,
       exitPromise,
     };
 
+    residentServer = serverEntry;
     proc.on('error', (err) => {
       exited = true;
       serverEntry.exited = true;
@@ -779,7 +794,7 @@ function createHistoryQaService(deps) {
           modelName: null,
           backend: null,
           loadedAt: null,
-          reason: serverEntry.unloading ? 'manual' : `process_exited_${code}`,
+          reason: serverEntry.unloading ? (serverEntry.unloadReason || 'manual') : `process_exited_${code}`,
         });
       }
       resolveExit();
@@ -799,9 +814,10 @@ function createHistoryQaService(deps) {
               : `Local Q&A model server exited before becoming ready (code ${exitCode}).`,
           );
         }
-        const healthy = await probeServerHealth({ port, token });
+        const healthy = await awaitAbortable(probeServerHealth({ port, token }), cancelSignal);
+        if (cancelSignal?.aborted || serverEntry.unloading || isQuitCommitted()) throw cancelSignal?.reason || createQaCancelError();
+        if (exited || residentServer !== serverEntry) throw new Error('Local Q&A model server exited during startup.');
         if (healthy) {
-          residentServer = serverEntry;
           emitModelState({
             status: 'loaded',
             modelId,
@@ -810,7 +826,6 @@ function createHistoryQaService(deps) {
             loadedAt: new Date().toISOString(),
             reason: 'ready',
           });
-          resetIdleTimer();
           return serverEntry;
         }
         await waitAbortableMs(120, cancelSignal);
@@ -818,20 +833,12 @@ function createHistoryQaService(deps) {
       throw new Error('Timed out waiting for local Q&A model server to finish loading.');
     } catch (error) {
       serverEntry.unloading = true;
+      serverEntry.unloadReason = 'startup_aborted';
       serverEntry.token = null;
-      await Promise.all([
-        Promise.resolve(terminateProcessBestEffort(proc)).catch(() => {}),
-        Promise.race([exitPromise, new Promise((resolve) => setTimeout(resolve, 4000).unref?.())]),
-      ]);
-      if (modelState.status !== 'unloaded') {
-        emitModelState({
-          status: 'unloaded',
-          modelId: null,
-          modelName: null,
-          backend: null,
-          loadedAt: null,
-          reason: 'startup_aborted',
-        });
+      try {
+        await stopServer(serverEntry);
+      } catch (_stopError) {
+        // Keep ownership until the child actually exits; later unloads can retry.
       }
       throw error;
     }
@@ -884,6 +891,7 @@ function createHistoryQaService(deps) {
       }
 
       let settled = false;
+      let timedOut = false;
       const finish = (cb, val) => {
         if (settled) {
           return;
@@ -898,11 +906,14 @@ function createHistoryQaService(deps) {
 
       const timeoutHandle = setTimeout(() => {
         void Promise.resolve(terminateProcessBestEffort(python)).catch(() => {});
+        timedOut = true;
+        if (moduleName === 'history_qa.retrieval') historySearchService.retainProcessUntilExit(python);
         finish(reject, new Error(`${moduleName} timed out.`));
       }, timeoutMs);
       timeoutHandle.unref?.();
 
       python.on('close', (code) => {
+        if (timedOut) { finish(reject, new Error(`${moduleName} timed out.`)); return; }
         if (registrar.isCancelled()) {
           finish(reject, createQaCancelError());
           return;
@@ -930,6 +941,7 @@ function createHistoryQaService(deps) {
       });
 
       if (registered && python.stdin) {
+        python.stdin.on?.('error', () => {});
         try {
           python.stdin.end(JSON.stringify(payload || {}));
         } catch (_writeErr) {
@@ -954,40 +966,37 @@ function createHistoryQaService(deps) {
       throw new Error('Please enter a question to search your local meeting history.');
     }
 
-    const eligibility = await resolveEligibility({
+    const requestedScope = options.scope == null ? null : chatThreadStore.sanitizeScope(options.scope);
+    const controller = new AbortController();
+    activeQaRequest = { threadId: null, controller, phase: 'admitting', process: null };
+    clearIdleTimer();
+    let thread = null;
+    const checkCurrent = () => {
+      if (controller.signal.aborted || isQuitCommitted()) throw controller.signal.reason || createQaCancelError();
+      if (hasInFlightAiAddonSetup()) throw new Error('Local AI setup is in progress; please retry.');
+    };
+    try {
+    const eligibility = await awaitAbortable(resolveEligibility({
       verifyChecksums: true,
       verifyChecksumsIfChanged: true,
-    });
+    }), controller.signal);
     if (!eligibility.eligible) {
       throw new Error(eligibility.reason || 'Local Q&A is not available until the local Summary AI add-on is installed.');
     }
 
-    const controller = new AbortController();
-    let thread = null;
+    checkCurrent();
     if (options.threadId) {
       thread = await chatThreadStore.getThread(options.threadId);
     } else {
-      thread = await chatThreadStore.createThread({ scope: options.scope || null });
+      thread = await chatThreadStore.createThread({ scope: requestedScope });
     }
 
-    const effectiveScope = options.scope && typeof options.scope === 'object'
-      ? chatThreadStore.sanitizeScope(options.scope)
-      : thread.scope;
+    checkCurrent();
+    const effectiveScope = requestedScope ?? thread.scope;
 
-    activeQaRequest = {
-      threadId: thread.id,
-      controller,
-      phase: 'retrieving',
-      process: null,
-    };
+    activeQaRequest.threadId = thread.id;
+    activeQaRequest.phase = 'retrieving';
 
-    const cleanupActive = () => {
-      if (activeQaRequest && activeQaRequest.controller === controller) {
-        activeQaRequest = null;
-      }
-    };
-
-    try {
       const preflightRegistrar = createCancellableProcessRegistrar({
         cancelSignal: controller.signal,
         terminateProcess: terminateProcessBestEffort,
@@ -1007,10 +1016,14 @@ function createHistoryQaService(deps) {
         percent: 10,
       });
 
+      const generation = historySearchService.getGeneration();
       await historySearchService.ensureSynced();
       preflightRegistrar.throwIfCancelled();
-
-      const retrieval = await runPythonStdinJson({
+      const assertFresh = () => {
+        checkCurrent();
+        if (historySearchService.getGeneration() !== generation) throw new Error('History changed while answering; please retry.');
+      };
+      const runRetrieval = () => runPythonStdinJson({
         moduleName: 'history_qa.retrieval',
         args: [
           '--recordings-dir',
@@ -1028,6 +1041,11 @@ function createHistoryQaService(deps) {
         registrar: preflightRegistrar,
         threadId: thread.id,
       });
+      const retrieval = await historySearchService.enqueueOperation(async () => {
+        assertFresh();
+        return runRetrieval();
+      });
+      assertFresh();
       preflightRegistrar.cleanup();
       preflightRegistrar.throwIfCancelled();
 
@@ -1036,7 +1054,8 @@ function createHistoryQaService(deps) {
 
       // Zero-hit preflight gate: NEVER acquire compute queue or allocate VRAM!
       if (evidence.length === 0) {
-        const persisted = await chatThreadStore.appendTurn(thread.id, {
+        assertFresh();
+      const persisted = await chatThreadStore.appendTurn(thread.id, {
           question,
           status: 'insufficient_evidence',
           answerMarkdown:
@@ -1047,7 +1066,8 @@ function createHistoryQaService(deps) {
           searchedMeetingCount,
           evidenceCount: 0,
           scope: options.scope || null,
-        });
+        }, { beforeCommit: assertFresh });
+        assertFresh();
         emitQaProgress({
           threadId: thread.id,
           phase: 'completed',
@@ -1076,14 +1096,25 @@ function createHistoryQaService(deps) {
       });
 
       const queueRunner = runQueuedCompute || ((action) => enqueueAiComputeAction(() => enqueueGpuResourceActionForQa(action)));
-      const historyTurns = (Array.isArray(thread.messages) ? thread.messages : [])
-        .map((msg) => ({ role: msg.role, content: msg.content }));
+      const evidenceIds = new Set(evidence.map((item) => item.meetingId));
+      const historyTurns = [];
+      const messages = Array.isArray(thread.messages) ? thread.messages : [];
+      for (let i = 0; i + 1 < messages.length; i += 2) {
+        const user = messages[i];
+        const assistant = messages[i + 1];
+        if (user.role === 'user' && assistant.role === 'assistant'
+            && Array.isArray(assistant.citations) && assistant.citations.length > 0
+            && assistant.citations.every((citation) => evidenceIds.has(citation.meetingId))) {
+          historyTurns.push({ role: 'user', content: user.content }, { role: 'assistant', content: assistant.content });
+        }
+      }
 
-      const qaResult = await queueRunner(async () => runWallClockComputeAction({
+      const qaResult = await awaitAbortable(queueRunner(async () => runWallClockComputeAction({
         timeoutMs: qaTimeoutMs,
         label: 'Local history Q&A',
         terminateProcess: terminateProcessBestEffort,
         action: async (wallClockRegister, wallClockOpts) => {
+          assertFresh();
           const combinedController = new AbortController();
           const forwardAbort = (srcSignal) => {
             if (!combinedController.signal.aborted) {
@@ -1091,8 +1122,10 @@ function createHistoryQaService(deps) {
             }
           };
           controller.signal.addEventListener('abort', () => forwardAbort(controller.signal), { once: true });
+          if (controller.signal.aborted) forwardAbort(controller.signal);
           if (wallClockOpts && wallClockOpts.signal) {
             wallClockOpts.signal.addEventListener('abort', () => forwardAbort(wallClockOpts.signal), { once: true });
+            if (wallClockOpts.signal.aborted) forwardAbort(wallClockOpts.signal);
           }
 
           const registrar = createCancellableProcessRegistrar({
@@ -1202,6 +1235,7 @@ function createHistoryQaService(deps) {
             });
 
             try {
+              assertFresh();
               const output = await runPythonStdinJson({
                 moduleName: 'history_qa.qa_runner',
                 args: ['--stdin-json'],
@@ -1236,12 +1270,9 @@ function createHistoryQaService(deps) {
             registrar.cleanup();
           }
         },
-      }));
+      })), controller.signal);
 
-      if (residentServer) {
-        resetIdleTimer();
-      }
-
+      assertFresh();
       const persisted = await chatThreadStore.appendTurn(thread.id, {
         question,
         status: qaResult.status || 'answered',
@@ -1250,7 +1281,8 @@ function createHistoryQaService(deps) {
         searchedMeetingCount: Number(qaResult.searchedMeetingCount) || searchedMeetingCount,
         evidenceCount: Number(qaResult.evidenceCount) || evidence.length,
         scope: options.scope || null,
-      });
+      }, { beforeCommit: assertFresh });
+      assertFresh();
 
       emitQaProgress({
         threadId: thread.id,
@@ -1269,20 +1301,21 @@ function createHistoryQaService(deps) {
     } catch (error) {
       if (error && (error.name === 'AbortError' || error.code === HISTORY_QA_CANCEL_CODE)) {
         emitQaProgress({
-          threadId: thread.id,
+          threadId: thread?.id || null,
           phase: 'cancelled',
           message: 'Response generation was stopped.',
         });
       } else {
         emitQaProgress({
-          threadId: thread.id,
+          threadId: thread?.id || null,
           phase: 'error',
           message: redactSensitiveText(error?.message || 'Local Q&A failed.'),
         });
       }
       throw error;
     } finally {
-      cleanupActive();
+      if (activeQaRequest?.controller === controller) activeQaRequest = null;
+      if (!activeQaRequest && residentServer && !residentServer.unloading && !residentServer.exited) resetIdleTimer();
     }
   }
 

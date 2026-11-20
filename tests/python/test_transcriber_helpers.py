@@ -1212,9 +1212,11 @@ def test_faster_whisper_run_transcription_attempt_preserves_pre_merge_caption_cu
         types.SimpleNamespace(start=3.5, end=6.5, text=' Second three second segment.'),
     ]
     info = types.SimpleNamespace(language='en', duration=7.0)
-    service.model = types.SimpleNamespace(transcribe=lambda *_args, **_kwargs: (iter(raw_segments), info))
+    calls = []
+    service.model = types.SimpleNamespace(transcribe=lambda *_args, **kwargs: (calls.append(kwargs) or iter(raw_segments), info))
 
     result = service._run_transcription_attempt(str(audio_path))
+    assert calls[0]["word_timestamps"] is True
 
     assert len(result['segments']) == 1
     assert result['segments'][0] == {

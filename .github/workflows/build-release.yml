@@ -180,6 +180,18 @@ jobs:
         run: ${{ matrix.build-script }}
         timeout-minutes: 75
 
+      - name: Prepare macOS notarization API key
+        if: matrix.os == 'macOS'
+        env:
+          API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          if [[ -n "$API_KEY_CONTENT" ]]; then
+            umask 077
+            key_path="$RUNNER_TEMP/avanevis-notary-key.p8"
+            printf '%s\n' "$API_KEY_CONTENT" > "$key_path"
+            echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
+          fi
+
       - name: Build installer (macOS)
         if: matrix.os == 'macOS'
         env:
@@ -187,12 +199,11 @@ jobs:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           CSC_NAME: ${{ secrets.CSC_NAME }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_KEYCHAIN_PROFILE: ${{ vars.APPLE_KEYCHAIN_PROFILE }}
+          APPLE_KEYCHAIN: ${{ vars.APPLE_KEYCHAIN }}
         run: |
           echo "Open file limit before: $(ulimit -n)"
           ulimit -n 10240 || true
@@ -207,12 +218,11 @@ jobs:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           CSC_NAME: ${{ secrets.CSC_NAME }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_KEYCHAIN_PROFILE: ${{ vars.APPLE_KEYCHAIN_PROFILE }}
+          APPLE_KEYCHAIN: ${{ vars.APPLE_KEYCHAIN }}
         run: bash scripts/notarize-macos-dmg.sh
         timeout-minutes: 30
 
@@ -242,10 +252,13 @@ jobs:
       - name: Verify packaged macOS app smoke checks
         if: matrix.os == 'macOS'
         env:
+          APPLE_KEYCHAIN_PROFILE: ${{ vars.APPLE_KEYCHAIN_PROFILE }}
           AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: bash scripts/verify-macos-packaged-app.sh
+
+      - name: Clean up macOS notarization API key
+        if: always() && matrix.os == 'macOS'
+        run: rm -f "$RUNNER_TEMP/avanevis-notary-key.p8"
 
       - name: Verify packaged macOS installer
         if: matrix.os == 'macOS'

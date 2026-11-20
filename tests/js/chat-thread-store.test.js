@@ -106,3 +106,43 @@ test('chat thread store backs up corrupt threads.json and serializes concurrent 
   assert.equal(created.length, 3);
   assert.equal((await store.listThreads()).length, 3);
 });
+
+test('invalid scope is rejected and legacy invalid scope retains history but matches nothing', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-chat-scope-'));
+  const store = createChatThreadStore({ app: { getPath: () => tmpDir }, path, fs });
+  assert.throws(() => store.sanitizeScope({ type: 'unknown' }), /scope/);
+  await assert.rejects(store.createThread({ scope: { type: 'unknown' } }), /scope/);
+  fs.mkdirSync(path.join(tmpDir, 'chat'), { recursive: true });
+  fs.writeFileSync(store.getThreadsPath(), JSON.stringify({ threads: [{ id: 'old', scope: { type: 'unknown' }, messages: [{ role: 'user', content: 'kept' }] }] }));
+  const thread = await store.getThread('old');
+  assert.equal(thread.messages[0].content, 'kept');
+  assert.deepEqual(thread.scope.meetingIds, []);
+  assert.equal(thread.scope.type, 'selected_meetings');
+});
+
+test('read and quarantine failures preserve the original store', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-chat-io-'));
+  const dir = path.join(tmpDir, 'chat');
+  fs.mkdirSync(dir);
+  const target = path.join(dir, 'threads.json');
+  fs.writeFileSync(target, 'broken');
+  const fakeFs = { ...fs, promises: { ...fs.promises, rename: async () => { throw new Error('denied'); } } };
+  const store = createChatThreadStore({ app: { getPath: () => tmpDir }, path, fs: fakeFs });
+  await assert.rejects(store.createThread(), /denied/);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'broken');
+  fakeFs.promises.readFile = async () => { throw new Error('read denied'); };
+  await assert.rejects(store.createThread(), /read denied/);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'broken');
+});
+
+test('appendTurn rejects stale evidence before committing and removes its temp file', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-stale-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const store = createChatThreadStore({ app: { getPath: () => tmpDir }, path, fs });
+  const thread = await store.createThread();
+  await assert.rejects(store.appendTurn(thread.id, { question: 'q', answerMarkdown: 'old' }, {
+    beforeCommit() { throw new Error('stale'); },
+  }), /stale/);
+  assert.equal((await store.getThread(thread.id)).messages.length, 0);
+  assert.deepEqual(fs.readdirSync(path.join(tmpDir, 'chat')), ['threads.json']);
+});

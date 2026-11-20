@@ -435,6 +435,7 @@ class TranscriberService(BaseTranscriber):
         segments, info = self.model.transcribe(
             audio_path,
             language=self.language,
+            word_timestamps=True,
             beam_size=5,  # Good balance of accuracy and speed
             vad_filter=True,  # Voice activity detection - removes silence
             vad_parameters=dict(min_silence_duration_ms=500)  # Remove pauses > 500ms

@@ -49,15 +49,32 @@ function autoTitleFromQuestion(question) {
 }
 
 function sanitizeScope(rawScope) {
-  const raw = rawScope && typeof rawScope === 'object' ? rawScope : {};
-  const rawType = String(raw.type || 'all').trim().toLowerCase();
-  const type = rawType === 'selected_meetings' || rawType === 'single_meeting'
-    ? 'selected_meetings'
-    : 'all';
-
+  if (rawScope != null && (typeof rawScope !== 'object' || Array.isArray(rawScope))) {
+    throw new Error('Invalid chat scope.');
+  }
+  const raw = rawScope || {};
+  if (raw.type === undefined && (raw.meetingIds !== undefined || raw.meetingId !== undefined)) {
+    throw new Error('Missing chat scope type.');
+  }
+  const rawType = raw.type === undefined ? 'all' : raw.type;
+  if (typeof rawType !== 'string' || !['all', 'selected_meetings', 'single_meeting'].includes(rawType.trim().toLowerCase())) {
+    throw new Error('Invalid chat scope type.');
+  }
+  for (const key of ['dateFrom', 'dateTo']) {
+    if (raw[key] != null && (typeof raw[key] !== 'string' || (raw[key].trim() && !sanitizeOptionalIsoDate(raw[key])))) {
+      throw new Error('Invalid chat scope date.');
+    }
+  }
+  if (raw.meetingIds != null && (!Array.isArray(raw.meetingIds) || raw.meetingIds.some((id) => typeof id !== 'string' || !id.trim()))) {
+    throw new Error('Invalid chat scope meeting IDs.');
+  }
+  if (raw.meetingId != null && (typeof raw.meetingId !== 'string' || !raw.meetingId.trim())) {
+    throw new Error('Invalid chat scope meeting ID.');
+  }
+  const type = rawType.trim().toLowerCase() === 'all' ? 'all' : 'selected_meetings';
   let meetingIds = [];
   if (type === 'selected_meetings') {
-    const candidates = Array.isArray(raw.meetingIds) ? raw.meetingIds : [];
+    const candidates = Array.isArray(raw.meetingIds) ? [...raw.meetingIds] : [];
     if (raw.meetingId != null && String(raw.meetingId).trim()) {
       candidates.push(raw.meetingId);
     }
@@ -134,6 +151,15 @@ function sanitizeMessage(raw) {
   return entry;
 }
 
+function sanitizeSavedScope(scope) {
+  try {
+    return sanitizeScope(scope);
+  } catch (_error) {
+    // Preserve old chat history while making an invalid saved scope match nothing.
+    return sanitizeScope({ type: 'selected_meetings', meetingIds: [] });
+  }
+}
+
 function sanitizeThreadRecord(raw) {
   if (!raw || typeof raw !== 'object') {
     return null;
@@ -149,7 +175,7 @@ function sanitizeThreadRecord(raw) {
     title: sanitizeThreadTitle(raw.title, DEFAULT_THREAD_TITLE),
     createdAt,
     updatedAt,
-    scope: sanitizeScope(raw.scope),
+    scope: sanitizeSavedScope(raw.scope),
     messages: Array.isArray(raw.messages)
       ? raw.messages.map(sanitizeMessage).filter(Boolean)
       : [],
@@ -201,7 +227,7 @@ function createChatThreadStore(deps) {
     return run;
   }
 
-  async function writeStoreAtomic(payload) {
+  async function writeStoreAtomic(payload, beforeCommit = null) {
     const chatDir = getChatDir();
     const targetPath = getThreadsPath();
     await fs.promises.mkdir(chatDir, { recursive: true });
@@ -221,38 +247,45 @@ function createChatThreadStore(deps) {
     } finally {
       await handle.close();
     }
-    await fs.promises.rename(tmpPath, targetPath);
+    try {
+      if (beforeCommit) {
+        beforeCommit();
+        // No event-loop turn may interleave invalidation and the commit.
+        fs.renameSync(tmpPath, targetPath);
+      } else {
+        await fs.promises.rename(tmpPath, targetPath);
+      }
+    } catch (error) {
+      await fs.promises.unlink(tmpPath).catch(() => {});
+      throw error;
+    }
   }
 
   async function readStoreUnsafe() {
     const targetPath = getThreadsPath();
-    if (!fs.existsSync(targetPath)) {
-      return { schemaVersion: SCHEMA_VERSION, threads: [] };
-    }
-    let rawText = '';
+    let rawText;
     try {
       rawText = await fs.promises.readFile(targetPath, 'utf8');
-      const parsed = JSON.parse(rawText);
+    } catch (error) {
+      if (error.code === 'ENOENT') return { schemaVersion: SCHEMA_VERSION, threads: [] };
+      throw error;
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
       if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.threads)) {
         throw new Error('Invalid chat thread store structure.');
       }
-      const threads = parsed.threads.map(sanitizeThreadRecord).filter(Boolean);
-      return { schemaVersion: SCHEMA_VERSION, threads };
     } catch (_error) {
-      const backupPath = path.join(
-        getChatDir(),
-        `threads.corrupt.${Date.now()}.json`,
-      );
-      try {
-        await fs.promises.mkdir(getChatDir(), { recursive: true });
-        await fs.promises.rename(targetPath, backupPath);
-      } catch (_renameErr) {
-        // Best-effort quarantine of corrupt thread file.
-      }
+      const backupPath = path.join(getChatDir(), `threads.corrupt.${Date.now()}.json`);
+      // Never replace the original unless the corrupt file was safely moved.
+      await fs.promises.rename(targetPath, backupPath);
       const empty = { schemaVersion: SCHEMA_VERSION, threads: [] };
       await writeStoreAtomic(empty);
       return empty;
     }
+    const threads = parsed.threads.map(sanitizeThreadRecord).filter(Boolean);
+    return { schemaVersion: SCHEMA_VERSION, threads };
   }
 
   function listThreads() {
@@ -352,6 +385,7 @@ function createChatThreadStore(deps) {
       evidenceCount = 0,
       scope = null,
     },
+    { beforeCommit = null } = {},
   ) {
     const targetId = String(threadId || '').trim();
     return enqueueMutation(async () => {
@@ -386,7 +420,7 @@ function createChatThreadStore(deps) {
         thread.scope = sanitizeScope(scope);
       }
       thread.updatedAt = assistantTime;
-      await writeStoreAtomic(store);
+      await writeStoreAtomic(store, beforeCommit);
       return {
         thread: structuredClone(thread),
         userMessage: structuredClone(userMessage),

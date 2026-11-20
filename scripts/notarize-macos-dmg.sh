@@ -39,31 +39,19 @@ if [[ ! -f "$DMG_PATH" ]]; then
 fi
 
 AUTH_ARGS=()
-if [[ -n "${APPLE_ID:-}" || -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" || -n "${APPLE_TEAM_ID:-}" ]]; then
-  if [[ -z "${APPLE_ID:-}" || -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" || -z "${APPLE_TEAM_ID:-}" ]]; then
-    echo "ERROR: Partial Apple ID notarization credentials set; require APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, and APPLE_TEAM_ID." >&2
-    exit 1
-  fi
-  AUTH_ARGS=(
-    --apple-id "$APPLE_ID"
-    --password "$APPLE_APP_SPECIFIC_PASSWORD"
-    --team-id "$APPLE_TEAM_ID"
-  )
-elif [[ -n "${APPLE_API_KEY:-}" || -n "${APPLE_API_KEY_ID:-}" || -n "${APPLE_API_ISSUER:-}" ]]; then
-  if [[ -z "${APPLE_API_KEY:-}" || -z "${APPLE_API_KEY_ID:-}" || -z "${APPLE_API_ISSUER:-}" ]]; then
-    echo "ERROR: Partial App Store Connect API notarization credentials set; require APPLE_API_KEY, APPLE_API_KEY_ID, and APPLE_API_ISSUER." >&2
-    exit 1
-  fi
-  AUTH_ARGS=(
-    --key "$APPLE_API_KEY"
-    --key-id "$APPLE_API_KEY_ID"
-    --issuer "$APPLE_API_ISSUER"
-  )
+if [[ -n "${APPLE_API_KEY:-}" && -n "${APPLE_API_KEY_ID:-}" && -n "${APPLE_API_ISSUER:-}" ]]; then
+  AUTH_ARGS=(--key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER")
 elif [[ -n "${APPLE_KEYCHAIN_PROFILE:-}" ]]; then
   AUTH_ARGS=(--keychain-profile "$APPLE_KEYCHAIN_PROFILE")
   if [[ -n "${APPLE_KEYCHAIN:-}" ]]; then
     AUTH_ARGS+=(--keychain "$APPLE_KEYCHAIN")
   fi
+elif [[ -n "${APPLE_ID:-}" || -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ]]; then
+  echo "ERROR: Apple ID notarization requires APPLE_KEYCHAIN_PROFILE; raw Apple ID passwords are not accepted." >&2
+  exit 1
+elif [[ -n "${APPLE_API_KEY:-}" || -n "${APPLE_API_KEY_ID:-}" || -n "${APPLE_API_ISSUER:-}" ]]; then
+  echo "ERROR: Partial App Store Connect API notarization credentials set." >&2
+  exit 1
 fi
 
 if [[ "${#AUTH_ARGS[@]}" -eq 0 ]]; then

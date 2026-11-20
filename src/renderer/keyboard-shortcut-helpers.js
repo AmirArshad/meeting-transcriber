@@ -24,13 +24,13 @@
     const mod = mac ? 'Command' : 'Ctrl';
     switch (action) {
       case 'goto-record':
-        return `${mod}+Shift+1`;
+        return `${mod}+${mac ? '' : 'Shift+'}1`;
       case 'goto-history':
-        return `${mod}+Shift+2`;
+        return `${mod}+${mac ? '' : 'Shift+'}2`;
       case 'goto-chat':
-        return `${mod}+Shift+3`;
+        return `${mod}+${mac ? '' : 'Shift+'}3`;
       case 'goto-settings':
-        return `${mod}+Shift+4`;
+        return `${mod}+${mac ? '' : 'Shift+'}4`;
       case 'start-recording':
         return `${mod}+Shift+R`;
       case 'stop-recording':
@@ -45,13 +45,13 @@
     const mod = mac ? 'Meta' : 'Control';
     switch (action) {
       case 'goto-record':
-        return `${mod}+Shift+1`;
+        return `${mod}+${mac ? '' : 'Shift+'}1`;
       case 'goto-history':
-        return `${mod}+Shift+2`;
+        return `${mod}+${mac ? '' : 'Shift+'}2`;
       case 'goto-chat':
-        return `${mod}+Shift+3`;
+        return `${mod}+${mac ? '' : 'Shift+'}3`;
       case 'goto-settings':
-        return `${mod}+Shift+4`;
+        return `${mod}+${mac ? '' : 'Shift+'}4`;
       case 'start-recording':
         return `${mod}+Shift+R`;
       case 'stop-recording':
@@ -99,13 +99,13 @@
     return key;
   }
 
-  function hasExactShortcutModifiers(event, { platform } = {}) {
+  function hasExactShortcutModifiers(event, { platform, navigation = false } = {}) {
     const mac = isMacPlatform(platform);
     const ctrl = Boolean(event && event.ctrlKey);
     const meta = Boolean(event && event.metaKey);
     const shift = Boolean(event && event.shiftKey);
     const alt = Boolean(event && event.altKey);
-    if (!shift || alt) {
+    if (alt || (mac && navigation ? shift : !shift)) {
       return false;
     }
     if (mac) {
@@ -146,10 +146,11 @@
     if (isShortcutEventRejected(event)) {
       return null;
     }
-    if (!hasExactShortcutModifiers(event, { platform })) {
+    const code = normalizeShortcutKey(event);
+    const navigation = /^(Digit|Numpad)[1-4]$/.test(code);
+    if (!hasExactShortcutModifiers(event, { platform, navigation })) {
       return null;
     }
-    const code = normalizeShortcutKey(event);
     switch (code) {
       case 'Digit1':
       case 'Numpad1':

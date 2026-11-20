@@ -19,6 +19,7 @@ import sys
 import shutil
 import stat
 import threading
+import tempfile
 
 from filelock import FileLock
 
@@ -631,12 +632,25 @@ class MeetingManager:
                     skipped += 1
                     continue
 
-                if transcript_file.exists() and transcript_file.is_file():
-                    duration = meeting_scan.extract_duration_from_transcript_file(transcript_file)
-                    has_existing_transcript = True
-                else:
+                captions_file = transcript_captions.captions_sidecar_path_for_audio(resolved_audio)
+                try:
+                    transcript_identity = meeting_scan.file_identity(transcript_file)
+                    captions_identity = meeting_scan.file_identity(captions_file)
+                    has_existing_transcript = transcript_file.is_file()
                     duration = 0.0
-                    has_existing_transcript = False
+                    matched_captions = None
+                    if has_existing_transcript:
+                        duration = meeting_scan.extract_duration_from_transcript_file(transcript_file)
+                        transcript_text = self._read_transcript_text(resolved_transcript)
+                        if transcript_text:
+                            matched_captions = self._find_valid_sibling_captions(resolved_audio, transcript_text)
+                    if (transcript_identity != meeting_scan.file_identity(transcript_file)
+                            or captions_identity != meeting_scan.file_identity(captions_file)):
+                        skipped += 1
+                        continue
+                except OSError:
+                    skipped += 1
+                    continue
 
                 candidates.append(
                     meeting_scan.ScanCandidate(
@@ -646,6 +660,9 @@ class MeetingManager:
                         title=title,
                         duration=duration,
                         has_existing_transcript=has_existing_transcript,
+                        transcript_identity=transcript_identity,
+                        captions_identity=captions_identity,
+                        matched_captions=matched_captions,
                     )
                 )
 
@@ -696,21 +713,26 @@ class MeetingManager:
                                 skipped += 1
                                 continue
 
-                            if candidate.transcript_file.exists():
-                                if not candidate.transcript_file.is_file():
+                            captions_file = transcript_captions.captions_sidecar_path_for_audio(resolved_audio)
+                            try:
+                                if (candidate.transcript_identity != meeting_scan.file_identity(candidate.transcript_file)
+                                        or candidate.captions_identity != meeting_scan.file_identity(captions_file)):
                                     skipped += 1
                                     continue
+                            except OSError:
+                                skipped += 1
+                                continue
+                            if candidate.has_existing_transcript:
                                 placeholder_created = False
-                                duration = (
-                                    candidate.duration
-                                    if candidate.has_existing_transcript
-                                    else meeting_scan.extract_duration_from_transcript_file(candidate.transcript_file)
-                                )
-                                transcript_text_for_captions = self._read_transcript_text(resolved_transcript)
+                                duration = candidate.duration
+                            elif candidate.transcript_identity is not None:
+                                skipped += 1
+                                continue
                             else:
                                 placeholder = self._build_pending_transcript_placeholder(candidate.audio_file.name)
                                 try:
-                                    candidate.transcript_file.write_text(placeholder, encoding='utf-8')
+                                    with candidate.transcript_file.open('x', encoding='utf-8') as output:
+                                        output.write(placeholder)
                                 except Exception as e:
                                     print(
                                         f"Warning: Could not create placeholder transcript for {candidate.audio_file.name}: {e}",
@@ -725,7 +747,6 @@ class MeetingManager:
                                     file=sys.stderr,
                                 )
                                 duration = 0.0
-                                transcript_text_for_captions = ""
 
                             meeting = self._build_direct_meeting_record(
                                 meeting_id=candidate.meeting_id,
@@ -741,14 +762,9 @@ class MeetingManager:
                                     "engine": "unknown",
                                 },
                             )
-                            if not placeholder_created and transcript_text_for_captions:
-                                matched_captions = self._find_valid_sibling_captions(
-                                    resolved_audio,
-                                    transcript_text_for_captions,
-                                )
-                                if matched_captions is not None:
-                                    meeting['captionsPath'] = str(matched_captions['path'])
-                                    meeting['captionsSourceTranscriptHash'] = matched_captions['hash']
+                            if not placeholder_created and candidate.matched_captions is not None:
+                                meeting['captionsPath'] = str(candidate.matched_captions['path'])
+                                meeting['captionsSourceTranscriptHash'] = candidate.matched_captions['hash']
                             existing_meetings.insert(0, meeting)
                             existing_ids.add(candidate.meeting_id)
                             existing_audio_names.add(Path(meeting['audioPath']).name)
@@ -1176,11 +1192,30 @@ class MeetingManager:
 
             if safe_captions_candidate is not None and safe_canonical_captions is not None:
                 if safe_canonical_captions.exists() and safe_canonical_captions != safe_captions_candidate:
-                    backup_captions_path = safe_canonical_captions.with_name(
-                        f".{safe_canonical_captions.name}.bak.{os.getpid()}"
-                    )
-                    os.replace(safe_canonical_captions, backup_captions_path)
-                os.replace(safe_captions_candidate, safe_canonical_captions)
+                    try:
+                        with tempfile.NamedTemporaryFile(
+                            mode='wb', prefix=f".{safe_canonical_captions.name}.bak.",
+                            dir=safe_canonical_captions.parent, delete=False,
+                        ) as backup:
+                            backup_captions_path = Path(backup.name)
+                            with safe_canonical_captions.open('rb') as source:
+                                shutil.copyfileobj(source, backup)
+                    except Exception:
+                        if backup_captions_path is not None:
+                            try:
+                                backup_captions_path.unlink(missing_ok=True)
+                            except OSError:
+                                pass
+                        raise
+                try:
+                    os.replace(safe_captions_candidate, safe_canonical_captions)
+                except Exception:
+                    if backup_captions_path is not None:
+                        try:
+                            backup_captions_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    raise
                 replaced_canonical_captions = True
                 committed_captions = str(safe_canonical_captions.resolve(strict=False))
                 meeting['captionsPath'] = committed_captions
@@ -1211,9 +1246,9 @@ class MeetingManager:
                     backup_captions_path.unlink()
                 except OSError:
                     pass
+            self._remove_obsolete_captions(previous_captions, committed_captions, canonical_captions_to_remove)
 
         self._remove_obsolete_transcript(previous_transcript, meeting['transcriptPath'])
-        self._remove_obsolete_captions(previous_captions, committed_captions, canonical_captions_to_remove)
         return meeting_norm.public_transcription_provenance(meeting)
 
     def _remove_obsolete_captions(

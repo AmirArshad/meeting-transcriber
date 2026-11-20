@@ -113,7 +113,7 @@ def test_build_caption_cues_dict_words_flush_on_speaker_duration_and_char_limits
     assert cues[3] == {"startMs": 8600, "endMs": 9200, "text": "x" * 78, "speaker": "Speaker 2"}
 
 
-def test_build_caption_cues_segment_only_splits_long_text_and_duration_monotonically():
+def test_build_caption_cues_segment_only_preserves_long_text_and_duration():
     long_text = (
         "We reviewed the Q3 roadmap in detail, covering onboarding delays and API limits. "
         "Then we agreed on concrete next steps for every engineering team before Friday."
@@ -131,17 +131,7 @@ def test_build_caption_cues_segment_only_splits_long_text_and_duration_monotonic
     )
 
     assert precision == "segment"
-    assert len(cues) >= 3
-    prev_end = 0
-    for cue in cues:
-        assert len(cue["text"]) <= MAX_CUE_CHARS
-        assert cue["speaker"] == "Speaker 1"
-        assert cue["startMs"] >= prev_end
-        assert cue["endMs"] > cue["startMs"]
-        assert cue["endMs"] - cue["startMs"] <= MAX_CUE_DURATION_MS + 1500
-        prev_end = cue["endMs"]
-    assert cues[-1]["endMs"] == 18000
-    assert " ".join(cue["text"] for cue in cues) == long_text
+    assert cues == [{"startMs": 0, "endMs": 18000, "text": long_text, "speaker": "Speaker 1"}]
 
 
 def test_build_caption_cues_cjk_no_space_text_and_clamps_overlapping_negative_inputs():
@@ -160,7 +150,6 @@ def test_build_caption_cues_cjk_no_space_text_and_clamps_overlapping_negative_in
     assert cues[0]["text"] == "First clamped item"
     prev_end = 0
     for cue in cues:
-        assert len(cue["text"]) <= MAX_CUE_CHARS
         assert cue["startMs"] >= prev_end
         assert cue["endMs"] - cue["startMs"] >= MIN_CUE_DURATION_MS
         prev_end = cue["endMs"]
@@ -228,3 +217,14 @@ def test_write_captions_sidecar_atomic_writes_valid_json_without_tmp_files(tmp_p
     assert written == target
     assert json.loads(target.read_text(encoding="utf-8")) == payload
     assert list(target.parent.glob("*.tmp")) == []
+
+
+def test_mlx_dictionary_word_tokens_preserve_internal_joining():
+    words = [
+        {"word": " Hello", "start": 0.0, "end": 0.2},
+        {"word": " wor", "start": 0.2, "end": 0.4},
+        {"word": "ld", "start": 0.4, "end": 0.6},
+    ]
+    cues, precision = build_caption_cues([{"text": "Hello world", "words": words}])
+    assert precision == "word"
+    assert cues[0]["text"] == "Hello world"
