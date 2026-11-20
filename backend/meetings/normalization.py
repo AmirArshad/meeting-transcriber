@@ -311,6 +311,13 @@ def expected_attempt_transcript_name(audio_path: object, attempt_id: str) -> str
     return f"{stem}.transcript-{attempt_id}.md"
 
 
+def expected_attempt_captions_name(audio_path: object, attempt_id: str) -> str:
+    stem = Path(str(audio_path)).stem
+    if not stem or not _UUID_RE.fullmatch(attempt_id):
+        _reject("INVALID_TRANSCRIPTION_RESULT")
+    return f"{stem}.captions-{attempt_id}.json"
+
+
 def parse_metadata(raw_value: Optional[str], label: str, *, unset):
     """Parse CLI AI metadata JSON. Returns `unset` when raw_value is None."""
     if raw_value is None:

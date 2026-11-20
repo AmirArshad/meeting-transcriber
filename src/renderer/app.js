@@ -128,6 +128,9 @@ const {
   resolveKeyboardShortcutAction,
   shouldSuppressKeyboardShortcut,
 } = window.keyboardShortcutHelpers;
+const {
+  buildExportFormatOptions,
+} = window.subtitleExportHelpers;
 
 // UI Elements
 const micSelect = document.getElementById('mic-select');
@@ -2995,6 +2998,7 @@ function setupEventListeners() {
     retryTranscriptionBtn.addEventListener('click', retryMeetingTranscription);
   }
   setupWhisperRetryDialog();
+  setupTranscriptExportDialog();
 
   const generateSummaryBtn = document.getElementById('generate-summary-btn');
   if (generateSummaryBtn) {
@@ -5104,6 +5108,346 @@ async function saveMeetingSummaryToFile() {
   }
 }
 
+let activeTranscriptExportContext = null;
+let transcriptExportTriggerElement = null;
+let transcriptExportBusy = false;
+
+function updateTranscriptExportSubtitleControls() {
+  const form = document.getElementById('transcript-export-form');
+  const prefsEl = document.getElementById('transcript-export-subtitle-prefs');
+  const vttVoiceRow = document.getElementById('transcript-export-vtt-voice-row');
+  if (!form || !prefsEl) return;
+  const selected = form.querySelector('input[name="transcript-export-format"]:checked');
+  const format = selected ? selected.value : 'md';
+  const isSubtitle = format === 'srt' || format === 'vtt';
+  prefsEl.hidden = !isSubtitle;
+  if (vttVoiceRow) {
+    vttVoiceRow.hidden = format !== 'vtt';
+  }
+}
+
+function renderTranscriptExportFormatOptions(config, selectedFormat = 'md') {
+  const optionsContainer = document.getElementById('transcript-export-options');
+  const noticeEl = document.getElementById('transcript-export-notice');
+  const noticeTextEl = document.getElementById('transcript-export-notice-text');
+  const retranscribeBtn = document.getElementById('transcript-export-retranscribe-btn');
+  if (!optionsContainer) return;
+
+  clearElement(optionsContainer);
+  const availableFormats = new Set(
+    config.options.filter((opt) => opt.available).map((opt) => opt.format),
+  );
+  const chosenFormat = availableFormats.has(selectedFormat) ? selectedFormat : config.defaultFormat;
+
+  for (const option of config.options) {
+    const label = document.createElement('label');
+    label.className = 'transcript-export-option';
+    if (!option.available) label.classList.add('is-disabled');
+    if (option.format === chosenFormat) label.classList.add('is-selected');
+
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'transcript-export-format';
+    input.value = option.format;
+    input.disabled = !option.available;
+    input.checked = option.format === chosenFormat;
+    if (!option.available && option.disabledReason) {
+      input.title = option.disabledReason;
+    }
+
+    const body = document.createElement('span');
+    body.className = 'transcript-export-option-body';
+
+    const header = document.createElement('span');
+    header.className = 'transcript-export-option-header';
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'transcript-export-option-label';
+    nameEl.textContent = option.label;
+    header.appendChild(nameEl);
+
+    const extEl = document.createElement('span');
+    extEl.className = 'transcript-export-option-ext';
+    extEl.textContent = option.extLabel;
+    header.appendChild(extEl);
+
+    if (!option.available) {
+      const badgeEl = document.createElement('span');
+      badgeEl.className = 'transcript-export-option-badge';
+      badgeEl.textContent = 'Unavailable';
+      header.appendChild(badgeEl);
+    }
+
+    const descEl = document.createElement('span');
+    descEl.className = 'transcript-export-option-desc';
+    descEl.textContent = option.description;
+
+    body.appendChild(header);
+    body.appendChild(descEl);
+    label.appendChild(input);
+    label.appendChild(body);
+    optionsContainer.appendChild(label);
+  }
+
+  if (noticeEl && noticeTextEl) {
+    const noticeText = config.captionsUnavailableNotice || '';
+    noticeTextEl.textContent = noticeText;
+    noticeEl.hidden = !noticeText;
+  }
+  if (retranscribeBtn) {
+    retranscribeBtn.hidden = !config.canRetranscribe;
+    retranscribeBtn.disabled = false;
+  }
+  updateTranscriptExportSubtitleControls();
+}
+
+function closeTranscriptExportDialog({ restoreFocus = true } = {}) {
+  const modal = document.getElementById('transcript-export-modal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  activeTranscriptExportContext = null;
+  transcriptExportBusy = false;
+  const trigger = transcriptExportTriggerElement;
+  transcriptExportTriggerElement = null;
+  if (restoreFocus && trigger && typeof trigger.focus === 'function' && !trigger.disabled) {
+    trigger.focus();
+  }
+}
+
+function openTranscriptExportDialog({ suggestedName, content, meeting = null, triggerElement = null }) {
+  const modal = document.getElementById('transcript-export-modal');
+  const form = document.getElementById('transcript-export-form');
+  const nameEl = document.getElementById('transcript-export-meeting-name');
+  const errorEl = document.getElementById('transcript-export-error');
+  const includeSpeakersEl = document.getElementById('transcript-export-include-speakers');
+  const useVoiceTagsEl = document.getElementById('transcript-export-use-voice-tags');
+  const confirmBtn = document.getElementById('transcript-export-confirm');
+  if (!modal || !form) return false;
+
+  const meetingId = meeting && meeting.id ? String(meeting.id).trim() : '';
+  const config = buildExportFormatOptions({
+    captionsAvailable: Boolean(meeting && meeting.captionsAvailable),
+    captionsStatus: (meeting && meeting.captionsStatus) || 'missing',
+    hasAudio: Boolean(meetingId && meeting && meeting.audioPath),
+  });
+
+  activeTranscriptExportContext = {
+    suggestedName,
+    content,
+    meetingId,
+    config,
+  };
+  transcriptExportTriggerElement = triggerElement || document.activeElement;
+  transcriptExportBusy = false;
+
+  if (nameEl) nameEl.textContent = suggestedName || 'Transcript';
+  if (includeSpeakersEl) includeSpeakersEl.checked = true;
+  if (useVoiceTagsEl) useVoiceTagsEl.checked = false;
+  if (errorEl) {
+    errorEl.textContent = '';
+    errorEl.hidden = true;
+  }
+  if (confirmBtn) {
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Save As…';
+  }
+
+  renderTranscriptExportFormatOptions(config, config.defaultFormat);
+  modal.classList.remove('hidden');
+
+  const checkedRadio = form.querySelector('input[name="transcript-export-format"]:checked');
+  if (checkedRadio) {
+    checkedRadio.focus();
+  }
+  return true;
+}
+
+async function retranscribeMeetingForCaptions(meetingId) {
+  const id = String(meetingId || '').trim();
+  if (!id || transcriptExportBusy) return;
+  const retranscribeBtn = document.getElementById('transcript-export-retranscribe-btn');
+  const errorEl = document.getElementById('transcript-export-error');
+  transcriptExportBusy = true;
+  if (retranscribeBtn) {
+    retranscribeBtn.disabled = true;
+    retranscribeBtn.textContent = 'Re-transcribing…';
+  }
+  if (errorEl) {
+    errorEl.textContent = '';
+    errorEl.hidden = true;
+  }
+  addLog(`Re-transcribing meeting ${id} to generate caption timings...`);
+  try {
+    const result = await window.electronAPI.retryTranscription(buildOrdinaryRetryOptions(id));
+    if (result && result.meeting) {
+      syncMeetingInList(result.meeting);
+    }
+    await loadMeetingHistory();
+    if (String(currentMeetingId || '') === id) {
+      await selectMeeting(id);
+    }
+    const refreshed = await window.electronAPI.getMeeting(id).catch(() => null);
+    if (activeTranscriptExportContext && activeTranscriptExportContext.meetingId === id && refreshed) {
+      activeTranscriptExportContext.content = refreshed.transcript || activeTranscriptExportContext.content;
+      activeTranscriptExportContext.suggestedName = refreshed.title || activeTranscriptExportContext.suggestedName;
+      activeTranscriptExportContext.config = buildExportFormatOptions({
+        captionsAvailable: Boolean(refreshed.captionsAvailable),
+        captionsStatus: refreshed.captionsStatus || 'missing',
+        hasAudio: Boolean(refreshed.audioPath),
+      });
+      renderTranscriptExportFormatOptions(
+        activeTranscriptExportContext.config,
+        refreshed.captionsAvailable ? 'srt' : 'md',
+      );
+    }
+    addLog('Re-transcription completed.');
+  } catch (error) {
+    if (errorEl) {
+      errorEl.textContent = `Re-transcription failed: ${error && error.message ? error.message : error}`;
+      errorEl.hidden = false;
+    }
+    addLog(`Re-transcription failed: ${error && error.message ? error.message : error}`, 'error');
+  } finally {
+    transcriptExportBusy = false;
+    if (retranscribeBtn) {
+      retranscribeBtn.disabled = false;
+      retranscribeBtn.textContent = 'Re-transcribe from audio';
+    }
+  }
+}
+
+function setupTranscriptExportDialog() {
+  const modal = document.getElementById('transcript-export-modal');
+  const form = document.getElementById('transcript-export-form');
+  const optionsEl = document.getElementById('transcript-export-options');
+  const cancelBtn = document.getElementById('transcript-export-cancel');
+  const retranscribeBtn = document.getElementById('transcript-export-retranscribe-btn');
+  const confirmBtn = document.getElementById('transcript-export-confirm');
+  const errorEl = document.getElementById('transcript-export-error');
+  if (!modal || !form || modal.dataset.bound === 'true') return;
+  modal.dataset.bound = 'true';
+
+  optionsEl?.addEventListener('change', () => {
+    for (const label of optionsEl.querySelectorAll('.transcript-export-option')) {
+      const radio = label.querySelector('input[type="radio"]');
+      label.classList.toggle('is-selected', Boolean(radio && radio.checked));
+    }
+    if (errorEl) {
+      errorEl.textContent = '';
+      errorEl.hidden = true;
+    }
+    updateTranscriptExportSubtitleControls();
+  });
+
+  cancelBtn?.addEventListener('click', () => {
+    closeTranscriptExportDialog();
+  });
+
+  retranscribeBtn?.addEventListener('click', () => {
+    if (activeTranscriptExportContext && activeTranscriptExportContext.meetingId) {
+      void retranscribeMeetingForCaptions(activeTranscriptExportContext.meetingId);
+    }
+  });
+
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) {
+      closeTranscriptExportDialog({ restoreFocus: false });
+    }
+  });
+
+  modal.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeTranscriptExportDialog();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusables = [...modal.querySelectorAll('input:not(:disabled), button:not(:disabled)')]
+      .filter((element) => !element.hidden && element.offsetParent !== null);
+    if (focusables.length === 0) return;
+    const activeIndex = focusables.indexOf(document.activeElement);
+    if (event.shiftKey && activeIndex <= 0) {
+      event.preventDefault();
+      focusables[focusables.length - 1].focus();
+    } else if (!event.shiftKey && activeIndex === focusables.length - 1) {
+      event.preventDefault();
+      focusables[0].focus();
+    }
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!activeTranscriptExportContext || transcriptExportBusy) return;
+    const selectedRadio = form.querySelector('input[name="transcript-export-format"]:checked');
+    const format = selectedRadio ? selectedRadio.value : 'md';
+    const includeSpeakers = Boolean(document.getElementById('transcript-export-include-speakers')?.checked ?? true);
+    const useVoiceTags = Boolean(document.getElementById('transcript-export-use-voice-tags')?.checked);
+
+    transcriptExportBusy = true;
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Saving…';
+    }
+    if (errorEl) {
+      errorEl.textContent = '';
+      errorEl.hidden = true;
+    }
+
+    try {
+      const result = await window.electronAPI.saveTranscriptAs({
+        suggestedName: activeTranscriptExportContext.suggestedName,
+        content: activeTranscriptExportContext.content,
+        format,
+        meetingId: activeTranscriptExportContext.meetingId || undefined,
+        includeSpeakers,
+        useVoiceTags,
+      });
+
+      if (result && result.ok === false) {
+        const message = result.error || 'Subtitle timing data is unavailable for this meeting.';
+        if (errorEl) {
+          errorEl.textContent = message;
+          errorEl.hidden = false;
+        }
+        addLog(message, 'warning');
+        if (activeTranscriptExportContext.config) {
+          renderTranscriptExportFormatOptions({
+            ...activeTranscriptExportContext.config,
+            captionsUnavailableNotice: message,
+            canRetranscribe: Boolean(activeTranscriptExportContext.meetingId),
+            options: activeTranscriptExportContext.config.options.map((opt) => (
+              opt.format === 'srt' || opt.format === 'vtt'
+                ? { ...opt, available: false, disabledReason: message }
+                : opt
+            )),
+          }, 'md');
+        }
+        return;
+      }
+
+      if (result && !result.canceled && result.filePath) {
+        addLog(`Transcript saved to ${result.filePath}`);
+        closeTranscriptExportDialog();
+      } else if (result && result.canceled) {
+        transcriptExportBusy = false;
+      }
+    } catch (err) {
+      console.error('Save failed:', err);
+      if (errorEl) {
+        errorEl.textContent = `Failed to save transcript: ${err.message}`;
+        errorEl.hidden = false;
+      }
+      addLog(`Failed to save transcript: ${err.message}`, 'error');
+    } finally {
+      transcriptExportBusy = false;
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Save As…';
+      }
+    }
+  });
+}
+
 // Save the currently selected history meeting's transcript via native dialog.
 // Defaults the filename to the meeting's display label so renamed meetings
 // save with the user-friendly name they chose.
@@ -5114,15 +5458,22 @@ async function saveMeetingTranscriptToFile() {
   }
 
   const meeting = findMeetingById(currentMeetingId);
-  const suggestedName = (meeting && meeting.title) || 'Transcript';
+  let fullMeeting = meeting || null;
+  let suggestedName = (meeting && meeting.title) || 'Transcript';
   const transcriptEl = document.getElementById('meeting-transcript');
   let content = (transcriptEl && transcriptEl.dataset.markdown) || '';
 
-  if (!content) {
-    try {
-      const fullMeeting = await window.electronAPI.getMeeting(currentMeetingId);
-      content = (fullMeeting && fullMeeting.transcript) || '';
-    } catch (err) {
+  try {
+    const loaded = await window.electronAPI.getMeeting(currentMeetingId);
+    if (loaded) {
+      fullMeeting = loaded;
+      suggestedName = loaded.title || suggestedName;
+      if (!content && loaded.transcript) {
+        content = loaded.transcript;
+      }
+    }
+  } catch (err) {
+    if (!content) {
       console.error('Failed to load transcript for save:', err);
       addLog(`Failed to load transcript: ${err.message}`, 'error');
       return;
@@ -5134,16 +5485,12 @@ async function saveMeetingTranscriptToFile() {
     return;
   }
 
-  try {
-    const result = await window.electronAPI.saveTranscriptAs({ suggestedName, content });
-    if (result && !result.canceled && result.filePath) {
-      addLog(`Transcript saved to ${result.filePath}`);
-    }
-  } catch (err) {
-    console.error('Save failed:', err);
-    addLog(`Failed to save transcript: ${err.message}`, 'error');
-    alert(`Failed to save transcript: ${err.message}`);
-  }
+  openTranscriptExportDialog({
+    suggestedName,
+    content,
+    meeting: fullMeeting,
+    triggerElement: document.getElementById('save-meeting-transcript-btn'),
+  });
 }
 
 function getRenderedTranscriptFallbackText() {
@@ -5159,17 +5506,22 @@ async function saveTranscript() {
   // available, falling back to whatever is currently in the transcript pane.
   let content = currentRecordingTranscriptMarkdown || '';
   let suggestedName = 'Transcript';
+  let fullMeeting = currentRecordingMeeting || null;
 
   if (currentRecordingMeeting && currentRecordingMeeting.id) {
     suggestedName = currentRecordingMeeting.title || suggestedName;
-    if (!content) {
-      try {
-        const fullMeeting = await window.electronAPI.getMeeting(currentRecordingMeeting.id);
-        if (fullMeeting && fullMeeting.transcript) {
-          content = fullMeeting.transcript;
-          currentRecordingTranscriptMarkdown = fullMeeting.transcript;
+    try {
+      const loaded = await window.electronAPI.getMeeting(currentRecordingMeeting.id);
+      if (loaded) {
+        fullMeeting = loaded;
+        suggestedName = loaded.title || suggestedName;
+        if (!content && loaded.transcript) {
+          content = loaded.transcript;
+          currentRecordingTranscriptMarkdown = loaded.transcript;
         }
-      } catch (err) {
+      }
+    } catch (err) {
+      if (!content) {
         console.warn('Failed to load saved transcript markdown, falling back to rendered text:', err);
       }
     }
@@ -5185,19 +5537,11 @@ async function saveTranscript() {
     return;
   }
 
-  try {
-    const result = await window.electronAPI.saveTranscriptAs({
-      suggestedName,
-      content,
-    });
-    if (result && !result.canceled && result.filePath) {
-      addLog(`Transcript saved to ${result.filePath}`);
-    }
-  } catch (err) {
-    console.error('Save failed:', err);
-    addLog(`Failed to save transcript: ${err.message}`, 'error');
-    alert(`Failed to save transcript: ${err.message}`);
-  }
+  openTranscriptExportDialog({
+    suggestedName,
+    content,
+    meeting: fullMeeting,
+  });
 }
 
 // Delete meeting

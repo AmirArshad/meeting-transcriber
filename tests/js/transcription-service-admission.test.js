@@ -1826,3 +1826,185 @@ test('successful guided Parakeet retry binds its replacement speaker text to com
   assert.equal(payload.segments[0].text, 'new facts');
   assert.equal(result.meeting.ai.diarization.status, 'completed');
 });
+
+test('runMeetingTranscriptionJob writes captionsCandidatePath and passes it to commitTranscriptionAttempt', async (t) => {
+  const fs = require('node:fs');
+  const crypto = require('node:crypto');
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const request = resolveTranscriptionRequest({ engine: 'whisper', language: 'en', modelSize: 'small' }, {
+    platform: process.platform, arch: process.arch,
+  }).request;
+
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-captions-commit-'));
+  const recordingsDir = path.join(rootDir, 'recordings');
+  fs.mkdirSync(recordingsDir, { recursive: true });
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+
+  const audioPath = path.join(recordingsDir, 'meeting.wav');
+  const transcriptPath = path.join(recordingsDir, 'meeting.md');
+  fs.writeFileSync(audioPath, 'RIFFfake', 'utf8');
+  fs.writeFileSync(transcriptPath, '# Old transcript\n', 'utf8');
+
+  const candidateMarkdown = '# Meeting Transcription\r\n\r\n## Transcript\r\n\r\nHello captions\r\n';
+  const meeting = {
+    id: 'captions-commit-meeting',
+    audioPath,
+    transcriptPath,
+    transcriptionStatus: 'pending',
+    transcriptionRequest: { ...request },
+    language: 'en',
+    model: 'small',
+  };
+
+  const commits = [];
+  const harness = createServiceHarness({
+    app: { getPath: () => rootDir, isPackaged: false },
+    getRecordingsDir: () => recordingsDir,
+    fs,
+    spawnTrackedPython: (args) => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        if (args[0] === 'meeting_manager') {
+          child.stdout.emit('data', Buffer.from(JSON.stringify(meeting)));
+        } else {
+          const outputPath = args[args.indexOf('--output') + 1];
+          fs.writeFileSync(outputPath, candidateMarkdown, 'utf8');
+          const requestedDevice = args.includes('--device')
+            ? args[args.indexOf('--device') + 1]
+            : 'cpu';
+          child.stdout.emit('data', Buffer.from(JSON.stringify({
+            text: 'Hello captions',
+            segments: [{ start: 0, end: 1.5, text: 'Hello captions' }],
+            captionCues: [{ startMs: 0, endMs: 1500, text: 'Hello captions' }],
+            captionTimingPrecision: 'word',
+            language: 'en',
+            duration: 1.5,
+            device: requestedDevice === 'auto' ? 'cpu' : requestedDevice,
+            computeType: 'int8',
+            output_file: outputPath,
+          })));
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    },
+    appendSpawnJsonStdout: (buffer, data) => `${buffer}${data}`,
+    checkAiAddonSetupStatus: async () => ({ features: { diarization: { status: 'notConfigured' } } }),
+    commitTranscriptionAttempt: async (meetingId, payload) => {
+      commits.push({ meetingId, payload });
+      return { ...meeting, transcriptPath: payload.candidatePath, transcriptionStatus: 'completed' };
+    },
+  });
+
+  const job = harness.service.admitMeetingTranscriptionJob({
+    meetingId: meeting.id,
+    request,
+    language: 'en',
+    modelSize: 'small',
+  });
+  await harness.computeQueue.runNext();
+  await job;
+
+  assert.equal(commits.length, 1);
+  const expectedCaptionsPath = path.join(recordingsDir, `meeting.captions-${request.attemptId}.json`);
+  assert.equal(commits[0].payload.captionsCandidatePath, expectedCaptionsPath);
+  assert.equal(fs.existsSync(expectedCaptionsPath), true);
+
+  const sidecar = JSON.parse(fs.readFileSync(expectedCaptionsPath, 'utf8'));
+  const expectedHash = `sha256:${crypto.createHash('sha256')
+    .update(candidateMarkdown.replace(/\r\n/g, '\n'), 'utf8')
+    .digest('hex')}`;
+  assert.equal(sidecar.schemaVersion, 1);
+  assert.equal(sidecar.sourceTranscriptHash, expectedHash);
+  assert.equal(sidecar.timingPrecision, 'word');
+  assert.deepEqual(sidecar.cues, [{ startMs: 0, endMs: 1500, text: 'Hello captions' }]);
+});
+
+test('runMeetingTranscriptionJob cleans up attempt captions candidate when commit fails', async (t) => {
+  const fs = require('node:fs');
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const request = resolveTranscriptionRequest({ engine: 'whisper', language: 'en', modelSize: 'small' }, {
+    platform: process.platform, arch: process.arch,
+  }).request;
+
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-captions-cleanup-'));
+  const recordingsDir = path.join(rootDir, 'recordings');
+  fs.mkdirSync(recordingsDir, { recursive: true });
+  t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }));
+
+  const audioPath = path.join(recordingsDir, 'meeting.wav');
+  const transcriptPath = path.join(recordingsDir, 'meeting.md');
+  fs.writeFileSync(audioPath, 'RIFFfake', 'utf8');
+  fs.writeFileSync(transcriptPath, '# Old transcript\n', 'utf8');
+
+  const meeting = {
+    id: 'captions-cleanup-meeting',
+    audioPath,
+    transcriptPath,
+    transcriptionStatus: 'pending',
+    transcriptionRequest: { ...request },
+    language: 'en',
+    model: 'small',
+  };
+
+  let observedCandidateBeforeFailure = null;
+  let existedDuringCommit = false;
+  const harness = createServiceHarness({
+    app: { getPath: () => rootDir, isPackaged: false },
+    getRecordingsDir: () => recordingsDir,
+    fs,
+    spawnTrackedPython: (args) => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        if (args[0] === 'meeting_manager') {
+          child.stdout.emit('data', Buffer.from(JSON.stringify(meeting)));
+        } else {
+          const outputPath = args[args.indexOf('--output') + 1];
+          fs.writeFileSync(outputPath, '# Meeting Transcription\n\n## Transcript\n\nCandidate text\n', 'utf8');
+          const requestedDevice = args.includes('--device')
+            ? args[args.indexOf('--device') + 1]
+            : 'cpu';
+          child.stdout.emit('data', Buffer.from(JSON.stringify({
+            text: 'Candidate text',
+            segments: [{ start: 0, end: 1, text: 'Candidate text' }],
+            captionCues: [{ startMs: 0, endMs: 1000, text: 'Candidate text' }],
+            language: 'en',
+            duration: 1,
+            device: requestedDevice === 'auto' ? 'cpu' : requestedDevice,
+            computeType: 'int8',
+            output_file: outputPath,
+          })));
+        }
+        child.emit('close', 0);
+      });
+      return child;
+    },
+    appendSpawnJsonStdout: (buffer, data) => `${buffer}${data}`,
+    checkAiAddonSetupStatus: async () => ({ features: { diarization: { status: 'notConfigured' } } }),
+    commitTranscriptionAttempt: async (_meetingId, payload) => {
+      observedCandidateBeforeFailure = payload.captionsCandidatePath;
+      existedDuringCommit = Boolean(
+        observedCandidateBeforeFailure && fs.existsSync(observedCandidateBeforeFailure),
+      );
+      throw new Error('simulated commit failure');
+    },
+    failTranscriptionAttempt: async () => {},
+  });
+
+  const job = harness.service.admitMeetingTranscriptionJob({
+    meetingId: meeting.id,
+    request,
+    language: 'en',
+    modelSize: 'small',
+  });
+  await assert.rejects(harness.computeQueue.runNext(), /simulated commit failure/);
+  await assert.rejects(job, /simulated commit failure/);
+
+  assert.ok(observedCandidateBeforeFailure);
+  assert.equal(existedDuringCommit, true);
+  assert.equal(fs.existsSync(observedCandidateBeforeFailure), false);
+});

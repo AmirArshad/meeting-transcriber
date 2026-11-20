@@ -340,3 +340,113 @@ test('update-meeting serializes concurrent renames for the same meeting', async 
   assert.deepEqual(await second, { id: 'meeting', title: 'Second' });
   assert.deepEqual(syncedTitles, ['First', 'Second']);
 });
+
+test('getMeeting spawns --recordings-dir ... get <id> and surfaces errors', async () => {
+  const spawned = [];
+  const client = createMeetingManagerClient({
+    app: { getPath: () => '/tmp/avanevis-test' },
+    path,
+    spawnTrackedPython(args) {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      spawned.push({ args, proc });
+      return proc;
+    },
+    pythonConfig: { backendPath: '/tmp/backend' },
+    getBackendModuleArgs: (moduleName, args) => [moduleName, ...args],
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      let stderr = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      python.stderr.on('data', (data) => { stderr += data.toString(); });
+      return {
+        getStdout: () => stdout,
+        getStderr: () => stderr,
+        assertStdoutWithinLimit() {},
+      };
+    },
+    appendSpawnLogBuffer: (buffer, chunk) => buffer + String(chunk),
+    assertTrustedRendererSender() {},
+    sanitizeTranscriptionError: (value) => value,
+    getRecordingsDir: () => '/tmp/avanevis-test/recordings',
+    assertSafeExistingRecordingAudioPath: (value) => value,
+    assertSafeExistingTranscriptPath: (value) => value,
+    validateAiMetadataPaths: (value) => value,
+  });
+
+  const okPromise = client.getMeeting('  meeting-42  ');
+  assert.deepEqual(spawned[0].args, [
+    'meeting_manager',
+    '--recordings-dir',
+    path.join('/tmp/avanevis-test', 'recordings'),
+    'get',
+    'meeting-42',
+  ]);
+  spawned[0].proc.stdout.emit('data', Buffer.from('{"id":"meeting-42","captionsAvailable":true}'));
+  spawned[0].proc.emit('close', 0);
+  assert.deepEqual(await okPromise, { id: 'meeting-42', captionsAvailable: true });
+
+  const failPromise = client.getMeeting('missing');
+  spawned[1].proc.stderr.emit('data', Buffer.from('Meeting missing not found'));
+  spawned[1].proc.emit('close', 1);
+  await assert.rejects(failPromise, /Meeting missing not found/);
+});
+
+test('commitTranscriptionAttempt passes --captions-candidate only when provided', async () => {
+  const spawnedArgs = [];
+  const client = createMeetingManagerClient({
+    app: { getPath: () => '/tmp/avanevis-test' },
+    path,
+    spawnTrackedPython(args) {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      spawnedArgs.push(args);
+      queueMicrotask(() => {
+        proc.stdout.emit('data', Buffer.from('{"id":"meeting-1"}'));
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+    pythonConfig: { backendPath: '/tmp/backend' },
+    getBackendModuleArgs: (moduleName, args) => [moduleName, ...args],
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      return { getStdout: () => stdout, getStderr: () => '', assertStdoutWithinLimit() {} };
+    },
+    appendSpawnLogBuffer: (buffer, chunk) => buffer + String(chunk),
+    assertTrustedRendererSender() {},
+    sanitizeTranscriptionError: (value) => value,
+    getRecordingsDir: () => '/tmp/avanevis-test/recordings',
+    assertSafeExistingRecordingAudioPath: (value) => value,
+    assertSafeExistingTranscriptPath: (value) => value,
+    validateAiMetadataPaths: (value) => value,
+  });
+
+  const baseResult = {
+    schemaVersion: 1,
+    attemptId: '11111111-1111-4111-8111-111111111111',
+    engine: 'whisper',
+    language: 'en',
+  };
+
+  await client.commitTranscriptionAttempt('meeting-1', {
+    attemptId: baseResult.attemptId,
+    candidatePath: '/tmp/avanevis-test/recordings/candidate.md',
+    result: baseResult,
+  });
+  assert.equal(spawnedArgs[0].includes('--captions-candidate'), false);
+
+  const captionsCandidate = '/tmp/avanevis-test/recordings/meeting.captions-11111111.json';
+  await client.commitTranscriptionAttempt('meeting-1', {
+    attemptId: baseResult.attemptId,
+    candidatePath: '/tmp/avanevis-test/recordings/candidate.md',
+    captionsCandidatePath: captionsCandidate,
+    result: baseResult,
+  });
+  const flagIndex = spawnedArgs[1].indexOf('--captions-candidate');
+  assert.notEqual(flagIndex, -1);
+  assert.equal(spawnedArgs[1][flagIndex + 1], captionsCandidate);
+});

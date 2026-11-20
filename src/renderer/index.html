@@ -61,6 +61,38 @@
       </div>
     </div>
 
+    <div id="transcript-export-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="transcript-export-title" aria-describedby="transcript-export-description">
+      <div class="modal-content transcript-export-modal-content">
+        <div class="modal-header"><h2 id="transcript-export-title" tabindex="-1">Save Transcript As</h2></div>
+        <form id="transcript-export-form" class="modal-body">
+          <p id="transcript-export-description" class="setting-description">Choose a file format for <strong id="transcript-export-meeting-name"></strong>.</p>
+          <fieldset class="transcript-export-formats" aria-labelledby="transcript-export-title">
+            <legend class="sr-only">Transcript export format</legend>
+            <div id="transcript-export-options" class="transcript-export-options" role="radiogroup" aria-label="Export format"></div>
+          </fieldset>
+          <div id="transcript-export-subtitle-prefs" class="transcript-export-subtitle-prefs" hidden>
+            <label class="transcript-export-checkbox">
+              <input type="checkbox" id="transcript-export-include-speakers" checked>
+              <span>Include speaker labels when available</span>
+            </label>
+            <label id="transcript-export-vtt-voice-row" class="transcript-export-checkbox" hidden>
+              <input type="checkbox" id="transcript-export-use-voice-tags">
+              <span>Use WebVTT <code>&lt;v Speaker&gt;</code> voice tags</span>
+            </label>
+          </div>
+          <div id="transcript-export-notice" class="transcript-export-notice" role="status" aria-live="polite" hidden>
+            <p id="transcript-export-notice-text" class="transcript-export-notice-text"></p>
+            <button type="button" id="transcript-export-retranscribe-btn" class="btn btn-secondary btn-small" hidden>Re-transcribe from audio</button>
+          </div>
+          <p id="transcript-export-error" class="whisper-retry-error" role="alert" hidden></p>
+          <div class="modal-actions transcript-export-actions">
+            <button type="button" id="transcript-export-cancel" class="btn btn-secondary">Cancel</button>
+            <button type="submit" id="transcript-export-confirm" class="btn btn-primary">Save As…</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <!-- First Time Setup Modal -->
     <div id="ftue-modal" class="modal-overlay hidden">
       <div class="modal-content">
@@ -1300,6 +1332,7 @@
     <script src="canvas-helpers.js"></script>
     <script src="keyboard-shortcut-helpers.js"></script>
     <script src="transcription-engine-helpers.js"></script>
+    <script src="subtitle-export-helpers.js"></script>
     <script src="../transcription-policy.js"></script>
     <script src="app.js"></script>
   </body>

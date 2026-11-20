@@ -1198,3 +1198,144 @@ def test_transcribe_file_does_not_retry_generic_load_errors(tmp_path):
         service.transcribe_file(str(audio_path), save_markdown=False)
 
     assert calls['attempt'] == 1
+
+
+def test_faster_whisper_run_transcription_attempt_preserves_pre_merge_caption_cues(tmp_path):
+    from backend.transcription.captions import hash_transcript_text, validate_captions_payload
+
+    audio_path = tmp_path / 'sample.opus'
+    audio_path.write_bytes(b'audio')
+    service = TranscriberService(model_size='small', language='en', device='cpu', compute_type='int8')
+
+    raw_segments = [
+        types.SimpleNamespace(start=0.0, end=3.0, text=' First three second segment.'),
+        types.SimpleNamespace(start=3.5, end=6.5, text=' Second three second segment.'),
+    ]
+    info = types.SimpleNamespace(language='en', duration=7.0)
+    service.model = types.SimpleNamespace(transcribe=lambda *_args, **_kwargs: (iter(raw_segments), info))
+
+    result = service._run_transcription_attempt(str(audio_path))
+
+    assert len(result['segments']) == 1
+    assert result['segments'][0] == {
+        'start': 0.0,
+        'end': 6.5,
+        'text': 'First three second segment. Second three second segment.',
+    }
+    assert result['captionEngine'] == 'faster-whisper'
+    assert result['captionTimingPrecision'] == 'segment'
+    assert result['captionCues'] == [
+        {'startMs': 0, 'endMs': 3000, 'text': 'First three second segment.'},
+        {'startMs': 3500, 'endMs': 6500, 'text': 'Second three second segment.'},
+    ]
+
+    output_md = tmp_path / 'sample.md'
+    captions_json = tmp_path / 'sample.captions.json'
+    service.model = types.SimpleNamespace(transcribe=lambda *_args, **_kwargs: (iter(raw_segments), info))
+    written = service.transcribe_file(
+        str(audio_path),
+        output_path=str(output_md),
+        captions_output_path=str(captions_json),
+    )
+
+    assert written['captions_file'] == str(captions_json)
+    payload = json.loads(captions_json.read_text(encoding='utf-8'))
+    expected_hash = hash_transcript_text(output_md.read_text(encoding='utf-8'))
+    assert payload['sourceTranscriptHash'] == expected_hash
+    assert validate_captions_payload(payload, expected_transcript_hash=expected_hash, require_non_empty=True) == (True, None)
+
+
+def test_faster_whisper_word_timed_segments_handle_leading_space_and_bare_tokens(tmp_path):
+    audio_path = tmp_path / 'words.opus'
+    audio_path.write_bytes(b'audio')
+    service = TranscriberService(model_size='small', language='en', device='cpu', compute_type='int8')
+
+    leading_space_seg = types.SimpleNamespace(
+        start=0.0,
+        end=2.0,
+        text='Hello world, next',
+        words=[
+            types.SimpleNamespace(word=' Hello', start=0.0, end=0.4),
+            types.SimpleNamespace(word=' world', start=0.4, end=0.8),
+            types.SimpleNamespace(word=',', start=0.8, end=0.85),
+            types.SimpleNamespace(word=' next', start=0.9, end=1.4),
+        ],
+    )
+    bare_token_seg = types.SimpleNamespace(
+        start=2.5,
+        end=4.0,
+        text='Alpha beta',
+        words=[
+            types.SimpleNamespace(word='Alpha', start=2.5, end=3.1),
+            types.SimpleNamespace(word='beta', start=3.2, end=3.9),
+        ],
+    )
+    info = types.SimpleNamespace(language='en', duration=4.5)
+    service.model = types.SimpleNamespace(
+        transcribe=lambda *_args, **_kwargs: (iter([leading_space_seg, bare_token_seg]), info)
+    )
+
+    result = service._run_transcription_attempt(str(audio_path))
+
+    assert result['captionEngine'] == 'faster-whisper'
+    assert result['captionTimingPrecision'] == 'word'
+    assert result['captionCues'] == [
+        {'startMs': 0, 'endMs': 1400, 'text': 'Hello world, next'},
+        {'startMs': 2500, 'endMs': 3900, 'text': 'Alpha beta'},
+    ]
+
+
+def test_mlx_transcriber_writes_hash_bound_captions_sidecar_with_pre_merge_cues(tmp_path):
+    import wave
+    from backend.transcription.captions import hash_transcript_text, validate_captions_payload
+
+    audio_path = tmp_path / 'mlx_sample.wav'
+    with wave.open(str(audio_path), 'wb') as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b'\x00\x00' * 16000 * 7)
+
+    service = cast(Any, MLXWhisperTranscriber(model_size='small', language='en'))
+    service.model_ready = True
+    service._transcribe_audio = lambda _audio: {
+        'text': 'One. Two.',
+        'language': 'en',
+        'segments': [
+            {
+                'start': 0.0,
+                'end': 3.0,
+                'text': 'One.',
+                'words': [
+                    {'word': ' One', 'start': 0.1, 'end': 1.0},
+                    {'word': '.', 'start': 1.0, 'end': 1.1, 'joinNoSpace': True},
+                ],
+            },
+            {
+                'start': 3.5,
+                'end': 6.5,
+                'text': 'Two.',
+                'words': [
+                    {'word': 'Two', 'start': 3.5, 'end': 4.2},
+                    {'word': '.', 'start': 4.2, 'end': 4.3, 'joinNoSpace': True},
+                ],
+            },
+        ],
+    }
+
+    output_md = tmp_path / 'mlx_sample.md'
+    captions_json = tmp_path / 'mlx_sample.captions.json'
+    result = service.transcribe_file(
+        str(audio_path),
+        output_path=str(output_md),
+        captions_output_path=str(captions_json),
+    )
+
+    assert len(result['segments']) == 1
+    assert result['captionEngine'] == 'mlx-whisper'
+    assert result['captionTimingPrecision'] == 'word'
+    assert len(result['captionCues']) == 2
+    assert result['captions_file'] == str(captions_json)
+    payload = json.loads(captions_json.read_text(encoding='utf-8'))
+    expected_hash = hash_transcript_text(output_md.read_text(encoding='utf-8'))
+    assert validate_captions_payload(payload, expected_transcript_hash=expected_hash, require_non_empty=True) == (True, None)

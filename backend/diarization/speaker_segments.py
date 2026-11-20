@@ -44,6 +44,11 @@ def _speaker_label_map(speaker_segments: Iterable[Dict[str, Any]]) -> Dict[str, 
     }
 
 
+def speaker_label_map(speaker_segments: Iterable[Dict[str, Any]]) -> Dict[str, str]:
+    """Return canonical raw-label -> 'Speaker N' mapping."""
+    return _speaker_label_map(speaker_segments)
+
+
 def _best_speaker_for_segment(
     transcript_segment: Dict[str, Any],
     speaker_segments: List[Dict[str, Any]],
@@ -207,3 +212,34 @@ def merge_speaker_labels(
         merged.append(merged_segment)
 
     return merged
+
+
+def attach_speakers_to_caption_cues(
+    cues: Iterable[Dict[str, Any]],
+    speaker_segments: Iterable[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Attach normalized speaker labels onto fine caption cues by max temporal overlap."""
+    speaker_turns = [dict(segment) for segment in speaker_segments]
+    label_map = _speaker_label_map(speaker_turns)
+    attached: List[Dict[str, Any]] = []
+    for cue in cues:
+        if not isinstance(cue, dict):
+            continue
+        item = dict(cue)
+        if item.get("startMs") is not None and item.get("endMs") is not None:
+            probe = {
+                "start": float(item["startMs"]) / 1000.0,
+                "end": float(item["endMs"]) / 1000.0,
+            }
+        else:
+            probe = {
+                "start": _to_float(item.get("start")),
+                "end": _to_float(item.get("end")),
+            }
+        best_speaker = _best_speaker_for_segment(probe, speaker_turns) if speaker_turns else None
+        if best_speaker:
+            item["speaker"] = label_map.get(best_speaker, UNKNOWN_SPEAKER)
+        elif speaker_turns and not item.get("speaker"):
+            item["speaker"] = UNKNOWN_SPEAKER
+        attached.append(item)
+    return attached

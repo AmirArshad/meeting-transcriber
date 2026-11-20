@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .captions import hash_transcript_text  # noqa: F401
+
 
 def format_timestamp(seconds: Any) -> str:
     """Format seconds as HH:MM:SS or MM:SS."""

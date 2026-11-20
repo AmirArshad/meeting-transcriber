@@ -655,6 +655,7 @@ const {
   isRecordingsScanInProgress,
   scanRecordings,
   listMeetings,
+  getMeeting,
 } = meetingManagerClient;
 
 const deviceIpc = registerDeviceIpc(ipcMain, {
@@ -687,6 +688,8 @@ registerFileExportIpc(ipcMain, {
   isSafeRecordingsMarkdownPath,
   isSafeRecordingsJsonPath,
   getLegalNoticesPath,
+  getMeeting,
+  assertTrustedRendererSender,
   dirname: __dirname,
 });
 

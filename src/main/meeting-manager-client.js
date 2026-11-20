@@ -309,46 +309,48 @@ function createMeetingManagerClient(deps) {
     });
   }
 
+  function getMeeting(meetingId) {
+    return new Promise((resolve, reject) => {
+      const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+      const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+        '--recordings-dir', recordingsDir,
+        'get',
+        String(meetingId || '').trim(),
+      ]), { cwd: pythonConfig.backendPath });
+
+      const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+      python.on('close', (code) => {
+        try {
+          processOutput.assertStdoutWithinLimit();
+        } catch (error) {
+          reject(error);
+          return;
+        }
+
+        if (code === 0) {
+          try {
+            const meeting = JSON.parse(processOutput.getStdout());
+            resolve(meeting);
+          } catch (e) {
+            reject(new Error(`Failed to parse meeting: ${e.message}`));
+          }
+        } else {
+          const errorMsg = processOutput.getStderr().trim() || 'Meeting not found';
+          reject(new Error(errorMsg));
+        }
+      });
+      python.on('error', reject);
+    });
+  }
+
   function registerIpc(ipcMain) {
     ipcMain.handle('list-meetings', async () => listMeetings());
 
     /**
      * Get a single meeting
      */
-    ipcMain.handle('get-meeting', async (event, meetingId) => {
-      return new Promise((resolve, reject) => {
-        const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-          '--recordings-dir', recordingsDir,
-          'get',
-          meetingId
-        ]), { cwd: pythonConfig.backendPath });
-
-        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-        python.on('close', (code) => {
-          try {
-            processOutput.assertStdoutWithinLimit();
-          } catch (error) {
-            reject(error);
-            return;
-          }
-
-          if (code === 0) {
-            try {
-              const meeting = JSON.parse(processOutput.getStdout());
-              resolve(meeting);
-            } catch (e) {
-              reject(new Error(`Failed to parse meeting: ${e.message}`));
-            }
-          } else {
-            const errorMsg = processOutput.getStderr().trim() || 'Meeting not found';
-            reject(new Error(errorMsg));
-          }
-        });
-        python.on('error', reject);
-      });
-    });
+    ipcMain.handle('get-meeting', async (event, meetingId) => getMeeting(meetingId));
 
     /**
      * Delete a meeting
@@ -664,7 +666,7 @@ function createMeetingManagerClient(deps) {
     if (!meetingId || !payload.attemptId || !payload.candidatePath || !bounded) {
       return Promise.reject(new Error('commit-transcription-attempt requires a candidate and bounded result'));
     }
-    return runMeetingManagerCommand([
+    const args = [
       'commit-transcription-attempt',
       String(meetingId),
       '--attempt-id', String(payload.attemptId),
@@ -672,7 +674,11 @@ function createMeetingManagerClient(deps) {
       '--result-json', JSON.stringify(bounded),
       '--cancel-generation', String(payload.cancelGeneration || 0),
       '--delete-generation', String(payload.deleteGeneration || 0),
-    ], registerProcess);
+    ];
+    if (payload.captionsCandidatePath) {
+      args.push('--captions-candidate', String(payload.captionsCandidatePath));
+    }
+    return runMeetingManagerCommand(args, registerProcess);
   }
 
   return {
@@ -687,6 +693,7 @@ function createMeetingManagerClient(deps) {
     isRecordingsScanInProgress,
     scanRecordings,
     listMeetings,
+    getMeeting,
     registerIpc,
   };
 }

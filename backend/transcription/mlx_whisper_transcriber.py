@@ -12,6 +12,12 @@ from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 
 from .base_transcriber import BaseTranscriber
+from .captions import (
+    build_caption_cues,
+    build_captions_payload,
+    hash_transcript_text,
+    write_captions_sidecar_atomic,
+)
 from .formatting import format_timestamp, merge_segments, save_transcript_markdown
 
 
@@ -348,11 +354,14 @@ class MLXWhisperTranscriber(BaseTranscriber):
     def _normalize_segment(segment: Any) -> Dict[str, Any]:
         """Normalize supported MLX segment shapes into the renderer contract."""
         if isinstance(segment, dict):
-            return {
+            normalized = {
                 'start': float(segment.get('start', 0) or 0),
                 'end': float(segment.get('end', 0) or 0),
                 'text': str(segment.get('text', '') or '').strip(),
             }
+            if isinstance(segment.get('words'), (list, tuple)) and segment['words']:
+                normalized['words'] = list(segment['words'])
+            return normalized
 
         if isinstance(segment, (list, tuple)):
             if len(segment) >= 3:
@@ -445,6 +454,8 @@ class MLXWhisperTranscriber(BaseTranscriber):
                 'end': float(segment.get('end', 0) or 0),
                 'text': text,
             }
+            if isinstance(segment.get('words'), (list, tuple)) and segment['words']:
+                normalized_segment['words'] = list(segment['words'])
             if normalized_segment['end'] <= normalized_segment['start'] and duration > 0:
                 normalized_segment['start'] = 0.0
                 normalized_segment['end'] = duration
@@ -456,12 +467,20 @@ class MLXWhisperTranscriber(BaseTranscriber):
             segments_list.append({'start': 0.0, 'end': duration if duration > 0 else 0.0, 'text': text})
             full_text.append(text)
 
+        caption_cues, caption_precision = build_caption_cues(segments_list, audio_duration=duration)
+
         print(f"Merging {len(segments_list)} segments into larger chunks...", file=sys.stderr)
-        segments_list = self._merge_segments(segments_list, target_duration=20.0)
+        segments_list = self._merge_segments(
+            [{'start': s['start'], 'end': s['end'], 'text': s['text']} for s in segments_list],
+            target_duration=20.0,
+        )
 
         return {
             'text': ' '.join(full_text),
             'segments': segments_list,
+            'captionCues': caption_cues,
+            'captionEngine': 'mlx-whisper',
+            'captionTimingPrecision': caption_precision,
             'language': detected_language,
             'duration': duration,
             'output_file': None,
@@ -537,7 +556,8 @@ class MLXWhisperTranscriber(BaseTranscriber):
         self,
         audio_path: str,
         output_path: Optional[str] = None,
-        save_markdown: bool = True
+        save_markdown: bool = True,
+        captions_output_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Transcribe an audio file to text.
@@ -589,6 +609,16 @@ class MLXWhisperTranscriber(BaseTranscriber):
 
             self._save_markdown(results, audio_path, output_path)
             results['output_file'] = output_path
+            if captions_output_path:
+                markdown_text = Path(output_path).read_text(encoding='utf-8')
+                payload = build_captions_payload(
+                    source_transcript_hash=hash_transcript_text(markdown_text),
+                    engine=results.get('captionEngine') or 'mlx-whisper',
+                    cues=results.get('captionCues') or [],
+                    timing_precision=results.get('captionTimingPrecision') or 'segment',
+                )
+                write_captions_sidecar_atomic(captions_output_path, payload)
+                results['captions_file'] = captions_output_path
 
         return results
 
@@ -643,11 +673,14 @@ class MLXWhisperTranscriber(BaseTranscriber):
             if end < start:
                 end = start
 
-            clamped_segments.append({
+            clamped_entry = {
                 'start': max(0.0, start),
                 'end': max(0.0, end),
                 'text': segment.get('text', ''),
-            })
+            }
+            if isinstance(segment.get('words'), (list, tuple)) and segment['words']:
+                clamped_entry['words'] = list(segment['words'])
+            clamped_segments.append(clamped_entry)
 
         return clamped_segments
 
@@ -768,6 +801,7 @@ def main():
     parser.add_argument("audio_file", nargs="?", help="Path to audio file")
     parser.add_argument("--file", dest="file_arg", help="Path to audio file (alternative)")
     parser.add_argument("--output", help="Optional Markdown destination")
+    parser.add_argument("--captions-output", help="Optional captions JSON sidecar destination")
     parser.add_argument("--language", default="en", help="Language code (default: en)")
     parser.add_argument("--model", default="base", help="Model size (default: base)")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
@@ -811,7 +845,11 @@ def main():
         transcriber.load_model()
 
         # Transcribe
-        results = transcriber.transcribe_file(audio_file, output_path=args.output)
+        results = transcriber.transcribe_file(
+            audio_file,
+            output_path=args.output,
+            captions_output_path=args.captions_output,
+        )
 
         if args.json:
             # Output JSON to stdout for integration

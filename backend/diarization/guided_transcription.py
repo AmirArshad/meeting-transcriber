@@ -33,7 +33,18 @@ from .diarization_pipeline import (
     run_pyannote_diarization,
     save_diarization_result,
 )
+from .speaker_segments import (
+    UNKNOWN_SPEAKER,
+    attach_speakers_to_caption_cues,
+    speaker_label_map,
+)
 from common.sensitive_text import redact_sensitive_text
+from transcription.captions import (
+    build_caption_cues,
+    build_captions_payload,
+    hash_transcript_text,
+    write_captions_sidecar_atomic,
+)
 from transcription.formatting import save_transcript_markdown
 
 
@@ -268,6 +279,70 @@ def extract_window_text_for_turn(result: Dict[str, Any], window: Dict[str, Any])
     return normalize_whitespace(" ".join(selected_text))
 
 
+def extract_window_caption_cues_for_turn(result: Dict[str, Any], window: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Preserve fine-grained caption cues inside the unpadded speaker turn."""
+    turn_start_ms = max(0, int(round(_to_float(window.get("start")) * 1000.0)))
+    turn_end_ms = max(turn_start_ms, int(round(_to_float(window.get("end")) * 1000.0)))
+    audio_start_ms = max(0, int(round(_to_float(window.get("audioStart")) * 1000.0)))
+    speaker = str(window.get("speaker", "") or "").strip()
+
+    def _clip_items(items: List[Dict[str, Any]], *, is_ms: bool) -> List[Dict[str, Any]]:
+        selected: List[Dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            text = normalize_whitespace(item.get("text"))
+            if not text:
+                continue
+            if is_ms:
+                rel_start_ms = int(round(_to_float(item.get("startMs"))))
+                rel_end_ms = int(round(_to_float(item.get("endMs"))))
+            else:
+                rel_start_ms = int(round(_to_float(item.get("start")) * 1000.0))
+                rel_end_ms = int(round(_to_float(item.get("end")) * 1000.0))
+            abs_start_ms = audio_start_ms + max(0, rel_start_ms)
+            abs_end_ms = audio_start_ms + max(0, rel_end_ms)
+            if abs_end_ms <= abs_start_ms:
+                continue
+            overlap_start = max(abs_start_ms, turn_start_ms)
+            overlap_end = min(abs_end_ms, turn_end_ms)
+            if overlap_end <= overlap_start:
+                continue
+            cue: Dict[str, Any] = {
+                "startMs": overlap_start,
+                "endMs": overlap_end,
+                "text": text,
+            }
+            if speaker:
+                cue["speaker"] = speaker
+            selected.append(cue)
+        return selected
+
+    raw_cues = result.get("captionCues")
+    if isinstance(raw_cues, list) and raw_cues:
+        clipped = _clip_items(raw_cues, is_ms=True)
+        if clipped:
+            return clipped
+
+    segments = result.get("segments")
+    if isinstance(segments, list) and segments:
+        clipped = _clip_items(segments, is_ms=False)
+        if clipped:
+            return clipped
+
+    fallback_text = extract_window_text_for_turn(result, window)
+    if not fallback_text:
+        return []
+    cue = {
+        "startMs": turn_start_ms,
+        "endMs": max(turn_start_ms + 100, turn_end_ms),
+        "text": fallback_text,
+    }
+    if speaker:
+        cue["speaker"] = speaker
+    return [cue]
+
+
 def assign_words_to_speaker_turns(
     words: Iterable[Dict[str, Any]],
     speaker_segments: Iterable[Dict[str, Any]],
@@ -325,6 +400,8 @@ def transcribe_speaker_windows(
     transcriber: Any,
     work_dir: Path,
     ffmpeg_path: str = "ffmpeg",
+    out_caption_cues: Optional[List[Dict[str, Any]]] = None,
+    out_precision_flags: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     transcript_segments: List[Dict[str, Any]] = []
     total = len(windows)
@@ -352,21 +429,65 @@ def transcribe_speaker_windows(
             "text": text,
             "speaker": str(window.get("speaker", "") or ""),
         })
+        if out_caption_cues is not None:
+            window_cues = extract_window_caption_cues_for_turn(result, window)
+            if window_cues:
+                out_caption_cues.extend(window_cues)
+                if out_precision_flags is not None:
+                    used_raw_cues = isinstance(result.get("captionCues"), list) and bool(result.get("captionCues"))
+                    out_precision_flags.append(
+                        "word"
+                        if used_raw_cues and result.get("captionTimingPrecision") == "word"
+                        else "segment"
+                    )
+            else:
+                out_caption_cues.append({
+                    "start": _to_float(window.get("start")),
+                    "end": _to_float(window.get("end")),
+                    "text": text,
+                    "speaker": str(window.get("speaker", "") or ""),
+                })
+                if out_precision_flags is not None:
+                    out_precision_flags.append("segment")
 
     return transcript_segments
 
 
-def transcribe_full_audio(transcriber: Any, audio_path: Path) -> List[Dict[str, Any]]:
+def transcribe_full_audio(
+    transcriber: Any,
+    audio_path: Path,
+    *,
+    out_caption_cues: Optional[List[Dict[str, Any]]] = None,
+    out_precision_flags: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
     result = transcriber.transcribe_file(str(audio_path), save_markdown=False)
     segments = result.get("segments")
     if isinstance(segments, list) and segments:
-        return [dict(segment) for segment in segments if isinstance(segment, dict)]
+        copied = [dict(segment) for segment in segments if isinstance(segment, dict)]
+        if out_caption_cues is not None:
+            raw_cues = result.get("captionCues")
+            if isinstance(raw_cues, list) and raw_cues:
+                out_caption_cues.extend(dict(cue) for cue in raw_cues if isinstance(cue, dict))
+                if out_precision_flags is not None:
+                    out_precision_flags.append(
+                        "word" if result.get("captionTimingPrecision") == "word" else "segment"
+                    )
+            else:
+                out_caption_cues.extend(copied)
+                if out_precision_flags is not None:
+                    out_precision_flags.append("segment")
+        return copied
 
     text = _extract_result_text(result)
     if not text:
         return []
     duration = _to_float(result.get("duration"), get_audio_duration_seconds(audio_path))
-    return [{"start": 0.0, "end": duration, "text": text}]
+    fallback = [{"start": 0.0, "end": duration, "text": text}]
+    if out_caption_cues is not None:
+        out_caption_cues.extend(fallback)
+        if out_precision_flags is not None:
+            out_precision_flags.append("segment")
+    return fallback
 
 
 def save_guided_markdown(
@@ -402,6 +523,7 @@ def transcribe_with_diarization_guidance(
     audio_path: str,
     output_transcript: Optional[str] = None,
     output_json: Optional[str] = None,
+    output_captions: Optional[str] = None,
     language: str = "en",
     model_size: str = "small",
     transcriber_backend: str = "auto",
@@ -462,6 +584,9 @@ def transcribe_with_diarization_guidance(
         transcriber.load_model()
         transcription_device = None
         transcription_compute_type = None
+        raw_caption_cues: List[Dict[str, Any]] = []
+        caption_precision_flags: List[str] = []
+        used_fallback_full_audio = False
         try:
             if windows:
                 transcript_segments = transcribe_speaker_windows(
@@ -470,13 +595,23 @@ def transcribe_with_diarization_guidance(
                     transcriber=transcriber,
                     work_dir=work_dir,
                     ffmpeg_path=ffmpeg_path,
+                    out_caption_cues=raw_caption_cues,
+                    out_precision_flags=caption_precision_flags,
                 )
             else:
                 transcript_segments = []
 
             if not transcript_segments:
                 emit_progress("fallback-transcription", "No usable speaker windows were transcribed; transcribing the full audio.", percent=94)
-                transcript_segments = transcribe_full_audio(transcriber, prepared_audio)
+                raw_caption_cues.clear()
+                caption_precision_flags.clear()
+                used_fallback_full_audio = True
+                transcript_segments = transcribe_full_audio(
+                    transcriber,
+                    prepared_audio,
+                    out_caption_cues=raw_caption_cues,
+                    out_precision_flags=caption_precision_flags,
+                )
             model_info = transcriber.get_model_info()
             transcription_device = model_info.get("device")
             transcription_compute_type = model_info.get("compute_type")
@@ -499,10 +634,29 @@ def transcribe_with_diarization_guidance(
         diarization_result["segmentsPath"] = output_json
 
     final_segments = diarization_result.get("segments") if isinstance(diarization_result.get("segments"), list) else transcript_segments
+    label_map = speaker_label_map(speaker_segments)
+    if used_fallback_full_audio:
+        labeled_caption_cues = attach_speakers_to_caption_cues(raw_caption_cues, speaker_segments)
+    else:
+        labeled_caption_cues = []
+        for cue in raw_caption_cues:
+            item = dict(cue)
+            raw_speaker = str(item.get("speaker", "") or "").strip()
+            if raw_speaker:
+                item["speaker"] = label_map.get(raw_speaker, UNKNOWN_SPEAKER)
+            labeled_caption_cues.append(item)
+    caption_cues, caption_precision = build_caption_cues(labeled_caption_cues, audio_duration=audio_duration)
+    if caption_cues and caption_precision_flags and all(flag == "word" for flag in caption_precision_flags):
+        caption_precision = "word"
+    caption_engine = "mlx-whisper" if resolve_transcriber_backend(transcriber_backend) == "mlx" else "faster-whisper"
+
     text = normalize_whitespace(" ".join(str(segment.get("text", "")) for segment in final_segments if isinstance(segment, dict)))
     result = {
         "text": text,
         "segments": final_segments,
+        "captionCues": caption_cues,
+        "captionEngine": caption_engine,
+        "captionTimingPrecision": caption_precision,
         "language": language,
         "duration": audio_duration,
         "output_file": transcript_path,
@@ -520,6 +674,16 @@ def transcribe_with_diarization_guidance(
         duration=audio_duration,
         segments=final_segments,
     )
+    if output_captions:
+        markdown_text = Path(transcript_path).read_text(encoding="utf-8")
+        captions_payload = build_captions_payload(
+            source_transcript_hash=hash_transcript_text(markdown_text),
+            engine=caption_engine,
+            cues=caption_cues,
+            timing_precision=caption_precision,
+        )
+        write_captions_sidecar_atomic(output_captions, captions_payload)
+        result["captions_file"] = output_captions
     emit_progress("completed", "Speaker-guided transcription completed.", percent=100)
     return result
 
@@ -590,6 +754,7 @@ def main() -> None:
     parser.add_argument("--audio", required=True, help="Source audio file path")
     parser.add_argument("--output-transcript", help="Output transcript Markdown path")
     parser.add_argument("--output-json", help="Optional output speaker JSON sidecar path")
+    parser.add_argument("--output-captions", help="Optional output captions JSON sidecar path")
     parser.add_argument("--language", default="en", help="Whisper language code")
     parser.add_argument("--model", default="small", help="Whisper model size")
     parser.add_argument("--transcriber-backend", default="auto", help="auto, mlx, or faster")
@@ -625,6 +790,7 @@ def main() -> None:
                 audio_path=args.audio,
                 output_transcript=args.output_transcript,
                 output_json=args.output_json,
+                output_captions=args.output_captions,
                 language=args.language,
                 model_size=args.model,
                 transcriber_backend=args.transcriber_backend,

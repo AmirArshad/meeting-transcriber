@@ -12,9 +12,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .base_transcriber import BaseTranscriber
+from .captions import (
+    build_caption_cues,
+    build_captions_payload,
+    hash_transcript_text,
+    write_captions_sidecar_atomic,
+)
 from .formatting import build_transcript_markdown
 from .parakeet_segments import (SAMPLE_RATE, InvalidParakeetOutput, assemble,
-                                repair_seam, retain_owned, windows)
+                                build_caption_words, repair_seam, retain_owned, windows)
 
 
 class ParakeetTranscriber(BaseTranscriber):
@@ -77,7 +83,8 @@ class ParakeetTranscriber(BaseTranscriber):
         return pcm
 
     def transcribe_file(self, audio_path: str, output_path: str | None = None,
-                        save_markdown: bool = True, guided_turns: dict | None = None):
+                        save_markdown: bool = True, guided_turns: dict | None = None,
+                        captions_output_path: str | None = None):
         duration = self._duration(audio_path)
         retained = []
         diarization = None
@@ -140,6 +147,7 @@ class ParakeetTranscriber(BaseTranscriber):
                 'speakerSegments': speaker_segments,
             }
         segments = assemble(retained, duration)
+        names = {}
         if diarization is not None:
             raw_speakers = sorted({
                 str(segment.get('speaker') or '') for segment in segments
@@ -150,6 +158,28 @@ class ParakeetTranscriber(BaseTranscriber):
                 if segment.get('speaker') in names:
                     segment['speaker'] = names[segment['speaker']]
             diarization['segments'] = segments
+        caption_words = build_caption_words(
+            retained,
+            speaker_names=names if diarization is not None else None,
+        )
+        speaker_runs: list[dict] = []
+        for word in caption_words:
+            speaker = word.get('speaker')
+            if speaker_runs and speaker_runs[-1].get('speaker') == speaker:
+                speaker_runs[-1]['words'].append(word)
+                speaker_runs[-1]['end'] = max(speaker_runs[-1]['end'], word['end'])
+                speaker_runs[-1]['text'] += ' ' + word['text']
+            else:
+                run = {
+                    'start': word['start'],
+                    'end': word['end'],
+                    'text': word['text'],
+                    'words': [word],
+                }
+                if speaker:
+                    run['speaker'] = speaker
+                speaker_runs.append(run)
+        caption_cues, caption_precision = build_caption_cues(speaker_runs, audio_duration=duration)
         text = ' '.join(segment['text'] for segment in segments)
         if save_markdown and output_path:
             markdown = build_transcript_markdown(audio_path=audio_path, language_label='English',
@@ -159,8 +189,20 @@ class ParakeetTranscriber(BaseTranscriber):
             if not segments:
                 markdown += '\nNo speech transcribed.\n'
             Path(output_path).write_text(markdown, encoding='utf-8')
+            if captions_output_path:
+                payload = build_captions_payload(
+                    source_transcript_hash=hash_transcript_text(markdown),
+                    engine='parakeet',
+                    cues=caption_cues,
+                    timing_precision=caption_precision,
+                )
+                write_captions_sidecar_atomic(captions_output_path, payload)
         result = {
-            'text': text, 'segments': segments, 'language': 'en', 'duration': duration,
+            'text': text, 'segments': segments,
+            'captionCues': caption_cues,
+            'captionEngine': 'parakeet',
+            'captionTimingPrecision': caption_precision,
+            'language': 'en', 'duration': duration,
             'output_file': output_path if save_markdown else None,
             'device': self.adapter.device, 'computeType': 'float32',
             'engine': 'parakeet', 'modelId': 'parakeet-tdt-0.6b-v2',
@@ -168,6 +210,8 @@ class ParakeetTranscriber(BaseTranscriber):
             'runtimeLockId': self.runtime_lock_id,
             'boundaryPolicy': 'parakeet-boundaries-v1',
         }
+        if save_markdown and output_path and captions_output_path:
+            result['captions_file'] = captions_output_path
         if diarization is not None:
             result['diarization'] = diarization
         return result
@@ -190,6 +234,7 @@ def main(argv=None):
     parser.add_argument('--ffmpeg', required=True)
     parser.add_argument('--ffprobe', default='')
     parser.add_argument('--speaker-turns-json', default='')
+    parser.add_argument('--captions-output', default='')
     args = parser.parse_args(argv)
     guided_turns = None
     if args.speaker_turns_json:
@@ -199,7 +244,12 @@ def main(argv=None):
                                      ffmpeg=args.ffmpeg, ffprobe=args.ffprobe,
                                      runtime_lock_id=args.runtime_lock_id,
                                      artifact_revision=args.artifact_revision, vad_dir=args.vad_dir)
-    result = transcriber.transcribe_file(args.file, args.output, guided_turns=guided_turns)
+    result = transcriber.transcribe_file(
+        args.file,
+        args.output,
+        guided_turns=guided_turns,
+        captions_output_path=args.captions_output or None,
+    )
     sys.stdout.write(json.dumps(result, allow_nan=False) + '\n')
     return 0
 

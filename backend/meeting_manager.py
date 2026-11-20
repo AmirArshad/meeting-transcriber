@@ -27,6 +27,7 @@ from meetings import normalization as meeting_norm
 from meetings import paths as meeting_paths
 from meetings import scan_import as meeting_scan
 from meetings import store as meeting_store
+from transcription import captions as transcript_captions
 
 
 _UNSET = object()
@@ -705,6 +706,7 @@ class MeetingManager:
                                     if candidate.has_existing_transcript
                                     else meeting_scan.extract_duration_from_transcript_file(candidate.transcript_file)
                                 )
+                                transcript_text_for_captions = self._read_transcript_text(resolved_transcript)
                             else:
                                 placeholder = self._build_pending_transcript_placeholder(candidate.audio_file.name)
                                 try:
@@ -723,6 +725,7 @@ class MeetingManager:
                                     file=sys.stderr,
                                 )
                                 duration = 0.0
+                                transcript_text_for_captions = ""
 
                             meeting = self._build_direct_meeting_record(
                                 meeting_id=candidate.meeting_id,
@@ -738,6 +741,14 @@ class MeetingManager:
                                     "engine": "unknown",
                                 },
                             )
+                            if not placeholder_created and transcript_text_for_captions:
+                                matched_captions = self._find_valid_sibling_captions(
+                                    resolved_audio,
+                                    transcript_text_for_captions,
+                                )
+                                if matched_captions is not None:
+                                    meeting['captionsPath'] = str(matched_captions['path'])
+                                    meeting['captionsSourceTranscriptHash'] = matched_captions['hash']
                             existing_meetings.insert(0, meeting)
                             existing_ids.add(candidate.meeting_id)
                             existing_audio_names.add(Path(meeting['audioPath']).name)
@@ -807,8 +818,78 @@ class MeetingManager:
                         hydrated['summaryStale'] = summary.get('sourceTranscriptHash') != self._hash_text(hydrated.get('transcript', ''))
                     else:
                         hydrated['summaryStale'] = False
+                    hydrated.update(self._inspect_meeting_captions(meeting, hydrated.get('transcript', '')))
                     return hydrated
             return None
+
+    def _find_valid_sibling_captions(self, audio_path: Path, transcript_text: str) -> Optional[Dict]:
+        candidate = transcript_captions.captions_sidecar_path_for_audio(audio_path)
+        safe_path = self._resolve_accessible_recordings_file(
+            candidate,
+            allowed_suffixes=('.json',),
+            must_exist=True,
+            label='captions',
+        )
+        if safe_path is None:
+            return None
+        try:
+            payload = json.loads(safe_path.read_text(encoding='utf-8'))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return None
+        expected_hash = transcript_captions.hash_transcript_text(transcript_text)
+        valid, _reason = transcript_captions.validate_captions_payload(
+            payload,
+            expected_transcript_hash=expected_hash,
+            require_non_empty=True,
+        )
+        if not valid:
+            return None
+        return {'path': safe_path, 'hash': expected_hash}
+
+    def _inspect_meeting_captions(self, meeting: Dict, transcript_text: str) -> Dict:
+        explicit_path = meeting.get('captionsPath')
+        if explicit_path:
+            target = Path(str(explicit_path))
+        elif meeting.get('audioPath'):
+            target = transcript_captions.captions_sidecar_path_for_audio(Path(str(meeting['audioPath'])))
+        else:
+            return {'captionsAvailable': False, 'captionsStatus': 'missing'}
+
+        safe_captions_path = self._resolve_accessible_recordings_file(
+            target,
+            allowed_suffixes=('.json',),
+            must_exist=True,
+            label='captions',
+        )
+        if safe_captions_path is None:
+            return {'captionsAvailable': False, 'captionsStatus': 'missing'}
+
+        try:
+            payload = json.loads(safe_captions_path.read_text(encoding='utf-8'))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            return {'captionsAvailable': False, 'captionsStatus': 'invalid'}
+
+        struct_valid, _reason = transcript_captions.validate_captions_payload(
+            payload,
+            require_non_empty=False,
+        )
+        if not struct_valid:
+            return {'captionsAvailable': False, 'captionsStatus': 'invalid'}
+
+        expected_hash = transcript_captions.hash_transcript_text(transcript_text)
+        if payload.get('sourceTranscriptHash') != expected_hash:
+            return {'captionsAvailable': False, 'captionsStatus': 'stale'}
+
+        cues = payload.get('cues') or []
+        if not cues:
+            return {'captionsAvailable': False, 'captionsStatus': 'missing'}
+
+        return {
+            'captionsAvailable': True,
+            'captionsStatus': 'ready',
+            'captionsCueCount': len(cues),
+            'captionsTimingPrecision': payload.get('timingPrecision'),
+        }
 
     def update_meeting(self, meeting_id: str, *, title: Optional[str] = None) -> Optional[Dict]:
         """
@@ -991,8 +1072,12 @@ class MeetingManager:
         result: Dict,
         cancel_generation: int,
         delete_generation: int,
+        captions_candidate_path: Optional[str] = None,
     ) -> Optional[Dict]:
         """Point metadata at a candidate transcript only after the attempt is still current."""
+        previous_captions = None
+        committed_captions = None
+        canonical_captions_to_remove: Optional[Path] = None
         with self._metadata_guard():
             meetings = self._list_meetings_locked()
             meeting = next((item for item in meetings if item['id'] == meeting_id), None)
@@ -1028,13 +1113,50 @@ class MeetingManager:
 
             normalized_result = meeting_norm.normalize_transcription_result(result, attempt_id=attempt_id)
             transcript_hash = self._hash_text(candidate_text)
+            captions_transcript_hash = transcript_captions.hash_transcript_text(candidate_text)
             if normalized_result.get('transcriptHash') not in (None, transcript_hash):
                 raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
             normalized_result['transcriptHash'] = transcript_hash
             if normalized_result.get('engine') != request.get('engine'):
                 raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
 
+            canonical_captions_target = transcript_captions.captions_sidecar_path_for_audio(Path(meeting['audioPath']))
+            safe_captions_candidate: Optional[Path] = None
+            safe_canonical_captions: Optional[Path] = None
+            backup_captions_path: Optional[Path] = None
+            replaced_canonical_captions = False
+            if captions_candidate_path:
+                expected_captions_name = meeting_norm.expected_attempt_captions_name(meeting.get('audioPath'), attempt_id)
+                safe_captions_candidate = self._resolve_accessible_recordings_file(
+                    Path(captions_candidate_path),
+                    allowed_suffixes=('.json',),
+                    must_exist=True,
+                    label='candidate captions',
+                )
+                if safe_captions_candidate is None or safe_captions_candidate.name != expected_captions_name:
+                    raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
+                safe_canonical_captions = self._resolve_accessible_recordings_file(
+                    canonical_captions_target,
+                    allowed_suffixes=('.json',),
+                    must_exist=False,
+                    label='canonical captions',
+                )
+                if safe_canonical_captions is None:
+                    raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
+                try:
+                    captions_payload = json.loads(safe_captions_candidate.read_text(encoding='utf-8'))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
+                valid_captions, _reason = transcript_captions.validate_captions_payload(
+                    captions_payload,
+                    expected_transcript_hash=captions_transcript_hash,
+                    require_non_empty=False,
+                )
+                if not valid_captions:
+                    raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
+
             previous_transcript = meeting.get('transcriptPath')
+            previous_captions = meeting.get('captionsPath')
             # Invalidate speakers in the same transaction as transcript replacement.
             # Failed attempts never reach this point; their prior AI outputs survive.
             if isinstance(meeting.get('ai'), dict):
@@ -1051,10 +1173,76 @@ class MeetingManager:
             meeting['transcriptionDevice'] = normalized_result.get('device')
             meeting['transcriptionComputeType'] = normalized_result.get('computeType')
             meeting.pop('transcriptionAttemptGuard', None)
-            self._save_meetings_unlocked(meetings)
+
+            if safe_captions_candidate is not None and safe_canonical_captions is not None:
+                if safe_canonical_captions.exists() and safe_canonical_captions != safe_captions_candidate:
+                    backup_captions_path = safe_canonical_captions.with_name(
+                        f".{safe_canonical_captions.name}.bak.{os.getpid()}"
+                    )
+                    os.replace(safe_canonical_captions, backup_captions_path)
+                os.replace(safe_captions_candidate, safe_canonical_captions)
+                replaced_canonical_captions = True
+                committed_captions = str(safe_canonical_captions.resolve(strict=False))
+                meeting['captionsPath'] = committed_captions
+                meeting['captionsSourceTranscriptHash'] = captions_transcript_hash
+            else:
+                meeting.pop('captionsPath', None)
+                meeting.pop('captionsSourceTranscriptHash', None)
+                canonical_captions_to_remove = canonical_captions_target
+
+            try:
+                self._save_meetings_unlocked(meetings)
+            except Exception:
+                if replaced_canonical_captions and safe_canonical_captions is not None and safe_captions_candidate is not None:
+                    try:
+                        if safe_canonical_captions.exists():
+                            os.replace(safe_canonical_captions, safe_captions_candidate)
+                    except OSError:
+                        pass
+                if backup_captions_path is not None and safe_canonical_captions is not None and backup_captions_path.exists():
+                    try:
+                        os.replace(backup_captions_path, safe_canonical_captions)
+                    except OSError:
+                        pass
+                raise
+
+            if backup_captions_path is not None and backup_captions_path.exists():
+                try:
+                    backup_captions_path.unlink()
+                except OSError:
+                    pass
 
         self._remove_obsolete_transcript(previous_transcript, meeting['transcriptPath'])
+        self._remove_obsolete_captions(previous_captions, committed_captions, canonical_captions_to_remove)
         return meeting_norm.public_transcription_provenance(meeting)
+
+    def _remove_obsolete_captions(
+        self,
+        previous_path: Optional[str],
+        committed_path: Optional[str],
+        canonical_target: Optional[Path] = None,
+    ) -> None:
+        candidates = []
+        if previous_path and str(previous_path) != str(committed_path or ''):
+            candidates.append(Path(previous_path))
+        if canonical_target is not None and str(canonical_target.resolve(strict=False)) != str(committed_path or ''):
+            candidates.append(canonical_target)
+        for path in candidates:
+            try:
+                obsolete = self._resolve_accessible_recordings_file(
+                    path,
+                    allowed_suffixes=('.json',),
+                    must_exist=True,
+                    label='previous captions',
+                )
+            except Exception:
+                continue
+            if obsolete is None:
+                continue
+            try:
+                obsolete.unlink()
+            except OSError as exc:
+                print(f"Warning: Could not remove obsolete captions: {exc}", file=sys.stderr)
 
     def _remove_obsolete_transcript(self, previous_path: Optional[str], committed_path: str) -> None:
         if not previous_path or str(previous_path) == str(committed_path):
@@ -1266,6 +1454,7 @@ def main():
     commit_parser.add_argument('id', help='Meeting ID')
     commit_parser.add_argument('--attempt-id', required=True)
     commit_parser.add_argument('--candidate', required=True)
+    commit_parser.add_argument('--captions-candidate', default=None)
     commit_parser.add_argument('--result-json', required=True)
     commit_parser.add_argument('--cancel-generation', type=int, required=True)
     commit_parser.add_argument('--delete-generation', type=int, required=True)
@@ -1371,6 +1560,7 @@ def main():
                 result=result,
                 cancel_generation=args.cancel_generation,
                 delete_generation=args.delete_generation,
+                captions_candidate_path=args.captions_candidate,
             )
         except (json.JSONDecodeError, meeting_norm.TranscriptionMetadataError) as exc:
             print(getattr(exc, 'code', 'INVALID_TRANSCRIPTION_RESULT'), file=sys.stderr)

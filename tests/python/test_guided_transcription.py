@@ -379,3 +379,168 @@ def test_guided_main_redacts_unhandled_errors(monkeypatch, capsys):
     assert 'hf_secret_token_value' not in captured.err
     assert '[redacted-token]' in captured.err
     assert '\n' not in captured.err.split('ERROR:', 1)[-1].strip()
+
+
+def test_extract_window_caption_cues_for_turn_clips_cues_and_falls_back_cleanly():
+    window = {'start': 10.3, 'end': 12.4, 'audioStart': 10.0, 'audioEnd': 12.8, 'speaker': 'SPEAKER_01'}
+
+    # 1. Clips fine captionCues to [window['start'], window['end']] and drops padded context
+    cue_result = {
+        'captionCues': [
+            {'startMs': 0, 'endMs': 250, 'text': 'padded before'},
+            {'startMs': 200, 'endMs': 1200, 'text': 'first clipped phrase'},
+            {'startMs': 1300, 'endMs': 2600, 'text': 'second clipped phrase'},
+            {'startMs': 2500, 'endMs': 2800, 'text': 'padded after'},
+        ]
+    }
+    assert guided.extract_window_caption_cues_for_turn(cue_result, window) == [
+        {'startMs': 10300, 'endMs': 11200, 'text': 'first clipped phrase', 'speaker': 'SPEAKER_01'},
+        {'startMs': 11300, 'endMs': 12400, 'text': 'second clipped phrase', 'speaker': 'SPEAKER_01'},
+    ]
+
+    # 2. Falls back to segments when captionCues are absent or outside the turn
+    seg_result = {
+        'captionCues': [{'startMs': 0, 'endMs': 200, 'text': 'only context'}],
+        'segments': [
+            {'start': 0.0, 'end': 0.25, 'text': 'outside'},
+            {'start': 0.2, 'end': 2.5, 'text': 'segment fallback'},
+        ],
+    }
+    assert guided.extract_window_caption_cues_for_turn(seg_result, window) == [
+        {'startMs': 10300, 'endMs': 12400, 'text': 'segment fallback', 'speaker': 'SPEAKER_01'},
+    ]
+
+    # 3. Falls back to result text inside turn bounds when both captionCues and segments are absent
+    text_result = {'text': 'plain fallback text'}
+    assert guided.extract_window_caption_cues_for_turn(text_result, window) == [
+        {'startMs': 10300, 'endMs': 12400, 'text': 'plain fallback text', 'speaker': 'SPEAKER_01'},
+    ]
+
+
+def test_transcribe_speaker_windows_populates_out_caption_cues(monkeypatch, tmp_path):
+    source_audio = tmp_path / 'source.wav'
+    source_audio.write_bytes(b'audio')
+    out_caption_cues = []
+
+    class FakeTranscriber:
+        def transcribe_file(self, _audio_path, save_markdown=False):
+            assert save_markdown is False
+            return {
+                'segments': [{'start': 0.2, 'end': 2.2, 'text': 'one two'}],
+                'captionCues': [
+                    {'startMs': 0, 'endMs': 200, 'text': 'context'},
+                    {'startMs': 300, 'endMs': 1100, 'text': 'one'},
+                    {'startMs': 1200, 'endMs': 2200, 'text': 'two'},
+                ],
+            }
+
+    monkeypatch.setattr(guided, 'extract_audio_window', lambda *args, **kwargs: None)
+
+    segments = guided.transcribe_speaker_windows(
+        source_audio=source_audio,
+        windows=[{'start': 5.3, 'end': 7.0, 'audioStart': 5.0, 'audioEnd': 7.3, 'speaker': 'SPEAKER_00'}],
+        transcriber=FakeTranscriber(),
+        work_dir=tmp_path,
+        ffmpeg_path='ffmpeg',
+        out_caption_cues=out_caption_cues,
+    )
+
+    assert segments == [{'start': 5.3, 'end': 7.0, 'text': 'one two', 'speaker': 'SPEAKER_00'}]
+    assert out_caption_cues == [
+        {'startMs': 5300, 'endMs': 6100, 'text': 'one', 'speaker': 'SPEAKER_00'},
+        {'startMs': 6200, 'endMs': 7000, 'text': 'two', 'speaker': 'SPEAKER_00'},
+    ]
+
+
+def test_attach_speakers_to_caption_cues_assigns_normalized_speakers():
+    from backend.diarization.speaker_segments import attach_speakers_to_caption_cues
+
+    attached = attach_speakers_to_caption_cues(
+        [
+            {'startMs': 100, 'endMs': 900, 'text': 'hi'},
+            {'startMs': 1100, 'endMs': 1900, 'text': 'hello'},
+            {'startMs': 3000, 'endMs': 3500, 'text': 'unmatched'},
+        ],
+        [
+            {'start': 0.0, 'end': 1.0, 'speaker': 'SPEAKER_02'},
+            {'start': 1.0, 'end': 2.0, 'speaker': 'SPEAKER_00'},
+        ],
+    )
+
+    assert attached == [
+        {'startMs': 100, 'endMs': 900, 'text': 'hi', 'speaker': 'Speaker 2'},
+        {'startMs': 1100, 'endMs': 1900, 'text': 'hello', 'speaker': 'Speaker 1'},
+        {'startMs': 3000, 'endMs': 3500, 'text': 'unmatched', 'speaker': 'Unknown'},
+    ]
+
+
+def test_transcribe_with_diarization_guidance_writes_hash_bound_speaker_captions(monkeypatch, tmp_path):
+    import json
+    from backend.transcription.captions import hash_transcript_text, validate_captions_payload
+
+    audio_path = tmp_path / 'meeting.wav'
+    audio_path.write_bytes(b'audio')
+    output_path = tmp_path / 'meeting.md'
+    captions_path = tmp_path / 'meeting.captions.json'
+    window_index = {'n': 0}
+
+    class FakeTranscriber:
+        def load_model(self):
+            pass
+
+        def transcribe_file(self, _audio_path, save_markdown=False):
+            assert save_markdown is False
+            window_index['n'] += 1
+            if window_index['n'] == 1:
+                return {
+                    'segments': [{'start': 0.0, 'end': 2.0, 'text': 'First speaker line.'}],
+                    'captionCues': [{'startMs': 0, 'endMs': 1800, 'text': 'First speaker line.'}],
+                    'captionTimingPrecision': 'word',
+                }
+            return {
+                'segments': [{'start': 0.35, 'end': 2.35, 'text': 'Second speaker line.'}],
+                'captionCues': [{'startMs': 350, 'endMs': 2150, 'text': 'Second speaker line.'}],
+                'captionTimingPrecision': 'word',
+            }
+
+        def get_model_info(self):
+            return {'device': 'cpu', 'compute_type': 'int8'}
+
+        def cleanup(self):
+            pass
+
+    monkeypatch.setattr(guided, 'prepare_diarization_audio', lambda *_args, **_kwargs: audio_path)
+    monkeypatch.setattr(guided, 'get_audio_duration_seconds', lambda _path: 5.0)
+    monkeypatch.setattr(
+        guided,
+        'run_pyannote_diarization',
+        lambda *_args, **_kwargs: (
+            [
+                {'start': 0.0, 'end': 2.0, 'speaker': 'SPEAKER_00'},
+                {'start': 2.5, 'end': 4.5, 'speaker': 'SPEAKER_01'},
+            ],
+            'exclusive_speaker_diarization',
+            'cpu',
+        ),
+    )
+    monkeypatch.setattr(guided, 'create_transcriber', lambda **_kwargs: FakeTranscriber())
+    monkeypatch.setattr(guided, 'extract_audio_window', lambda *args, **kwargs: None)
+
+    result = guided.transcribe_with_diarization_guidance(
+        audio_path=str(audio_path),
+        output_transcript=str(output_path),
+        output_captions=str(captions_path),
+        transcriber_backend='faster',
+    )
+
+    assert result['captions_file'] == str(captions_path)
+    assert result['captionEngine'] == 'faster-whisper'
+    assert result['captionTimingPrecision'] == 'word'
+    assert result['captionCues'] == [
+        {'startMs': 0, 'endMs': 1800, 'text': 'First speaker line.', 'speaker': 'Speaker 1'},
+        {'startMs': 2500, 'endMs': 4300, 'text': 'Second speaker line.', 'speaker': 'Speaker 2'},
+    ]
+    payload = json.loads(captions_path.read_text(encoding='utf-8'))
+    expected_hash = hash_transcript_text(output_path.read_text(encoding='utf-8'))
+    assert validate_captions_payload(payload, expected_transcript_hash=expected_hash, require_non_empty=True) == (True, None)
+    assert payload['cues'] == result['captionCues']

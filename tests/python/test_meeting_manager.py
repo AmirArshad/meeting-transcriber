@@ -1835,3 +1835,381 @@ def test_scan_commits_multiple_discovered_meetings_in_single_atomic_save_and_rol
     assert (recordings / f'{pre_stem}.md').read_text(encoding='utf-8') == '**Duration:** 0:04\n\nKeep me'
     monkeypatch.setattr(manager, '_save_meetings_unlocked', original_save)
     assert len(manager.list_meetings()) == 3
+
+
+def _write_captions_sidecar(path: Path, transcript_text: str, *, engine: str = 'faster-whisper', precision: str = 'word'):
+    from backend.transcription.captions import (
+        build_captions_payload,
+        hash_transcript_text,
+        write_captions_sidecar_atomic,
+    )
+
+    payload = build_captions_payload(
+        source_transcript_hash=hash_transcript_text(transcript_text),
+        engine=engine,
+        cues=[
+            {'startMs': 0, 'endMs': 1200, 'text': 'First caption cue.'},
+            {'startMs': 1300, 'endMs': 2600, 'text': 'Second caption cue.'},
+        ],
+        timing_precision=precision,
+    )
+    write_captions_sidecar_atomic(path, payload)
+    return payload
+
+
+def test_commit_transcription_attempt_promotes_captions_hydrates_ready_and_detects_stale_edit(tmp_path):
+    from backend.transcription.captions import hash_transcript_text
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings, 'initial_cap')
+    manager = MeetingManager(str(recordings))
+
+    attempt_1 = '11111111-1111-4111-8111-111111111111'
+    request_1 = {
+        'schemaVersion': 1,
+        'attemptId': attempt_1,
+        'engine': 'whisper',
+        'language': 'en',
+        'modelSize': 'small',
+        'artifactRevision': None,
+    }
+    meeting = manager.add_meeting(str(audio), str(transcript), 12.0, transcription_request=request_1)
+    audio_path = Path(meeting['audioPath'])
+    candidate_md = recordings / f'{audio_path.stem}.transcript-{attempt_1}.md'
+    candidate_captions = recordings / f'{audio_path.stem}.captions-{attempt_1}.json'
+    candidate_text = '# Meeting Transcription\n\nFirst caption cue. Second caption cue.\n'
+    candidate_md.write_text(candidate_text, encoding='utf-8')
+    _write_captions_sidecar(candidate_captions, candidate_text, engine='faster-whisper', precision='word')
+
+    committed = manager.commit_transcription_attempt(
+        meeting['id'],
+        attempt_id=attempt_1,
+        candidate_path=str(candidate_md),
+        captions_candidate_path=str(candidate_captions),
+        result={
+            'schemaVersion': 1,
+            'attemptId': attempt_1,
+            'engine': 'whisper',
+            'language': 'en',
+            'device': 'cpu',
+            'computeType': 'int8',
+            'modelSize': 'small',
+            'artifactRevision': None,
+            'transcriptHash': hash_transcript_text(candidate_text),
+        },
+        cancel_generation=0,
+        delete_generation=0,
+    )
+
+    canonical_captions = audio_path.with_suffix('.captions.json')
+    assert committed is not None
+    assert committed['captionsPath'] == str(canonical_captions.resolve(strict=False))
+    assert committed['captionsSourceTranscriptHash'] == hash_transcript_text(candidate_text)
+    assert canonical_captions.is_file()
+    assert not candidate_captions.exists()
+
+    hydrated = manager.get_meeting(meeting['id'])
+    assert hydrated is not None
+    assert hydrated['captionsAvailable'] is True
+    assert hydrated['captionsStatus'] == 'ready'
+    assert hydrated['captionsCueCount'] == 2
+    assert hydrated['captionsTimingPrecision'] == 'word'
+
+    # External edit to the .md file invalidates captions freshness.
+    Path(committed['transcriptPath']).write_text('# Meeting Transcription\n\nEdited externally.\n', encoding='utf-8')
+    stale = manager.get_meeting(meeting['id'])
+    assert stale is not None
+    assert stale['captionsAvailable'] is False
+    assert stale['captionsStatus'] == 'stale'
+
+
+def test_commit_transcription_attempt_rejects_corrupt_sidecar_invalidates_stale_and_rolls_back(tmp_path, monkeypatch):
+    import pytest
+    from meetings.normalization import TranscriptionMetadataError
+    from backend.transcription.captions import hash_transcript_text
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings, 'retranscribe_cap')
+    manager = MeetingManager(str(recordings))
+
+    attempt_1 = '11111111-1111-4111-8111-111111111111'
+    request_1 = {
+        'schemaVersion': 1,
+        'attemptId': attempt_1,
+        'engine': 'whisper',
+        'language': 'en',
+        'modelSize': 'small',
+        'artifactRevision': None,
+    }
+    meeting = manager.add_meeting(str(audio), str(transcript), 10.0, transcription_request=request_1)
+    audio_path = Path(meeting['audioPath'])
+    canonical_captions = audio_path.with_suffix('.captions.json')
+
+    md_1 = recordings / f'{audio_path.stem}.transcript-{attempt_1}.md'
+    cap_1 = recordings / f'{audio_path.stem}.captions-{attempt_1}.json'
+    text_1 = '# Transcript v1\n\nInitial version.\n'
+    md_1.write_text(text_1, encoding='utf-8')
+    payload_1 = _write_captions_sidecar(cap_1, text_1)
+
+    manager.commit_transcription_attempt(
+        meeting['id'],
+        attempt_id=attempt_1,
+        candidate_path=str(md_1),
+        captions_candidate_path=str(cap_1),
+        result={
+            'schemaVersion': 1,
+            'attemptId': attempt_1,
+            'engine': 'whisper',
+            'language': 'en',
+            'device': 'cpu',
+            'computeType': 'int8',
+            'modelSize': 'small',
+            'artifactRevision': None,
+            'transcriptHash': hash_transcript_text(text_1),
+        },
+        cancel_generation=0,
+        delete_generation=0,
+    )
+    assert canonical_captions.is_file()
+
+    # Stage attempt 2: corrupt captions candidate must be rejected BEFORE touching prior captions.
+    attempt_2 = '22222222-2222-4222-8222-222222222222'
+    request_2 = {**request_1, 'attemptId': attempt_2}
+    manager.stage_transcription_request(meeting['id'], request_2, cancel_generation=0, delete_generation=0)
+    md_2 = recordings / f'{audio_path.stem}.transcript-{attempt_2}.md'
+    cap_2 = recordings / f'{audio_path.stem}.captions-{attempt_2}.json'
+    text_2 = '# Transcript v2\n\nUpdated transcript.\n'
+    md_2.write_text(text_2, encoding='utf-8')
+    cap_2.write_text('{corrupt-json', encoding='utf-8')
+
+    with pytest.raises(TranscriptionMetadataError) as exc_info:
+        manager.commit_transcription_attempt(
+            meeting['id'],
+            attempt_id=attempt_2,
+            candidate_path=str(md_2),
+            captions_candidate_path=str(cap_2),
+            result={
+                'schemaVersion': 1,
+                'attemptId': attempt_2,
+                'engine': 'whisper',
+                'language': 'en',
+                'device': 'cpu',
+                'computeType': 'int8',
+                'modelSize': 'small',
+                'artifactRevision': None,
+                'transcriptHash': hash_transcript_text(text_2),
+            },
+            cancel_generation=0,
+            delete_generation=0,
+        )
+    assert exc_info.value.code == 'INVALID_TRANSCRIPTION_RESULT'
+    assert json.loads(canonical_captions.read_text(encoding='utf-8')) == payload_1
+
+    # Valid captions candidate for attempt 2, but _save_meetings_unlocked fails -> both candidate and prior captions roll back.
+    payload_2 = _write_captions_sidecar(cap_2, text_2, engine='mlx-whisper', precision='segment')
+    original_save = manager._save_meetings_unlocked
+
+    def failing_save(_meetings):
+        raise OSError('disk full during commit')
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', failing_save)
+    with pytest.raises(OSError, match='disk full during commit'):
+        manager.commit_transcription_attempt(
+            meeting['id'],
+            attempt_id=attempt_2,
+            candidate_path=str(md_2),
+            captions_candidate_path=str(cap_2),
+            result={
+                'schemaVersion': 1,
+                'attemptId': attempt_2,
+                'engine': 'whisper',
+                'language': 'en',
+                'device': 'cpu',
+                'computeType': 'int8',
+                'modelSize': 'small',
+                'artifactRevision': None,
+                'transcriptHash': hash_transcript_text(text_2),
+            },
+            cancel_generation=0,
+            delete_generation=0,
+        )
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', original_save)
+    assert json.loads(canonical_captions.read_text(encoding='utf-8')) == payload_1
+    assert json.loads(cap_2.read_text(encoding='utf-8')) == payload_2
+    assert list(recordings.glob('*.bak.*')) == []
+
+    # Commit attempt 2 WITHOUT captions_candidate_path -> stale prior .captions.json is removed.
+    committed_2 = manager.commit_transcription_attempt(
+        meeting['id'],
+        attempt_id=attempt_2,
+        candidate_path=str(md_2),
+        captions_candidate_path=None,
+        result={
+            'schemaVersion': 1,
+            'attemptId': attempt_2,
+            'engine': 'whisper',
+            'language': 'en',
+            'device': 'cpu',
+            'computeType': 'int8',
+            'modelSize': 'small',
+            'artifactRevision': None,
+            'transcriptHash': hash_transcript_text(text_2),
+        },
+        cancel_generation=0,
+        delete_generation=0,
+    )
+    assert committed_2 is not None
+    assert 'captionsPath' not in committed_2
+    assert 'captionsSourceTranscriptHash' not in committed_2
+    assert not canonical_captions.exists()
+    hydrated_2 = manager.get_meeting(meeting['id'])
+    assert hydrated_2 is not None
+    assert hydrated_2['captionsAvailable'] is False
+    assert hydrated_2['captionsStatus'] == 'missing'
+
+
+def test_scan_and_sync_recordings_adopts_valid_sibling_captions_and_ignores_stale(tmp_path):
+    from backend.transcription.captions import hash_transcript_text
+
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(str(recordings))
+
+    # 1. Hash-matched sibling captions sidecar is adopted.
+    valid_audio = recordings / 'meeting_20260801_100000.opus'
+    valid_md = recordings / 'meeting_20260801_100000.md'
+    valid_cap = recordings / 'meeting_20260801_100000.captions.json'
+    valid_text = '**Duration:** 0:08\n\nMatched transcript.\n'
+    valid_audio.write_bytes(b'audio')
+    valid_md.write_text(valid_text, encoding='utf-8')
+    _write_captions_sidecar(valid_cap, valid_text, engine='parakeet', precision='word')
+
+    # 2. Stale sibling captions sidecar is NOT adopted and remains untouched on disk.
+    stale_audio = recordings / 'meeting_20260801_100500.opus'
+    stale_md = recordings / 'meeting_20260801_100500.md'
+    stale_cap = recordings / 'meeting_20260801_100500.captions.json'
+    stale_audio.write_bytes(b'audio')
+    stale_md.write_text('**Duration:** 0:08\n\nCurrent transcript.\n', encoding='utf-8')
+    stale_payload = _write_captions_sidecar(stale_cap, 'Different older transcript')
+
+    scan_result = manager.scan_and_sync_recordings()
+    assert scan_result == {'scanned': 2, 'added': 2, 'skipped': 0}
+
+    saved = {m['id']: m for m in manager.list_meetings()}
+    assert saved['20260801_100000']['captionsPath'] == str(valid_cap.resolve(strict=False))
+    assert saved['20260801_100000']['captionsSourceTranscriptHash'] == hash_transcript_text(valid_text)
+    assert 'captionsPath' not in saved['20260801_100500']
+
+    valid_meeting = manager.get_meeting('20260801_100000')
+    assert valid_meeting is not None
+    assert valid_meeting['captionsAvailable'] is True
+    assert valid_meeting['captionsStatus'] == 'ready'
+    assert valid_meeting['captionsTimingPrecision'] == 'word'
+
+    stale_meeting = manager.get_meeting('20260801_100500')
+    assert stale_meeting is not None
+    assert stale_meeting['captionsAvailable'] is False
+    assert stale_meeting['captionsStatus'] == 'stale'
+    assert json.loads(stale_cap.read_text(encoding='utf-8')) == stale_payload
+
+
+def test_delete_meeting_removes_captions_sidecar_and_rolls_back_on_save_failure(tmp_path, monkeypatch):
+    import pytest
+
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(str(recordings))
+
+    audio_path = recordings / 'meeting_20260802_120000.opus'
+    transcript_path = recordings / 'meeting_20260802_120000.md'
+    captions_path = recordings / 'meeting_20260802_120000.captions.json'
+    transcript_text = 'Transcript for deletion'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text(transcript_text, encoding='utf-8')
+    payload = _write_captions_sidecar(captions_path, transcript_text)
+
+    manager._save_meetings([
+        {
+            'id': '20260802_120000',
+            'title': 'Delete Captions',
+            'date': '2026-08-02T12:00:00',
+            'duration': '0:05',
+            'durationSeconds': 5.0,
+            'audioPath': str(audio_path),
+            'transcriptPath': str(transcript_path),
+            'captionsPath': str(captions_path),
+            'language': 'en',
+            'model': 'small',
+        }
+    ])
+
+    original_save = manager._save_meetings_unlocked
+
+    def failing_save(_meetings):
+        raise OSError('metadata write failed')
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', failing_save)
+    with pytest.raises(OSError, match='metadata write failed'):
+        manager.delete_meeting('20260802_120000')
+
+    assert audio_path.exists()
+    assert transcript_path.exists()
+    assert captions_path.exists()
+    assert json.loads(captions_path.read_text(encoding='utf-8')) == payload
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', original_save)
+    assert manager.delete_meeting('20260802_120000') is True
+    assert not audio_path.exists()
+    assert not transcript_path.exists()
+    assert not captions_path.exists()
+    assert manager.list_meetings() == []
+
+
+def test_commit_transcription_attempt_matches_crlf_transcript_to_lf_normalized_captions(tmp_path):
+    from backend.transcription.captions import hash_transcript_text
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings, 'crlf_cap')
+    manager = MeetingManager(str(recordings))
+
+    attempt_1 = '33333333-3333-4333-8333-333333333333'
+    request_1 = {
+        'schemaVersion': 1,
+        'attemptId': attempt_1,
+        'engine': 'whisper',
+        'language': 'en',
+        'modelSize': 'small',
+        'artifactRevision': None,
+    }
+    meeting = manager.add_meeting(str(audio), str(transcript), 5.0, transcription_request=request_1)
+    audio_path = Path(meeting['audioPath'])
+    candidate_md = recordings / f'{audio_path.stem}.transcript-{attempt_1}.md'
+    candidate_captions = recordings / f'{audio_path.stem}.captions-{attempt_1}.json'
+    crlf_text = '# Meeting Transcription\r\n\r\nLine one.\r\n'
+    candidate_md.write_bytes(crlf_text.encode('utf-8'))
+    _write_captions_sidecar(candidate_captions, crlf_text, engine='faster-whisper', precision='word')
+
+    committed = manager.commit_transcription_attempt(
+        meeting['id'],
+        attempt_id=attempt_1,
+        candidate_path=str(candidate_md),
+        captions_candidate_path=str(candidate_captions),
+        result={
+            'schemaVersion': 1,
+            'attemptId': attempt_1,
+            'engine': 'whisper',
+            'language': 'en',
+            'device': 'cpu',
+            'computeType': 'int8',
+            'modelSize': 'small',
+            'artifactRevision': None,
+        },
+        cancel_generation=0,
+        delete_generation=0,
+    )
+
+    assert committed is not None
+    assert committed['captionsSourceTranscriptHash'] == hash_transcript_text(crlf_text)
+    hydrated = manager.get_meeting(meeting['id'])
+    assert hydrated is not None
+    assert hydrated['captionsAvailable'] is True
+    assert hydrated['captionsStatus'] == 'ready'
