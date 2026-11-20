@@ -7,7 +7,7 @@ const { execFileSync, execSync } = require('child_process');
 const AdmZip = require('adm-zip');
 const { BUILD_DOWNLOADS, getBuildDownload, hashString, verifyFileChecksum } = require('./download-manifest');
 
-const PYTHON_VERSION = '3.11.9';
+const PYTHON_VERSION = '3.11.18';
 
 const BUILD_DIR = path.join(__dirname, 'resources');
 const PYTHON_DIR = path.join(BUILD_DIR, 'python');
@@ -16,7 +16,7 @@ const LEGAL_DIR = path.join(BUILD_DIR, 'legal');
 const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const REPO_ROOT = path.join(__dirname, '..');
 const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
-const RESOURCE_MANIFEST_VERSION = 8;
+const RESOURCE_MANIFEST_VERSION = 9;
 const REQUIREMENTS_MACOS_BUILD = path.join(__dirname, '..', 'requirements-macos-build.txt');
 const REQUIREMENTS_WINDOWS_BUILD = path.join(__dirname, '..', 'requirements-windows-build.txt');
 const REQUIREMENTS_LINUX_BUILD = path.join(__dirname, '..', 'requirements-linux-build.txt');
@@ -248,25 +248,25 @@ async function stageFfmpegSourceArchive(targetDir = LEGAL_DIR) {
 }
 
 function ensureWindowsEmbeddedPythonPathConfig(pthFile = path.join(PYTHON_DIR, 'python311._pth')) {
-  if (!fs.existsSync(pthFile)) {
-    return;
-  }
-
-  const pthContent = fs.readFileSync(pthFile, 'utf8');
+  const dirPath = path.dirname(pthFile);
+  fs.mkdirSync(dirPath, { recursive: true });
+  const pthContent = fs.existsSync(pthFile) ? fs.readFileSync(pthFile, 'utf8') : '';
   const lines = pthContent.split(/\r?\n/);
   const cleanedLines = lines.filter((line) => line.trim() !== '');
+  const hasZipEntry = cleanedLines.some((line) => line.trim().toLowerCase() === 'python311.zip');
+  const isLegacyEmbed = hasZipEntry
+    || (!fs.existsSync(path.join(dirPath, 'Lib')) && fs.existsSync(path.join(dirPath, 'python311.zip')));
+
   const normalizedLines = [];
   const seen = new Set();
-  let siteEnabled = false;
 
   for (const line of cleanedLines) {
     const trimmed = line.trim();
 
     if (trimmed === '#import site' || trimmed === 'import site') {
-      if (!siteEnabled) {
-        normalizedLines.push('import site');
-        siteEnabled = true;
-      }
+      continue;
+    }
+    if (!isLegacyEmbed && trimmed.toLowerCase() === 'python311.zip') {
       continue;
     }
 
@@ -276,7 +276,9 @@ function ensureWindowsEmbeddedPythonPathConfig(pthFile = path.join(PYTHON_DIR, '
     }
   }
 
-  const requiredPaths = ['../backend', './Lib/site-packages'];
+  const requiredPaths = isLegacyEmbed
+    ? ['../backend', './Lib/site-packages']
+    : ['../backend', './Lib/site-packages', './Lib', './DLLs', '.'];
   for (const requiredPath of requiredPaths.reverse()) {
     if (!seen.has(requiredPath)) {
       normalizedLines.unshift(requiredPath);
@@ -284,16 +286,14 @@ function ensureWindowsEmbeddedPythonPathConfig(pthFile = path.join(PYTHON_DIR, '
     }
   }
 
-  if (!siteEnabled) {
-    normalizedLines.push('import site');
-  }
+  normalizedLines.push('import site');
 
   const updatedContent = `${normalizedLines.join('\n')}\n`;
   if (updatedContent !== pthContent) {
     fs.writeFileSync(pthFile, updatedContent);
-    console.log('  → Embedded Python path configuration updated');
+    console.log('  → Windows Python path configuration updated');
   } else {
-    console.log('  → Embedded Python path configuration already current');
+    console.log('  → Windows Python path configuration already current');
   }
 }
 
@@ -759,21 +759,70 @@ function extractZip(zipPath, targetDir) {
   }
 }
 
-// Helper to extract tar.gz files (for macOS Python)
+function validateTarArchiveEntries(entries) {
+  for (const rawEntry of entries || []) {
+    const entry = String(rawEntry || '');
+    if (!entry) {
+      continue;
+    }
+    if (
+      entry.includes('\0')
+      || entry.startsWith('/')
+      || entry.startsWith('\\')
+      || /^[a-zA-Z]:/.test(entry)
+    ) {
+      throw new Error(`Refusing unsafe tar archive entry path: ${entry}`);
+    }
+    const normalizedSegments = entry.replace(/\\/g, '/').split('/');
+    if (normalizedSegments.includes('..')) {
+      throw new Error(`Refusing tar archive path traversal entry: ${entry}`);
+    }
+  }
+}
+
+// Helper to extract tar.gz archives (for standalone Python builds on macOS, Linux, and Windows)
 function extractTarGz(tarPath, targetDir) {
   console.log(`Extracting: ${path.basename(tarPath)}`);
 
   try {
-    // Ensure target directory exists
     if (!fs.existsSync(targetDir)) {
       fs.mkdirSync(targetDir, { recursive: true });
     }
 
-    // Use tar command (available on both macOS and Windows with Git Bash)
-    execSync(`tar -xzf "${tarPath}" -C "${targetDir}"`, { stdio: 'inherit' });
+    const listing = execFileSync('tar', ['-tzf', tarPath], { encoding: 'utf8' });
+    validateTarArchiveEntries(listing.split(/\r?\n/));
+
+    // tar is available natively on macOS, Linux, and Windows 10/11 (bsdtar).
+    execFileSync('tar', ['-xzf', tarPath, '-C', targetDir], { stdio: 'inherit' });
     console.log('  Extraction complete!\n');
   } catch (error) {
     throw new Error(`Failed to extract ${tarPath}: ${error.message}`);
+  }
+}
+
+async function stageStandalonePythonArchive(downloadKey, archiveFileName) {
+  const archivePath = path.join(BUILD_DIR, archiveFileName);
+  const tempDir = path.join(BUILD_DIR, 'python-temp');
+  await downloadFile(getBuildDownload(downloadKey), archivePath);
+
+  try {
+    console.log('[2/4] Extracting Python...');
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    extractTarGz(archivePath, tempDir);
+
+    const extractedPythonDir = path.join(tempDir, 'python');
+    if (!fs.existsSync(extractedPythonDir)) {
+      throw new Error(`Expected extracted python/ directory in ${path.basename(archivePath)}`);
+    }
+    if (fs.existsSync(PYTHON_DIR)) {
+      fs.rmSync(PYTHON_DIR, { recursive: true, force: true });
+    }
+    fs.renameSync(extractedPythonDir, PYTHON_DIR);
+  } finally {
+    if (fs.existsSync(archivePath)) {
+      fs.unlinkSync(archivePath);
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
 }
 
@@ -1209,40 +1258,16 @@ async function prepareResources() {
   if (existing.pythonExists) {
     console.log('✓ Python runtime already prepared');
     
-    // CRITICAL FIX (v1.7.4): Always ensure .pth file has backend path
-    // This applies the fix even if Python was downloaded in a previous build
+    // Always ensure python311._pth keeps isolated stdlib/site/backend paths current.
     if (IS_WINDOWS) {
-      const pthFile = path.join(PYTHON_DIR, 'python311._pth');
-      if (fs.existsSync(pthFile)) {
-        ensureWindowsEmbeddedPythonPathConfig();
-        console.log('');
-      }
+      ensureWindowsEmbeddedPythonPathConfig();
+      console.log('');
     }
   } else {
     if (IS_MAC) {
       // macOS: Download standalone Python build
       console.log('[1/4] Downloading standalone Python for macOS (arm64)...');
-      const pythonTar = path.join(BUILD_DIR, 'python-macos.tar.gz');
-      await downloadFile(getBuildDownload('pythonMac'), pythonTar);
-
-      console.log('[2/4] Extracting Python...');
-      // Extract to temp dir first
-      const tempDir = path.join(BUILD_DIR, 'python-temp');
-      extractTarGz(pythonTar, tempDir);
-
-      // Move the python directory to PYTHON_DIR
-      const extractedPythonDir = path.join(tempDir, 'python');
-      if (fs.existsSync(extractedPythonDir)) {
-        // Move contents to PYTHON_DIR
-        if (fs.existsSync(PYTHON_DIR)) {
-          fs.rmSync(PYTHON_DIR, { recursive: true, force: true });
-        }
-        fs.renameSync(extractedPythonDir, PYTHON_DIR);
-      }
-
-      // Cleanup
-      fs.unlinkSync(pythonTar);
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      await stageStandalonePythonArchive('pythonMac', 'python-macos.tar.gz');
 
       console.log('[3/4] Setting up pip...');
 
@@ -1290,23 +1315,7 @@ async function prepareResources() {
       console.log('✓ Python setup complete!\n');
     } else if (IS_LINUX) {
       console.log('[1/4] Downloading standalone Python for Linux (x86_64)...');
-      const pythonTar = path.join(BUILD_DIR, 'python-linux.tar.gz');
-      await downloadFile(getBuildDownload('pythonLinux'), pythonTar);
-
-      console.log('[2/4] Extracting Python...');
-      const tempDir = path.join(BUILD_DIR, 'python-temp');
-      extractTarGz(pythonTar, tempDir);
-
-      const extractedPythonDir = path.join(tempDir, 'python');
-      if (fs.existsSync(extractedPythonDir)) {
-        if (fs.existsSync(PYTHON_DIR)) {
-          fs.rmSync(PYTHON_DIR, { recursive: true, force: true });
-        }
-        fs.renameSync(extractedPythonDir, PYTHON_DIR);
-      }
-
-      fs.unlinkSync(pythonTar);
-      fs.rmSync(tempDir, { recursive: true, force: true });
+      await stageStandalonePythonArchive('pythonLinux', 'python-linux.tar.gz');
 
       console.log('[3/4] Setting up pip...');
       const pythonExe = path.join(PYTHON_DIR, 'bin', 'python3');
@@ -1323,37 +1332,39 @@ async function prepareResources() {
 
       console.log('✓ Python setup complete!\n');
     } else if (IS_WINDOWS) {
-      // Windows: Download embedded Python
-      console.log('[1/4] Downloading embedded Python...');
-      const pythonZip = path.join(BUILD_DIR, 'python-embed.zip');
-      await downloadFile(getBuildDownload('pythonWin'), pythonZip);
+      // Windows: Download Astral standalone Python 3.11.18+ (Lib/ + DLLs/ layout)
+      console.log('[1/4] Downloading standalone Python for Windows (x64)...');
+      await stageStandalonePythonArchive('pythonWin', 'python-windows.tar.gz');
 
-      console.log('[2/4] Extracting Python...');
-      extractZip(pythonZip, PYTHON_DIR);
-      fs.unlinkSync(pythonZip);
+      const pythonExe = path.join(PYTHON_DIR, 'python.exe');
+      if (!fs.existsSync(pythonExe)
+          || !fs.existsSync(path.join(PYTHON_DIR, 'Lib', 'encodings'))
+          || !fs.existsSync(path.join(PYTHON_DIR, 'DLLs', '_ctypes.pyd'))) {
+        throw new Error('Prepared Windows standalone Python is missing python.exe, Lib/encodings, or DLLs/_ctypes.pyd');
+      }
 
-      console.log('[3/4] Setting up pip...');
+      for (const relPrune of ['Lib/test', 'Lib/idlelib', 'Lib/turtledemo']) {
+        removeDirectoryIfExists(path.join(PYTHON_DIR, ...relPrune.split('/')), relPrune);
+      }
 
-      // Modify python311._pth to:
-      // 1. Enable site packages (uncomment 'import site')
-      // 2. Add backend folder path so -m flag can find our modules (audio, transcription)
-      //    CRITICAL FIX (v1.7.3): Embedded Python ignores PYTHONPATH env var, so we MUST
-      //    add paths directly to the .pth file for module resolution to work.
+      console.log('[3/4] Setting up isolated python311._pth and pip...');
+      // Write an explicit python311._pth beside python.exe so packaged runs ignore
+      // ambient PYTHONPATH/user-site and resolve Lib, DLLs, site-packages, and ../backend,
+      // while allowing Parakeet's private launcher to omit "import site".
       ensureWindowsEmbeddedPythonPathConfig();
 
-      // Install pip
-      const pythonExe = path.join(PYTHON_DIR, 'python.exe');
       await ensurePipInstalled(pythonExe, path.join(PYTHON_DIR, 'Lib', 'site-packages'));
 
       console.log('[4/4] Installing Python dependencies...');
 
-      // Install requirements (Windows-specific)
       const requirementsPath = fs.existsSync(REQUIREMENTS_WINDOWS_BUILD)
         ? REQUIREMENTS_WINDOWS_BUILD
         : path.join(__dirname, '..', 'requirements-windows.txt');
-      execSync(`"${pythonExe}" -m pip install --only-binary=:all: -r "${requirementsPath}" --no-warn-script-location`, {
-        stdio: 'inherit'
-      });
+      execFileSync(
+        pythonExe,
+        ['-m', 'pip', 'install', '--only-binary=:all:', '-r', requirementsPath, '--no-warn-script-location'],
+        { stdio: 'inherit' }
+      );
 
       console.log('✓ Python setup complete!\n');
     } else {
@@ -1519,6 +1530,8 @@ module.exports = {
   buildSpeakrsCliCargoArgs,
   buildMacOSSpeakrsCliVerificationCommands,
   ensureWindowsEmbeddedPythonPathConfig,
+  extractTarGz,
+  validateTarArchiveEntries,
   installPinnedPipWheel,
   getMacOSPythonRuntimeRemovablePackages,
   buildMacOSHelperVerificationCommands,

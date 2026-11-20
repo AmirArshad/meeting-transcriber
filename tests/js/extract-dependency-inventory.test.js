@@ -90,8 +90,8 @@ test('unparseable or ambiguous catalog entries fail instead of shrinking the aud
 test('native runtimes are inventoried for review, never passed to the PyPI audit, and FFmpeg binaries must match the source bundle', () => {
   const native = nativeInventory(BUILD_DOWNLOADS);
   assert.deepEqual(native.entries.map((entry) => `${entry.source}=${entry.name}@${entry.version}`), [
-    'pythonWin=cpython@3.11.9',
-    'pythonMac=cpython@3.11.17',
+    'pythonWin=cpython@3.11.18',
+    'pythonMac=cpython@3.11.18',
     'pythonLinux=cpython@3.11.18',
     'ffmpegWin=ffmpeg@8.1.2',
     'ffmpegMac=ffmpeg@8.1.2',

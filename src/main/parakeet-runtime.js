@@ -353,8 +353,9 @@ function discoverStdlibEntries(realExe, spawnExe, fsModule, pathModule) {
     addExistingStdlib(entries, seen, pathModule.join(exeDir, 'Lib'), fsModule, pathModule);
     addExistingStdlib(entries, seen, pathModule.join(exeDir, 'python311.zip'), fsModule, pathModule);
     addExistingStdlib(entries, seen, pathModule.join(exeDir, 'python3.11.zip'), fsModule, pathModule);
-    // Windows embedded Python keeps stdlib extensions beside python.exe.
-    // The private launcher copies DLLs, but loads those .pyd modules from
+    // Windows standalone Python keeps stdlib extensions under DLLs/ (added above)
+    // and legacy embeddable layouts kept them beside python.exe.
+    // The private launcher copies DLLs, but loads .pyd modules from
     // their original stdlib directory without enabling site-packages.
     if (!seen.has(exeDir) && fsModule.existsSync(pathModule.join(exeDir, '_ctypes.pyd'))) {
       seen.add(exeDir);

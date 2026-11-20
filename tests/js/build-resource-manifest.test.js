@@ -12,6 +12,7 @@ const {
   buildMacOSPythonWheelhouseCommands,
   buildResourceManifest,
   ensureWindowsEmbeddedPythonPathConfig,
+  validateTarArchiveEntries,
   installPinnedPipWheel,
   ensureWindowsEmptyBinDirectory,
   getMacOSPythonRuntimeRemovablePackages,
@@ -112,7 +113,7 @@ test('manifestsMatch detects Swift source changes through the resource manifest'
 test('buildResourceManifest tracks pinned packaged dependency requirements', () => {
   const manifest = buildResourceManifest();
 
-  assert.equal(manifest.version, 8);
+  assert.equal(manifest.version, 9);
   assert.equal(typeof manifest.inputs.requirementsMacosBuild, 'string');
   assert.equal(typeof manifest.inputs.requirementsWindowsBuild, 'string');
   assert.equal(typeof manifest.inputs.requirementsLinuxBuild, 'string');
@@ -172,6 +173,41 @@ test('Windows embedded Python path config enables pip and backend imports', () =
   assert.equal(lines.filter((line) => line === 'import site').length, 1);
 
   fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test('Windows Astral standalone Python path config creates python311._pth from scratch with Lib and DLLs', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mt-python-astral-pth-'));
+  try {
+    fs.mkdirSync(path.join(tempDir, 'Lib'), { recursive: true });
+    fs.mkdirSync(path.join(tempDir, 'DLLs'), { recursive: true });
+    const pthFile = path.join(tempDir, 'python311._pth');
+
+    ensureWindowsEmbeddedPythonPathConfig(pthFile);
+
+    const lines = fs.readFileSync(pthFile, 'utf8').trim().split(/\r?\n/);
+    assert.ok(lines.includes('../backend'));
+    assert.ok(lines.includes('./Lib/site-packages'));
+    assert.ok(lines.includes('./Lib'));
+    assert.ok(lines.includes('./DLLs'));
+    assert.ok(lines.includes('.'));
+    assert.equal(lines.includes('python311.zip'), false);
+    assert.equal(lines.at(-1), 'import site');
+    assert.equal(lines.filter((line) => line === 'import site').length, 1);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('validateTarArchiveEntries allows safe relative members and rejects path traversal or absolute paths', () => {
+  assert.doesNotThrow(() => validateTarArchiveEntries([
+    'python/python.exe',
+    'python/Lib/os.py',
+    'python/DLLs/_ctypes.pyd',
+  ]));
+
+  for (const unsafeEntry of ['/etc/passwd', '../escape', 'python/../../evil.dll', 'C:\\Windows\\system32\\evil.dll', 'bad\0entry']) {
+    assert.throws(() => validateTarArchiveEntries([unsafeEntry]), /Refusing/);
+  }
 });
 
 

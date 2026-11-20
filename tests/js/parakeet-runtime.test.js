@@ -355,8 +355,10 @@ test('a site-enabled ._pth is replaced by a private interpreter that does not im
 test('private Windows embedded Python can import native stdlib without importing site', (t) => {
   const embedded = path.resolve(__dirname, '../../build/resources/python');
   const pythonExe = path.join(embedded, 'python.exe');
-  if (process.platform !== 'win32' || !fs.existsSync(path.join(embedded, '_ctypes.pyd'))) {
-    t.skip('prepared Windows embedded Python is unavailable');
+  const hasNativePyd = fs.existsSync(path.join(embedded, 'DLLs', '_ctypes.pyd'))
+    || fs.existsSync(path.join(embedded, '_ctypes.pyd'));
+  if (process.platform !== 'win32' || !hasNativePyd) {
+    t.skip('prepared Windows standalone Python is unavailable');
     return;
   }
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'parakeet-embedded-'));
@@ -408,6 +410,47 @@ test('an interpreter without a site-enabled ._pth is launched unchanged', () => 
       }),
       (error) => error.code === 'PARAKEET_RUNTIME_INVALID',
     );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Astral Windows standalone Lib and DLLs stdlib layout isolates cleanly without site import', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'parakeet-astral-win-'));
+  try {
+    const winPython = path.join(root, 'resources', 'python');
+    const libEncodings = path.join(winPython, 'Lib', 'encodings');
+    const dllsDir = path.join(winPython, 'DLLs');
+    fs.mkdirSync(libEncodings, { recursive: true });
+    fs.mkdirSync(dllsDir, { recursive: true });
+    fs.writeFileSync(path.join(dllsDir, '_ctypes.pyd'), '');
+    fs.writeFileSync(path.join(winPython, 'python311.dll'), '');
+    fs.writeFileSync(path.join(winPython, 'vcruntime140.dll'), '');
+    const exePath = path.join(winPython, 'python.exe');
+    fs.writeFileSync(exePath, '');
+    fs.writeFileSync(
+      path.join(winPython, 'python311._pth'),
+      '../backend\n./Lib/site-packages\n./Lib\n./DLLs\n.\nimport site\n',
+    );
+
+    const cacheRoot = path.join(root, 'cache');
+    const isolated = resolveParakeetPythonExecutable({
+      pythonExe: exePath,
+      backendPath: path.join(root, 'resources', 'backend'),
+      runtimeDir: path.join(root, 'parakeet-runtime'),
+      cacheRoot,
+    });
+    assert.notEqual(path.resolve(isolated), path.resolve(exePath));
+    const isolatedDir = path.dirname(isolated);
+    assert.equal(fs.existsSync(path.join(isolatedDir, 'python311.dll')), true);
+    assert.equal(fs.existsSync(path.join(isolatedDir, 'vcruntime140.dll')), true);
+    const isolatedPth = fs.readFileSync(path.join(isolatedDir, 'python311._pth'), 'utf8').trim().split(/\r?\n/);
+    assert.ok(isolatedPth.includes(path.join(winPython, 'Lib')));
+    assert.ok(isolatedPth.includes(dllsDir));
+    assert.ok(isolatedPth.includes(path.join(root, 'resources', 'backend')));
+    assert.ok(isolatedPth.includes(path.join(root, 'parakeet-runtime')));
+    assert.equal(isolatedPth.includes('import site'), false);
+    assert.equal(isolatedPth.includes('.'), false);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

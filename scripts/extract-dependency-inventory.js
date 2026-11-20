@@ -125,9 +125,9 @@ function matchVersion(value, pattern, source) {
 
 function nativeInventory(downloads) {
   const cpython = [
-    ['pythonWin', /\/python-(\d+\.\d+\.\d+)-embed-amd64\.zip$/],
-    ['pythonMac', /\/cpython-(\d+\.\d+\.\d+)\+\d{8}-aarch64-apple-darwin-install_only\.tar\.gz$/],
-    ['pythonLinux', /\/cpython-(\d+\.\d+\.\d+)\+\d{8}-x86_64-unknown-linux-gnu-install_only\.tar\.gz$/],
+    ['pythonWin', /\/cpython-(\d+\.\d+\.\d+)(?:\+|%2B)\d{8}-x86_64-pc-windows-msvc-install_only\.tar\.gz$/],
+    ['pythonMac', /\/cpython-(\d+\.\d+\.\d+)(?:\+|%2B)\d{8}-aarch64-apple-darwin-install_only\.tar\.gz$/],
+    ['pythonLinux', /\/cpython-(\d+\.\d+\.\d+)(?:\+|%2B)\d{8}-x86_64-unknown-linux-gnu-install_only\.tar\.gz$/],
   ].map(([key, pattern]) => ({
     ecosystem: 'native', name: 'cpython', version: matchVersion(downloads[key] && downloads[key].url, pattern, key), source: key,
   }));

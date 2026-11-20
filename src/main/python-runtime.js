@@ -243,8 +243,8 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
    *
    * Dev: PYTHONPATH includes the repo backend (plus ambient PYTHONPATH).
    * Packaged: buildPythonEnv uses only bundled paths, ignores ambient
-   * PYTHONPATH/HOME/USERBASE, disables user site and bytecode writes. Windows embedded
-   * Python also reads backend from python311._pth.
+   * PYTHONPATH/HOME/USERBASE, disables user site and bytecode writes. Windows standalone
+   * Python is also isolated via an authored python311._pth containing backend and stdlib.
    */
   function isolatedPythonEnv(env) {
     const isolated = { ...(env || {}) };
@@ -270,7 +270,7 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
     delete spawnOptions.pythonExe;
     // Merge our environment with any options.env provided by caller.
     // Packaged POSIX Python honors PYTHONPATH; buildPythonEnv strips ambient
-    // import paths. Windows embedded Python also uses python311._pth.
+    // import paths. Windows standalone Python also uses an authored python311._pth.
     // isolatedPythonPath keeps a caller-built PYTHONPATH exactly, so a Parakeet
     // child cannot inherit developer, Whisper, or Speakrs import roots.
     const mergedOptions = {
