@@ -934,6 +934,7 @@ historyQaService = createHistoryQaService({
   collectPythonProcessOutput,
   enqueueAiComputeAction,
   enqueueGpuResourceActionForQa: gpuResourceActionQueue.enqueue,
+  hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   getAiAddonRuntimeOptions,
   buildSummaryRuntimeEnv,
   resolveCudaStatusForTranscription,

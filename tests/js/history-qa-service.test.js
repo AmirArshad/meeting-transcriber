@@ -102,6 +102,8 @@ function makeQaHarness({
   ];
   let searchedMeetingCount = 1;
   let healthHealthy = true;
+  let computeBusy = false;
+  const getModelByIdCalls = [];
 
   const service = createHistoryQaService({
     app: { getPath: () => tmpDir },
@@ -127,7 +129,10 @@ function makeQaHarness({
     }),
     getSummaryArtifactForPlatform: () => ({ id: 'qwen-artifact', fileName: 'Qwen3.5-9B-Q4_K_M.gguf' }),
     getSummaryRuntimeArtifactForPlatform: () => ({ id: 'llama-cpp-v0.3.0-linux-x64-cuda-12.8' }),
-    getModelById: () => ({ id: 'qwen3.5-9b-q4-k-m', label: 'Qwen 3.5 9B' }),
+    getModelById: (feature, modelId) => {
+      getModelByIdCalls.push([feature, modelId]);
+      return { id: modelId, label: 'Qwen 3.5 9B (Q4_K_M)' };
+    },
     getSummaryArtifactPath: () => modelPath,
     getSummaryRuntimeDir: () => path.dirname(path.dirname(extractDir)),
     buildSummaryRuntimeEnv: () => ({ LD_LIBRARY_PATH: extractDir }),
@@ -153,6 +158,7 @@ function makeQaHarness({
       return action();
     },
     enqueueGpuResourceActionForQa: async (action) => action(),
+    hasPendingAiComputeWork: () => computeBusy,
     sendToRenderer(channel, payload) {
       events.push({ channel, payload });
     },
@@ -242,6 +248,10 @@ function makeQaHarness({
     setHealthHealthy(val) {
       healthHealthy = val;
     },
+    setComputeBusy(val) {
+      computeBusy = val;
+    },
+    getModelByIdCalls: () => getModelByIdCalls,
   };
 }
 
@@ -286,6 +296,10 @@ test('lazy llama-server boots with 127.0.0.1 + LLAMA_API_KEY env, reuses warm se
   assert.equal(first.status, 'answered');
   assert.equal(first.modelLoaded, true);
   assert.equal(h.spawnedServers.length, 1);
+  assert.deepEqual(h.getModelByIdCalls()[0], ['summary', 'qwen3.5-9b-q4-k-m']);
+  assert.equal(h.service.getModelState().modelName, 'Qwen 3.5 9B (Q4_K_M)');
+
+  h.setComputeBusy(true);
 
   const srv = h.spawnedServers[0];
   assert.ok(srv.args.includes('127.0.0.1'));
@@ -306,7 +320,7 @@ test('lazy llama-server boots with 127.0.0.1 + LLAMA_API_KEY env, reuses warm se
     assert.equal(JSON.stringify(evt).includes('45678'), false);
   }
 
-  // Second question in same thread reuses warm server cleanly.
+  // Second question in same thread reuses warm server cleanly & surfaces queued copy when busy.
   const second = await h.handlers.get('ask-history')({}, {
     threadId: first.thread.id,
     question: 'Remind me who spoke?',
@@ -314,6 +328,9 @@ test('lazy llama-server boots with 127.0.0.1 + LLAMA_API_KEY env, reuses warm se
   assert.equal(second.status, 'answered');
   assert.equal(h.spawnedServers.length, 1);
   assert.equal(capturedRunnerPayloads[1].history.length, 2);
+  assert.ok(
+    h.events.some((e) => e.channel === 'history-qa-progress' && /Queued behind active local AI work/.test(e.payload.message)),
+  );
 
   // Manual unload kills server and transitions cleanly to unloaded.
   const unloadRes = await h.handlers.get('unload-history-qa-model')({});

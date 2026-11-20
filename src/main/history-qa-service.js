@@ -290,6 +290,7 @@ function createHistoryQaService(deps) {
     collectPythonProcessOutput,
     enqueueAiComputeAction,
     enqueueGpuResourceActionForQa = (action) => action(),
+    hasPendingAiComputeWork = () => false,
     getAiAddonRuntimeOptions,
     checkAiAddonSetupStatus = defaultCheckAiAddonSetupStatus,
     getSummaryArtifactForPlatform = defaultGetSummaryArtifactForPlatform,
@@ -412,7 +413,7 @@ function createHistoryQaService(deps) {
     }
 
     const modelId = summaryStatus.modelId || null;
-    const modelMeta = modelId ? getModelById(modelId, 'summary') : null;
+    const modelMeta = modelId ? getModelById('summary', modelId) : null;
     const modelName = (modelMeta && (modelMeta.label || modelMeta.name)) || modelId || null;
     const artifact = modelId ? getSummaryArtifactForPlatform(modelId, platform, arch) : null;
     const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch);
@@ -1068,7 +1069,9 @@ function createHistoryQaService(deps) {
       emitQaProgress({
         threadId: thread.id,
         phase: 'queued',
-        message: 'Preparing local AI model…',
+        message: hasPendingAiComputeWork()
+          ? 'Queued behind active local AI work…'
+          : 'Preparing local AI model…',
         percent: 20,
       });
 
