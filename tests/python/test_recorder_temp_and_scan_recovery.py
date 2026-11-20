@@ -23,9 +23,11 @@ from audio.recorder_temp_paths import (  # noqa: E402
     promote_recorder_temp_to_wav,
 )
 from meetings.scan_import import (  # noqa: E402
+    ScanCandidate,
     is_recorder_temp_audio_file,
     recover_or_cleanup_recorder_temps,
     recording_stem_from_audio_path,
+    scan_recovery_guard,
     select_scannable_audio_files,
 )
 
@@ -227,6 +229,38 @@ class ScanImportTempRecoveryTests(unittest.TestCase):
             (capture_dir / "inside.wav").write_bytes(b"RIFF")
             selected = select_scannable_audio_files(recordings_dir)
             self.assertEqual([path.name for path in selected], [meeting.name])
+
+    def test_scan_recovery_guard_serializes_without_touching_metadata_lock(self):
+        import threading
+        from filelock import FileLock
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+
+            class FakeManager:
+                def __init__(self):
+                    self._scan_recovery_thread_lock = threading.RLock()
+                    self._scan_recovery_file_lock = FileLock(
+                        str(recordings_dir / "scan_recovery.lock"),
+                        timeout=5,
+                    )
+
+            mgr = FakeManager()
+            candidate = ScanCandidate(
+                audio_file=recordings_dir / "meeting_20260101_120000.opus",
+                transcript_file=recordings_dir / "meeting_20260101_120000.md",
+                meeting_id="20260101_120000",
+                title="Meeting 2026-01-01 12:00",
+                duration=0.0,
+                has_existing_transcript=False,
+            )
+            self.assertEqual(candidate.meeting_id, "20260101_120000")
+
+            with scan_recovery_guard(mgr):
+                self.assertFalse((recordings_dir / "meetings.json.lock").exists())
+                metadata_lock = FileLock(str(recordings_dir / "meetings.json.lock"), timeout=0.1)
+                with metadata_lock:
+                    self.assertTrue(metadata_lock.is_locked)
 
 
 if __name__ == "__main__":

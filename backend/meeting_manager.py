@@ -64,6 +64,9 @@ class MeetingManager:
         self.metadata_lock_file = self.recordings_dir / "meetings.json.lock"
         self._metadata_thread_lock = threading.RLock()
         self._metadata_file_lock = FileLock(str(self.metadata_lock_file), timeout=10)
+        self.scan_recovery_lock_file = self.recordings_dir / "scan_recovery.lock"
+        self._scan_recovery_thread_lock = threading.RLock()
+        self._scan_recovery_file_lock = FileLock(str(self.scan_recovery_lock_file), timeout=120)
         self._corrupt_metadata_backup_path: Optional[Path] = None
         self._corrupt_metadata_signature: Optional[tuple[int, int]] = None
 
@@ -77,6 +80,12 @@ class MeetingManager:
     def _metadata_guard(self):
         """Serialize metadata operations across threads and processes."""
         with meeting_store.metadata_guard(self):
+            yield
+
+    @contextmanager
+    def _scan_recovery_guard(self):
+        """Serialize slow scan/temp recovery without holding meetings.json.lock."""
+        with meeting_scan.scan_recovery_guard(self):
             yield
 
     def _load_meetings_unlocked(self) -> List[Dict]:
@@ -427,6 +436,55 @@ class MeetingManager:
         print(f"Meeting saved: {meeting_id}", file=sys.stderr)
         return meeting
 
+    def _build_direct_meeting_record(
+        self,
+        *,
+        meeting_id: str,
+        audio_path: str,
+        transcript_path: str,
+        duration: float,
+        language: str,
+        model: str,
+        title: str,
+        transcription_status: str = "completed",
+        transcription_error: Optional[str] = None,
+        transcription_result: Optional[Dict] = None,
+    ) -> Dict:
+        """Build a normalized meeting metadata record for direct insertion/scan commit."""
+        minutes = int(duration // 60)
+        seconds = int(duration % 60)
+        duration_str = f"{minutes}:{seconds:02d}"
+
+        # Parse meeting_id to get date
+        # Handle suffixed IDs like "20260107_104555_1" by extracting base ID
+        try:
+            parts = meeting_id.split('_')
+            if len(parts) >= 2:
+                base_id = f"{parts[0]}_{parts[1]}"
+                dt = datetime.strptime(base_id, "%Y%m%d_%H%M%S")
+            else:
+                dt = datetime.strptime(meeting_id, "%Y%m%d_%H%M%S")
+            date_iso = dt.isoformat()
+        except (ValueError, IndexError):
+            date_iso = datetime.now().isoformat()
+
+        meeting = {
+            'id': meeting_id,
+            'title': title,
+            'date': date_iso,
+            'duration': duration_str,
+            'durationSeconds': duration,
+            'audioPath': audio_path,
+            'transcriptPath': transcript_path,
+            'language': language,
+            'model': model,
+            'transcriptionStatus': self._normalize_transcription_status(transcription_status),
+            'transcriptionError': self._normalize_transcription_error(transcription_error),
+        }
+        if transcription_result is not None:
+            meeting['transcriptionResult'] = meeting_norm.normalize_transcription_result(transcription_result)
+        return meeting
+
     def _add_meeting_direct(
         self,
         meeting_id: str,
@@ -456,39 +514,18 @@ class MeetingManager:
                 print(f"Warning: Skipping duplicate meeting ID: {meeting_id}", file=sys.stderr)
                 return None
 
-            # Format duration
-            minutes = int(duration // 60)
-            seconds = int(duration % 60)
-            duration_str = f"{minutes}:{seconds:02d}"
-
-            # Parse meeting_id to get date
-            # Handle suffixed IDs like "20260107_104555_1" by extracting base ID
-            try:
-                parts = meeting_id.split('_')
-                if len(parts) >= 2:
-                    base_id = f"{parts[0]}_{parts[1]}"
-                    dt = datetime.strptime(base_id, "%Y%m%d_%H%M%S")
-                else:
-                    dt = datetime.strptime(meeting_id, "%Y%m%d_%H%M%S")
-                date_iso = dt.isoformat()
-            except (ValueError, IndexError):
-                date_iso = datetime.now().isoformat()
-
-            meeting = {
-                'id': meeting_id,
-                'title': title,
-                'date': date_iso,
-                'duration': duration_str,
-                'durationSeconds': duration,
-                'audioPath': audio_path,
-                'transcriptPath': transcript_path,
-                'language': language,
-                'model': model,
-                'transcriptionStatus': self._normalize_transcription_status(transcription_status),
-                'transcriptionError': self._normalize_transcription_error(transcription_error),
-            }
-            if transcription_result is not None:
-                meeting['transcriptionResult'] = meeting_norm.normalize_transcription_result(transcription_result)
+            meeting = self._build_direct_meeting_record(
+                meeting_id=meeting_id,
+                audio_path=audio_path,
+                transcript_path=transcript_path,
+                duration=duration,
+                language=language,
+                model=model,
+                title=title,
+                transcription_status=transcription_status,
+                transcription_error=transcription_error,
+                transcription_result=transcription_result,
+            )
 
             # Add to beginning of existing meetings (most recent first)
             meetings.insert(0, meeting)
@@ -517,89 +554,66 @@ class MeetingManager:
         Scan the recordings directory for audio/transcript files and add any
         missing meetings to the database.
 
-        This is useful for recovering from situations where transcriptions
-        completed but weren't added to the database, or for importing
-        recordings from other sources.
+        Slow recorder-temp recovery and filesystem discovery run under
+        ``scan_recovery.lock`` without holding ``meetings.json.lock`` so
+        concurrent History reads/writes/deletes remain responsive.
 
         Returns:
             Dictionary with counts: {'scanned': N, 'added': M, 'skipped': K}
         """
-        with self._metadata_guard():
-            self._reconcile_import_transactions_unlocked()
-            return self._scan_and_sync_recordings_locked()
+        with self._scan_recovery_guard():
+            # Phase A: reconcile pending import transactions and snapshot known
+            # meetings under a short metadata guard.
+            with self._metadata_guard():
+                self._reconcile_import_transactions_unlocked()
+                snapshot_meetings = self._list_meetings_locked()
+                snapshot_audio_names = {
+                    Path(m['audioPath']).name
+                    for m in snapshot_meetings
+                    if isinstance(m.get('audioPath'), str) and m['audioPath']
+                }
+                snapshot_ids = {m['id'] for m in snapshot_meetings if m.get('id')}
 
-    def _scan_and_sync_recordings_locked(self) -> Dict[str, int]:
-        existing_meetings = self.list_meetings()
-        existing_audio_paths = {Path(m['audioPath']).name for m in existing_meetings}
+            # Phase B: perform slow temp recovery and candidate discovery outside
+            # the metadata guard so History operations do not contend.
+            scanned = 0
+            added = 0
+            skipped = 0
+            candidates: List[meeting_scan.ScanCandidate] = []
 
-        scanned = 0
-        added = 0
-        skipped = 0
+            try:
+                temp_recovery = meeting_scan.recover_or_cleanup_recorder_temps(self.recordings_dir)
+                if temp_recovery.get("recovered") or temp_recovery.get("cleaned"):
+                    print(
+                        "Recorder temp recovery: "
+                        f"recovered={temp_recovery.get('recovered', 0)} "
+                        f"cleaned={temp_recovery.get('cleaned', 0)} "
+                        f"skipped={temp_recovery.get('skipped', 0)}",
+                        file=sys.stderr,
+                    )
+            except Exception as temp_err:
+                print(f"Warning: Recorder temp recovery failed: {temp_err}", file=sys.stderr)
 
-        # Promote orphaned recorder temps (.pcm.tmp / legacy *.temp.wav) to
-        # scannable WAVs, or delete temps when a final Opus/WAV already exists.
-        try:
-            temp_recovery = meeting_scan.recover_or_cleanup_recorder_temps(self.recordings_dir)
-            if temp_recovery.get("recovered") or temp_recovery.get("cleaned"):
-                print(
-                    "Recorder temp recovery: "
-                    f"recovered={temp_recovery.get('recovered', 0)} "
-                    f"cleaned={temp_recovery.get('cleaned', 0)} "
-                    f"skipped={temp_recovery.get('skipped', 0)}",
-                    file=sys.stderr,
-                )
-        except Exception as temp_err:
-            print(f"Warning: Recorder temp recovery failed: {temp_err}", file=sys.stderr)
+            audio_files = self._select_scannable_audio_files(self.recordings_dir)
 
-        # Find all .opus and .wav audio files, preferring one candidate per stem
-        audio_files = self._select_scannable_audio_files(self.recordings_dir)
+            for audio_file in audio_files:
+                scanned += 1
 
-        for audio_file in audio_files:
-            scanned += 1
-
-            if audio_file.is_symlink():
-                print(f"Warning: Skipping symlink audio file during scan: {audio_file.name}", file=sys.stderr)
-                skipped += 1
-                continue
-
-            # Skip if already in database
-            if audio_file.name in existing_audio_paths:
-                skipped += 1
-                continue
-
-            # Look for the canonical transcript. Attempt sidecars are not imported.
-            transcript_file = meeting_scan.transcript_candidate_for_audio(audio_file)
-            placeholder_created = False
-            if transcript_file.is_symlink():
-                print(f"Warning: Skipping symlink transcript during scan: {transcript_file.name}", file=sys.stderr)
-                skipped += 1
-                continue
-            if not transcript_file.exists():
-                placeholder = self._build_pending_transcript_placeholder(audio_file.name)
-                try:
-                    transcript_file.write_text(placeholder, encoding='utf-8')
-                    placeholder_created = True
-                    print(f"Created pending transcript placeholder for {audio_file.name}", file=sys.stderr)
-                except Exception as e:
-                    print(f"Warning: Could not create placeholder transcript for {audio_file.name}: {e}", file=sys.stderr)
+                if audio_file.is_symlink():
+                    print(f"Warning: Skipping symlink audio file during scan: {audio_file.name}", file=sys.stderr)
                     skipped += 1
                     continue
 
-            # Try to extract duration from transcript
-            duration = meeting_scan.extract_duration_from_transcript_file(transcript_file)
+                if audio_file.name in snapshot_audio_names:
+                    skipped += 1
+                    continue
 
-            # Extract ID and title from filename
-            meeting_id, title = meeting_scan.parse_scan_meeting_id_and_title(audio_file.stem)
+                transcript_file = meeting_scan.transcript_candidate_for_audio(audio_file)
+                if transcript_file.is_symlink():
+                    print(f"Warning: Skipping symlink transcript during scan: {transcript_file.name}", file=sys.stderr)
+                    skipped += 1
+                    continue
 
-            # Check if this ID already exists in database
-            existing_ids = {m['id'] for m in existing_meetings}
-            if meeting_id in existing_ids:
-                print(f"Skipping {audio_file.name}: ID {meeting_id} already exists", file=sys.stderr)
-                skipped += 1
-                continue
-
-            # Add meeting to database directly (don't copy files - they're already in place)
-            try:
                 resolved_audio = audio_file.resolve(strict=False)
                 resolved_transcript = transcript_file.resolve(strict=False)
                 if not self._is_recordings_path(resolved_audio) or not self._is_recordings_path(resolved_transcript):
@@ -610,37 +624,147 @@ class MeetingManager:
                     skipped += 1
                     continue
 
-                meeting = self._add_meeting_direct(
-                    meeting_id=meeting_id,
-                    audio_path=str(resolved_audio),
-                    transcript_path=str(resolved_transcript),
-                    duration=duration,
-                    language="en",
-                    model="unknown",
-                    title=title,
-                    transcription_status="pending" if placeholder_created else "completed",
-                    transcription_result=None if placeholder_created else {
-                        "schemaVersion": 1,
-                        "engine": "unknown",
-                    },
-                )
-                if meeting is not None:
-                    existing_meetings.append(meeting)
-                    existing_audio_paths.add(Path(meeting['audioPath']).name)
-                    added += 1
-                    print(f"Added meeting from filesystem: {audio_file.name} (ID: {meeting_id})", file=sys.stderr)
-                else:
-                    # Duplicate detected by _add_meeting_direct
+                meeting_id, title = meeting_scan.parse_scan_meeting_id_and_title(audio_file.stem)
+                if meeting_id in snapshot_ids:
+                    print(f"Skipping {audio_file.name}: ID {meeting_id} already exists", file=sys.stderr)
                     skipped += 1
-            except Exception as e:
-                print(f"Error adding meeting {audio_file.name}: {e}", file=sys.stderr)
-                skipped += 1
+                    continue
 
-        return {
-            'scanned': scanned,
-            'added': added,
-            'skipped': skipped
-        }
+                if transcript_file.exists() and transcript_file.is_file():
+                    duration = meeting_scan.extract_duration_from_transcript_file(transcript_file)
+                    has_existing_transcript = True
+                else:
+                    duration = 0.0
+                    has_existing_transcript = False
+
+                candidates.append(
+                    meeting_scan.ScanCandidate(
+                        audio_file=audio_file,
+                        transcript_file=transcript_file,
+                        meeting_id=meeting_id,
+                        title=title,
+                        duration=duration,
+                        has_existing_transcript=has_existing_transcript,
+                    )
+                )
+
+            # Phase C: re-reconcile import transactions, re-verify candidates
+            # against live metadata/filesystem state, write placeholders, and
+            # commit all newly discovered meetings in one atomic metadata write.
+            if candidates:
+                with self._metadata_guard():
+                    self._reconcile_import_transactions_unlocked()
+                    existing_meetings = self._list_meetings_locked()
+                    existing_audio_names = {
+                        Path(m['audioPath']).name
+                        for m in existing_meetings
+                        if isinstance(m.get('audioPath'), str) and m['audioPath']
+                    }
+                    existing_ids = {m['id'] for m in existing_meetings if m.get('id')}
+
+                    newly_added: List[tuple[Path, Dict]] = []
+                    created_placeholders: List[Path] = []
+
+                    try:
+                        for candidate in candidates:
+                            if candidate.audio_file.is_symlink() or not candidate.audio_file.is_file():
+                                skipped += 1
+                                continue
+                            if meeting_scan.has_sibling_capture_session(candidate.audio_file):
+                                skipped += 1
+                                continue
+                            if candidate.audio_file.name in existing_audio_names:
+                                skipped += 1
+                                continue
+                            if candidate.meeting_id in existing_ids:
+                                print(f"Skipping {candidate.audio_file.name}: ID {candidate.meeting_id} already exists", file=sys.stderr)
+                                skipped += 1
+                                continue
+                            if candidate.transcript_file.is_symlink():
+                                print(f"Warning: Skipping symlink transcript during scan: {candidate.transcript_file.name}", file=sys.stderr)
+                                skipped += 1
+                                continue
+
+                            resolved_audio = candidate.audio_file.resolve(strict=False)
+                            resolved_transcript = candidate.transcript_file.resolve(strict=False)
+                            if not self._is_recordings_path(resolved_audio) or not self._is_recordings_path(resolved_transcript):
+                                print(
+                                    f"Warning: Skipping {candidate.audio_file.name}: resolved path escapes recordings directory",
+                                    file=sys.stderr,
+                                )
+                                skipped += 1
+                                continue
+
+                            if candidate.transcript_file.exists():
+                                if not candidate.transcript_file.is_file():
+                                    skipped += 1
+                                    continue
+                                placeholder_created = False
+                                duration = (
+                                    candidate.duration
+                                    if candidate.has_existing_transcript
+                                    else meeting_scan.extract_duration_from_transcript_file(candidate.transcript_file)
+                                )
+                            else:
+                                placeholder = self._build_pending_transcript_placeholder(candidate.audio_file.name)
+                                try:
+                                    candidate.transcript_file.write_text(placeholder, encoding='utf-8')
+                                except Exception as e:
+                                    print(
+                                        f"Warning: Could not create placeholder transcript for {candidate.audio_file.name}: {e}",
+                                        file=sys.stderr,
+                                    )
+                                    skipped += 1
+                                    continue
+                                placeholder_created = True
+                                created_placeholders.append(candidate.transcript_file)
+                                print(
+                                    f"Created pending transcript placeholder for {candidate.audio_file.name}",
+                                    file=sys.stderr,
+                                )
+                                duration = 0.0
+
+                            meeting = self._build_direct_meeting_record(
+                                meeting_id=candidate.meeting_id,
+                                audio_path=str(resolved_audio),
+                                transcript_path=str(resolved_transcript),
+                                duration=duration,
+                                language="en",
+                                model="unknown",
+                                title=candidate.title,
+                                transcription_status="pending" if placeholder_created else "completed",
+                                transcription_result=None if placeholder_created else {
+                                    "schemaVersion": 1,
+                                    "engine": "unknown",
+                                },
+                            )
+                            existing_meetings.insert(0, meeting)
+                            existing_ids.add(candidate.meeting_id)
+                            existing_audio_names.add(Path(meeting['audioPath']).name)
+                            newly_added.append((candidate.audio_file, meeting))
+
+                        if newly_added:
+                            self._save_meetings_unlocked(existing_meetings)
+                    except Exception:
+                        for placeholder_path in created_placeholders:
+                            try:
+                                placeholder_path.unlink(missing_ok=True)
+                            except OSError:
+                                pass
+                        raise
+
+                    for audio_file, meeting in newly_added:
+                        print(
+                            f"Added meeting from filesystem: {audio_file.name} (ID: {meeting['id']})",
+                            file=sys.stderr,
+                        )
+                    added += len(newly_added)
+
+            return {
+                'scanned': scanned,
+                'added': added,
+                'skipped': skipped
+            }
 
     def get_meeting(self, meeting_id: str) -> Optional[Dict]:
         """

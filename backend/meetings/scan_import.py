@@ -6,11 +6,31 @@ import json
 import re
 import shutil
 import sys
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from filelock import FileLock, Timeout
+
+
+@dataclass(frozen=True)
+class ScanCandidate:
+    audio_file: Path
+    transcript_file: Path
+    meeting_id: str
+    title: str
+    duration: float
+    has_existing_transcript: bool
+
+
+@contextmanager
+def scan_recovery_guard(manager):
+    """Serialize slow recorder-temp recovery and filesystem scan preparation."""
+    with manager._scan_recovery_thread_lock:
+        with manager._scan_recovery_file_lock:
+            yield
 
 
 # Legacy recorder temps (pre-.pcm.tmp) plus the current non-scanned extension.

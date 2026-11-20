@@ -1484,3 +1484,354 @@ def test_scan_waits_for_staged_import_metadata_lock(tmp_path, monkeypatch):
     assert not writer_thread.is_alive() and not scan_thread.is_alive()
     assert scan_results[0]['added'] == 0
     assert len(scanner.list_meetings()) == 1
+
+
+def test_concurrent_metadata_ops_succeed_during_slow_recovery_scan(tmp_path, monkeypatch):
+    import threading
+    from filelock import FileLock
+
+    recordings = tmp_path / 'recordings'
+    seed_manager = MeetingManager(str(recordings))
+
+    existing_audio, existing_md = _create_source_files(recordings, 'existing_seed')
+    existing = seed_manager.add_meeting(str(existing_audio), str(existing_md), 10.0, title='Existing')
+
+    deletable_audio, deletable_md = _create_source_files(recordings, 'deletable_seed')
+    deletable = seed_manager.add_meeting(str(deletable_audio), str(deletable_md), 8.0, title='Deletable')
+
+    # Orphan recorder temp that will be promoted during slow recovery.
+    orphan_pcm = recordings / 'recording_2026-03-01T10-00-00.pcm.tmp'
+    orphan_pcm.write_bytes(b'R' * 64)
+
+    entered = threading.Event()
+    release = threading.Event()
+    original_recover = meeting_manager_module.meeting_scan.recover_or_cleanup_recorder_temps
+
+    def slowed_recover(recordings_dir):
+        entered.set()
+        assert release.wait(5), 'timed out waiting for release signal'
+        return original_recover(recordings_dir)
+
+    monkeypatch.setattr(
+        meeting_manager_module.meeting_scan,
+        'recover_or_cleanup_recorder_temps',
+        slowed_recover,
+    )
+
+    scanner = MeetingManager(str(recordings))
+    scan_results = []
+    scan_errors = []
+
+    def run_scan():
+        try:
+            scan_results.append(scanner.scan_and_sync_recordings())
+        except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+            scan_errors.append(exc)
+
+    scan_thread = threading.Thread(target=run_scan)
+    scan_thread.start()
+    assert entered.wait(5)
+
+    # Use a second MeetingManager with a short metadata lock timeout to prove
+    # meetings.json.lock is NOT held during slow recovery.
+    worker = MeetingManager(str(recordings))
+    worker._metadata_file_lock = FileLock(str(worker.metadata_lock_file), timeout=0.5)
+
+    listed = worker.list_meetings()
+    assert {m['id'] for m in listed} == {existing['id'], deletable['id']}
+
+    renamed = worker.update_meeting(existing['id'], title='Renamed During Slow Scan')
+    assert renamed is not None and renamed['title'] == 'Renamed During Slow Scan'
+
+    new_audio, new_md = _create_source_files(recordings, 'concurrent_add')
+    added_meeting = worker.add_meeting(
+        str(new_audio),
+        str(new_md),
+        12.0,
+        title='Added During Slow Scan',
+    )
+    assert added_meeting['title'] == 'Added During Slow Scan'
+
+    assert worker.delete_meeting(deletable['id']) is True
+
+    release.set()
+    scan_thread.join(5)
+    assert not scan_thread.is_alive()
+    assert not scan_errors
+    assert scan_results == [{'scanned': 3, 'added': 1, 'skipped': 2}]
+
+    final_meetings = worker.list_meetings()
+    ids = [m['id'] for m in final_meetings]
+    assert len(ids) == len(set(ids))
+    assert existing['id'] in ids
+    assert added_meeting['id'] in ids
+    assert deletable['id'] not in ids
+    assert '20260301_100000' in ids
+
+    by_id = {m['id']: m for m in final_meetings}
+    assert by_id[existing['id']]['title'] == 'Renamed During Slow Scan'
+    assert by_id[added_meeting['id']]['title'] == 'Added During Slow Scan'
+    assert Path(by_id[added_meeting['id']]['transcriptPath']).read_text(encoding='utf-8').startswith('# Transcript')
+    assert by_id['20260301_100000']['transcriptionStatus'] == 'pending'
+
+
+def test_multiprocess_metadata_ops_succeed_during_slow_recovery_scan(tmp_path):
+    import subprocess
+    import sys
+    import time
+    from filelock import FileLock
+
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(str(recordings))
+    manager._metadata_file_lock = FileLock(str(manager.metadata_lock_file), timeout=0.75)
+
+    existing_audio, existing_md = _create_source_files(recordings, 'mp_existing')
+    existing = manager.add_meeting(str(existing_audio), str(existing_md), 10.0, title='MP Existing')
+
+    deletable_audio, deletable_md = _create_source_files(recordings, 'mp_deletable')
+    deletable = manager.add_meeting(str(deletable_audio), str(deletable_md), 5.0, title='MP Deletable')
+
+    orphan_pcm = recordings / 'recording_2026-04-01T11-30-00.pcm.tmp'
+    orphan_pcm.write_bytes(b'R' * 64)
+
+    ready_flag = tmp_path / 'scan_paused.flag'
+    go_flag = tmp_path / 'scan_resume.flag'
+
+    script = '''
+import json, sys, time
+from pathlib import Path
+import meeting_manager
+
+recordings_dir, ready_path, go_path = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
+orig_recover = meeting_manager.meeting_scan.recover_or_cleanup_recorder_temps
+
+def paused_recover(rec_dir):
+    ready_path.write_text('paused', encoding='utf-8')
+    deadline = time.monotonic() + 15.0
+    while not go_path.exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError('timed out waiting for go flag')
+        time.sleep(0.02)
+    return orig_recover(rec_dir)
+
+meeting_manager.meeting_scan.recover_or_cleanup_recorder_temps = paused_recover
+mgr = meeting_manager.MeetingManager(recordings_dir)
+result = mgr.scan_and_sync_recordings()
+print(json.dumps(result))
+'''
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / 'backend'))
+    proc = subprocess.Popen(
+        [sys.executable, '-c', script, str(recordings), str(ready_flag), str(go_flag)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 10.0
+        while not ready_flag.exists():
+            assert proc.poll() is None, f'child exited early: {proc.stderr.read()}'
+            assert time.monotonic() < deadline, 'timed out waiting for child scan pause'
+            time.sleep(0.02)
+
+        # All four metadata operations must complete without hitting 0.75s FileLock timeout.
+        assert {m['id'] for m in manager.list_meetings()} == {existing['id'], deletable['id']}
+        renamed = manager.update_meeting(existing['id'], title='MP Renamed During Scan')
+        assert renamed is not None and renamed['title'] == 'MP Renamed During Scan'
+
+        new_audio, new_md = _create_source_files(recordings, 'mp_added')
+        added = manager.add_meeting(str(new_audio), str(new_md), 15.0, title='MP Added During Scan')
+        assert manager.delete_meeting(deletable['id']) is True
+    finally:
+        go_flag.write_text('go', encoding='utf-8')
+
+    stdout, stderr = proc.communicate(timeout=15)
+    assert proc.returncode == 0, f'child failed: {stderr}'
+    scan_result = json.loads(stdout.strip().splitlines()[-1])
+    assert scan_result['added'] == 1
+
+    final_meetings = manager.list_meetings()
+    by_id = {m['id']: m for m in final_meetings}
+    assert len(final_meetings) == 3
+    assert set(by_id.keys()) == {existing['id'], added['id'], '20260401_113000'}
+    assert by_id[existing['id']]['title'] == 'MP Renamed During Scan'
+    assert by_id[added['id']]['title'] == 'MP Added During Scan'
+    assert by_id['20260401_113000']['transcriptionStatus'] == 'pending'
+
+
+def test_scan_handles_staged_import_committed_or_crashed_during_phase_b(tmp_path, monkeypatch):
+    import threading
+
+    recordings = tmp_path / 'recordings'
+    scanner = MeetingManager(str(recordings))
+    writer = MeetingManager(str(recordings))
+
+    # Pre-existing unrecorded audio so Phase B discovers something.
+    orphan_audio = recordings / 'meeting_20260501_080000.opus'
+    orphan_audio.write_bytes(b'orphan')
+
+    entered = threading.Event()
+    release = threading.Event()
+    original_select = scanner._select_scannable_audio_files
+
+    def simulate_concurrent_phase_b_activity(recordings_dir):
+        # Case A: a staged import commits cleanly during Phase B.
+        staged_ok = recordings / '.audio-import-ok'
+        ok_audio, ok_md = _create_source_files(staged_ok, 'audio')
+        ok_md.write_text('**Duration:** 0:09\n\nReal staged transcript', encoding='utf-8')
+        # Add directly via staged import while scan is outside _metadata_guard.
+        committed = writer.add_meeting(str(ok_audio), str(ok_md), 9.0, title='Committed Mid-Scan')
+        assert committed['id']
+
+        # Case B: a crashed staged import leaves marker + partial opus before select runs.
+        crashed_id = '20260501_080005'
+        (recordings / f'.meeting-import-{crashed_id}').mkdir()
+        (recordings / f'meeting_{crashed_id}.opus').write_bytes(b'partial-import')
+
+        entered.set()
+        assert release.wait(5)
+        return original_select(recordings_dir)
+
+    monkeypatch.setattr(scanner, '_select_scannable_audio_files', simulate_concurrent_phase_b_activity)
+
+    results = []
+    scan_thread = threading.Thread(target=lambda: results.append(scanner.scan_and_sync_recordings()))
+    scan_thread.start()
+    assert entered.wait(5)
+    release.set()
+    scan_thread.join(5)
+    assert not scan_thread.is_alive()
+
+    meetings = scanner.list_meetings()
+    by_id = {m['id']: m for m in meetings}
+    assert len(meetings) == 2
+    assert '20260501_080000' in by_id
+    # Committed import kept its real transcript and wasn't duplicated or overwritten.
+    committed_id = next(mid for mid in by_id if mid != '20260501_080000')
+    assert by_id[committed_id]['title'] == 'Committed Mid-Scan'
+    assert 'Real staged transcript' in Path(by_id[committed_id]['transcriptPath']).read_text(encoding='utf-8')
+    # Crashed import partial audio, marker, and placeholder must NOT exist.
+    assert not (recordings / 'meeting_20260501_080005.opus').exists()
+    assert not (recordings / 'meeting_20260501_080005.md').exists()
+    assert not (recordings / '.meeting-import-20260501_080005').exists()
+
+
+def test_concurrent_scans_serialize_on_scan_recovery_lock_without_blocking_metadata(tmp_path, monkeypatch):
+    import threading
+    import time
+    from filelock import FileLock
+
+    recordings = tmp_path / 'recordings'
+    seed = MeetingManager(str(recordings))
+    a1, m1 = _create_source_files(recordings, 'seed_scan')
+    existing = seed.add_meeting(str(a1), str(m1), 4.0, title='Seed')
+
+    (recordings / 'meeting_20260601_100000.opus').write_bytes(b'new-audio')
+
+    entered = threading.Event()
+    release = threading.Event()
+    call_count = 0
+    original_recover = meeting_manager_module.meeting_scan.recover_or_cleanup_recorder_temps
+
+    def guarded_recover(recordings_dir):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            entered.set()
+            assert release.wait(5)
+        return original_recover(recordings_dir)
+
+    monkeypatch.setattr(
+        meeting_manager_module.meeting_scan,
+        'recover_or_cleanup_recorder_temps',
+        guarded_recover,
+    )
+
+    scanner1 = MeetingManager(str(recordings))
+    scanner2 = MeetingManager(str(recordings))
+    res1 = []
+    res2 = []
+
+    t1 = threading.Thread(target=lambda: res1.append(scanner1.scan_and_sync_recordings()))
+    t1.start()
+    assert entered.wait(5)
+
+    t2 = threading.Thread(target=lambda: res2.append(scanner2.scan_and_sync_recordings()))
+    t2.start()
+    time.sleep(0.15)
+    # Scan 2 must be blocked on scan_recovery.lock, not running Phase B concurrently.
+    assert t2.is_alive()
+    assert call_count == 1
+
+    # Third reader/writer still accesses metadata immediately with short lock timeout.
+    reader = MeetingManager(str(recordings))
+    reader._metadata_file_lock = FileLock(str(reader.metadata_lock_file), timeout=0.5)
+    assert len(reader.list_meetings()) == 1
+    assert reader.update_meeting(existing['id'], title='Updated While Two Scans Wait')['title'] == 'Updated While Two Scans Wait'
+
+    release.set()
+    t1.join(5)
+    t2.join(5)
+    assert not t1.is_alive() and not t2.is_alive()
+    assert call_count == 2
+    assert res1[0]['added'] == 1
+    assert res2[0]['added'] == 0
+    final = {m['id']: m for m in reader.list_meetings()}
+    assert set(final.keys()) == {existing['id'], '20260601_100000'}
+    assert final[existing['id']]['title'] == 'Updated While Two Scans Wait'
+
+
+def test_scan_commits_multiple_discovered_meetings_in_single_atomic_save_and_rolls_back_placeholders(tmp_path, monkeypatch):
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(str(recordings))
+
+    stems = [
+        'meeting_20260701_090000',
+        'meeting_20260701_090500',
+        'meeting_20260701_091000',
+    ]
+    for stem in stems:
+        (recordings / f'{stem}.opus').write_bytes(b'audio')
+
+    save_calls = 0
+    original_save = manager._save_meetings_unlocked
+
+    def counting_save(meetings):
+        nonlocal save_calls
+        save_calls += 1
+        return original_save(meetings)
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', counting_save)
+    result = manager.scan_and_sync_recordings()
+
+    assert result == {'scanned': 3, 'added': 3, 'skipped': 0}
+    assert save_calls == 1
+    for stem in stems:
+        assert (recordings / f'{stem}.md').is_file()
+
+    # Now add a pre-existing .md meeting and two audio-only meetings, and force save failure.
+    pre_stem = 'meeting_20260701_092000'
+    (recordings / f'{pre_stem}.opus').write_bytes(b'audio')
+    (recordings / f'{pre_stem}.md').write_text('**Duration:** 0:04\n\nKeep me', encoding='utf-8')
+
+    fail_stems = ['meeting_20260701_092500', 'meeting_20260701_093000']
+    for stem in fail_stems:
+        (recordings / f'{stem}.opus').write_bytes(b'audio')
+
+    def failing_save(_meetings):
+        raise OSError('disk full')
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', failing_save)
+    try:
+        manager.scan_and_sync_recordings()
+    except OSError as exc:
+        assert 'disk full' in str(exc)
+    else:
+        raise AssertionError('Expected OSError from failing atomic save')
+
+    # Newly created placeholders must be rolled back; pre-existing transcript preserved.
+    for stem in fail_stems:
+        assert not (recordings / f'{stem}.md').exists()
+    assert (recordings / f'{pre_stem}.md').read_text(encoding='utf-8') == '**Duration:** 0:04\n\nKeep me'
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', original_save)
+    assert len(manager.list_meetings()) == 3
