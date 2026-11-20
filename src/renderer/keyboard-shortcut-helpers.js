@@ -9,6 +9,7 @@
   const ACTIONS = [
     'goto-record',
     'goto-history',
+    'goto-chat',
     'goto-settings',
     'start-recording',
     'stop-recording',
@@ -26,8 +27,10 @@
         return `${mod}+Shift+1`;
       case 'goto-history':
         return `${mod}+Shift+2`;
-      case 'goto-settings':
+      case 'goto-chat':
         return `${mod}+Shift+3`;
+      case 'goto-settings':
+        return `${mod}+Shift+4`;
       case 'start-recording':
         return `${mod}+Shift+R`;
       case 'stop-recording':
@@ -45,8 +48,10 @@
         return `${mod}+Shift+1`;
       case 'goto-history':
         return `${mod}+Shift+2`;
-      case 'goto-settings':
+      case 'goto-chat':
         return `${mod}+Shift+3`;
+      case 'goto-settings':
+        return `${mod}+Shift+4`;
       case 'start-recording':
         return `${mod}+Shift+R`;
       case 'stop-recording':
@@ -60,6 +65,7 @@
     return [
       { action: 'goto-record', label: 'Record page', display: getKeyboardShortcutDisplay('goto-record', { platform }) },
       { action: 'goto-history', label: 'History', display: getKeyboardShortcutDisplay('goto-history', { platform }) },
+      { action: 'goto-chat', label: 'Chat', display: getKeyboardShortcutDisplay('goto-chat', { platform }) },
       { action: 'goto-settings', label: 'Settings', display: getKeyboardShortcutDisplay('goto-settings', { platform }) },
       { action: 'start-recording', label: 'Start recording (Mic + Desktop)', display: getKeyboardShortcutDisplay('start-recording', { platform }) },
       { action: 'stop-recording', label: 'Stop and save recording', display: getKeyboardShortcutDisplay('stop-recording', { platform }) },
@@ -80,6 +86,9 @@
     }
     if (key === '#' || key === '3') {
       return 'Digit3';
+    }
+    if (key === '$' || key === '4') {
+      return 'Digit4';
     }
     if (lower === 'r') {
       return 'KeyR';
@@ -150,6 +159,9 @@
         return 'goto-history';
       case 'Digit3':
       case 'Numpad3':
+        return 'goto-chat';
+      case 'Digit4':
+      case 'Numpad4':
         return 'goto-settings';
       case 'KeyR':
         return 'start-recording';

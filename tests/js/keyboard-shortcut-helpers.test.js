@@ -35,12 +35,16 @@ function makeEvent(overrides = {}) {
   };
 }
 
-test('bindings expose five fixed actions with platform modifiers', () => {
-  assert.deepEqual([...ACTIONS].sort(), ['goto-history', 'goto-record', 'goto-settings', 'start-recording', 'stop-recording'].sort());
+test('bindings expose six fixed actions with platform modifiers', () => {
+  assert.deepEqual([...ACTIONS].sort(), ['goto-chat', 'goto-history', 'goto-record', 'goto-settings', 'start-recording', 'stop-recording'].sort());
   assert.equal(getKeyboardShortcutDisplay('goto-record', { platform: 'win32' }), 'Ctrl+Shift+1');
+  assert.equal(getKeyboardShortcutDisplay('goto-chat', { platform: 'win32' }), 'Ctrl+Shift+3');
+  assert.equal(getKeyboardShortcutDisplay('goto-settings', { platform: 'darwin' }), 'Command+Shift+4');
   assert.equal(getKeyboardShortcutDisplay('goto-record', { platform: 'darwin' }), 'Command+Shift+1');
   assert.equal(getKeyboardShortcutDisplay('start-recording', { platform: 'linux' }), 'Ctrl+Shift+R');
   assert.equal(getKeyboardShortcutDisplay('stop-recording', { platform: 'darwin' }), 'Command+Shift+S');
+  assert.equal(getKeyboardShortcutAria('goto-chat', { platform: 'win32' }), 'Control+Shift+3');
+  assert.equal(getKeyboardShortcutAria('goto-settings', { platform: 'darwin' }), 'Meta+Shift+4');
   assert.equal(getKeyboardShortcutAria('start-recording', { platform: 'win32' }), 'Control+Shift+R');
   assert.equal(getKeyboardShortcutAria('stop-recording', { platform: 'linux' }), 'Control+Shift+S');
   assert.equal(getKeyboardShortcutAria('goto-record', { platform: 'darwin' }), 'Meta+Shift+1');
@@ -48,7 +52,7 @@ test('bindings expose five fixed actions with platform modifiers', () => {
   assert.doesNotMatch(getKeyboardShortcutAria('start-recording', { platform: 'win32' }), /Ctrl/);
   assert.doesNotMatch(getKeyboardShortcutAria('start-recording', { platform: 'darwin' }), /Command/);
   const bindings = getKeyboardShortcutBindings({ platform: 'win32' });
-  assert.equal(bindings.length, 5);
+  assert.equal(bindings.length, 6);
   for (const binding of bindings) {
     assert.ok(binding.action && binding.label && binding.display);
   }
@@ -82,6 +86,8 @@ test('command matching normalizes case and shifted number rows', () => {
   assert.equal(normalizeShortcutKey({ code: '', key: '!' }), 'Digit1');
   assert.equal(normalizeShortcutKey({ code: 'Digit1', key: '!' }), 'Digit1');
   assert.equal(resolveKeyboardShortcutAction(makeEvent({ code: 'Digit1', ctrlKey: true, shiftKey: true, key: '!' }), { platform: 'win32' }), 'goto-record');
+  assert.equal(resolveKeyboardShortcutAction(makeEvent({ code: '', key: '3', ctrlKey: true, shiftKey: true }), { platform: 'win32' }), 'goto-chat');
+  assert.equal(resolveKeyboardShortcutAction(makeEvent({ code: '', key: '$', ctrlKey: true, shiftKey: true }), { platform: 'win32' }), 'goto-settings');
   assert.equal(resolveKeyboardShortcutAction(makeEvent({ code: '', key: '1', ctrlKey: true, shiftKey: true }), { platform: 'win32' }), 'goto-record');
   assert.equal(resolveKeyboardShortcutAction(makeEvent({ code: 'KeyS', key: 's', ctrlKey: true, shiftKey: true }), { platform: 'linux' }), 'stop-recording');
   assert.equal(resolveKeyboardShortcutAction(makeEvent({ code: 'KeyS', key: 'S', ctrlKey: true, shiftKey: true }), { platform: 'linux' }), 'stop-recording');

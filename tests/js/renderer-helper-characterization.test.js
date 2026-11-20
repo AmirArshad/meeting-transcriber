@@ -62,10 +62,17 @@ const EXPECTED_RENDERER_GLOBALS = [
   'keyboardShortcutHelpers',
   'transcriptionEngineHelpers',
   'subtitleExportHelpers',
+  'markdownRenderHelpers',
+  'chatHelpers',
   // v2.10 Slice A shared policy (src/transcription-policy.js, UMD) loads
   // before app.js so Record UI + main use one curated source of truth.
   'transcriptionPolicy',
 ];
+
+const VENDOR_SCRIPT_SRCS = new Set([
+  '../../node_modules/marked/lib/marked.umd.js',
+  '../../node_modules/dompurify/dist/purify.min.js',
+]);
 
 const EXPECTED_SCRIPT_ORDER = [
   'recording-state-helpers.js',
@@ -86,6 +93,10 @@ const EXPECTED_SCRIPT_ORDER = [
   'keyboard-shortcut-helpers.js',
   'transcription-engine-helpers.js',
   'subtitle-export-helpers.js',
+  '../../node_modules/marked/lib/marked.umd.js',
+  '../../node_modules/dompurify/dist/purify.min.js',
+  'markdown-render-helpers.js',
+  'chat-helpers.js',
   '../transcription-policy.js',
   'app.js',
 ];
@@ -230,7 +241,12 @@ test('index.html loads renderer helpers before app.js with unique globals', () =
   const helperFiles = EXPECTED_SCRIPT_ORDER.slice(0, -1);
   const globals = [];
   for (const fileName of helperFiles) {
-    const source = readUtf8(path.join(ROOT, 'src', 'renderer', fileName));
+    const resolvedPath = path.join(ROOT, 'src', 'renderer', fileName);
+    if (VENDOR_SCRIPT_SRCS.has(fileName)) {
+      assert.equal(require('node:fs').existsSync(resolvedPath), true, `missing bundled vendor script ${fileName}`);
+      continue;
+    }
+    const source = readUtf8(resolvedPath);
     const match = source.match(/root\.([A-Za-z0-9_]+)\s*=/);
     assert.ok(match, `${fileName} must attach a root.<global>`);
     globals.push(match[1]);

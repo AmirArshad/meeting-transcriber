@@ -18,6 +18,8 @@ These components are included when you build installers via
 | Component | Role | License (summary) | Notes |
 |-----------|------|-------------------|--------|
 | [Electron](https://www.electronjs.org/) | Desktop shell | MIT | |
+| [marked](https://marked.js.org/) (`18.2.1`) | Offline Markdown parsing for Chat responses | MIT | Bundled inside `app.asar` |
+| [DOMPurify](https://github.com/cure53/DOMPurify) (`3.4.18`) | HTML sanitization for rendered Markdown | Apache-2.0 (or MPL-2.0) | Bundled inside `app.asar` |
 | [Python](https://www.python.org/) | Embedded / standalone runtime in installer | PSF License | See python.org license page |
 | [ffmpeg](https://ffmpeg.org/) | Opus compression after recording | **GPLv3** (typical third-party builds) | See [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt) and [legal/FFMPEG-COMPLIANCE.json](legal/FFMPEG-COMPLIANCE.json). Windows: gyan.dev essentials build. macOS: shaka-project/static-ffmpeg-binaries arm64 static build. Linux (when packaged): shaka-project `ffmpeg-linux-x64` static build. Windows builds may include `legal/ffmpeg-upstream-*` copied from the gyan.dev archive. |
 | Python packages in `requirements-*-build.txt` | Recording, transcription, HF downloads | Mostly MIT / BSD / Apache-2.0 | Non-exhaustive list below |

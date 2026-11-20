@@ -18,6 +18,8 @@ test('THIRD_PARTY_NOTICES.md exists and documents key optional models', () => {
   assert.match(contents, /speakrs-cli/i);
   assert.match(contents, /avencera\/speakrs/i);
   assert.match(contents, /Qwen/i);
+  assert.match(contents, /marked/i);
+  assert.match(contents, /dompurify/i);
   assert.match(contents, /ffmpeg/i);
   assert.match(contents, /GPL/i);
 });

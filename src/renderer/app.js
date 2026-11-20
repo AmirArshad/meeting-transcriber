@@ -140,6 +140,16 @@ const {
 const {
   buildExportFormatOptions,
 } = window.subtitleExportHelpers;
+const {
+  renderGroundedMarkdown,
+} = window.markdownRenderHelpers;
+const {
+  buildModelMemoryPillView,
+  buildStarterPrompts,
+  filterChatThreads,
+  formatChatScopeLabel,
+  groupThreadsByRecency,
+} = window.chatHelpers;
 
 // UI Elements
 const micSelect = document.getElementById('mic-select');
@@ -1670,6 +1680,9 @@ function activateTab(targetTab) {
   if (targetTab === 'settings') {
     initSettingsTab().catch((error) => console.error('Failed to initialize settings tab:', error));
   }
+  if (targetTab === 'chat' && typeof initChatTab === 'function') {
+    initChatTab().catch((error) => console.error('Failed to initialize chat tab:', error));
+  }
 }
 
 function getPreferredScrollBehavior() {
@@ -1872,9 +1885,16 @@ function handleKeyboardShortcut(event) {
   })) {
     return;
   }
-  if (action === 'goto-record' || action === 'goto-history' || action === 'goto-settings') {
+  if (action === 'goto-record' || action === 'goto-history' || action === 'goto-chat' || action === 'goto-settings') {
     event.preventDefault();
-    activateTabAndFocusHeading(action === 'goto-record' ? 'record' : action === 'goto-history' ? 'history' : 'settings');
+    const targetTab = action === 'goto-record'
+      ? 'record'
+      : action === 'goto-history'
+        ? 'history'
+        : action === 'goto-chat'
+          ? 'chat'
+          : 'settings';
+    activateTabAndFocusHeading(targetTab);
     return;
   }
   if (action === 'start-recording' || action === 'stop-recording') {
@@ -1895,6 +1915,7 @@ function applyKeyboardShortcutDiscovery() {
   const displays = {
     'goto-record': getKeyboardShortcutDisplay('goto-record', { platform }),
     'goto-history': getKeyboardShortcutDisplay('goto-history', { platform }),
+    'goto-chat': getKeyboardShortcutDisplay('goto-chat', { platform }),
     'goto-settings': getKeyboardShortcutDisplay('goto-settings', { platform }),
     'start-recording': getKeyboardShortcutDisplay('start-recording', { platform }),
     'stop-recording': getKeyboardShortcutDisplay('stop-recording', { platform }),
@@ -1908,6 +1929,11 @@ function applyKeyboardShortcutDiscovery() {
   if (railHistory) {
     railHistory.setAttribute('aria-keyshortcuts', getKeyboardShortcutAria('goto-history', { platform }));
     railHistory.title = `History (${displays['goto-history']})`;
+  }
+  const railChat = document.querySelector('.rail-btn[data-tab="chat"]');
+  if (railChat) {
+    railChat.setAttribute('aria-keyshortcuts', getKeyboardShortcutAria('goto-chat', { platform }));
+    railChat.title = `Chat (${displays['goto-chat']})`;
   }
   const railSettings = document.querySelector('.rail-btn[data-tab="settings"]');
   if (railSettings) {
@@ -8644,3 +8670,837 @@ setupTitleEditors();
 setupGPUCTA();
 setupHomeAiAddonCTA();
 setupAudioImport();
+
+// ============================================================================
+// Left-Rail Grounded Chat Workspace
+// ============================================================================
+
+const chatState = {
+  listenersBound: false,
+  threads: [],
+  activeThread: null,
+  pendingScope: { type: 'all', meetingIds: [], dateFrom: null, dateTo: null },
+  eligibility: null,
+  modelState: { status: 'unloaded', modelId: null, modelName: null },
+  sending: false,
+  optimisticQuestion: null,
+  progress: null,
+  editingThreadId: null,
+  threadFilter: '',
+  scopeFilter: '',
+  scopeDraft: null,
+  popoverOpen: false,
+};
+
+function getCurrentChatScope() {
+  return (chatState.activeThread && chatState.activeThread.scope)
+    || chatState.pendingScope
+    || { type: 'all', meetingIds: [], dateFrom: null, dateTo: null };
+}
+
+function getMeetingsMapById() {
+  const map = new Map();
+  for (const m of Array.isArray(meetings) ? meetings : []) {
+    if (m && m.id != null) {
+      map.set(String(m.id), m);
+    }
+  }
+  return map;
+}
+
+function autoResizeChatInput() {
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(160, Math.max(24, input.scrollHeight))}px`;
+}
+
+function renderChatModelPill() {
+  const pill = document.getElementById('chat-model-pill');
+  const label = document.getElementById('chat-model-pill-label');
+  const unloadBtn = document.getElementById('chat-unload-model-btn');
+  if (!pill || !label || !unloadBtn) return;
+
+  const view = buildModelMemoryPillView(chatState.modelState);
+  pill.dataset.state = view.status;
+  label.textContent = view.label;
+  unloadBtn.hidden = !view.showUnload;
+  unloadBtn.disabled = view.busy;
+}
+
+function renderChatOnboardingAndComposer() {
+  const onboarding = document.getElementById('chat-onboarding-card');
+  const reasonEl = document.getElementById('chat-onboarding-reason');
+  const sendBtn = document.getElementById('chat-send-btn');
+  const input = document.getElementById('chat-input');
+  const headerTitle = document.getElementById('chat-thread-title');
+  const headerScope = document.getElementById('chat-header-scope');
+  const scopeLabel = document.getElementById('chat-scope-btn-label');
+
+  const eligible = !chatState.eligibility || chatState.eligibility.eligible !== false;
+  if (onboarding) {
+    onboarding.hidden = eligible;
+  }
+  if (reasonEl && chatState.eligibility && chatState.eligibility.reason) {
+    reasonEl.textContent = `${chatState.eligibility.reason} Instant History full-text search remains available anytime.`;
+  }
+
+  const scopeText = formatChatScopeLabel(getCurrentChatScope(), getMeetingsMapById());
+  if (headerTitle) {
+    headerTitle.textContent = chatState.activeThread ? chatState.activeThread.title : 'Ask your history';
+  }
+  if (headerScope) {
+    headerScope.textContent = scopeText;
+  }
+  if (scopeLabel) {
+    scopeLabel.textContent = scopeText;
+  }
+
+  if (sendBtn) {
+    if (chatState.sending) {
+      sendBtn.textContent = 'Stop';
+      sendBtn.classList.remove('btn-primary');
+      sendBtn.classList.add('btn-danger');
+      sendBtn.disabled = false;
+    } else {
+      sendBtn.textContent = 'Send';
+      sendBtn.classList.remove('btn-danger');
+      sendBtn.classList.add('btn-primary');
+      sendBtn.disabled = !eligible;
+    }
+  }
+  if (input) {
+    input.disabled = chatState.sending;
+  }
+}
+
+function renderChatThreadSidebar() {
+  const container = document.getElementById('chat-thread-list');
+  if (!container) return;
+  clearElement(container);
+
+  const filtered = filterChatThreads(chatState.threads, chatState.threadFilter);
+  if (filtered.length === 0) {
+    setPlaceholder(
+      container,
+      chatState.threads.length === 0 ? 'No conversations yet' : 'No matching conversations',
+    );
+    return;
+  }
+
+  const meetingsById = getMeetingsMapById();
+  const groups = groupThreadsByRecency(filtered);
+  for (const group of groups) {
+    const groupEl = document.createElement('div');
+    groupEl.className = 'chat-thread-group';
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'chat-thread-group-label';
+    labelEl.textContent = group.label;
+    groupEl.appendChild(labelEl);
+
+    const itemsWrap = document.createElement('div');
+    itemsWrap.className = 'chat-thread-group-items';
+
+    for (const thread of group.threads) {
+      const row = document.createElement('div');
+      row.className = 'chat-thread-item';
+      row.setAttribute('role', 'listitem');
+      if (chatState.activeThread && chatState.activeThread.id === thread.id) {
+        row.classList.add('is-active');
+      }
+
+      if (chatState.editingThreadId === thread.id) {
+        const form = document.createElement('form');
+        form.className = 'chat-thread-rename-form';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'chat-thread-rename-input';
+        input.maxLength = 120;
+        input.value = thread.title || '';
+        input.setAttribute('aria-label', 'Rename chat thread');
+
+        let cancelled = false;
+        let submitted = false;
+        const commitRename = async () => {
+          if (cancelled || submitted) return;
+          const nextTitle = input.value.trim();
+          chatState.editingThreadId = null;
+          if (!nextTitle || nextTitle === thread.title) {
+            renderChatThreadSidebar();
+            return;
+          }
+          submitted = true;
+          try {
+            const res = await window.electronAPI.renameChatThread(thread.id, nextTitle);
+            await refreshChatThreadList({ selectThreadId: res.thread.id });
+          } catch (error) {
+            showAppToast(`Could not rename chat: ${error.message}`, 'error');
+            renderChatThreadSidebar();
+          }
+        };
+
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          void commitRename();
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelled = true;
+            chatState.editingThreadId = null;
+            renderChatThreadSidebar();
+          }
+        });
+        input.addEventListener('blur', () => {
+          void commitRename();
+        });
+
+        form.appendChild(input);
+        row.appendChild(form);
+        itemsWrap.appendChild(row);
+        requestAnimationFrame(() => {
+          input.focus();
+          input.select();
+        });
+        continue;
+      }
+
+      const selectBtn = document.createElement('button');
+      selectBtn.type = 'button';
+      selectBtn.className = 'chat-thread-select-btn';
+      selectBtn.addEventListener('click', () => {
+        void selectChatThread(thread.id);
+      });
+
+      const titleEl = document.createElement('span');
+      titleEl.className = 'chat-thread-item-title';
+      titleEl.textContent = thread.title || 'New chat';
+
+      const scopeEl = document.createElement('span');
+      scopeEl.className = 'chat-thread-item-scope';
+      scopeEl.textContent = formatChatScopeLabel(thread.scope, meetingsById);
+
+      selectBtn.append(titleEl, scopeEl);
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-thread-item-actions';
+
+      const renameBtn = document.createElement('button');
+      renameBtn.type = 'button';
+      renameBtn.className = 'chat-thread-action-btn';
+      renameBtn.title = 'Rename chat';
+      renameBtn.setAttribute('aria-label', `Rename ${thread.title || 'chat'}`);
+      renameBtn.textContent = '✎';
+      renameBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        chatState.editingThreadId = thread.id;
+        renderChatThreadSidebar();
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'chat-thread-action-btn is-danger';
+      delBtn.title = 'Delete chat';
+      delBtn.setAttribute('aria-label', `Delete ${thread.title || 'chat'}`);
+      delBtn.textContent = '✕';
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void deleteChatThreadWithConfirm(thread.id, thread.title);
+      });
+
+      actions.append(renameBtn, delBtn);
+      row.append(selectBtn, actions);
+      itemsWrap.appendChild(row);
+    }
+
+    groupEl.appendChild(itemsWrap);
+    container.appendChild(groupEl);
+  }
+}
+
+function handleChatCitationClick(citation) {
+  if (!citation || !citation.meetingId) {
+    return;
+  }
+  void openMeetingAtTimestamp(citation.meetingId, citation.startSec);
+}
+
+function renderChatStream() {
+  const emptyState = document.getElementById('chat-empty-state');
+  const starterGrid = document.getElementById('chat-starter-prompts');
+  const messagesEl = document.getElementById('chat-messages');
+  const progressBanner = document.getElementById('chat-progress-banner');
+  const progressText = document.getElementById('chat-progress-text');
+  const scrollContainer = document.getElementById('chat-stream-scroll');
+  if (!messagesEl) return;
+
+  clearElement(messagesEl);
+
+  const threadMessages = chatState.activeThread && Array.isArray(chatState.activeThread.messages)
+    ? chatState.activeThread.messages
+    : [];
+  const hasMessages = threadMessages.length > 0 || Boolean(chatState.optimisticQuestion);
+
+  if (emptyState) {
+    emptyState.hidden = hasMessages;
+  }
+
+  if (!hasMessages && starterGrid) {
+    clearElement(starterGrid);
+    const eligible = !chatState.eligibility || chatState.eligibility.eligible !== false;
+    const prompts = buildStarterPrompts(meetings, getCurrentChatScope());
+    for (const promptText of prompts) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chat-starter-btn';
+      btn.textContent = promptText;
+      btn.disabled = !eligible || meetings.length === 0;
+      btn.addEventListener('click', () => {
+        const input = document.getElementById('chat-input');
+        if (!input) return;
+        input.value = promptText;
+        autoResizeChatInput();
+        void sendCurrentChatQuestion();
+      });
+      starterGrid.appendChild(btn);
+    }
+  }
+
+  const renderUserTurn = (text) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-turn-user';
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-user-bubble';
+    bubble.textContent = text;
+    wrap.appendChild(bubble);
+    messagesEl.appendChild(wrap);
+  };
+
+  for (const msg of threadMessages) {
+    if (msg.role === 'user') {
+      renderUserTurn(msg.content);
+      continue;
+    }
+
+    const wrap = document.createElement('article');
+    wrap.className = 'chat-turn-assistant';
+
+    if (msg.status === 'insufficient_evidence') {
+      const callout = document.createElement('div');
+      callout.className = 'chat-insufficient-callout';
+      callout.textContent = msg.content || 'Insufficient grounded evidence in your selected local meeting history.';
+      wrap.appendChild(callout);
+    } else {
+      const prose = document.createElement('div');
+      prose.className = 'chat-markdown';
+      renderGroundedMarkdown(prose, msg.content || '', msg.citations || [], {
+        markedLib: window.marked,
+        domPurifyLib: window.DOMPurify,
+        documentObj: document,
+        onCitationClick: handleChatCitationClick,
+      });
+      wrap.appendChild(prose);
+    }
+
+    const citations = Array.isArray(msg.citations) ? msg.citations : [];
+    if (citations.length > 0) {
+      const details = document.createElement('details');
+      details.className = 'chat-sources-drawer';
+
+      const summary = document.createElement('summary');
+      summary.textContent = `Sources (${citations.length})`;
+      details.appendChild(summary);
+
+      const list = document.createElement('div');
+      list.className = 'chat-sources-list';
+      for (const citation of citations) {
+        const item = document.createElement('div');
+        item.className = 'chat-source-item';
+
+        const head = document.createElement('div');
+        head.className = 'chat-source-item-head';
+
+        const jumpPill = document.createElement('button');
+        jumpPill.type = 'button';
+        jumpPill.className = 'chat-citation-pill';
+        const tsLabel = formatJumpTimestamp(citation.startSec);
+        jumpPill.textContent = tsLabel
+          ? `${citation.meetingTitle || 'Meeting'} · ${tsLabel}`
+          : (citation.meetingTitle || 'Meeting');
+        jumpPill.addEventListener('click', () => handleChatCitationClick(citation));
+        head.appendChild(jumpPill);
+
+        const metaSpan = document.createElement('span');
+        metaSpan.className = 'chat-turn-meta-row';
+        const parts = [];
+        if (citation.speaker) parts.push(citation.speaker);
+        if (citation.meetingDate) parts.push(formatDate(citation.meetingDate));
+        metaSpan.textContent = parts.join(' · ');
+        head.appendChild(metaSpan);
+
+        const excerpt = document.createElement('p');
+        excerpt.className = 'chat-source-excerpt';
+        excerpt.textContent = citation.excerpt || '';
+
+        item.append(head, excerpt);
+        list.appendChild(item);
+      }
+      details.appendChild(list);
+      wrap.appendChild(details);
+    }
+
+    if (Number.isFinite(msg.searchedMeetingCount) && msg.searchedMeetingCount > 0) {
+      const meta = document.createElement('div');
+      meta.className = 'chat-turn-meta-row';
+      meta.textContent = `Searched ${msg.searchedMeetingCount} meeting${msg.searchedMeetingCount === 1 ? '' : 's'} · ${msg.evidenceCount || 0} cited excerpt${(msg.evidenceCount || 0) === 1 ? '' : 's'}`;
+      wrap.appendChild(meta);
+    }
+
+    messagesEl.appendChild(wrap);
+  }
+
+  if (chatState.optimisticQuestion) {
+    renderUserTurn(chatState.optimisticQuestion);
+  }
+
+  if (progressBanner && progressText) {
+    progressBanner.hidden = !chatState.sending;
+    if (chatState.sending) {
+      progressText.textContent = (chatState.progress && chatState.progress.message)
+        || 'Searching local meeting history…';
+    }
+  }
+
+  if (scrollContainer && hasMessages) {
+    requestAnimationFrame(() => {
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    });
+  }
+}
+
+async function refreshChatThreadList({ selectThreadId = null } = {}) {
+  if (!window.electronAPI || typeof window.electronAPI.listChatThreads !== 'function') {
+    return;
+  }
+  const res = await window.electronAPI.listChatThreads();
+  chatState.threads = Array.isArray(res && res.threads) ? res.threads : [];
+
+  const targetId = selectThreadId || (chatState.activeThread && chatState.activeThread.id);
+  if (targetId && chatState.threads.some((t) => t.id === targetId)) {
+    const detail = await window.electronAPI.getChatThread(targetId);
+    chatState.activeThread = detail && detail.thread ? detail.thread : null;
+  } else if (!chatState.activeThread && chatState.threads.length > 0 && selectThreadId === null) {
+    // Wait — when initializing fresh or after deleting, leave activeThread null if creating fresh or pick latest when none chosen.
+  } else if (chatState.activeThread && !chatState.threads.some((t) => t.id === chatState.activeThread.id)) {
+    chatState.activeThread = null;
+  }
+
+  renderChatThreadSidebar();
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+}
+
+async function selectChatThread(threadId) {
+  if (!threadId) {
+    chatState.activeThread = null;
+    renderChatThreadSidebar();
+    renderChatOnboardingAndComposer();
+    renderChatStream();
+    return;
+  }
+  try {
+    const res = await window.electronAPI.getChatThread(threadId);
+    chatState.activeThread = res && res.thread ? res.thread : null;
+    closeChatMobileSidebar();
+    renderChatThreadSidebar();
+    renderChatOnboardingAndComposer();
+    renderChatStream();
+  } catch (error) {
+    showAppToast(`Could not load chat: ${error.message}`, 'error');
+  }
+}
+
+async function startNewChatThread(scope = null) {
+  chatState.activeThread = null;
+  chatState.optimisticQuestion = null;
+  if (scope && typeof scope === 'object') {
+    chatState.pendingScope = {
+      type: scope.type === 'selected_meetings' ? 'selected_meetings' : 'all',
+      meetingIds: Array.isArray(scope.meetingIds) ? [...scope.meetingIds] : [],
+      dateFrom: scope.dateFrom || null,
+      dateTo: scope.dateTo || null,
+    };
+  }
+  closeChatMobileSidebar();
+  renderChatThreadSidebar();
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+  document.getElementById('chat-input')?.focus();
+}
+
+async function deleteChatThreadWithConfirm(threadId, title) {
+  if (!confirm(`Delete "${title || 'New chat'}"? This cannot be undone.`)) {
+    return;
+  }
+  try {
+    await window.electronAPI.deleteChatThread(threadId);
+    if (chatState.activeThread && chatState.activeThread.id === threadId) {
+      chatState.activeThread = null;
+    }
+    await refreshChatThreadList();
+  } catch (error) {
+    showAppToast(`Could not delete chat: ${error.message}`, 'error');
+  }
+}
+
+function renderScopePopover() {
+  const allBtn = document.getElementById('chat-scope-all-btn');
+  const selBtn = document.getElementById('chat-scope-selected-btn');
+  const selPanel = document.getElementById('chat-scope-selected-panel');
+  const listEl = document.getElementById('chat-scope-meetings-list');
+  const fromEl = document.getElementById('chat-scope-date-from');
+  const toEl = document.getElementById('chat-scope-date-to');
+  const draft = chatState.scopeDraft || getCurrentChatScope();
+
+  if (allBtn) allBtn.classList.toggle('is-selected', draft.type !== 'selected_meetings');
+  if (selBtn) selBtn.classList.toggle('is-selected', draft.type === 'selected_meetings');
+  if (selPanel) selPanel.hidden = draft.type !== 'selected_meetings';
+  if (fromEl) fromEl.value = draft.dateFrom ? String(draft.dateFrom).slice(0, 10) : '';
+  if (toEl) toEl.value = draft.dateTo ? String(draft.dateTo).slice(0, 10) : '';
+
+  if (listEl) {
+    clearElement(listEl);
+    const filterTerm = chatState.scopeFilter.trim().toLowerCase();
+    const visible = filterTerm
+      ? meetings.filter((m) => String(m.title || '').toLowerCase().includes(filterTerm))
+      : meetings;
+    if (!visible.length) {
+      setPlaceholder(listEl, 'No meetings match');
+    } else {
+      const selectedSet = new Set(Array.isArray(draft.meetingIds) ? draft.meetingIds.map(String) : []);
+      for (const m of visible) {
+        const label = document.createElement('label');
+        label.className = 'chat-scope-meeting-option';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = selectedSet.has(String(m.id));
+        cb.addEventListener('change', () => {
+          const nextIds = new Set(Array.isArray(chatState.scopeDraft.meetingIds) ? chatState.scopeDraft.meetingIds : []);
+          if (cb.checked) nextIds.add(String(m.id));
+          else nextIds.delete(String(m.id));
+          chatState.scopeDraft.meetingIds = [...nextIds];
+        });
+        const span = document.createElement('span');
+        span.className = 'chat-scope-meeting-title';
+        span.textContent = m.title || 'Untitled Meeting';
+        label.append(cb, span);
+        listEl.appendChild(label);
+      }
+    }
+  }
+}
+
+function toggleChatScopePopover(forceOpen = null) {
+  const popover = document.getElementById('chat-scope-popover');
+  const btn = document.getElementById('chat-scope-btn');
+  if (!popover || !btn) return;
+  const open = forceOpen !== null ? forceOpen : !chatState.popoverOpen;
+  chatState.popoverOpen = open;
+  popover.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+  if (open) {
+    const cur = getCurrentChatScope();
+    chatState.scopeDraft = {
+      type: cur.type === 'selected_meetings' ? 'selected_meetings' : 'all',
+      meetingIds: Array.isArray(cur.meetingIds) ? [...cur.meetingIds] : [],
+      dateFrom: cur.dateFrom || null,
+      dateTo: cur.dateTo || null,
+    };
+    renderScopePopover();
+  }
+}
+
+function closeChatMobileSidebar() {
+  document.getElementById('chat-tab')?.classList.remove('is-sidebar-drawer-open');
+}
+
+async function sendCurrentChatQuestion() {
+  if (chatState.sending) {
+    try {
+      await window.electronAPI.cancelHistoryQa();
+    } catch (_error) {
+      // Ignore cancel errors.
+    }
+    return;
+  }
+
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  const question = input.value.replace(/\s+/g, ' ').trim();
+  if (!question) {
+    return;
+  }
+
+  if (chatState.eligibility && chatState.eligibility.eligible === false) {
+    openSettingsAtAiAddons();
+    return;
+  }
+
+  input.value = '';
+  autoResizeChatInput();
+  chatState.sending = true;
+  chatState.optimisticQuestion = question;
+  chatState.progress = { phase: 'retrieving', message: 'Searching local meeting history…' };
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+
+  try {
+    const res = await window.electronAPI.askHistory({
+      threadId: chatState.activeThread ? chatState.activeThread.id : null,
+      question,
+      scope: getCurrentChatScope(),
+    });
+    chatState.optimisticQuestion = null;
+    if (res && res.thread) {
+      chatState.activeThread = res.thread;
+    }
+    await refreshChatThreadList({ selectThreadId: chatState.activeThread?.id || null });
+  } catch (error) {
+    chatState.optimisticQuestion = null;
+    const isCancelled = error && (error.code === 'HISTORY_QA_CANCELLED' || /stopped|canceled/i.test(error.message || ''));
+    if (isCancelled) {
+      input.value = question;
+      autoResizeChatInput();
+      showAppToast('Response generation stopped.', 'info');
+    } else {
+      showAppToast(error?.message || 'Could not generate local answer.', 'error');
+    }
+    await initChatTab();
+  } finally {
+    chatState.sending = false;
+    chatState.progress = null;
+    renderChatOnboardingAndComposer();
+    renderChatStream();
+    input.focus();
+  }
+}
+
+async function openHistoryMeetingInChat(meetingId) {
+  const targetId = String(meetingId || '').trim();
+  if (!targetId) return;
+  const meeting = meetings.find((m) => String(m.id) === targetId);
+  const scope = { type: 'selected_meetings', meetingIds: [targetId], dateFrom: null, dateTo: null };
+
+  activateTab('chat');
+  await initChatTab();
+
+  // Reuse an empty thread already scoped solely to this meeting if present, else create one.
+  const reusable = chatState.threads.find((t) => (
+    t.messageCount === 0
+    && t.scope?.type === 'selected_meetings'
+    && Array.isArray(t.scope.meetingIds)
+    && t.scope.meetingIds.length === 1
+    && String(t.scope.meetingIds[0]) === targetId
+  ));
+
+  if (reusable) {
+    await selectChatThread(reusable.id);
+  } else if (window.electronAPI && typeof window.electronAPI.createChatThread === 'function') {
+    const title = meeting?.title ? `Ask: ${meeting.title.slice(0, 60)}` : 'New chat';
+    const created = await window.electronAPI.createChatThread({ title, scope });
+    if (created && created.thread) {
+      chatState.activeThread = created.thread;
+      await refreshChatThreadList({ selectThreadId: created.thread.id });
+    }
+  } else {
+    await startNewChatThread(scope);
+  }
+  document.getElementById('chat-input')?.focus();
+}
+
+async function initChatTab() {
+  if (!window.electronAPI || typeof window.electronAPI.getHistoryQaEligibility !== 'function') {
+    return;
+  }
+  try {
+    const [elig, mState] = await Promise.all([
+      window.electronAPI.getHistoryQaEligibility(),
+      window.electronAPI.getHistoryQaModelState(),
+    ]);
+    chatState.eligibility = elig;
+    if (mState) {
+      chatState.modelState = mState;
+    }
+  } catch (error) {
+    console.warn('Could not refresh Chat eligibility/model state:', error);
+  }
+  renderChatModelPill();
+  await refreshChatThreadList({
+    selectThreadId: chatState.activeThread ? chatState.activeThread.id : undefined,
+  });
+}
+
+function setupChatWorkspace() {
+  if (chatState.listenersBound) {
+    return;
+  }
+  chatState.listenersBound = true;
+
+  if (window.electronAPI && typeof window.electronAPI.onHistoryQaModelState === 'function') {
+    registerCleanup(window.electronAPI.onHistoryQaModelState((state) => {
+      if (state) {
+        chatState.modelState = state;
+        renderChatModelPill();
+      }
+    }));
+  }
+
+  if (window.electronAPI && typeof window.electronAPI.onHistoryQaProgress === 'function') {
+    registerCleanup(window.electronAPI.onHistoryQaProgress((progress) => {
+      if (progress) {
+        chatState.progress = progress;
+        const textEl = document.getElementById('chat-progress-text');
+        if (textEl && chatState.sending && progress.message) {
+          textEl.textContent = progress.message;
+        }
+      }
+    }));
+  }
+
+  document.getElementById('chat-new-thread-btn')?.addEventListener('click', () => {
+    void startNewChatThread({ type: 'all', meetingIds: [], dateFrom: null, dateTo: null });
+  });
+
+  document.getElementById('chat-sidebar-toggle')?.addEventListener('click', () => {
+    const tab = document.getElementById('chat-tab');
+    if (!tab) return;
+    if (window.innerWidth <= 900) {
+      tab.classList.remove('is-sidebar-drawer-open');
+    } else {
+      tab.classList.toggle('is-sidebar-collapsed', true);
+    }
+  });
+
+  document.getElementById('chat-sidebar-open-btn')?.addEventListener('click', () => {
+    const tab = document.getElementById('chat-tab');
+    if (!tab) return;
+    if (window.innerWidth <= 900) {
+      tab.classList.toggle('is-sidebar-drawer-open');
+    } else {
+      tab.classList.remove('is-sidebar-collapsed');
+    }
+  });
+
+  document.getElementById('chat-thread-search')?.addEventListener('input', (e) => {
+    chatState.threadFilter = e.target.value || '';
+    renderChatThreadSidebar();
+  });
+
+  document.getElementById('chat-unload-model-btn')?.addEventListener('click', async () => {
+    try {
+      const res = await window.electronAPI.unloadHistoryQaModel();
+      if (res && res.modelState) {
+        chatState.modelState = res.modelState;
+      }
+      renderChatModelPill();
+      showAppToast('Local Q&A model unloaded from memory.', 'success');
+    } catch (error) {
+      showAppToast(`Could not unload model: ${error.message}`, 'error');
+    }
+  });
+
+  document.getElementById('chat-open-ai-settings-btn')?.addEventListener('click', () => {
+    openSettingsAtAiAddons();
+  });
+
+  document.getElementById('ask-meeting-in-chat-btn')?.addEventListener('click', () => {
+    if (currentMeetingId) {
+      void openHistoryMeetingInChat(currentMeetingId);
+    }
+  });
+
+  const chatInput = document.getElementById('chat-input');
+  if (chatInput) {
+    chatInput.addEventListener('input', autoResizeChatInput);
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+        e.preventDefault();
+        void sendCurrentChatQuestion();
+      }
+    });
+  }
+
+  document.getElementById('chat-send-btn')?.addEventListener('click', () => {
+    void sendCurrentChatQuestion();
+  });
+
+  document.getElementById('chat-scope-btn')?.addEventListener('click', () => {
+    toggleChatScopePopover();
+  });
+
+  document.getElementById('chat-scope-all-btn')?.addEventListener('click', () => {
+    if (!chatState.scopeDraft) return;
+    chatState.scopeDraft.type = 'all';
+    chatState.scopeDraft.meetingIds = [];
+    renderScopePopover();
+  });
+
+  document.getElementById('chat-scope-selected-btn')?.addEventListener('click', () => {
+    if (!chatState.scopeDraft) return;
+    chatState.scopeDraft.type = 'selected_meetings';
+    renderScopePopover();
+  });
+
+  document.getElementById('chat-scope-meeting-filter')?.addEventListener('input', (e) => {
+    chatState.scopeFilter = e.target.value || '';
+    renderScopePopover();
+  });
+
+  document.getElementById('chat-scope-clear-btn')?.addEventListener('click', () => {
+    chatState.scopeDraft = { type: 'all', meetingIds: [], dateFrom: null, dateTo: null };
+    chatState.scopeFilter = '';
+    const filterEl = document.getElementById('chat-scope-meeting-filter');
+    if (filterEl) filterEl.value = '';
+    renderScopePopover();
+  });
+
+  document.getElementById('chat-scope-apply-btn')?.addEventListener('click', async () => {
+    const fromVal = document.getElementById('chat-scope-date-from')?.value || null;
+    const toVal = document.getElementById('chat-scope-date-to')?.value || null;
+    const nextScope = {
+      type: chatState.scopeDraft?.type === 'selected_meetings' ? 'selected_meetings' : 'all',
+      meetingIds: Array.isArray(chatState.scopeDraft?.meetingIds) ? [...chatState.scopeDraft.meetingIds] : [],
+      dateFrom: fromVal || null,
+      dateTo: toVal || null,
+    };
+    if (chatState.activeThread && window.electronAPI?.updateChatThreadScope) {
+      try {
+        const res = await window.electronAPI.updateChatThreadScope(chatState.activeThread.id, nextScope);
+        if (res && res.thread) {
+          chatState.activeThread = res.thread;
+        }
+        await refreshChatThreadList({ selectThreadId: chatState.activeThread?.id || null });
+      } catch (error) {
+        showAppToast(`Could not update scope: ${error.message}`, 'error');
+      }
+    } else {
+      chatState.pendingScope = nextScope;
+      renderChatOnboardingAndComposer();
+      renderChatStream();
+    }
+    toggleChatScopePopover(false);
+  });
+
+  document.addEventListener('pointerdown', (e) => {
+    if (!chatState.popoverOpen) return;
+    const popover = document.getElementById('chat-scope-popover');
+    const btn = document.getElementById('chat-scope-btn');
+    if (popover?.contains(e.target) || btn?.contains(e.target)) {
+      return;
+    }
+    toggleChatScopePopover(false);
+  });
+}
+
+setupChatWorkspace();
