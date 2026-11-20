@@ -1,7 +1,7 @@
 # AvaNevis v3.0.0 qualification record
 
 Working branch: `release/3.0`  
-Last updated: 2026-11-20 (CachyOS Linux x86_64 orchestrator pass; Windows and macOS native qualification pending on target hosts)
+Last updated: 2026-11-20 (CachyOS and partial macOS native qualification; Windows and remaining macOS gates open)
 
 ## Dependency & Upstream Decisions (Checked 2026-11-20)
 
@@ -81,7 +81,26 @@ This pass supersedes the older Linux artifact hashes above. Host: CachyOS x86_64
 - **History Q&A:** The packaged service and Python backend, using a disposable synthetic meeting plus copied, hash-checked installed Qwen/runtime assets, returned an FTS5 hit at 133 seconds. A zero-hit query loaded no model; a grounded query lazily started `llama-server`, returned `answered` with a verified `[E1]` citation at 133 seconds, and manual unload stopped the server. `nvidia-smi` observed the server using 6,234 MiB of GPU memory in the same service smoke. A missing managed CUDA library rejected Q&A before a server spawn. Separately, deleting the synthetic meeting removed its search hit. Citation playback and renderer interaction remain untested in this pass.
 - **Recorder:** The integrated Linux recorder harness simulates a vanished monitor and confirms a warning, continued mic frames and retained committed desktop frames. A real PipeWire sink switch was not performed.
 
-## Open Windows & macOS Qualification Gates (Cannot Run on Linux)
+## macOS Apple Silicon partial qualification at `90845d1` — 2026-11-20
+
+Host: MacBook Pro, Apple M4 Pro, 48 GB, macOS 26.7.3 arm64; Node 26.13.1, npm 11.20.0, repo venv CPython 3.11.18. Source HEAD was `90845d12f62ffceec541a93cf75f0a57efab46d9`; this record is a subsequent documentation change. The existing `dist/` was preserved outside the repository before the build. No everyday app profile or recordings were modified.
+
+- `npm ci` and `npm run test:all` exited 0: JS **1,243 tests, 1,240 passed, 3 skipped**; Python **907 passed, 10 skipped**; JS and Python syntax checks passed. `npm ci` full audit and `npm audit --omit=dev` reported 0 vulnerabilities; `pip_audit_inventory.py requirements-macos-build.txt` reported 0 findings. macOS build requirements closure and `scripts/agents/validate_setup.py` passed.
+- `npm run build:mac`, `npm run verify:mac:packaged`, `npm run verify:mac:installer`, and `node scripts/verify-speakrs-packaging.js --packaged` exited 0. The build used **ad-hoc signing**; no valid signing identity was found, and notarization was not performed. The DMG was mounted and its payload verified read-only. `latest-mac.yml` sizes and SHA-512 values matched both artifacts. This is not Gatekeeper/notarization or live updater acceptance.
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `AvaNevis-Setup-2.12.0.dmg` | 1,010,067,983 | `9e756dcb642a2d11860661fac8c81da6c036b0d61ed8c51a1aa1bf8a693bab42` |
+| `AvaNevis-Setup-2.12.0.zip` | 975,113,081 | `2014021fca5a20046a89e2d96e7a49e01819902921a78abc8669888788bb768f` |
+| `latest-mac.yml` | 505 | `063c9d0ab2880eec7ed0f4c53895ccf3a0c8c448119fcf4f887fed0512f62932` |
+
+- With copied local assets in scratch space, packaged CPython transcribed a 25.75-second six-turn macOS `say` synthetic fixture (SHA-256 `eb05d198566339a1e5107da05d55eedb8c3ab4bb206c2cbba4af53c2e2d01321`) offline using MLX Whisper small on Metal/float16. The generated caption sidecar matched the transcript hash; the serializer extracted from the packaged app produced SRT and WebVTT. This MLX run produced one segment-level cue; playback and renderer export were not exercised.
+- The packaged Speakrs CLI on CoreML separated the six alternating synthetic voice turns into two labels in the expected order. The old copied model pack initially failed because it lacked new 0.7 assets; 47 existing and 20 fetched files were verified against all 67 current pins in scratch before the successful run. This was direct asset provisioning, not an app-driven repair test, and synthetic speech is not natural-speech quality qualification. The separate repository fixture returned one label.
+- Packaged Python's `-S -P` Parakeet bootstrap, using copied model and local runtime `99d3a35c…` in scratch, transcribed the synthetic fixture offline on Metal/float32 and emitted word-timed captions. This direct run does not establish current managed-runtime admission, setup, or repair.
+- Packaged Python History FTS5 indexed the synthetic meeting, returned the `budget` hit with timestamp, and removed the hit after its disposable metadata was removed. This did not exercise the renderer, citation playback, or Q&A model service.
+- **Still open:** macOS 15, isolated Keychain migration, actual microphone and desktop capture/permission variants and recovery, renderer-driven recording/export/search/chat and citation playback, Pyannote MPS, Qwen Metal, app-driven add-on lifecycle, natural-speech speaker quality, signed and notarized builds/Gatekeeper, and a live signed Squirrel.Mac update. These are not inferred from unit tests or the partial smokes above.
+
+## Open Windows & macOS Qualification Gates
 
 1. **Windows 10/11 x64:**
    - Run `npm run test:all` and `python scripts/check-build-requirements-closure.py windows`.
