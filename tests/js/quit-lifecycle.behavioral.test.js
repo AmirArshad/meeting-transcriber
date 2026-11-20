@@ -210,6 +210,45 @@ test('resolveBeforeQuitAction: armed AI pass force-quits instead of re-draining'
   );
 });
 
+test('resolveBeforeQuitAction: pendingUpdateInstall never bypasses recording intercept or un-armed AI drain', () => {
+  assert.deepEqual(
+    resolveBeforeQuitAction({
+      immediateQuitArmed: true,
+      interceptQuit: true,
+      hasInFlightAiWork: false,
+      pendingUpdateInstall: true,
+    }),
+    { action: 'intercept_recording' },
+  );
+  assert.deepEqual(
+    resolveBeforeQuitAction({
+      immediateQuitArmed: false,
+      interceptQuit: true,
+      hasInFlightAiWork: true,
+      pendingUpdateInstall: true,
+    }),
+    { action: 'intercept_recording' },
+  );
+  assert.deepEqual(
+    resolveBeforeQuitAction({
+      immediateQuitArmed: false,
+      interceptQuit: false,
+      hasInFlightAiWork: true,
+      pendingUpdateInstall: true,
+    }),
+    { action: 'drain_ai' },
+  );
+  assert.deepEqual(
+    resolveBeforeQuitAction({
+      immediateQuitArmed: true,
+      interceptQuit: false,
+      hasInFlightAiWork: true,
+      pendingUpdateInstall: true,
+    }),
+    { action: 'force_quit' },
+  );
+});
+
 test('shouldKillProcessOnQuit spares the protected metadata process', () => {
   const protectedProc = { killed: false };
   const otherProc = { killed: false };

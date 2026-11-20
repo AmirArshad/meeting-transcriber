@@ -80,7 +80,7 @@ const {
   formatQueuedTranscriptionBusyMessage,
 } = require('./main-process-helpers');
 const { signalProcessTree, signalOwnedProcessGroup } = require('./main-process/quit-lifecycle-helpers');
-const { checkForUpdates, openDownloadPage } = require('./updater');
+const { createUpdaterService } = require('./main/updater-service');
 const {
   checkAiAddonSetupStatus,
   getSummaryArtifactPath,
@@ -174,7 +174,7 @@ let aiQuitDrainPromise = null;
 let allowImmediateQuit = false;
 /** Once a quit drain begins, reject new recording/summary work until quit completes or is canceled. */
 let quitCommitted = false;
-let pendingUpdateInfo = null;
+let pendingUpdateInstall = false;
 // Assigned at composition root after services are constructed.
 let aiAddonIpc = null;
 let gpuRuntimeService = null;
@@ -183,6 +183,7 @@ let historyQaService = null;
 let transcriptionService = null;
 let recorderService = null;
 let recordingPresenceService = null;
+let updaterService = null;
 let appStartupComplete = false;
 let revealWindowWhenReady = false;
 
@@ -535,11 +536,6 @@ async function drainAiWorkBeforeQuit() {
       );
     }
   }
-}
-
-function sendUpdateAvailable(updateInfo) {
-  pendingUpdateInfo = updateInfo;
-  sendToRenderer('update-available', updateInfo);
 }
 
 function openTrustedExternalUrl(url) {
@@ -1012,6 +1008,32 @@ recordingPresenceService = createRecordingPresenceService({
   toggleMainWindow,
   quitApp: () => app.quit(),
 });
+
+updaterService = createUpdaterService({
+  app,
+  platform: process.platform,
+  env: process.env,
+  userDataPath: app.getPath('userData'),
+  fs,
+  sendToRenderer,
+  getQuitInterceptState,
+  getRecorderQuitInputs: () => (
+    recorderService
+      ? recorderService.getQuitInterceptInputs()
+      : { hasRecordingProcess: false, recordingStartTime: null, stopInProgress: false }
+  ),
+  hasActiveAudioImport: () => Boolean(audioImportService && audioImportService.hasActive()),
+  hasProtectedSummaryWrite: () => Boolean(summaryService && summaryService.getActiveSummaryPhase() === 'metadata'),
+  hasInFlightAiWork,
+  drainAiWorkBeforeQuit,
+  armUpdateQuit: () => {
+    pendingUpdateInstall = true;
+    allowImmediateQuit = true;
+    isQuitting = true;
+    markQuitCommitted();
+  },
+});
+updaterService.registerIpcHandlers(ipcMain, assertTrustedRendererSender);
 
 function getBackendModuleArgs(moduleName, extraArgs = []) {
   return buildPythonModuleArgs(moduleName, extraArgs);
@@ -1515,18 +1537,10 @@ function createApplicationMenu() {
       submenu: [
         {
           label: 'Check for Updates...',
-          click: async () => {
-            const updateInfo = await checkForUpdates();
-            if (updateInfo && mainWindow) {
-              sendUpdateAvailable(updateInfo);
-            } else if (mainWindow) {
-              dialog.showMessageBox(mainWindow, {
-                type: 'info',
-                title: 'No Updates Available',
-                message: 'You\'re up to date!',
-                detail: `AvaNevis v${app.getVersion()} is the latest version.`,
-                buttons: ['OK']
-              });
+          click: () => {
+            showMainWindow();
+            if (updaterService) {
+              void updaterService.checkForUpdates({ manual: true });
             }
           }
         },
@@ -1723,13 +1737,10 @@ app.whenReady().then(async () => {
   // Whisper model download is renderer-driven via download-model IPC (with
   // compute-queue idle wait) so FTUE gets progress feedback without VRAM contention.
 
-  // Check for updates after app loads (5 second delay to not slow startup)
-  setTimeout(async () => {
-    const updateInfo = await checkForUpdates();
-    if (updateInfo && mainWindow) {
-      sendUpdateAvailable(updateInfo);
-    }
-  }, 5000);
+  // Start periodic update checks after app loads (5 second startup delay).
+  if (updaterService) {
+    updaterService.startPeriodicChecks();
+  }
 
   app.on('activate', () => {
     showMainWindow();
@@ -1760,6 +1771,7 @@ app.on('before-quit', (event) => {
     immediateQuitArmed,
     interceptQuit: Boolean(quitState.interceptQuit),
     hasInFlightAiWork: hasInFlightAiWork(),
+    pendingUpdateInstall,
   });
 
   // Armed pass: re-check recording only (new recording during drain needs graceful
@@ -1821,6 +1833,10 @@ app.on('before-quit', (event) => {
 
       pythonRuntime.drainActiveProcesses();
 
+      if (updaterService) {
+        updaterService.dispose();
+      }
+
       // Clean up tray / presence
       if (recordingPresenceService) {
         recordingPresenceService.destroy();
@@ -1833,6 +1849,12 @@ app.on('before-quit', (event) => {
   });
 });
 
+app.on('will-quit', () => {
+  if (updaterService) {
+    updaterService.dispose();
+  }
+});
+
 // ============================================================================
 // IPC Handlers - Communication between UI and Python backend
 // ============================================================================
@@ -1842,7 +1864,9 @@ app.on('before-quit', (event) => {
 // registered by registerDeviceIpc above. run-recording-preflight is registered
 // by createRecorderService.
 
-ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
+// Updater IPC handlers (get-update-state, check-for-updates, download-update,
+// cancel-update-download, install-update-now, set-auto-download-updates,
+// open-update-release-page) are registered by createUpdaterService above.
 
 function getRecordingsDir() {
   return path.join(app.getPath('userData'), 'recordings');
@@ -2086,19 +2110,6 @@ ipcMain.handle('get-system-info', async () => {
 // open-legal-notices is registered by registerFileExportIpc above.
 // check-gpu / check-cuda / install-gpu / ensure-compatible-gpu-runtime /
 // uninstall-gpu are registered by createGpuRuntimeService above.
-
-/**
- * Open update download page in browser
- */
-ipcMain.handle('download-update', async (event) => {
-  assertTrustedRendererSender(event);
-
-  if (!pendingUpdateInfo || !pendingUpdateInfo.downloadUrl) {
-    throw new Error('No pending update is available to download.');
-  }
-
-  await openDownloadPage(pendingUpdateInfo.downloadUrl);
-  return { success: true };
-});
+// Updater IPC handlers are registered by createUpdaterService above.
 
 console.log('AvaNevis - Main process started');

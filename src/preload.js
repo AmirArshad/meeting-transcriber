@@ -158,8 +158,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   buildFileUrl,
 
   // Updates
+  getUpdateState: () => ipcRenderer.invoke('get-update-state'),
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
-  getPendingUpdateInfo: () => ipcRenderer.invoke('get-pending-update-info'),
+  cancelUpdateDownload: () => ipcRenderer.invoke('cancel-update-download'),
+  installUpdateNow: (options = {}) => ipcRenderer.invoke('install-update-now', options),
+  setAutoDownloadUpdates: (enabled) => ipcRenderer.invoke('set-auto-download-updates', enabled),
+  openUpdateReleasePage: () => ipcRenderer.invoke('open-update-release-page'),
 
   // Local AI add-ons
   getAiAddonStatus: (options) => ipcRenderer.invoke('get-ai-addon-status', options),
@@ -194,5 +199,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onRecordingWarning: (callback) => addListener('recording-warning', callback),
   onRecordingFailed: (callback) => addListener('recording-failed', callback),
   onRecordingRecoveryStateChanged: (callback) => addListener('recording-recovery-state-changed', callback),
-  onUpdateAvailable: (callback) => addListener('update-available', callback),
+  onUpdateStateChanged: (callback) => addListener('update-state-changed', callback),
 });

@@ -41,6 +41,7 @@
   "dependencies": {
     "adm-zip": "0.6.1",
     "dompurify": "3.4.18",
+    "electron-updater": "6.8.11",
     "marked": "18.2.1"
   },
   "devDependencies": {
@@ -64,6 +65,14 @@
   "build": {
     "appId": "com.avanevis.app",
     "productName": "AvaNevis",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "AmirArshad",
+        "repo": "meeting-transcriber",
+        "releaseType": "release"
+      }
+    ],
     "afterPack": "build/after-pack.js",
     "win": {
       "target": [
@@ -171,6 +180,12 @@
       "target": [
         {
           "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "arm64"
           ]

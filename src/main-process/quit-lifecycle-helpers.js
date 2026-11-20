@@ -18,29 +18,32 @@
  * - Drain in-flight AI once, then arm for a final quit pass.
  * - Otherwise force-quit immediately.
  *
- * @param {{ immediateQuitArmed: boolean, interceptQuit: boolean, hasInFlightAiWork: boolean }} input
+ * @param {{ immediateQuitArmed?: boolean, interceptQuit?: boolean, hasInFlightAiWork?: boolean, pendingUpdateInstall?: boolean }} input
  * @returns {{ action: 'intercept_recording' | 'drain_ai' | 'force_quit' }}
  */
 function resolveBeforeQuitAction({
   immediateQuitArmed = false,
   interceptQuit = false,
   hasInFlightAiWork = false,
+  pendingUpdateInstall = false,
 } = {}) {
-  if (immediateQuitArmed) {
-    if (interceptQuit) {
-      return { action: 'intercept_recording' };
-    }
-    return { action: 'force_quit' };
-  }
-
+  // Active recording interception always takes precedence, even during an armed
+  // pass or a pending update install.
   if (interceptQuit) {
     return { action: 'intercept_recording' };
+  }
+
+  if (immediateQuitArmed) {
+    return { action: 'force_quit' };
   }
 
   if (hasInFlightAiWork) {
     return { action: 'drain_ai' };
   }
 
+  // pendingUpdateInstall never bypasses recording interception or AI drain
+  // when immediateQuitArmed is false; once armed (or idle), proceed to force_quit.
+  void pendingUpdateInstall;
   return { action: 'force_quit' };
 }
 

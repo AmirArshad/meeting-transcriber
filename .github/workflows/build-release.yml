@@ -58,13 +58,21 @@ jobs:
             runner: windows-latest
             rust-target: x86_64-pc-windows-msvc
             build-script: npm run build
-            artifact-path: "dist/AvaNevis-Setup-*.exe"
+            artifact-path: |
+              dist/AvaNevis-Setup-*.exe
+              dist/AvaNevis-Setup-*.exe.blockmap
+              dist/latest.yml
             artifact-name: avanevis-installer-windows
           - os: macOS
             runner: macos-15 # Apple Silicon
             rust-target: aarch64-apple-darwin
             build-script: npm run build:mac
-            artifact-path: "dist/AvaNevis-Setup-*.dmg"
+            artifact-path: |
+              dist/AvaNevis-Setup-*.dmg
+              dist/AvaNevis-Setup-*.dmg.blockmap
+              dist/AvaNevis-Setup-*.zip
+              dist/AvaNevis-Setup-*.zip.blockmap
+              dist/latest-mac.yml
             artifact-name: avanevis-installer-macos
           - os: Linux
             runner: ubuntu-24.04 # AppImage 1.0.2 is incompatible with Ubuntu 26.04 host libraries
@@ -74,6 +82,7 @@ jobs:
               dist/AvaNevis-Setup-*.AppImage
               dist/AvaNevis-Setup-*.pkg.tar.zst
               dist/AvaNevis-Setup-*.deb
+              dist/latest-linux.yml
             artifact-name: avanevis-installer-linux
 
     steps:
@@ -356,7 +365,26 @@ jobs:
           linux_appimage="release-artifacts/avanevis-installer-linux/${installer}.AppImage"
           linux_pacman="release-artifacts/avanevis-installer-linux/${installer}.pkg.tar.zst"
           linux_deb="release-artifacts/avanevis-installer-linux/${installer}.deb"
-          for asset in "$windows_asset" "$macos_asset" "$linux_appimage" "$linux_pacman" "$linux_deb"; do
+          windows_blockmap="release-artifacts/avanevis-installer-windows/${installer}.exe.blockmap"
+          windows_latest="release-artifacts/avanevis-installer-windows/latest.yml"
+          macos_dmg_blockmap="release-artifacts/avanevis-installer-macos/${installer}.dmg.blockmap"
+          macos_zip="release-artifacts/avanevis-installer-macos/${installer}.zip"
+          macos_zip_blockmap="release-artifacts/avanevis-installer-macos/${installer}.zip.blockmap"
+          macos_latest="release-artifacts/avanevis-installer-macos/latest-mac.yml"
+          linux_latest="release-artifacts/avanevis-installer-linux/latest-linux.yml"
+          for asset in \
+            "$windows_asset" \
+            "$macos_asset" \
+            "$linux_appimage" \
+            "$linux_pacman" \
+            "$linux_deb" \
+            "$windows_blockmap" \
+            "$windows_latest" \
+            "$macos_dmg_blockmap" \
+            "$macos_zip" \
+            "$macos_zip_blockmap" \
+            "$macos_latest" \
+            "$linux_latest"; do
             if [ ! -s "$asset" ]; then
               echo "Missing or empty release asset: $asset"
               exit 1
@@ -369,6 +397,13 @@ jobs:
           cp "$linux_appimage" release-upload/
           cp "$linux_pacman" release-upload/
           cp "$linux_deb" release-upload/
+          cp "$windows_blockmap" release-upload/
+          cp "$windows_latest" release-upload/
+          cp "$macos_dmg_blockmap" release-upload/
+          cp "$macos_zip" release-upload/
+          cp "$macos_zip_blockmap" release-upload/
+          cp "$macos_latest" release-upload/
+          cp "$linux_latest" release-upload/
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "windows_name=$(basename "$windows_asset")" >> $GITHUB_OUTPUT

@@ -34,6 +34,7 @@ Not inferable from the tree, and the highest-risk surface in the repo. Renaming 
 | `file-export-ipc.js` | `save-transcript-file`, `save-speaker-segments-file`, `save-transcript-as`, `open-legal-notices` |
 | `gpu-runtime-service.js` | `check-gpu`, `check-cuda`, `install-gpu`, `ensure-compatible-gpu-runtime`, `uninstall-gpu` |
 | `ai-addon-ipc.js` | AI add-on status, diarization token, diarization/summary setup/cancel/validate/remove |
+| `updater-service.js` | `get-update-state`, `check-for-updates`, `download-update`, `cancel-update-download`, `install-update-now`, `set-auto-download-updates`, `open-update-release-page`, plus `update-state-changed` (event) |
 | `ai-compute-queue.js` | none (no IPC) — owns the compute queue itself |
 | `recording-presence-service.js` | none — tray/Dock/taskbar presentation only |
 
@@ -60,6 +61,10 @@ legacy/unconfirmed output. Channel names and preload export shape are unchanged.
 ### Local History search & threaded Chat
 
 `history-search-service.js` owns the disposable SQLite FTS5 cache (`userData/search/history-index.sqlite`) and exposes `search-history` (debounced renderer search returning BM25-ranked meetings with highlighted `snippetParts` and `[MM:SS]` timestamp jump coordinates), `rebuild-history-index`, and `get-history-index-status`. `history-qa-service.js` owns `userData/chat/threads.json` (`chat-thread-store.js`) and exposes `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, plus renderer push listeners `onHistoryQaModelState` (`history-qa-model-state`) and `onHistoryQaProgress` (`history-qa-progress`). The renderer renders Chat responses exclusively via bundled offline `marked` + strict-allowlist `DOMPurify` (`src/renderer/markdown-render-helpers.js`) and never sends bearer tokens, ports, or arbitrary file paths over IPC.
+
+### In-app auto-updater
+
+`updater-service.js` owns `electron-updater` lifecycle (`in-app` mode on packaged Windows NSIS, macOS `.zip`, and Linux AppImage), Linux `pacman`/`.deb` `manual-package` fallback (via `src/updater.js` release detection + strict filename-validated install command), and `userData/updater-preferences.json` (`autoDownload: false` by default). Every `update-state-changed` push and state snapshot carries a monotonically increasing `seq`. The renderer never passes feed URLs, versions, or paths over IPC, and renders release notes strictly through `markdown-render-helpers.js` (`STRICT_DOMPURIFY_CONFIG`). `install-update-now` rejects active recording (`UPDATE_BLOCKED_RECORDING`), active audio import (`UPDATE_BLOCKED_IMPORT_SAVE`), and summary `metadata` commits (`UPDATE_BLOCKED_SUMMARY_FINALIZING`), and prompts confirmation (`UPDATE_CONFIRM_AI_INTERRUPT`) before draining active local AI work and calling `quitAndInstall(false, true)`.
 
 ### Facades whose export shape is pinned
 

@@ -78,9 +78,10 @@ const {
   parseTimestampStringToSeconds,
 } = window.historySearchHelpers;
 const {
-  hideUpdateNotificationBanner,
-  replayPendingUpdateNotification,
-  showUpdateNotificationBanner,
+  buildUpdateViewModel,
+  renderSafeReleaseNotes,
+  shouldAcceptUpdateState,
+  shouldAutoSurfaceUpdatePopover,
 } = window.updateNotificationHelpers;
 const {
   formatAiAddonProgressText,
@@ -3574,16 +3575,7 @@ function setupEventListeners() {
     setRecordingState('idle');
   }));
 
-  registerCleanup(window.electronAPI.onUpdateAvailable((updateInfo) => {
-    showUpdateNotification(updateInfo);
-  }));
-
-  if (typeof window.electronAPI.getPendingUpdateInfo === 'function') {
-    replayPendingUpdateNotification({
-      getPendingUpdateInfo: window.electronAPI.getPendingUpdateInfo,
-      showUpdateNotification,
-    }).catch((error) => console.warn('Could not replay pending update notification:', error));
-  }
+  initUpdateUi();
 
   // Check if user has recorded before (for timeout settings)
   const settings = loadSettings();
@@ -3637,6 +3629,9 @@ function setRecordingState(state) {
   updateButtonUI();
   updateControlsState();
   updateRecordingPresenceUI();
+  if (typeof renderUpdateUi === 'function') {
+    renderUpdateUi();
+  }
 
   // Capture returned to idle: re-query so a deferred once-per-launch prompt can claim.
   if (shouldRequeryRecoveryAfterCaptureIdle(previousState, state)) {
@@ -7342,6 +7337,10 @@ async function initSettingsTabOnce() {
   setupAiAddonSettingsListeners();
   await refreshAiAddonSettings();
 
+  if (typeof renderUpdateUi === 'function') {
+    renderUpdateUi();
+  }
+
   const openLegalNoticesBtn = document.getElementById('open-legal-notices-btn');
   if (openLegalNoticesBtn) {
     openLegalNoticesBtn.addEventListener('click', async () => {
@@ -7891,46 +7890,582 @@ function appendGPULog(text) {
 }
 
 // ============================================================================
-// Update Notification
+// Phase 3: Non-Intrusive In-App Auto-Updater UX
 // ============================================================================
 
-let currentUpdateInfo = null;
+let updateUiState = null;
+let updateStateSeq = -1;
+let updatePopoverOpen = false;
+let dismissedUpdateVersion = null;
+let updateAiConfirmPending = false;
+let lastRenderedReleaseNotesKey = null;
+let lastAnnouncedUpdateStatus = null;
+let updateManualCopyTimer = null;
+let updateUiWired = false;
 
-function showUpdateNotification(updateInfo) {
-  currentUpdateInfo = showUpdateNotificationBanner({
-    banner: document.getElementById('update-banner'),
-    title: document.getElementById('update-title'),
-    description: document.getElementById('update-description'),
-    downloadBtn: document.getElementById('download-update'),
-    dismissBtn: document.getElementById('dismiss-update'),
-    updateInfo,
-    onDownload: handleDownloadUpdate,
-    onDismiss: handleDismissUpdate,
-    addLog,
-  });
+function isRecordingActiveForUpdate() {
+  return recordingState !== 'idle' && recordingState !== 'transcribing';
 }
 
-async function handleDownloadUpdate() {
-  if (!currentUpdateInfo) return;
+function initUpdateUi() {
+  if (!updateUiWired) {
+    updateUiWired = true;
 
-  try {
-    addLog('Opening download page...');
-    await window.electronAPI.downloadUpdate();
-    addLog('Download started in your browser. Install when ready!');
+    const railBtn = document.getElementById('rail-update-btn');
+    const popoverCloseBtn = document.getElementById('update-popover-close');
+    const popoverPrimaryBtn = document.getElementById('update-popover-primary-btn');
+    const popoverSecondaryBtn = document.getElementById('update-popover-secondary-btn');
+    const popoverTertiaryBtn = document.getElementById('update-popover-tertiary-btn');
+    const aiConfirmRestartBtn = document.getElementById('update-ai-confirm-restart');
+    const aiConfirmWaitBtn = document.getElementById('update-ai-confirm-wait');
+    const manualCopyBtn = document.getElementById('update-popover-manual-copy');
+    const settingsPrimaryBtn = document.getElementById('update-settings-primary-btn');
+    const settingsGithubBtn = document.getElementById('update-settings-github-btn');
+    const autoDownloadToggle = document.getElementById('auto-download-updates-toggle');
 
-    // Keep banner visible so user remembers to install
-  } catch (error) {
-    console.error('Failed to open download:', error);
-    addLog('Failed to open download page', 'error');
+    if (railBtn) {
+      railBtn.addEventListener('click', () => {
+        if (updatePopoverOpen) {
+          closeUpdatePopover({ returnFocus: false });
+        } else {
+          openUpdatePopover({ focus: true });
+        }
+      });
+    }
+
+    if (popoverCloseBtn) {
+      popoverCloseBtn.addEventListener('click', () => {
+        closeUpdatePopover({ returnFocus: true });
+      });
+    }
+
+    if (popoverPrimaryBtn) {
+      popoverPrimaryBtn.addEventListener('click', () => {
+        void handleUpdateAction(popoverPrimaryBtn.dataset.action || '');
+      });
+    }
+
+    if (popoverSecondaryBtn) {
+      popoverSecondaryBtn.addEventListener('click', () => {
+        void handleUpdateAction(popoverSecondaryBtn.dataset.action || '');
+      });
+    }
+
+    if (popoverTertiaryBtn) {
+      popoverTertiaryBtn.addEventListener('click', () => {
+        void handleUpdateAction(popoverTertiaryBtn.dataset.action || '');
+      });
+    }
+
+    if (aiConfirmRestartBtn) {
+      aiConfirmRestartBtn.addEventListener('click', () => {
+        void handleInstallUpdateNow({ confirmAiInterrupt: true });
+      });
+    }
+
+    if (aiConfirmWaitBtn) {
+      aiConfirmWaitBtn.addEventListener('click', () => {
+        updateAiConfirmPending = false;
+        renderUpdateUi();
+      });
+    }
+
+    if (manualCopyBtn) {
+      manualCopyBtn.addEventListener('click', () => {
+        void handleCopyManualInstallCommand();
+      });
+    }
+
+    if (settingsPrimaryBtn) {
+      settingsPrimaryBtn.addEventListener('click', () => {
+        void handleUpdateAction(settingsPrimaryBtn.dataset.action || '');
+      });
+    }
+
+    if (settingsGithubBtn) {
+      settingsGithubBtn.addEventListener('click', () => {
+        void handleUpdateAction('github');
+      });
+    }
+
+    if (autoDownloadToggle) {
+      autoDownloadToggle.addEventListener('change', (event) => {
+        void handleAutoDownloadToggleChange(event);
+      });
+    }
+
+    const handleGlobalKeydown = (event) => {
+      if (event.key === 'Escape' && updatePopoverOpen) {
+        event.preventDefault();
+        closeUpdatePopover({ returnFocus: true });
+      }
+    };
+    document.addEventListener('keydown', handleGlobalKeydown);
+    registerCleanup(() => document.removeEventListener('keydown', handleGlobalKeydown));
+
+    const handleGlobalPointerDown = (event) => {
+      if (!updatePopoverOpen) {
+        return;
+      }
+      const popover = document.getElementById('update-popover');
+      const railButton = document.getElementById('rail-update-btn');
+      if (popover && popover.contains(event.target)) {
+        return;
+      }
+      if (railButton && railButton.contains(event.target)) {
+        return;
+      }
+      closeUpdatePopover({ returnFocus: false });
+    };
+    document.addEventListener('mousedown', handleGlobalPointerDown);
+    registerCleanup(() => document.removeEventListener('mousedown', handleGlobalPointerDown));
+  }
+
+  if (typeof window.electronAPI?.onUpdateStateChanged === 'function') {
+    registerCleanup(window.electronAPI.onUpdateStateChanged((nextState) => {
+      applyIncomingUpdateState(nextState, { isHydration: false });
+    }));
+  }
+
+  if (typeof window.electronAPI?.getUpdateState === 'function') {
+    window.electronAPI.getUpdateState()
+      .then((initialState) => {
+        applyIncomingUpdateState(initialState, { isHydration: true });
+      })
+      .catch((error) => {
+        console.warn('Could not hydrate update state:', error);
+      });
+  }
+
+  renderUpdateUi();
+}
+
+function applyIncomingUpdateState(nextState, { isHydration = false } = {}) {
+  if (!shouldAcceptUpdateState(updateStateSeq, nextState)) {
+    return;
+  }
+
+  const prevState = updateUiState;
+  updateStateSeq = Number(nextState.seq);
+  updateUiState = nextState;
+
+  if (nextState.status !== 'ready-to-install') {
+    updateAiConfirmPending = false;
+  }
+
+  if (!isHydration && nextState.status === 'ready-to-install') {
+    dismissedUpdateVersion = null;
+  }
+
+  if (
+    !isHydration
+    && shouldAutoSurfaceUpdatePopover(prevState, nextState, {
+      isRecordingActive: isRecordingActiveForUpdate(),
+      dismissedVersion: dismissedUpdateVersion,
+    })
+  ) {
+    openUpdatePopover({ focus: false });
+  }
+
+  renderUpdateUi();
+}
+
+function openUpdatePopover({ focus = true } = {}) {
+  const popover = document.getElementById('update-popover');
+  const railBtn = document.getElementById('rail-update-btn');
+  if (!popover) {
+    return;
+  }
+  updatePopoverOpen = true;
+  popover.hidden = false;
+  if (railBtn) {
+    railBtn.setAttribute('aria-expanded', 'true');
+  }
+  renderUpdateUi();
+  if (focus) {
+    const titleEl = document.getElementById('update-popover-title');
+    if (titleEl && typeof titleEl.focus === 'function') {
+      titleEl.focus();
+    }
   }
 }
 
-function handleDismissUpdate() {
-  hideUpdateNotificationBanner({
-    banner: document.getElementById('update-banner'),
-    addLog,
+function closeUpdatePopover({ returnFocus = false, markDismissed = false } = {}) {
+  const popover = document.getElementById('update-popover');
+  const railBtn = document.getElementById('rail-update-btn');
+  updatePopoverOpen = false;
+  if (popover) {
+    popover.hidden = true;
+  }
+  if (railBtn) {
+    railBtn.setAttribute('aria-expanded', 'false');
+  }
+  if (markDismissed && updateUiState && updateUiState.availableVersion) {
+    dismissedUpdateVersion = String(updateUiState.availableVersion);
+    renderUpdateUi();
+  }
+  if (returnFocus && railBtn && !railBtn.hidden && typeof railBtn.focus === 'function') {
+    railBtn.focus();
+  }
+}
+
+function applyUpdateButtonVariant(button, variant) {
+  if (!button) {
+    return;
+  }
+  button.classList.remove('btn-primary', 'btn-secondary', 'btn-update-ready');
+  if (variant === 'ready') {
+    button.classList.add('btn-update-ready');
+  } else if (variant === 'secondary') {
+    button.classList.add('btn-secondary');
+  } else {
+    button.classList.add('btn-primary');
+  }
+}
+
+function renderUpdateUi() {
+  const vm = buildUpdateViewModel(updateUiState || {}, {
+    isRecordingActive: isRecordingActiveForUpdate(),
+    dismissedVersion: dismissedUpdateVersion,
+    aiConfirmPending: updateAiConfirmPending,
   });
-  currentUpdateInfo = null;
+
+  // Surface 1: Left-rail indicator
+  const railBtn = document.getElementById('rail-update-btn');
+  if (railBtn) {
+    railBtn.hidden = !vm.rail.visible;
+    railBtn.dataset.tone = vm.rail.tone;
+    railBtn.setAttribute('aria-label', vm.rail.ariaLabel);
+    railBtn.setAttribute('aria-expanded', updatePopoverOpen ? 'true' : 'false');
+
+    const tooltip = document.getElementById('rail-update-tooltip');
+    if (tooltip) {
+      tooltip.textContent = vm.rail.tooltip;
+    }
+
+    const dot = document.getElementById('rail-update-dot');
+    if (dot) {
+      dot.hidden = !vm.rail.showDot;
+    }
+
+    const ring = document.getElementById('rail-update-ring');
+    const ringFill = document.getElementById('rail-update-ring-fill');
+    if (ring) {
+      ring.hidden = !vm.rail.showRing;
+    }
+    if (ringFill) {
+      ringFill.setAttribute('stroke-dasharray', String(vm.progress.ringDashArray));
+      ringFill.setAttribute('stroke-dashoffset', String(vm.progress.ringDashOffset));
+    }
+
+    const iconArrow = document.getElementById('rail-update-icon-arrow');
+    const iconReady = document.getElementById('rail-update-icon-ready');
+    const iconSpinner = document.getElementById('rail-update-icon-spinner');
+    const iconAlert = document.getElementById('rail-update-icon-alert');
+    if (iconArrow) iconArrow.hidden = vm.rail.iconKind !== 'arrow-up';
+    if (iconReady) iconReady.hidden = vm.rail.iconKind !== 'check-restart';
+    if (iconSpinner) iconSpinner.hidden = vm.rail.iconKind !== 'spinner';
+    if (iconAlert) iconAlert.hidden = vm.rail.iconKind !== 'alert';
+  }
+
+  // Surface 2: Anchored popover
+  const chip = document.getElementById('update-status-chip');
+  const chipLabel = document.getElementById('update-status-chip-label');
+  const titleEl = document.getElementById('update-popover-title');
+  const versionBadge = document.getElementById('update-popover-version');
+  const notesEl = document.getElementById('update-popover-notes');
+  const progressBlock = document.getElementById('update-popover-progress');
+  const progressTrack = document.getElementById('update-popover-progress-track');
+  const progressFill = document.getElementById('update-popover-progress-fill');
+  const progressPercent = document.getElementById('update-popover-progress-percent');
+  const progressBytes = document.getElementById('update-popover-progress-bytes');
+  const progressSpeed = document.getElementById('update-popover-progress-speed');
+  const busyNotice = document.getElementById('update-popover-busy-notice');
+  const aiConfirm = document.getElementById('update-popover-ai-confirm');
+  const manualBlock = document.getElementById('update-popover-manual');
+  const manualGuidance = document.getElementById('update-popover-manual-guidance');
+  const manualCmd = document.getElementById('update-popover-manual-cmd');
+  const errorBlock = document.getElementById('update-popover-error');
+  const errorText = document.getElementById('update-popover-error-text');
+  const primaryBtn = document.getElementById('update-popover-primary-btn');
+  const secondaryBtn = document.getElementById('update-popover-secondary-btn');
+  const tertiaryBtn = document.getElementById('update-popover-tertiary-btn');
+  const liveRegion = document.getElementById('update-popover-live');
+
+  if (chip) chip.dataset.tone = vm.popover.tone;
+  if (chipLabel) chipLabel.textContent = vm.popover.chipLabel;
+  if (titleEl) titleEl.textContent = vm.popover.title;
+  if (versionBadge) {
+    versionBadge.textContent = vm.popover.versionDelta;
+    versionBadge.hidden = !vm.popover.versionDelta;
+  }
+
+  if (notesEl) {
+    const rawNotes = updateUiState && updateUiState.releaseNotes ? String(updateUiState.releaseNotes) : '';
+    const notesKey = `${vm.availableVersion || ''}:${rawNotes}`;
+    if (vm.popover.hasReleaseNotes) {
+      if (notesKey !== lastRenderedReleaseNotesKey) {
+        renderSafeReleaseNotes(notesEl, rawNotes, {
+          markdownRenderHelpers: window.markdownRenderHelpers,
+        });
+        lastRenderedReleaseNotesKey = notesKey;
+      }
+      notesEl.hidden = false;
+    } else {
+      notesEl.hidden = true;
+    }
+  }
+
+  if (progressBlock) {
+    progressBlock.hidden = !vm.popover.showProgress;
+  }
+  if (progressTrack) {
+    progressTrack.setAttribute('aria-valuenow', String(Math.round(vm.progress.percent)));
+  }
+  if (progressFill) {
+    progressFill.style.width = `${vm.progress.percent}%`;
+  }
+  if (progressPercent) progressPercent.textContent = vm.progress.percentText;
+  if (progressBytes) progressBytes.textContent = vm.progress.transferredText;
+  if (progressSpeed) progressSpeed.textContent = vm.progress.speedText;
+
+  if (busyNotice) {
+    busyNotice.hidden = !vm.popover.showRecordingNotice;
+  }
+  if (aiConfirm) {
+    aiConfirm.hidden = !vm.popover.showAiConfirm;
+  }
+  if (manualBlock) {
+    manualBlock.hidden = !vm.popover.showManualPackage;
+    if (manualGuidance) manualGuidance.textContent = vm.popover.manualGuidance;
+    if (manualCmd) manualCmd.textContent = vm.popover.manualInstallCommand;
+  }
+  if (errorBlock) {
+    errorBlock.hidden = !vm.popover.showError;
+    if (errorText) errorText.textContent = vm.popover.errorMessage;
+  }
+
+  if (primaryBtn) {
+    primaryBtn.hidden = !vm.popover.primaryAction.visible;
+    primaryBtn.textContent = vm.popover.primaryAction.label;
+    primaryBtn.disabled = Boolean(vm.popover.primaryAction.disabled);
+    primaryBtn.dataset.action = vm.popover.primaryAction.action || '';
+    applyUpdateButtonVariant(primaryBtn, vm.popover.primaryAction.variant);
+  }
+  if (secondaryBtn) {
+    secondaryBtn.hidden = !vm.popover.secondaryAction.visible;
+    secondaryBtn.textContent = vm.popover.secondaryAction.label;
+    secondaryBtn.disabled = Boolean(vm.popover.secondaryAction.disabled);
+    secondaryBtn.dataset.action = vm.popover.secondaryAction.action || '';
+  }
+  if (tertiaryBtn) {
+    tertiaryBtn.hidden = !vm.popover.tertiaryAction.visible;
+    tertiaryBtn.textContent = vm.popover.tertiaryAction.label;
+    tertiaryBtn.dataset.action = vm.popover.tertiaryAction.action || '';
+  }
+
+  if (liveRegion && vm.status !== lastAnnouncedUpdateStatus) {
+    lastAnnouncedUpdateStatus = vm.status;
+    if (vm.status !== 'idle' && vm.status !== 'downloading') {
+      liveRegion.textContent = vm.popover.versionDelta
+        ? `${vm.popover.title} (${vm.popover.versionDelta})`
+        : vm.popover.title;
+    }
+  }
+
+  // Surface 3: Settings -> Updates card
+  const settingsBadge = document.getElementById('update-settings-badge');
+  const settingsVersion = document.getElementById('update-settings-version');
+  const settingsMode = document.getElementById('update-settings-mode');
+  const settingsLastChecked = document.getElementById('update-settings-last-checked');
+  const settingsProgress = document.getElementById('update-settings-progress');
+  const settingsProgressTrack = document.getElementById('update-settings-progress-track');
+  const settingsProgressFill = document.getElementById('update-settings-progress-fill');
+  const settingsProgressPercent = document.getElementById('update-settings-progress-percent');
+  const settingsProgressBytes = document.getElementById('update-settings-progress-bytes');
+  const settingsProgressSpeed = document.getElementById('update-settings-progress-speed');
+  const settingsBusyNotice = document.getElementById('update-settings-busy-notice');
+  const settingsError = document.getElementById('update-settings-error');
+  const settingsPrimaryBtn = document.getElementById('update-settings-primary-btn');
+  const autoDownloadToggle = document.getElementById('auto-download-updates-toggle');
+  const autoDownloadHint = document.getElementById('auto-download-updates-hint');
+
+  if (settingsBadge) {
+    settingsBadge.textContent = vm.settings.badgeText;
+    settingsBadge.className = `setting-badge ${vm.settings.badgeTone}`;
+  }
+  if (settingsVersion) {
+    settingsVersion.textContent = vm.settings.versionText;
+  }
+  if (settingsMode) {
+    settingsMode.textContent = vm.settings.modeText;
+  }
+  if (settingsLastChecked) {
+    settingsLastChecked.textContent = vm.settings.lastCheckedText;
+  }
+  if (settingsProgress) {
+    settingsProgress.hidden = !vm.settings.showProgress;
+  }
+  if (settingsProgressTrack) {
+    settingsProgressTrack.setAttribute('aria-valuenow', String(Math.round(vm.progress.percent)));
+  }
+  if (settingsProgressFill) {
+    settingsProgressFill.style.width = `${vm.progress.percent}%`;
+  }
+  if (settingsProgressPercent) settingsProgressPercent.textContent = vm.progress.percentText;
+  if (settingsProgressBytes) settingsProgressBytes.textContent = vm.progress.transferredText;
+  if (settingsProgressSpeed) settingsProgressSpeed.textContent = vm.progress.speedText;
+
+  if (settingsBusyNotice) {
+    settingsBusyNotice.hidden = !vm.settings.showRecordingNotice;
+  }
+  if (settingsError) {
+    settingsError.hidden = !vm.settings.showError;
+    settingsError.textContent = vm.settings.errorMessage;
+  }
+  if (settingsPrimaryBtn) {
+    settingsPrimaryBtn.textContent = vm.settings.primaryAction.label;
+    settingsPrimaryBtn.disabled = Boolean(vm.settings.primaryAction.disabled);
+    settingsPrimaryBtn.dataset.action = vm.settings.primaryAction.action || '';
+    applyUpdateButtonVariant(settingsPrimaryBtn, vm.settings.primaryAction.variant);
+  }
+  if (autoDownloadToggle) {
+    autoDownloadToggle.checked = vm.settings.autoDownload.checked;
+    autoDownloadToggle.disabled = vm.settings.autoDownload.disabled;
+  }
+  if (autoDownloadHint) {
+    autoDownloadHint.textContent = vm.settings.autoDownload.hint;
+  }
+}
+
+async function handleUpdateAction(action) {
+  try {
+    switch (action) {
+      case 'check':
+      case 'retry': {
+        if (typeof window.electronAPI?.checkForUpdates === 'function') {
+          const nextState = await window.electronAPI.checkForUpdates();
+          applyIncomingUpdateState(nextState, { isHydration: false });
+        }
+        break;
+      }
+      case 'download': {
+        if (typeof window.electronAPI?.downloadUpdate === 'function') {
+          const result = await window.electronAPI.downloadUpdate();
+          if (result && result.state) {
+            applyIncomingUpdateState(result.state, { isHydration: false });
+          }
+        }
+        break;
+      }
+      case 'cancel': {
+        if (typeof window.electronAPI?.cancelUpdateDownload === 'function') {
+          const result = await window.electronAPI.cancelUpdateDownload();
+          if (result && result.state) {
+            applyIncomingUpdateState(result.state, { isHydration: false });
+          }
+        }
+        break;
+      }
+      case 'install': {
+        await handleInstallUpdateNow({ confirmAiInterrupt: false });
+        break;
+      }
+      case 'github': {
+        if (typeof window.electronAPI?.openUpdateReleasePage === 'function') {
+          await window.electronAPI.openUpdateReleasePage();
+        }
+        break;
+      }
+      case 'later': {
+        closeUpdatePopover({ returnFocus: true, markDismissed: true });
+        break;
+      }
+      default:
+        break;
+    }
+  } catch (error) {
+    console.error(`Update action "${action}" failed:`, error);
+    addLog(`Update action failed: ${error.message || error}`, 'error');
+  }
+}
+
+async function handleInstallUpdateNow({ confirmAiInterrupt = false } = {}) {
+  if (isRecordingActiveForUpdate()) {
+    renderUpdateUi();
+    return;
+  }
+  if (typeof window.electronAPI?.installUpdateNow !== 'function') {
+    return;
+  }
+  try {
+    const result = await window.electronAPI.installUpdateNow({ confirmAiInterrupt });
+    if (result && result.state) {
+      applyIncomingUpdateState(result.state, { isHydration: false });
+    }
+    if (result && !result.ok) {
+      if (result.code === 'UPDATE_CONFIRM_AI_INTERRUPT') {
+        updateAiConfirmPending = true;
+        if (!updatePopoverOpen) {
+          openUpdatePopover({ focus: true });
+        } else {
+          renderUpdateUi();
+        }
+        return;
+      }
+      if (result.message) {
+        addLog(result.message, 'warning');
+      }
+    }
+  } catch (error) {
+    console.error('Failed to install update:', error);
+    addLog(`Failed to install update: ${error.message || error}`, 'error');
+  }
+}
+
+async function handleAutoDownloadToggleChange(event) {
+  const toggle = event && event.target ? event.target : null;
+  if (!toggle || typeof window.electronAPI?.setAutoDownloadUpdates !== 'function') {
+    return;
+  }
+  const desired = Boolean(toggle.checked);
+  toggle.disabled = true;
+  try {
+    const result = await window.electronAPI.setAutoDownloadUpdates(desired);
+    if (result && result.state) {
+      applyIncomingUpdateState(result.state, { isHydration: false });
+    }
+  } catch (error) {
+    console.error('Failed to update auto-download preference:', error);
+    toggle.checked = !desired;
+  } finally {
+    renderUpdateUi();
+  }
+}
+
+async function handleCopyManualInstallCommand() {
+  const copyBtn = document.getElementById('update-popover-manual-copy');
+  const cmd = updateUiState && updateUiState.manualInstallCommand
+    ? String(updateUiState.manualInstallCommand)
+    : '';
+  if (!cmd || !copyBtn) {
+    return;
+  }
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(cmd);
+    }
+    copyBtn.textContent = 'Copied';
+    if (updateManualCopyTimer) {
+      clearTimeout(updateManualCopyTimer);
+    }
+    updateManualCopyTimer = setTimeout(() => {
+      copyBtn.textContent = 'Copy';
+      updateManualCopyTimer = null;
+    }, 2000);
+  } catch (error) {
+    console.warn('Could not copy manual install command:', error);
+  }
 }
 
 // ============================================================================

@@ -1,5 +1,14 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
+
+const packageJson = require('../../package.json');
+const ROOT = path.join(__dirname, '..', '..');
+const RELEASE_WORKFLOW = fs.readFileSync(
+  path.join(ROOT, '.github', 'workflows', 'build-release.yml'),
+  'utf8',
+);
 
 const electronModulePath = require.resolve('electron');
 const updaterModulePath = require.resolve('../../src/updater');
@@ -204,4 +213,134 @@ test('openDownloadPage rejects untrusted update URLs', () => {
     /Refusing to open untrusted update URL/,
   );
   assert.deepEqual(openedUrls, []);
+});
+
+
+test('package.json configures electron-updater, GitHub publish, macOS zip+dmg, and differential NSIS', () => {
+  assert.ok(packageJson.dependencies['electron-updater']);
+  assert.deepEqual(packageJson.build.publish, [
+    {
+      provider: 'github',
+      owner: 'AmirArshad',
+      repo: 'meeting-transcriber',
+      releaseType: 'release',
+    },
+  ]);
+
+  const macTargets = packageJson.build.mac.target;
+  assert.ok(Array.isArray(macTargets));
+  assert.ok(
+    macTargets.some((t) => t.target === 'dmg' && Array.isArray(t.arch) && t.arch.includes('arm64')),
+    'build.mac.target must include dmg for arm64',
+  );
+  assert.ok(
+    macTargets.some((t) => t.target === 'zip' && Array.isArray(t.arch) && t.arch.includes('arm64')),
+    'build.mac.target must include zip for arm64',
+  );
+
+  assert.equal(packageJson.build.nsis.differentialPackage, true);
+  assert.equal(packageJson.build.artifactName, '${productName}-Setup-${version}.${ext}');
+});
+
+
+test('build-release workflow uploads and publishes differential updater metadata alongside all 5 installers', () => {
+  const expectedUploadPaths = [
+    'dist/AvaNevis-Setup-*.exe',
+    'dist/AvaNevis-Setup-*.exe.blockmap',
+    'dist/latest.yml',
+    'dist/AvaNevis-Setup-*.dmg',
+    'dist/AvaNevis-Setup-*.dmg.blockmap',
+    'dist/AvaNevis-Setup-*.zip',
+    'dist/AvaNevis-Setup-*.zip.blockmap',
+    'dist/latest-mac.yml',
+    'dist/AvaNevis-Setup-*.AppImage',
+    'dist/AvaNevis-Setup-*.pkg.tar.zst',
+    'dist/AvaNevis-Setup-*.deb',
+    'dist/latest-linux.yml',
+  ];
+  for (const uploadPath of expectedUploadPaths) {
+    assert.ok(
+      RELEASE_WORKFLOW.includes(uploadPath),
+      `build-release.yml must upload ${uploadPath}`,
+    );
+  }
+
+  const collectSectionStart = RELEASE_WORKFLOW.indexOf('name: Collect release assets');
+  const notesSectionStart = RELEASE_WORKFLOW.indexOf('name: Build release notes');
+  assert.ok(collectSectionStart !== -1 && notesSectionStart > collectSectionStart);
+  const collectSection = RELEASE_WORKFLOW.slice(collectSectionStart, notesSectionStart);
+
+  const expectedStagedAssets = [
+    '${installer}.exe',
+    '${installer}.exe.blockmap',
+    'latest.yml',
+    '${installer}.dmg',
+    '${installer}.dmg.blockmap',
+    '${installer}.zip',
+    '${installer}.zip.blockmap',
+    'latest-mac.yml',
+    '${installer}.AppImage',
+    '${installer}.pkg.tar.zst',
+    '${installer}.deb',
+    'latest-linux.yml',
+  ];
+  for (const stagedAsset of expectedStagedAssets) {
+    assert.ok(
+      collectSection.includes(stagedAsset),
+      `publish-release Collect release assets must stage ${stagedAsset}`,
+    );
+  }
+
+  assert.ok(RELEASE_WORKFLOW.includes('release-upload/*'));
+});
+
+
+test('legacy v2.x findInstallerAsset ignores zip, blockmap, and latest*.yml metadata files', () => {
+  const releaseAssets = [
+    { name: 'latest.yml' },
+    { name: 'latest-mac.yml' },
+    { name: 'latest-linux.yml' },
+    { name: 'AvaNevis-Setup-3.0.0.exe.blockmap' },
+    { name: 'AvaNevis-Setup-3.0.0.dmg.blockmap' },
+    { name: 'AvaNevis-Setup-3.0.0.zip' },
+    { name: 'AvaNevis-Setup-3.0.0.zip.blockmap' },
+    { name: 'AvaNevis-Setup-3.0.0.exe' },
+    { name: 'AvaNevis-Setup-3.0.0.dmg' },
+    { name: 'AvaNevis-Setup-3.0.0.AppImage' },
+    { name: 'AvaNevis-Setup-3.0.0.pkg.tar.zst' },
+    { name: 'AvaNevis-Setup-3.0.0.deb' },
+  ];
+
+  assert.deepEqual(
+    findInstallerAsset(releaseAssets, { platform: 'win32' }),
+    { name: 'AvaNevis-Setup-3.0.0.exe' },
+  );
+  assert.deepEqual(
+    findInstallerAsset(releaseAssets, { platform: 'darwin' }),
+    { name: 'AvaNevis-Setup-3.0.0.dmg' },
+  );
+  assert.deepEqual(
+    findInstallerAsset(releaseAssets, {
+      platform: 'linux',
+      env: { APPIMAGE: '/tmp/.mount_AvaNevis' },
+      osReleaseText: 'ID=ubuntu\n',
+    }),
+    { name: 'AvaNevis-Setup-3.0.0.AppImage' },
+  );
+  assert.deepEqual(
+    findInstallerAsset(releaseAssets, {
+      platform: 'linux',
+      env: {},
+      osReleaseText: 'ID=arch\n',
+    }),
+    { name: 'AvaNevis-Setup-3.0.0.pkg.tar.zst' },
+  );
+  assert.deepEqual(
+    findInstallerAsset(releaseAssets, {
+      platform: 'linux',
+      env: {},
+      osReleaseText: 'ID=ubuntu\n',
+    }),
+    { name: 'AvaNevis-Setup-3.0.0.deb' },
+  );
 });
