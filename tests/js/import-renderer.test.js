@@ -36,4 +36,11 @@ test('sidebar opens History and the import dialog restores focus to its opener',
   assert.equal(result.focusAfterDismiss, 'import-audio-button');
   assert.match(result.pickerMessage, /Could not choose a file/);
   assert.equal(result.immediateOpenId, 'fresh'); assert.equal(result.immediateOpenFocus, 'cap-play-btn');
+  assert.deepEqual(result.shortWindowLayout, {
+    dialogFits: true,
+    bodyScrolls: true,
+    bodyFitsWidth: true,
+    footerVisible: true,
+    footerStaysPut: true
+  });
 });

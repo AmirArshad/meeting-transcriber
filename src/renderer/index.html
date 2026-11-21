@@ -20,20 +20,34 @@
     <div id="import-audio-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="import-audio-title" aria-describedby="import-audio-description">
       <div class="modal-content import-audio-content">
         <div class="modal-header"><h2 id="import-audio-title" tabindex="-1">Import audio</h2></div>
-        <form id="import-audio-form" class="modal-body">
-          <p id="import-audio-name" class="import-audio-name"></p>
-          <p id="import-audio-description" class="setting-description">AvaNevis saves a playable copy in History and transcribes it on this device. Your original stays where it is.</p>
-          <div id="import-audio-fields">
-            <div class="ai-addon-field compact"><label for="import-audio-engine">Engine</label><select id="import-audio-engine" class="device-select"><option value="whisper">Whisper</option><option value="parakeet">Parakeet v2</option></select></div>
-            <p id="import-audio-guidance" class="setting-description" aria-live="polite"></p>
-            <div id="import-audio-whisper-fields">
-              <div class="ai-addon-field compact"><label for="import-audio-language">Language</label><select id="import-audio-language" class="device-select"></select></div>
-              <div class="ai-addon-field compact"><label for="import-audio-model">Whisper model</label><select id="import-audio-model" class="device-select"></select></div>
+        <form id="import-audio-form" class="modal-form">
+          <div class="modal-body">
+            <p id="import-audio-name" class="import-audio-name"></p>
+            <p id="import-audio-description" class="setting-description">AvaNevis saves a playable copy in History and transcribes it on this device. Your original stays where it is.</p>
+            <div id="import-audio-fields">
+              <div class="ai-addon-field">
+                <label for="import-audio-engine">Engine</label>
+                <select id="import-audio-engine" class="device-select">
+                  <option value="whisper">Whisper</option>
+                  <option value="parakeet">Parakeet v2</option>
+                </select>
+              </div>
+              <p id="import-audio-guidance" class="setting-description" aria-live="polite"></p>
+              <div id="import-audio-whisper-fields" class="modal-field-grid">
+                <div class="ai-addon-field">
+                  <label for="import-audio-language">Language</label>
+                  <select id="import-audio-language" class="device-select"></select>
+                </div>
+                <div class="ai-addon-field">
+                  <label for="import-audio-model">Whisper model</label>
+                  <select id="import-audio-model" class="device-select"></select>
+                </div>
+              </div>
+              <p id="import-audio-english" class="setting-description" hidden>Language: English only</p>
             </div>
-            <p id="import-audio-english" class="setting-description" hidden>Language: English only</p>
+            <p id="import-audio-status" role="status" aria-live="polite"></p>
           </div>
-          <p id="import-audio-status" role="status" aria-live="polite"></p>
-          <div class="modal-actions import-audio-actions">
+          <div class="modal-actions">
             <button type="button" id="import-audio-cancel" class="btn btn-secondary">Cancel</button>
             <button type="button" id="import-audio-retry" class="btn btn-secondary" hidden>Try again</button>
             <button type="button" id="import-audio-open" class="btn btn-primary" hidden>Open meeting</button>
@@ -44,16 +58,18 @@
     </div>
 
     <div id="summary-language-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="summary-language-title" aria-describedby="summary-language-description">
-      <div class="modal-content whisper-retry-modal-content">
+      <div class="modal-content">
         <div class="modal-header"><h2 id="summary-language-title">Confirm transcript language</h2></div>
-        <form id="summary-language-form" class="modal-body">
-          <p id="summary-language-description" class="setting-description">Choose the language actually spoken in this transcript. For mixed content, choose its predominant language. Balanced multilingual meetings are not supported.</p>
-          <div class="ai-addon-field compact">
-            <label for="summary-transcript-language">Transcript language</label>
-            <select id="summary-transcript-language" class="device-select"></select>
+        <form id="summary-language-form" class="modal-form">
+          <div class="modal-body">
+            <p id="summary-language-description" class="setting-description">Choose the language actually spoken in this transcript. For mixed content, choose its predominant language. Balanced multilingual meetings are not supported.</p>
+            <div class="ai-addon-field">
+              <label for="summary-transcript-language">Transcript language</label>
+              <select id="summary-transcript-language" class="device-select"></select>
+            </div>
+            <p id="summary-language-message" class="setting-description" aria-live="polite"></p>
           </div>
-          <p id="summary-language-message" class="setting-description" aria-live="polite"></p>
-          <div class="modal-actions whisper-retry-actions">
+          <div class="modal-actions">
             <button type="button" id="summary-language-cancel" class="btn btn-secondary">Cancel</button>
             <button type="submit" id="summary-language-confirm" class="btn btn-primary">Generate summary</button>
           </div>
@@ -64,28 +80,30 @@
     <div id="transcript-export-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="transcript-export-title" aria-describedby="transcript-export-description">
       <div class="modal-content transcript-export-modal-content">
         <div class="modal-header"><h2 id="transcript-export-title" tabindex="-1">Save Transcript As</h2></div>
-        <form id="transcript-export-form" class="modal-body">
-          <p id="transcript-export-description" class="setting-description">Choose a file format for <strong id="transcript-export-meeting-name"></strong>.</p>
-          <fieldset class="transcript-export-formats" aria-labelledby="transcript-export-title">
-            <legend class="sr-only">Transcript export format</legend>
-            <div id="transcript-export-options" class="transcript-export-options" role="radiogroup" aria-label="Export format"></div>
-          </fieldset>
-          <div id="transcript-export-subtitle-prefs" class="transcript-export-subtitle-prefs" hidden>
-            <label class="transcript-export-checkbox">
-              <input type="checkbox" id="transcript-export-include-speakers" checked>
-              <span>Include speaker labels when available</span>
-            </label>
-            <label id="transcript-export-vtt-voice-row" class="transcript-export-checkbox" hidden>
-              <input type="checkbox" id="transcript-export-use-voice-tags">
-              <span>Use WebVTT <code>&lt;v Speaker&gt;</code> voice tags</span>
-            </label>
+        <form id="transcript-export-form" class="modal-form">
+          <div class="modal-body">
+            <p id="transcript-export-description" class="setting-description">Choose a file format for <strong id="transcript-export-meeting-name"></strong>.</p>
+            <fieldset class="transcript-export-formats" aria-labelledby="transcript-export-title">
+              <legend class="sr-only">Transcript export format</legend>
+              <div id="transcript-export-options" class="transcript-export-options" role="radiogroup" aria-label="Export format"></div>
+            </fieldset>
+            <div id="transcript-export-subtitle-prefs" class="transcript-export-subtitle-prefs" hidden>
+              <label class="transcript-export-checkbox">
+                <input type="checkbox" id="transcript-export-include-speakers" checked>
+                <span>Include speaker labels when available</span>
+              </label>
+              <label id="transcript-export-vtt-voice-row" class="transcript-export-checkbox" hidden>
+                <input type="checkbox" id="transcript-export-use-voice-tags">
+                <span>Use WebVTT <code>&lt;v Speaker&gt;</code> voice tags</span>
+              </label>
+            </div>
+            <div id="transcript-export-notice" class="transcript-export-notice" role="status" aria-live="polite" hidden>
+              <p id="transcript-export-notice-text" class="transcript-export-notice-text"></p>
+              <button type="button" id="transcript-export-retranscribe-btn" class="btn btn-secondary btn-small" hidden>Re-transcribe from audio</button>
+            </div>
+            <p id="transcript-export-error" class="whisper-retry-error" role="alert" hidden></p>
           </div>
-          <div id="transcript-export-notice" class="transcript-export-notice" role="status" aria-live="polite" hidden>
-            <p id="transcript-export-notice-text" class="transcript-export-notice-text"></p>
-            <button type="button" id="transcript-export-retranscribe-btn" class="btn btn-secondary btn-small" hidden>Re-transcribe from audio</button>
-          </div>
-          <p id="transcript-export-error" class="whisper-retry-error" role="alert" hidden></p>
-          <div class="modal-actions transcript-export-actions">
+          <div class="modal-actions">
             <button type="button" id="transcript-export-cancel" class="btn btn-secondary">Cancel</button>
             <button type="submit" id="transcript-export-confirm" class="btn btn-primary">Save As…</button>
           </div>
@@ -116,19 +134,18 @@
             <h4>Installation Log</h4>
             <div class="log-output" id="ftue-log-output"></div>
           </div>
-
-          <div class="modal-actions" style="margin-top: 1rem">
-            <button type="button" id="ftue-cancel-download-btn" class="btn btn-secondary btn-small cancel-download-btn">
-              Cancel Download
-            </button>
-          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="ftue-cancel-download-btn" class="btn btn-secondary btn-small cancel-download-btn">
+            Cancel Download
+          </button>
         </div>
       </div>
     </div>
 
     <!-- Interrupted recording recovery prompt (once per launch when eligible) -->
     <div id="recording-recovery-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="recording-recovery-title" aria-describedby="recording-recovery-body">
-      <div class="modal-content recording-recovery-modal-content">
+      <div class="modal-content">
         <div class="modal-header">
           <h2 id="recording-recovery-title">Finish an interrupted recording?</h2>
         </div>
@@ -137,53 +154,55 @@
           <p id="recording-recovery-detail" class="recording-recovery-detail"></p>
           <ul id="recording-recovery-candidate-list" class="recording-recovery-candidate-list"></ul>
           <p id="recording-recovery-footer" class="recording-recovery-footer"></p>
-          <div class="modal-actions" style="margin-top: 1rem">
-            <button type="button" id="recording-recovery-later-btn" class="btn btn-secondary">Later</button>
-            <button type="button" id="recording-recovery-now-btn" class="btn btn-primary">Recover Now</button>
-          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="recording-recovery-later-btn" class="btn btn-secondary">Later</button>
+          <button type="button" id="recording-recovery-now-btn" class="btn btn-primary">Recover Now</button>
         </div>
       </div>
     </div>
 
     <!-- Explicit one-off Whisper retry; it never changes the active engine. -->
     <div id="whisper-retry-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="whisper-retry-title" aria-describedby="whisper-retry-description">
-      <div class="modal-content whisper-retry-modal-content">
+      <div class="modal-content">
         <div class="modal-header">
           <h2 id="whisper-retry-title">Retry with Whisper</h2>
         </div>
-        <form id="whisper-retry-form" class="modal-body">
-          <p id="whisper-retry-description" class="setting-description">
-            This starts a new Whisper attempt with these preferences. It does not change your active transcription engine.
-          </p>
-          <div class="whisper-retry-fields">
-            <div class="ai-addon-field compact">
-              <label for="whisper-retry-language">Language</label>
-              <select id="whisper-retry-language" class="device-select">
-                <option value="">Choose language…</option>
-                <option value="en">English</option>
-                <option value="es">Spanish</option>
-                <option value="fr">French</option>
-                <option value="de">German</option>
-                <option value="zh">Chinese (Mandarin/Cantonese)</option>
-                <option value="ja">Japanese</option>
-                <option value="it">Italian</option>
-                <option value="pa">Panjabi</option>
-                <option value="hi">Hindi</option>
-                <option value="ko">Korean</option>
-                <option value="pt">Portuguese</option>
-              </select>
+        <form id="whisper-retry-form" class="modal-form">
+          <div class="modal-body">
+            <p id="whisper-retry-description" class="setting-description">
+              This starts a new Whisper attempt with these preferences. It does not change your active transcription engine.
+            </p>
+            <div class="modal-field-grid">
+              <div class="ai-addon-field">
+                <label for="whisper-retry-language">Language</label>
+                <select id="whisper-retry-language" class="device-select">
+                  <option value="">Choose language…</option>
+                  <option value="en">English</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="zh">Chinese (Mandarin/Cantonese)</option>
+                  <option value="ja">Japanese</option>
+                  <option value="it">Italian</option>
+                  <option value="pa">Panjabi</option>
+                  <option value="hi">Hindi</option>
+                  <option value="ko">Korean</option>
+                  <option value="pt">Portuguese</option>
+                </select>
+              </div>
+              <div class="ai-addon-field compact">
+                <label for="whisper-retry-model">Model</label>
+                <select id="whisper-retry-model" class="device-select" title="Large (v3) requires more download space, memory and processing time.">
+                  <option value="small">Small</option>
+                  <option value="medium">Medium</option>
+                  <option value="large-v3">Large (v3)</option>
+                </select>
+              </div>
             </div>
-            <div class="ai-addon-field compact">
-              <label for="whisper-retry-model">Model</label>
-              <select id="whisper-retry-model" class="device-select" title="Large (v3) requires more download space, memory and processing time.">
-                <option value="small">Small</option>
-                <option value="medium">Medium</option>
-                <option value="large-v3">Large (v3)</option>
-              </select>
-            </div>
+            <p id="whisper-retry-error" class="whisper-retry-error" role="alert" hidden></p>
           </div>
-          <p id="whisper-retry-error" class="whisper-retry-error" role="alert" hidden></p>
-          <div class="modal-actions whisper-retry-actions">
+          <div class="modal-actions">
             <button type="button" id="whisper-retry-cancel-btn" class="btn btn-secondary">Cancel</button>
             <button type="submit" id="whisper-retry-submit-btn" class="btn btn-primary">Retry with Whisper</button>
           </div>
@@ -230,11 +249,11 @@
           <span class="rail-tooltip">Chat</span>
         </button>
 
-        <button type="button" class="rail-btn" id="import-audio-rail-button" aria-label="Upload meeting" aria-haspopup="dialog">
+        <button type="button" class="rail-btn" id="import-audio-rail-button" aria-label="Import audio" aria-haspopup="dialog">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4M12 16V3m-5 5 5-5 5 5"/>
           </svg>
-          <span class="rail-tooltip">Upload meeting</span>
+          <span class="rail-tooltip">Import audio</span>
         </button>
 
         <div class="rail-spacer"></div>
@@ -1290,8 +1309,9 @@
                       class="chat-input"
                       rows="1"
                       maxlength="2000"
-                      placeholder="Ask a question across your local meetings… (Enter to send, Shift+Enter for newline)"
+                      placeholder="Ask a question…"
                       aria-label="Ask a question about your meetings"
+                      title="Enter to send. Shift+Enter for a new line."
                     ></textarea>
                     <button
                       type="button"
@@ -1312,15 +1332,10 @@
               <h2>Settings</h2>
               <nav class="settings-subnav" aria-label="Settings sections">
                 <a href="#transcription-settings">Transcription</a>
-                <span aria-hidden="true">·</span>
                 <a href="#gpu-settings">GPU Acceleration</a>
-                <span aria-hidden="true">·</span>
                 <a href="#ai-addons-settings">AI Add-ons</a>
-                <span aria-hidden="true">·</span>
                 <a href="#keyboard-shortcuts-settings">Keyboard Shortcuts</a>
-                <span aria-hidden="true">·</span>
                 <a href="#updates-settings" class="settings-subnav-link">Updates</a>
-                <span aria-hidden="true">·</span>
                 <a href="#about-settings">About</a>
               </nav>
 
