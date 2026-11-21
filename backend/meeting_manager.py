@@ -19,7 +19,6 @@ import sys
 import shutil
 import stat
 import threading
-import tempfile
 
 from filelock import FileLock
 
@@ -1105,9 +1104,6 @@ class MeetingManager:
         captions_candidate_path: Optional[str] = None,
     ) -> Optional[Dict]:
         """Point metadata at a candidate transcript only after the attempt is still current."""
-        previous_captions = None
-        committed_captions = None
-        canonical_captions_to_remove: Optional[Path] = None
         with self._metadata_guard():
             meetings = self._list_meetings_locked()
             meeting = next((item for item in meetings if item['id'] == meeting_id), None)
@@ -1151,10 +1147,8 @@ class MeetingManager:
                 raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
 
             canonical_captions_target = transcript_captions.captions_sidecar_path_for_audio(Path(meeting['audioPath']))
-            safe_captions_candidate: Optional[Path] = None
-            safe_canonical_captions: Optional[Path] = None
-            backup_captions_path: Optional[Path] = None
-            replaced_canonical_captions = False
+            safe_captions_candidate = None
+            committed_captions = None
             if captions_candidate_path:
                 expected_captions_name = meeting_norm.expected_attempt_captions_name(meeting.get('audioPath'), attempt_id)
                 safe_captions_candidate = self._resolve_accessible_recordings_file(
@@ -1165,13 +1159,13 @@ class MeetingManager:
                 )
                 if safe_captions_candidate is None or safe_captions_candidate.name != expected_captions_name:
                     raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
-                safe_canonical_captions = self._resolve_accessible_recordings_file(
-                    canonical_captions_target,
+                committed_captions = self._resolve_accessible_recordings_file(
+                    candidate.with_suffix('.captions.json'),
                     allowed_suffixes=('.json',),
                     must_exist=False,
-                    label='canonical captions',
+                    label='committed captions',
                 )
-                if safe_canonical_captions is None:
+                if committed_captions is None or str(committed_captions) == meeting.get('captionsPath'):
                     raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
                 try:
                     captions_payload = json.loads(safe_captions_candidate.read_text(encoding='utf-8'))
@@ -1204,63 +1198,27 @@ class MeetingManager:
             meeting['transcriptionComputeType'] = normalized_result.get('computeType')
             meeting.pop('transcriptionAttemptGuard', None)
 
-            if safe_captions_candidate is not None and safe_canonical_captions is not None:
-                if safe_canonical_captions.exists() and safe_canonical_captions != safe_captions_candidate:
-                    try:
-                        with tempfile.NamedTemporaryFile(
-                            mode='wb', prefix=f".{safe_canonical_captions.name}.bak.",
-                            dir=safe_canonical_captions.parent, delete=False,
-                        ) as backup:
-                            backup_captions_path = Path(backup.name)
-                            with safe_canonical_captions.open('rb') as source:
-                                shutil.copyfileobj(source, backup)
-                    except Exception:
-                        if backup_captions_path is not None:
-                            try:
-                                backup_captions_path.unlink(missing_ok=True)
-                            except OSError:
-                                pass
-                        raise
-                try:
-                    os.replace(safe_captions_candidate, safe_canonical_captions)
-                except Exception:
-                    if backup_captions_path is not None:
-                        try:
-                            backup_captions_path.unlink(missing_ok=True)
-                        except OSError:
-                            pass
-                    raise
-                replaced_canonical_captions = True
-                committed_captions = str(safe_canonical_captions.resolve(strict=False))
-                meeting['captionsPath'] = committed_captions
+            if committed_captions is not None:
+                # Keep the old pair readable until metadata points to the new pair.
+                # Move the sidecar out of the staging path that the caller cleans on error.
+                os.replace(safe_captions_candidate, committed_captions)
+                meeting['captionsPath'] = str(committed_captions)
                 meeting['captionsSourceTranscriptHash'] = captions_transcript_hash
             else:
                 meeting.pop('captionsPath', None)
                 meeting.pop('captionsSourceTranscriptHash', None)
-                canonical_captions_to_remove = canonical_captions_target
 
             try:
                 self._save_meetings_unlocked(meetings)
             except Exception:
-                if replaced_canonical_captions and safe_canonical_captions is not None and safe_captions_candidate is not None:
+                if committed_captions is not None:
                     try:
-                        if safe_canonical_captions.exists():
-                            os.replace(safe_canonical_captions, safe_captions_candidate)
-                    except OSError:
-                        pass
-                if backup_captions_path is not None and safe_canonical_captions is not None and backup_captions_path.exists():
-                    try:
-                        os.replace(backup_captions_path, safe_canonical_captions)
+                        os.replace(committed_captions, safe_captions_candidate)
                     except OSError:
                         pass
                 raise
 
-            if backup_captions_path is not None and backup_captions_path.exists():
-                try:
-                    backup_captions_path.unlink()
-                except OSError:
-                    pass
-            self._remove_obsolete_captions(previous_captions, committed_captions, canonical_captions_to_remove)
+            self._remove_obsolete_captions(previous_captions, meeting.get('captionsPath'), canonical_captions_target)
 
         self._remove_obsolete_transcript(previous_transcript, meeting['transcriptPath'])
         return meeting_norm.public_transcription_provenance(meeting)

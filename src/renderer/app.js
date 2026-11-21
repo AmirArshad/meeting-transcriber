@@ -273,6 +273,7 @@ let homePromptContext = { platform: null, arch: null, hasNvidiaGpu: false, cudaI
 let selectedDiarizationEngine = null;
 let startupCudaCheckPromise = null;
 let meetings = [];
+let meetingHistoryRequestEpoch = 0;
 let audioVisualizer = null;
 let isFirstRecording = true; // Track if this is first recording (for longer timeout)
 let isInitializing = true; // Track if app is still initializing
@@ -373,22 +374,25 @@ function findMeetingIndexById(meetingId) {
   return meetings.findIndex((meeting) => String(meeting.id) === targetId);
 }
 
-async function restoreCurrentHistorySummary(meetingId) {
+async function restoreCurrentHistorySummary(meetingId, message, { isError = false, showTab = true } = {}) {
   if (!meetingId || !meetingIdsEqual(currentMeetingId, meetingId)) {
-    return false;
+    return;
   }
 
+  let fullMeeting;
   try {
-    const fullMeeting = await window.electronAPI.getMeeting(meetingId);
-    if (fullMeeting && fullMeeting.summary) {
-      renderSummaryMarkdown(fullMeeting.summary, { stale: fullMeeting.summaryStale });
-      return true;
-    }
+    fullMeeting = await window.electronAPI.getMeeting(meetingId);
   } catch (error) {
     console.warn(`Could not restore saved summary: ${error.message}`);
   }
 
-  return false;
+  if (!meetingIdsEqual(currentMeetingId, meetingId)) return;
+  if (fullMeeting?.summary) {
+    renderSummaryMarkdown(fullMeeting.summary, { stale: fullMeeting.summaryStale });
+  } else {
+    showSummaryMessage(message, isError);
+  }
+  if (showTab) activateHistoryDetailTab('summary');
 }
 
 function renderSummaryMarkdown(markdown, options = {}) {
@@ -2654,20 +2658,22 @@ async function loadAudioDevices() {
 
 // Load meeting history
 async function loadMeetingHistory({ scan = false } = {}) {
-  try {
-    if (scan) {
-      try {
-        const scanResult = await window.electronAPI.scanRecordings();
-        if (scanResult.added > 0) {
-          addLog(`Found ${scanResult.added} recording(s) not in database`);
-        }
-      } catch (scanError) {
-        console.warn('Scan failed:', scanError);
+  if (scan) {
+    try {
+      const scanResult = await window.electronAPI.scanRecordings();
+      if (scanResult.added > 0) {
+        addLog(`Found ${scanResult.added} recording(s) not in database`);
       }
+    } catch (scanError) {
+      console.warn('Scan failed:', scanError);
     }
+  }
 
-    // Load the meeting list
-    meetings = await window.electronAPI.listMeetings();
+  const requestEpoch = ++meetingHistoryRequestEpoch;
+  try {
+    const loadedMeetings = await window.electronAPI.listMeetings();
+    if (requestEpoch !== meetingHistoryRequestEpoch) return;
+    meetings = loadedMeetings;
     if (meetingSearchQueryNormalized) {
       void runHistorySearch(meetingSearchQuery);
     } else {
@@ -2677,6 +2683,7 @@ async function loadMeetingHistory({ scan = false } = {}) {
     const emptyDetail = document.getElementById('meeting-details-empty');
     if (!currentMeetingId && emptyDetail) emptyDetail.style.display = meetings.length ? 'flex' : 'none';
   } catch (error) {
+    if (requestEpoch !== meetingHistoryRequestEpoch) return;
     console.error('Failed to load meeting history:', error);
     setPlaceholder(meetingList, 'Could not load meetings. Refresh to try again.');
     renderActivityList();
@@ -4892,13 +4899,7 @@ async function generateSummaryForMeeting(meetingId) {
     cancelling: summaryGenerationCancelling,
   })) {
     addLog('Summary generation cancelled. Transcript is unchanged.', 'warning');
-    if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
-      const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
-      if (!restored) {
-        showSummaryMessage('Summary generation cancelled. Transcript is unchanged.');
-      }
-      activateHistoryDetailTab('summary');
-    }
+    await restoreCurrentHistorySummary(normalizedMeetingId, 'Summary generation cancelled. Transcript is unchanged.');
     summaryGenerationMeetingId = null;
     summaryGenerationCancelling = false;
     updateSummaryGenerationButtons();
@@ -4909,13 +4910,7 @@ async function generateSummaryForMeeting(meetingId) {
   if (!summaryStatus || !summaryStatus.setupComplete || summaryStatus.status !== 'ready') {
     const message = getSummarySetupMessage(summaryStatus);
     addLog(message, summaryStatus && summaryStatus.status === 'unsupported' ? 'error' : 'warning');
-    if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
-      const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
-      if (!restored) {
-        showSummaryMessage(message, summaryStatus && summaryStatus.status === 'error');
-      }
-      activateHistoryDetailTab('summary');
-    }
+    await restoreCurrentHistorySummary(normalizedMeetingId, message, { isError: summaryStatus?.status === 'error' });
     openSettingsAtAiAddons();
     summaryGenerationMeetingId = null;
     summaryGenerationCancelling = false;
@@ -4932,10 +4927,7 @@ async function generateSummaryForMeeting(meetingId) {
     const preferredLanguage = window.summaryLanguageHelpers.reusableSummaryLanguage(meeting, sourceTranscriptHash, policy);
     const transcriptLanguage = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage);
     if (!transcriptLanguage || summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) {
-      if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
-        const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
-        if (!restored) showSummaryMessage('Summary generation cancelled. Transcript is unchanged.');
-      }
+      await restoreCurrentHistorySummary(normalizedMeetingId, 'Summary generation cancelled. Transcript is unchanged.', { showTab: false });
       return;
     }
     if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) showSummaryMessage(`Generating local summary in ${policy.names[transcriptLanguage]}…`);
@@ -4950,15 +4942,17 @@ async function generateSummaryForMeeting(meetingId) {
 
     if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
       const fullMeeting = await window.electronAPI.getMeeting(normalizedMeetingId);
-      updateSummaryLanguageCaptions(fullMeeting);
-      renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '', { stale: fullMeeting && fullMeeting.summaryStale });
       syncMeetingInList((result && result.meeting) || fullMeeting);
-      activateHistoryDetailTab('summary');
+      if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
+        updateSummaryLanguageCaptions(fullMeeting);
+        renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '', { stale: fullMeeting && fullMeeting.summaryStale });
+        activateHistoryDetailTab('summary');
+      }
     } else if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, normalizedMeetingId)) {
       syncMeetingInList(result && result.meeting);
       activateTab('history');
       await selectMeeting(normalizedMeetingId);
-      activateHistoryDetailTab('summary');
+      if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) activateHistoryDetailTab('summary');
     } else {
       syncMeetingInList(result && result.meeting);
     }
@@ -4969,25 +4963,13 @@ async function generateSummaryForMeeting(meetingId) {
     const wasCancelled = error && (error.code === 'AI_ADDON_SETUP_CANCELLED' || error.name === 'AbortError' || /cancell?ed/i.test(error.message || ''));
     if (wasCancelled) {
       addLog('Summary generation cancelled. Transcript is unchanged.', 'warning');
-      if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
-        const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
-        if (!restored) {
-          showSummaryMessage('Summary generation cancelled. Transcript is unchanged.');
-        }
-        activateHistoryDetailTab('summary');
-      }
+      await restoreCurrentHistorySummary(normalizedMeetingId, 'Summary generation cancelled. Transcript is unchanged.');
       return;
     }
 
     const message = `Summary generation failed. Transcript is unchanged. ${error.message}`;
     addLog(message, 'error');
-    if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
-      const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
-      if (!restored) {
-        showSummaryMessage(message, true);
-      }
-      activateHistoryDetailTab('summary');
-    }
+    await restoreCurrentHistorySummary(normalizedMeetingId, message, { isError: true });
   } finally {
     summaryGenerationMeetingId = null;
     summaryGenerationCancelling = false;
@@ -5376,26 +5358,22 @@ function copyMeetingSummary() {
 }
 
 async function saveMeetingSummaryToFile() {
-  if (!currentMeetingId) {
+  const meetingId = currentMeetingId;
+  if (!meetingId) {
     addLog('No meeting selected to save.', 'warning');
     return;
   }
 
-  const meeting = findMeetingById(currentMeetingId);
-  const suggestedName = `${(meeting && meeting.title) || 'Summary'} Summary`;
-  let content = getCurrentSummaryMarkdown();
-
-  if (!content) {
-    try {
-      const fullMeeting = await window.electronAPI.getMeeting(currentMeetingId);
-      content = (fullMeeting && fullMeeting.summary) || '';
-    } catch (err) {
-      console.error('Failed to load summary for save:', err);
-      addLog(`Failed to load summary: ${err.message}`, 'error');
-      return;
-    }
+  let meeting;
+  try {
+    meeting = await window.electronAPI.getMeeting(meetingId);
+  } catch (err) {
+    console.error('Failed to load summary for save:', err);
+    addLog(`Failed to load summary: ${err.message}`, 'error');
+    return;
   }
 
+  const content = meeting?.summary || '';
   if (!content.trim()) {
     addLog('No summary available to save.', 'warning');
     return;
@@ -5403,7 +5381,7 @@ async function saveMeetingSummaryToFile() {
 
   try {
     const result = await window.electronAPI.saveTranscriptAs({
-      suggestedName,
+      suggestedName: `${meeting.title || 'Summary'} Summary`,
       content,
       title: 'Save Summary',
     });

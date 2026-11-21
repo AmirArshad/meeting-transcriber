@@ -209,7 +209,7 @@ test('save-transcript-as with format md and txt works for Windows-style names an
   assert.equal(fs.readFileSync(plainPassthrough.filePath, 'utf8'), '# keep raw markdown header');
 });
 
-test('save-transcript-as exports valid srt and vtt from disk sidecar including CRLF markdown and dotted parent dir', async (t) => {
+test('save-transcript-as exports legacy and attempt-scoped captions with CRLF markdown and a dotted parent dir', async (t) => {
   let activeMeeting = null;
   const harness = createHarness(t, {
     getMeeting: async (id) => (activeMeeting && activeMeeting.id === id ? activeMeeting : null),
@@ -271,6 +271,12 @@ test('save-transcript-as exports valid srt and vtt from disk sidecar including C
       '',
     ].join('\n'),
   );
+
+  const attemptStem = 'meet.transcript-11111111-1111-4111-8111-111111111111';
+  activeMeeting.transcriptPath = path.join(dottedSubdir, `${attemptStem}.md`);
+  activeMeeting.captionsPath = path.join(dottedSubdir, `${attemptStem}.captions.json`);
+  fs.renameSync(transcriptPath, activeMeeting.transcriptPath);
+  fs.renameSync(captionsPath, activeMeeting.captionsPath);
 
   const vttResult = await harness.handlers['save-transcript-as'](harness.fakeEvent, {
     suggestedName: 'Product Review',

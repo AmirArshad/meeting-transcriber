@@ -219,8 +219,9 @@ function createMeetingManagerClient(deps) {
 
     recordingsScanInProgress = true;
     try {
-      return await new Promise((resolve, reject) => {
+      const result = await new Promise((resolve, reject) => {
         let settled = false;
+        let timedOut = false;
         let scanTimeout = null;
         const finish = (callback, value) => {
           if (settled) {
@@ -240,7 +241,10 @@ function createMeetingManagerClient(deps) {
 
         const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
-        python.on('close', async (code) => {
+        python.on('close', (code) => {
+          if (settled || timedOut) {
+            return;
+          }
           try {
             processOutput.assertStdoutWithinLimit();
           } catch (error) {
@@ -250,17 +254,7 @@ function createMeetingManagerClient(deps) {
 
           if (code === 0) {
             try {
-              const result = JSON.parse(processOutput.getStdout());
-              if (typeof options.beforeAutoResume === 'function') {
-                await options.beforeAutoResume(result);
-              }
-              try {
-                onScanSucceeded();
-              } catch (_) {
-                // Best-effort recovery banner cleanup.
-              }
-              notifyMeetingsMutated({ action: 'scan', result });
-              finish(resolve, result);
+              finish(resolve, JSON.parse(processOutput.getStdout()));
             } catch (e) {
               finish(reject, new Error(`Failed to parse scan result: ${e.message}`));
             }
@@ -270,15 +264,33 @@ function createMeetingManagerClient(deps) {
           }
         });
 
-        python.on('error', (error) => finish(reject, error));
+        python.on('error', (error) => {
+          if (!timedOut) finish(reject, error);
+        });
         scanTimeout = setTimeout(async () => {
-          await terminateProcessBestEffort(python);
+          timedOut = true;
+          try {
+            await terminateProcessBestEffort(python);
+          } catch (_) {
+            // Report the scanner timeout even if termination fails.
+          }
           finish(reject, new Error('Recording recovery scan timed out.'));
         }, recordingsScanTimeoutMs);
         if (unrefRecordingsScanTimeout) {
           scanTimeout.unref?.();
         }
       });
+      // The scanner deadline has ended. Keep admission through durable staging.
+      if (typeof options.beforeAutoResume === 'function') {
+        await options.beforeAutoResume(result);
+      }
+      try {
+        onScanSucceeded();
+      } catch (_) {
+        // Best-effort recovery banner cleanup.
+      }
+      notifyMeetingsMutated({ action: 'scan', result });
+      return result;
     } finally {
       recordingsScanInProgress = false;
       // Caller that transferred recovery→scan owns release of the scan hold.
@@ -455,7 +467,7 @@ function createMeetingManagerClient(deps) {
         String(meetingId),
       ];
       if (typeof updates.title === 'string') {
-        args.push('--title', updates.title);
+        args.push(`--title=${updates.title}`);
       }
 
       return enqueueMeetingUpdate(meetingId, () => new Promise((resolve, reject) => {

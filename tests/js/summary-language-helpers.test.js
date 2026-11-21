@@ -283,6 +283,7 @@ test('a deferred summary response cannot replace the selected meeting captions o
 
   const meetingB = {
     id: 'meeting-b',
+    title: 'Meeting B',
     language: 'de',
     summary: 'Legacy summary prose.',
     ai: { summary: { markdownPath: 'legacy.md' } },
@@ -290,6 +291,9 @@ test('a deferred summary response cannot replace the selected meeting captions o
   let releaseLateMeeting = null;
   let meetingReads = 0;
   let refreshStatusReads = 0;
+  let visibleSummary = meetingB.summary;
+  const openedTabs = [];
+  const savedSummaries = [];
   const context = vm.createContext({
     document: {
       getElementById: (id) => elements[id] || null,
@@ -310,7 +314,9 @@ test('a deferred summary response cannot replace the selected meeting captions o
             },
           };
         },
-        getMeeting: async () => {
+        getMeeting: async (id) => {
+          if (id === meetingB.id) return meetingB;
+          assert.equal(id, 'meeting-a');
           meetingReads += 1;
           if (meetingReads === 1) {
             return { id: 'meeting-a', language: 'en', transcript: 'speech from A' };
@@ -325,6 +331,7 @@ test('a deferred summary response cannot replace the selected meeting captions o
           });
         },
         generateSummary: async () => ({ meeting: { id: 'meeting-a' } }),
+        saveTranscriptAs: async (payload) => { savedSummaries.push(payload); },
       },
     },
     currentMeetingId: 'meeting-a',
@@ -346,8 +353,10 @@ test('a deferred summary response cannot replace the selected meeting captions o
     shouldAbortSummaryGenerationAfterPreflight: () => false,
     hashSummaryTranscript: async () => 'hash',
     showSummaryMessage() {},
-    activateHistoryDetailTab() {},
-    renderSummaryMarkdown() {},
+    activateHistoryDetailTab(tab) { openedTabs.push(tab); },
+    renderSummaryMarkdown(markdown) { visibleSummary = markdown; },
+    getCurrentSummaryMarkdown: () => visibleSummary,
+    findMeetingById: (id) => id === meetingB.id ? meetingB : null,
     syncMeetingInList() {},
     restoreCurrentHistorySummary: async () => false,
     openSettingsAtAiAddons() {},
@@ -364,6 +373,7 @@ test('a deferred summary response cannot replace the selected meeting captions o
     'confirmSummaryTranscriptLanguage',
     'updateSummaryLanguageCaptions',
     'generateSummaryForMeeting',
+    'saveMeetingSummaryToFile',
     'updateAiAddonSettings',
     'refreshAiAddonSettings',
   ]) {
@@ -389,6 +399,16 @@ test('a deferred summary response cannot replace the selected meeting captions o
   await pending;
 
   assert.equal(context.currentMeetingId, meetingB.id);
+  assert.equal(visibleSummary, meetingB.summary);
+  assert.deepEqual(openedTabs, []);
+  visibleSummary = 'Old detail pane content';
+  const exportPending = context.saveMeetingSummaryToFile();
+  context.currentMeetingId = 'meeting-a';
+  await exportPending;
+  assert.deepEqual(savedSummaries.map(({ suggestedName, content }) => [suggestedName, content]), [
+    ['Meeting B Summary', meetingB.summary],
+  ]);
+  context.currentMeetingId = meetingB.id;
   assert.equal(context.historyLanguageCaptionMeeting, meetingB);
   assert.equal(context.historyLanguageCaptionMeeting.summary, 'Legacy summary prose.');
   assert.equal(context.historyLanguageCaptionMeeting.ai.summary.markdownPath, 'legacy.md');
@@ -434,6 +454,7 @@ test('real regeneration cannot bypass the dialog for a reusable language', async
     } },
   });
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
+  vm.runInContext(extractTopLevelFunctionSource(source, 'restoreCurrentHistorySummary'), context);
   vm.runInContext(extractTopLevelFunctionSource(source, 'generateSummaryForMeeting'), context);
   const pending = context.generateSummaryForMeeting('meeting');
   await new Promise(resolve => setImmediate(resolve));

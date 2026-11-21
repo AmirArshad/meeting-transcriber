@@ -6,6 +6,7 @@ const path = require('node:path');
 const { EventEmitter } = require('node:events');
 
 const { createMeetingManagerClient } = require('../../src/main/meeting-manager-client');
+const { createRecordingsMaintenanceGate } = require('../../src/main/recordings-maintenance-gate');
 
 test('add-meeting forwards resolved transcription runtime metadata', async () => {
   const proc = new EventEmitter();
@@ -158,11 +159,13 @@ test('commit forwards device, compute type, and transcript hash without paths', 
   assert.equal(resultJson.includes('hf_secret'), false);
 });
 
-test('scan recovery hook failure rejects the scan before auto-resume', async () => {
+async function checkDelayedScanHandoff(rejectHandoff) {
+  const gate = createRecordingsMaintenanceGate();
   const proc = new EventEmitter();
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
-  let resumed = false;
+  const notifications = [];
+  let terminated = false;
   const client = createMeetingManagerClient({
     app: { getPath: () => '/tmp/avanevis-test' },
     path,
@@ -181,18 +184,50 @@ test('scan recovery hook failure rejects the scan before auto-resume', async () 
     assertSafeExistingRecordingAudioPath: (value) => value,
     assertSafeExistingTranscriptPath: (value) => value,
     validateAiMetadataPaths: (value) => value,
-    onScanSucceeded() { resumed = true; },
+    recordingsMaintenanceGate: gate,
+    recordingsScanTimeoutMs: 5,
+    unrefRecordingsScanTimeout: false,
+    terminateProcessBestEffort: async () => { terminated = true; },
+    onScanSucceeded() { notifications.push('resume'); },
+    onMeetingsMutated({ action }) { notifications.push(action); },
   });
+  let resolveHandoff;
+  let failHandoff;
+  const handoff = new Promise((resolve, reject) => {
+    resolveHandoff = resolve;
+    failHandoff = reject;
+  });
+  let markHandoffStarted;
+  const handoffStarted = new Promise((resolve) => { markHandoffStarted = resolve; });
   const scanPromise = client.scanRecordings({
-    beforeAutoResume: async () => {
-      throw new Error('request staging failed');
+    beforeAutoResume: () => {
+      markHandoffStarted();
+      return handoff;
     },
   });
+  const outcome = rejectHandoff ? assert.rejects(scanPromise, /request staging failed/) : scanPromise;
+  // Observe rejection even if the scanner incorrectly times out before staging settles.
+  void outcome.catch(() => {});
+  await Promise.resolve();
   proc.stdout.emit('data', Buffer.from('{"scanned":1,"added":1,"skipped":0}'));
   proc.emit('close', 0);
-  await assert.rejects(scanPromise, /request staging failed/);
-  assert.equal(resumed, false);
-});
+  await handoffStarted;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(gate.getOwner(), 'scan');
+  assert.equal(gate.tryAcquire('start'), false);
+  assert.equal(terminated, false);
+  assert.deepEqual(notifications, []);
+
+  if (rejectHandoff) failHandoff(new Error('request staging failed'));
+  else resolveHandoff();
+  const result = await outcome;
+  if (!rejectHandoff) assert.equal(result.added, 1);
+  assert.equal(gate.getOwner(), 'idle');
+  assert.deepEqual(notifications, rejectHandoff ? [] : ['resume', 'scan']);
+}
+
+test('scan keeps admission past the scanner deadline until a successful handoff', () => checkDelayedScanHandoff(false));
+test('scan keeps admission past the scanner deadline and suppresses success on handoff failure', () => checkDelayedScanHandoff(true));
 
 test('scan-recordings rejects before spawning while recorder work is active', async () => {
   let spawned = false;
@@ -265,13 +300,15 @@ test('scan-recordings timeout terminates the scanner and releases admission', as
   proc.stdout = new EventEmitter();
   proc.stderr = new EventEmitter();
   let terminated = false;
+  let handedOff = false;
+  let notified = false;
   const client = createMeetingManagerClient({
     app: { getPath: () => '/tmp/avanevis-test' },
     path,
     spawnTrackedPython: () => proc,
     pythonConfig: { backendPath: '/tmp/backend' },
     getBackendModuleArgs: () => [],
-    collectPythonProcessOutput: () => ({ getStdout: () => '', getStderr: () => '', assertStdoutWithinLimit() {} }),
+    collectPythonProcessOutput: () => ({ getStdout: () => '{"scanned":0,"added":0,"skipped":0}', assertStdoutWithinLimit() {} }),
     appendSpawnLogBuffer: (buffer, chunk) => buffer + String(chunk),
     assertTrustedRendererSender() {},
     sanitizeTranscriptionError: (value) => value,
@@ -282,26 +319,33 @@ test('scan-recordings timeout terminates the scanner and releases admission', as
     isRecorderBusy: () => false,
     recordingsScanTimeoutMs: 5,
     unrefRecordingsScanTimeout: false,
-    terminateProcessBestEffort: async () => { terminated = true; },
+    terminateProcessBestEffort: async () => {
+      assert.equal(client.isRecordingsScanInProgress(), true);
+      proc.emit('close', 0);
+      terminated = true;
+    },
+    onScanSucceeded() { notified = true; },
+    onMeetingsMutated() { notified = true; },
   });
-  const handlers = {};
-  client.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
 
-  await assert.rejects(handlers['scan-recordings'](), /timed out/);
+  await assert.rejects(client.scanRecordings({ beforeAutoResume() { handedOff = true; } }), /timed out/);
   assert.equal(terminated, true);
+  assert.equal(handedOff, false);
+  assert.equal(notified, false);
   assert.equal(client.isRecordingsScanInProgress(), false);
 });
 
-test('update-meeting serializes concurrent renames for the same meeting', async () => {
+test('update-meeting preserves leading-dash titles and serializes concurrent renames', async () => {
   const processes = [];
   const syncedTitles = [];
   const client = createMeetingManagerClient({
     app: { getPath: () => '/tmp/avanevis-test' },
     path,
-    spawnTrackedPython() {
+    spawnTrackedPython(args) {
       const proc = new EventEmitter();
       proc.stdout = new EventEmitter();
       proc.stderr = new EventEmitter();
+      proc.args = args;
       processes.push(proc);
       return proc;
     },
@@ -324,21 +368,22 @@ test('update-meeting serializes concurrent renames for the same meeting', async 
   const handlers = {};
   client.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
 
-  const first = handlers['update-meeting']({}, { meetingId: 'meeting', updates: { title: 'First' } });
+  const first = handlers['update-meeting']({}, { meetingId: 'meeting', updates: { title: '-Standup' } });
   const second = handlers['update-meeting']({}, { meetingId: 'meeting', updates: { title: 'Second' } });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(processes.length, 1, 'second rename must wait for the first subprocess');
 
-  processes[0].stdout.emit('data', Buffer.from('{"id":"meeting","title":"First"}'));
+  assert.deepEqual(processes[0].args.slice(-3), ['update', 'meeting', '--title=-Standup']);
+  processes[0].stdout.emit('data', Buffer.from('{"id":"meeting","title":"-Standup"}'));
   processes[0].emit('close', 0);
-  assert.deepEqual(await first, { id: 'meeting', title: 'First' });
+  assert.deepEqual(await first, { id: 'meeting', title: '-Standup' });
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(processes.length, 2);
 
   processes[1].stdout.emit('data', Buffer.from('{"id":"meeting","title":"Second"}'));
   processes[1].emit('close', 0);
   assert.deepEqual(await second, { id: 'meeting', title: 'Second' });
-  assert.deepEqual(syncedTitles, ['First', 'Second']);
+  assert.deepEqual(syncedTitles, ['-Standup', 'Second']);
 });
 
 test('getMeeting spawns --recordings-dir ... get <id> and surfaces errors', async () => {

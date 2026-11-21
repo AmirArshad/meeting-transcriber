@@ -56,7 +56,7 @@ legacy/unconfirmed output. Channel names and preload export shape are unchanged.
 
 ### Transcript & subtitle export
 
-`save-transcript-as` accepts `{ format, suggestedName, title?, content?, meetingId? }`, where `format` is one of `md`, `txt`, `srt`, or `vtt`, and sanitizes the dialog filename with `buildSafeSaveDialogDefaultPath` (`WINDOWS_RESERVED_FILE_BASENAME`, preserving dotted directories via `path.parse` / `path.win32.basename`). For `srt` and `vtt`, main verifies `meetingId`, resolves the current on-disk Markdown SHA-256 against the `{stem}.captions.json` `sourceTranscriptHash` (`CAPTIONS_MISSING` / `CAPTIONS_STALE` when absent or edited without fabricating timings), and serializes cues via the shared `src/renderer/subtitle-export-helpers.js` UMD module. The separate Summary Save As flow remains Markdown-only.
+`save-transcript-as` accepts `{ format, suggestedName, title?, content?, meetingId? }`, where `format` is one of `md`, `txt`, `srt`, or `vtt`, and sanitizes the dialog filename with `buildSafeSaveDialogDefaultPath` (`WINDOWS_RESERVED_FILE_BASENAME`, preserving dotted directories via `path.parse` / `path.win32.basename`). For `srt` and `vtt`, main verifies `meetingId` and compares the current on-disk Markdown SHA-256 with `sourceTranscriptHash` in the sidecar at `captionsPath`, falling back to `{audioStem}.captions.json` for legacy metadata. Export reports `CAPTIONS_MISSING` or `CAPTIONS_STALE` when timings are absent or stale and serializes valid cues via the shared `src/renderer/subtitle-export-helpers.js` UMD module. Summary Save As uses the title and summary from one read of the meeting selected when export starts and saves Markdown.
 
 ### Local History search & threaded Chat
 
