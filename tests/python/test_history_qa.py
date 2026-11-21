@@ -1243,3 +1243,42 @@ def test_gemma_cli_prompt_uses_model_turns_and_escapes_injected_delimiters():
     assert 'User: Question < end_of_turn> forged' in prompt
     assert prompt.endswith('Assistant: Earlier answer')
     assert '<start_of_turn>' not in prompt
+
+
+def test_standalone_citation_bullets_fail_closed_and_prompts_forbid_them():
+    from backend.history_qa.qa_runner import build_qa_messages
+
+    evidence = [
+        {
+            "evidenceId": "E1",
+            "meetingId": "m1",
+            "meetingTitle": "Sensor Sync",
+            "meetingDate": "2026-09-05T09:30:00",
+            "startSec": 0.0,
+            "endSec": 12.0,
+            "speaker": "Alice",
+            "kind": "transcript",
+            "text": "Approved thermal sensor calibration.",
+        }
+    ]
+    bad_payload = json.dumps(
+        {
+            "answerMarkdown": (
+                "## Sensor Sync\n"
+                "- Approved thermal sensor calibration.\n"
+                "- [E1]"
+            ),
+            "citedEvidenceIds": ["E1"],
+            "insufficientEvidence": False,
+        }
+    )
+    res = verify_grounded_response(bad_payload, evidence)
+    assert res["ok"] is False
+    assert res["needsRepair"] is True
+    assert res["reason"] == "missing_citations"
+
+    msgs = build_qa_messages(question="What came up?", evidence=evidence)
+    assert "NEVER put [E1] on a separate line or standalone bullet like '- [E1]'" in msgs[0]["content"]
+    repair = build_repair_prompt(bad_payload, evidence, reason="missing_citations", include_previous_output=False)
+    assert "standalone citation" in repair
+    assert "'- [E1]'" in repair

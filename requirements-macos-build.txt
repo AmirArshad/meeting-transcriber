@@ -22,13 +22,13 @@ filelock==4.2.12
 cffi==2.1.1
 pycparser==3.12
 tiktoken==0.3.3
-regex==2026.11.18
+regex==2026.11.19
 requests==2.34.2
 charset-normalizer==3.5.2
 idna==3.20
 # 2.8.0 fixes CVE-2026-97687/97688/97689 reported by the Mac build audit.
 urllib3==2.8.0
-certifi==2026.10.23
+certifi==2026.11.20
 huggingface-hub==1.33.0
 hf-xet==1.8.0
 httpx==0.28.1
@@ -36,12 +36,12 @@ httpcore==1.0.9
 fsspec==2026.9.0
 h11==0.16.0
 packaging==26.3
-PyYAML==6.0.3
+PyYAML==6.0.4
 tqdm==4.70.1
 typer==0.29.2
 annotated-types==0.8.0
-pydantic==2.14.3
-pydantic-core==2.50.4
+pydantic==2.14.4
+pydantic-core==2.50.5
 typing-inspection==0.4.5
 annotated-doc==0.0.7
 click==8.5.1

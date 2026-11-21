@@ -497,11 +497,12 @@ def build_repair_prompt(
     if reason == "missing_citations":
         header = (
             "Your previous JSON answer omitted valid inline [Ek] citation markers on one or more "
-            "factual paragraphs, bullet items, or table rows (or cited invalid IDs)."
+            "factual paragraphs, bullet items, or table rows (or placed a standalone citation bullet like '- [E1]' on its own line)."
         )
         guidance = (
             "Rewrite the answer so EVERY factual paragraph, bullet point, blockquote, and table data row "
-            "includes at least one valid inline citation like [E1] or [E1] [E2]. "
+            "includes at least one valid inline citation on that SAME line (for example: '- Approved the calibration [E1].'). "
+            "Remove any standalone citation-only bullets or lines like '- [E1]'. "
             "(Markdown headings, table header/separator rows, and short colon lead-in lines do not need citations.)"
         )
     else:
