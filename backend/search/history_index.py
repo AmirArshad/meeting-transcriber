@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from meeting_manager import MeetingManager
+from meetings import normalization as meeting_norm
+from summaries import language_labels as summary_language_labels
 from summaries import summary_pipeline
 from transcription import captions as transcript_captions
 
@@ -41,10 +43,34 @@ _CJK_CHAR_RE = re.compile(
     r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]"
 )
 _ISO_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_SUMMARY_META_LINE_RE = re.compile(
-    r"^(?:#\s+.*|\*\*(?:Profile|Model|Generated|File|Date|Duration|Language|Status|Last error):?\*\*.*|---+|\*\*\*+|___+)$",
-    re.IGNORECASE,
-)
+
+
+def _build_summary_meta_line_re() -> re.Pattern[str]:
+    keys = {
+        "Profile",
+        "Model",
+        "Generated",
+        "Tag",
+        "Type",
+        "Template",
+        "File",
+        "Date",
+        "Duration",
+        "Language",
+        "Status",
+        "Last error",
+    }
+    for row in summary_language_labels.LANGUAGE_LABELS.values():
+        keys.update(row[8:11])
+    keys.update(summary_language_labels.TAG_META_LABELS.values())
+    escaped = "|".join(sorted((re.escape(k) for k in keys if k), key=len, reverse=True))
+    return re.compile(
+        rf"^\*\*(?:{escaped}):?\*\*.*$",
+        re.IGNORECASE,
+    )
+
+
+_SUMMARY_META_LINE_RE = _build_summary_meta_line_re()
 
 
 def _utc_now_iso() -> str:
@@ -367,6 +393,7 @@ def _chunk_plain_paragraphs(
     current_lines: List[str] = []
     current_speaker = ""
     in_header_preamble = True
+    before_first_section = True
 
     def flush_para(*, reset_speaker: bool = False) -> None:
         nonlocal current_speaker
@@ -383,7 +410,11 @@ def _chunk_plain_paragraphs(
         if not stripped:
             flush_para()
             continue
-        if in_header_preamble and _SUMMARY_META_LINE_RE.match(stripped):
+        if re.match(r"^#{2,6}\s+", stripped):
+            before_first_section = False
+        if in_header_preamble and re.match(r"^#\s+", stripped):
+            continue
+        if (in_header_preamble or (kind == "summary" and before_first_section)) and _SUMMARY_META_LINE_RE.match(stripped):
             continue
         if stripped in ("---", "***", "___"):
             flush_para(reset_speaker=True)
@@ -780,7 +811,7 @@ def _extract_meeting_snapshot(
     date_iso = _clean_inline(meeting.get("date") or "")
     duration_sec = _parse_duration_seconds(meeting)
     language = _clean_inline(meeting.get("language") or "")
-    tag = _clean_inline(meeting.get("tag") or "").lower()
+    tag = meeting_norm.normalize_recording_tag(meeting.get("tag"), strict=False) or ""
     diarization_meta = (meeting.get("ai") or {}).get("diarization")
     speaker_names = diarization_meta.get("speakerNames") if isinstance(diarization_meta, dict) else None
     speaker_names_hash = (
@@ -820,6 +851,9 @@ def _extract_meeting_snapshot(
         transcript_hash = transcript_captions.hash_transcript_text(transcript_text)
         captions_hash, caption_cues = _resolve_meeting_captions(manager, meeting, transcript_hash)
         summary_hash, summary_text = _resolve_meeting_summary_text(manager, meeting, transcript_hash)
+        if summary_hash:
+            # Reindex existing summaries when passage extraction rules change.
+            summary_hash = transcript_captions.hash_transcript_text(f"summary-passages-v2|{summary_hash}")
 
     return {
         "meeting_id": meeting_id,
@@ -1187,6 +1221,7 @@ def build_scope_sql_filters(
     meeting_ids: Optional[Sequence[str]] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    tags: Optional[Sequence[str]] = None,
 ) -> Tuple[List[str], List[Any]]:
     clauses: List[str] = []
     params: List[Any] = []
@@ -1199,6 +1234,23 @@ def build_scope_sql_filters(
             placeholders = ", ".join("?" for _ in cleaned_ids)
             clauses.append(f"p.meeting_id IN ({placeholders})")
             params.extend(cleaned_ids)
+
+    if tags is not None:
+        if not isinstance(tags, (list, tuple)):
+            raise ValueError("Invalid recording tags in scope filter.")
+        cleaned_tags: List[str] = []
+        seen_tags = set()
+        for raw_tag in tags:
+            if not isinstance(raw_tag, str) or not raw_tag.strip():
+                raise ValueError("Invalid recording tag in scope filter.")
+            normalized_tag = meeting_norm.normalize_recording_tag(raw_tag, strict=True)
+            if normalized_tag and normalized_tag not in seen_tags:
+                seen_tags.add(normalized_tag)
+                cleaned_tags.append(normalized_tag)
+        if cleaned_tags:
+            placeholders = ", ".join("?" for _ in cleaned_tags)
+            clauses.append(f"m.tag IN ({placeholders})")
+            params.extend(cleaned_tags)
 
     clean_from = str(date_from or "").strip()
     if clean_from:
@@ -1287,6 +1339,7 @@ def _query_passages(
     meeting_ids: Optional[Sequence[str]],
     date_from: Optional[str],
     date_to: Optional[str],
+    tags: Optional[Sequence[str]] = None,
     limit_rows: int,
     max_matches_per_meeting: int = 3,
 ) -> Tuple[List[sqlite3.Row], List[str]]:
@@ -1294,6 +1347,7 @@ def _query_passages(
         meeting_ids=meeting_ids,
         date_from=date_from,
         date_to=date_to,
+        tags=tags,
     )
     per_meeting_cap = max(1, int(max_matches_per_meeting))
 
@@ -1489,6 +1543,7 @@ def search_history_index(
     meeting_ids: Optional[Sequence[str]] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    tags: Optional[Sequence[str]] = None,
     sync: bool = True,
     conn: Optional[sqlite3.Connection] = None,
 ) -> Dict[str, Any]:
@@ -1503,6 +1558,7 @@ def search_history_index(
     elif meeting_ids is not None:
         scoped_ids = [str(mid).strip() for mid in meeting_ids]
 
+    build_scope_sql_filters(meeting_ids=scoped_ids, date_from=date_from, date_to=date_to, tags=tags)
     tokens = extract_query_tokens(raw_query)
     if not tokens:
         total = 0
@@ -1532,6 +1588,7 @@ def search_history_index(
             meeting_ids=scoped_ids,
             date_from=date_from,
             date_to=date_to,
+            tags=tags,
             limit_rows=row_limit,
             max_matches_per_meeting=capped_matches,
         )
@@ -1600,6 +1657,7 @@ def list_indexed_meeting_headers(
     meeting_ids: Optional[Sequence[str]] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    tags: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Return lightweight metadata headers and distinct speakers for scoped indexed meetings."""
     if meeting_ids is not None:
@@ -1610,6 +1668,7 @@ def list_indexed_meeting_headers(
         meeting_ids=meeting_ids,
         date_from=date_from,
         date_to=date_to,
+        tags=tags,
     )
     m_clauses = [clause.replace("p.meeting_id", "m.meeting_id") for clause in clauses]
     where_sql = f"WHERE {' AND '.join(m_clauses)}" if m_clauses else ""

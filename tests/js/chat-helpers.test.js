@@ -278,16 +278,37 @@ test('shouldShowChatProgressBanner and resolveNoticeActionScope handle post-stre
   assert.equal(shouldShowChatProgressBanner({ sendVisible: true, streamingDraft: 'Partial draft', progress: { phase: 'json-repair' } }), true);
 
   assert.deepEqual(
-    resolveNoticeActionScope('reset_filters', { type: 'selected_meetings', meetingIds: [], dateFrom: '2026-09-01', dateTo: '2026-09-30' }),
-    { type: 'all', meetingIds: [], dateFrom: null, dateTo: null },
+    resolveNoticeActionScope('reset_filters', { type: 'selected_meetings', meetingIds: [], dateFrom: '2026-09-01', dateTo: '2026-09-30', tags: ['call'] }),
+    { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] },
   );
   assert.deepEqual(
-    resolveNoticeActionScope('reset_filters', { type: 'selected_meetings', meetingIds: ['m1'], dateFrom: '2026-09-01' }),
-    { type: 'selected_meetings', meetingIds: ['m1'], dateFrom: null, dateTo: null },
+    resolveNoticeActionScope('reset_filters', { type: 'selected_meetings', meetingIds: ['m1'], dateFrom: '2026-09-01', tags: ['meeting'] }),
+    { type: 'selected_meetings', meetingIds: ['m1'], dateFrom: null, dateTo: null, tags: [] },
   );
   assert.deepEqual(
-    resolveNoticeActionScope('search_all', { type: 'selected_meetings', meetingIds: ['m1'] }),
-    { type: 'all', meetingIds: [], dateFrom: null, dateTo: null },
+    resolveNoticeActionScope('search_all', { type: 'selected_meetings', meetingIds: ['m1'], tags: ['call'] }),
+    { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] },
   );
   assert.equal(resolveNoticeActionScope('retry', { type: 'all' }), null);
+});
+
+test('formatChatScopeLabel, isScopeFiltered, and buildAssistantNoticeView support scope.tags', () => {
+  assert.equal(formatChatScopeLabel({ type: 'all', tags: ['call'] }), 'All recordings · Phone / Support Call');
+  assert.equal(
+    formatChatScopeLabel({ type: 'all', tags: ['voice-note'] }, null, (slug) => `Custom:${slug}`),
+    'All recordings · Custom:voice-note',
+  );
+  assert.equal(
+    formatChatScopeLabel({ type: 'all', tags: ['call', 'interview'], dateFrom: '2026-11-01', dateTo: '2026-11-30' }),
+    'All recordings · 2 tags · 2026-11-01 – 2026-11-30',
+  );
+
+  assert.equal(isScopeFiltered({ type: 'all', tags: ['call'] }), true);
+  assert.equal(isScopeFiltered({ type: 'all', tags: [] }), false);
+
+  const noMatchWithTag = buildAssistantNoticeView(
+    { status: 'no_matching_excerpts', searchedMeetingCount: 2 },
+    { type: 'all', tags: ['call'] },
+  );
+  assert.deepEqual(noMatchWithTag.actions.map((a) => a.id), ['reset_filters']);
 });

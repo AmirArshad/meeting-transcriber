@@ -39,6 +39,7 @@ const {
   getSummaryArtifactForPlatform: defaultGetSummaryArtifactForPlatform,
 } = require('../ai-addon-state');
 const { isLinuxCudaStatusReadyForAdmission } = require('../main-process/linux-cuda-runtime-helpers');
+const { normalizeTag } = require('../renderer/tag-helpers');
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -386,6 +387,7 @@ function createSummaryService(deps) {
       }
 
       const transcriptBase = transcriptPath.replace(/\.md$/i, '');
+      const meetingTag = normalizeTag(meeting.tag);
       const attemptId = `${Date.now()}-${process.pid}-${++summaryAttemptCounter}`;
       const outputJson = `${transcriptBase}.${attemptId}.summary.json`;
       const outputMarkdown = `${transcriptBase}.${attemptId}.summary.md`;
@@ -505,6 +507,7 @@ function createSummaryService(deps) {
           modelId: selectedModelId,
           transcriptLanguage,
           sourceTranscriptHash,
+          ...(meetingTag ? { tag: meetingTag } : {}),
         }), { cwd: pythonConfig.backendPath, env: summaryEnv });
         activeSummaryGeneration.process = python;
         registerProcess(python);
@@ -623,6 +626,10 @@ function createSummaryService(deps) {
               return;
             }
 
+            const committedTag = normalizeTag(result.metadata.tag) || meetingTag || null;
+            const templateVersion = typeof result.metadata.templateVersion === 'string' && result.metadata.templateVersion.trim()
+              ? result.metadata.templateVersion.trim()
+              : null;
             const summaryMetadata = {
               status: 'completed',
               language: transcriptLanguage,
@@ -631,6 +638,8 @@ function createSummaryService(deps) {
               modelId: selectedModelId,
               modelProfile: result.metadata.profile,
               model: result.metadata.model,
+              tag: committedTag,
+              ...(templateVersion ? { templateVersion } : {}),
               generatedAt: result.metadata.generatedAt,
               sourceTranscriptHash: result.metadata.sourceTranscriptHash,
               jsonPath: outputJson,

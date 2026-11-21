@@ -598,3 +598,134 @@ def test_untimed_speaker_persists_across_blank_lines_and_superseded_legacy_summa
     assert search_history_index(rec_dir, index_path, query="StaleAttemptSummarySecret")["matchedMeetingCount"] == 0
     assert search_history_index(rec_dir, index_path, query="StalePathSummarySecret")["matchedMeetingCount"] == 0
 
+
+def test_tags_filtering_cli_and_localized_summary_metadata_stripping(tmp_path):
+    rec_dir = tmp_path / "recordings"
+    index_path = tmp_path / "search" / "history-index.sqlite"
+
+    _seed_meeting(
+        rec_dir,
+        meeting_id="m_interview",
+        title="Candidate Screen",
+        date_iso="2026-11-10T09:00:00",
+        transcript_md="**[00:10 - 00:20]** **Interviewer:**\nLet us discuss distributed consensus.\n",
+        summary_md=(
+            "# Resumo\n\n"
+            "**Etiqueta:** Entrevista · **Perfil:** Equilibrado\n\n"
+            "Candidato explicou consenso distribuído.\n"
+        ),
+    )
+    _seed_meeting(
+        rec_dir,
+        meeting_id="m_lecture",
+        title="Systems Class",
+        date_iso="2026-11-12T09:00:00",
+        transcript_md="**[00:10 - 00:20]** **Prof:**\nDistributed consensus guarantees safety under partitions.\n",
+        summary_md=(
+            "# Zusammenfassung\n\n"
+            "**Kategorie:** Vorlesung / Studium · **Profil:** Ausgewogen\n\n"
+            "Der Kurs behandelte verteilten Konsens.\n"
+        ),
+    )
+    _seed_meeting(
+        rec_dir,
+        meeting_id="m_untagged",
+        title="Quick Sync",
+        date_iso="2026-11-14T09:00:00",
+        transcript_md="**[00:10 - 00:20]** **Alice:**\nDistributed consensus notes.\n",
+    )
+
+    metadata = json.loads((rec_dir / "meetings.json").read_text(encoding="utf-8"))
+    metadata[0]["tag"] = "interview"
+    metadata[1]["tag"] = "lecture"
+    (rec_dir / "meetings.json").write_text(json.dumps(metadata), encoding="utf-8")
+
+    sync_history_index(rec_dir, index_path)
+
+    # Filter by single and multiple tags
+    res_single = search_history_index(rec_dir, index_path, query="consensus", tags=["interview"])
+    assert [m["meetingId"] for m in res_single["meetings"]] == ["m_interview"]
+
+    res_multi = search_history_index(rec_dir, index_path, query="consensus", tags=["interview", "lecture"])
+    assert {m["meetingId"] for m in res_multi["meetings"]} == {"m_interview", "m_lecture"}
+
+    # Localized Tag/Tipo metadata lines are stripped from summary passages
+    conn = sqlite3.connect(str(index_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT meeting_id, text FROM passages WHERE kind = 'summary' ORDER BY meeting_id"
+        ).fetchall()
+        joined_by_id = {r["meeting_id"]: r["text"] for r in rows}
+        assert "Etiqueta:" not in joined_by_id.get("m_interview", "")
+        assert "Kategorie:" not in joined_by_id.get("m_lecture", "")
+    finally:
+        conn.close()
+
+    # Incremental re-sync clears tag cleanly when tag is removed
+    metadata[0]["tag"] = None
+    (rec_dir / "meetings.json").write_text(json.dumps(metadata), encoding="utf-8")
+    sync_stats = sync_history_index(rec_dir, index_path)
+    assert sync_stats["syncedMeetings"] == 1
+    res_after_clear = search_history_index(rec_dir, index_path, query="consensus", tags=["interview"])
+    assert res_after_clear["matchedMeetingCount"] == 0
+
+    # CLI --tags and --stdin-json tags filtering
+    env = {**__import__("os").environ, "PYTHONPATH": str(ROOT / "backend")}
+    cli_flag = subprocess.run(
+        [
+            sys.executable, "-m", "backend.search.cli",
+            "--recordings-dir", str(rec_dir),
+            "--index-path", str(index_path),
+            "search", "--query", "consensus", "--tags", "lecture",
+        ],
+        text=True, capture_output=True, check=True, cwd=ROOT, env=env,
+    )
+    assert [m["meetingId"] for m in json.loads(cli_flag.stdout)["meetings"]] == ["m_lecture"]
+
+    cli_stdin = subprocess.run(
+        [
+            sys.executable, "-m", "backend.search.cli",
+            "--recordings-dir", str(rec_dir),
+            "--index-path", str(index_path),
+            "search", "--stdin-json",
+        ],
+        input=json.dumps({"query": "consensus", "tags": ["lecture"]}),
+        text=True, capture_output=True, check=True, cwd=ROOT, env=env,
+    )
+    assert [m["meetingId"] for m in json.loads(cli_stdin.stdout)["meetings"]] == ["m_lecture"]
+
+
+def test_rendered_summary_metadata_after_overview_is_not_indexed(tmp_path):
+    from backend.summaries.summary_pipeline import render_summary_markdown
+
+    rec_dir = tmp_path / 'recordings'
+    index_path = tmp_path / 'index.sqlite'
+    markdown = render_summary_markdown(
+        {'summary': 'Overview contains unique content.', 'topics': [{'title': 'A topic'}]},
+        {'tag': 'meeting', 'profile': 'balanced', 'model': 'Example', 'generatedAt': '2026-11-21T00:00:00Z'},
+    )
+    _seed_meeting(rec_dir, meeting_id='m1', title='Test', date_iso='2026-11-21',
+                  transcript_md='Transcript text', summary_md=markdown)
+    sync_history_index(rec_dir, index_path)
+    with sqlite3.connect(index_path) as conn:
+        text = ' '.join(row[0] for row in conn.execute("SELECT text FROM passages WHERE kind = 'summary'"))
+    assert 'Overview contains unique content' in text
+    for label in ('Tag:', 'Profile:', 'Model:', 'Generated:'):
+        assert label not in text
+
+
+def test_invalid_tags_rejected_even_without_query_tokens(tmp_path):
+    import pytest
+    for tags in ([''], ['lecture', '  '], 7, {'lecture': True}):
+        with pytest.raises(ValueError):
+            search_history_index(tmp_path, tmp_path / 'index', query='', tags=tags, sync=False)
+    for tags in ([''], ['lecture', ''], 7, {'lecture': True}, None):
+        proc = subprocess.run(
+            [sys.executable, '-m', 'backend.search.cli', '--recordings-dir', str(tmp_path),
+             '--index-path', str(tmp_path / 'index'), 'search', '--stdin-json'],
+            input=json.dumps({'query': '', 'tags': tags}), text=True, capture_output=True, cwd=ROOT,
+            env={**__import__('os').environ, 'PYTHONPATH': str(ROOT / 'backend')},
+        )
+        assert proc.returncode != 0
+        assert 'Invalid recording tag' in proc.stderr

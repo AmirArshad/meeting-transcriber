@@ -75,9 +75,44 @@
     return '';
   }
 
-  function formatChatScopeLabel(scope, meetingsById = null) {
+  const DEFAULT_TAG_LABELS = {
+    meeting: 'Meeting',
+    appointment: 'Appointment',
+    call: 'Phone / Support Call',
+    interview: 'Interview',
+    lecture: 'Lecture / Study',
+    podcast: 'Podcast',
+    video: 'Video',
+    'voice-note': 'Voice Note',
+    brainstorm: 'Brainstorm',
+    music: 'Music',
+    other: 'Other',
+  };
+
+  function formatTagScopeSuffix(scope, tagLabelResolver = null) {
+    const tags = Array.isArray(scope?.tags)
+      ? [...new Set(scope.tags.map((t) => String(t || '').trim().toLowerCase()).filter(Boolean))]
+      : [];
+    if (tags.length === 0) {
+      return '';
+    }
+    if (tags.length === 1) {
+      const slug = tags[0];
+      if (typeof tagLabelResolver === 'function') {
+        const resolved = tagLabelResolver(slug);
+        if (resolved) {
+          return String(resolved);
+        }
+      }
+      return DEFAULT_TAG_LABELS[slug] || slug;
+    }
+    return `${tags.length} tags`;
+  }
+
+  function formatChatScopeLabel(scope, meetingsById = null, tagLabelResolver = null) {
     const normalized = scope && typeof scope === 'object' ? scope : { type: 'all' };
     const dateSuffix = formatDateWindowSuffix(normalized);
+    const tagSuffix = formatTagScopeSuffix(normalized, tagLabelResolver);
     let base = 'All recordings';
     if (normalized.type === 'selected_meetings' && Array.isArray(normalized.meetingIds)) {
       const ids = normalized.meetingIds.filter(Boolean);
@@ -93,7 +128,7 @@
         base = 'No recordings selected';
       }
     }
-    return dateSuffix ? `${base} · ${dateSuffix}` : base;
+    return [base, tagSuffix, dateSuffix].filter(Boolean).join(' · ');
   }
 
   function buildModelMemoryPillView(modelState) {
@@ -290,7 +325,7 @@
 
   function resolveNoticeActionScope(actionId, currentScope = null) {
     if (actionId === 'search_all') {
-      return { type: 'all', meetingIds: [], dateFrom: null, dateTo: null };
+      return { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] };
     }
     if (actionId === 'reset_filters') {
       const meetingIds = Array.isArray(currentScope?.meetingIds)
@@ -302,6 +337,7 @@
         meetingIds: keepSelected ? meetingIds : [],
         dateFrom: null,
         dateTo: null,
+        tags: [],
       };
     }
     return null;

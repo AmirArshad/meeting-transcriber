@@ -1061,6 +1061,12 @@ def test_update_meeting_ai_merges_partial_feature_updates(tmp_path):
 
     assert meeting['ai']['summary']['jsonPath'] == str(summary_json_path.resolve(strict=False))
     assert meeting['ai']['summary']['error'] == 'later warning'
+    assert meeting['tag'] is None
+    for cleared in (None, '', '   '):
+        manager.update_meeting_ai('20260107_104555', summary={'tag': 'meeting'})
+        updated = manager.update_meeting_ai('20260107_104555', summary={'tag': cleared})
+        assert updated['ai']['summary']['tag'] is None
+    assert manager.update_transcription('20260107_104555')['tag'] is None
 
 
 def test_update_meeting_ai_clears_stale_diarization_path_on_terminal_error(tmp_path):
@@ -2495,3 +2501,122 @@ def test_scan_rejects_audio_changed_after_duration_read(tmp_path, monkeypatch, c
     assert not audio.with_suffix('.md').exists()
     assert manager.scan_and_sync_recordings()['added'] == 1
     assert manager.get_meeting('20261121_010000')['durationSeconds'] == 12.5
+
+
+def test_recording_tag_normalization_persistence_cli_and_summary_staleness(tmp_path):
+    from backend.meetings.normalization import (
+        VALID_RECORDING_TAGS,
+        normalize_recording_tag,
+        recording_tag_display_label,
+    )
+
+    assert len(VALID_RECORDING_TAGS) == 11
+    assert normalize_recording_tag('Meeting') == 'meeting'
+    assert normalize_recording_tag('phone / support call') == 'call'
+    assert normalize_recording_tag('voice_memo') == 'voice-note'
+    assert normalize_recording_tag('') is None
+    assert normalize_recording_tag(None) is None
+    assert recording_tag_display_label('call') == 'Phone / Support Call'
+
+    with pytest.raises(ValueError, match='Unsupported recording tag'):
+        normalize_recording_tag('unknown-category', strict=True)
+
+    recordings = tmp_path / 'recordings'
+    audio_a, transcript_a = _create_source_files(recordings, 'tagged_a')
+    manager = MeetingManager(str(recordings))
+
+    # Add with tag (alias accepted and normalized)
+    added = manager.add_meeting(
+        audio_path=str(audio_a),
+        transcript_path=str(transcript_a),
+        duration=45.0,
+        tag='Voice Memo',
+    )
+    assert added['tag'] == 'voice-note'
+    assert manager.get_meeting(added['id'])['tag'] == 'voice-note'
+
+    # Invalid tag rejected on add and update
+    audio_b, transcript_b = _create_source_files(recordings, 'tagged_b')
+    with pytest.raises(ValueError, match='Unsupported recording tag'):
+        manager.add_meeting(str(audio_b), str(transcript_b), 12.0, tag='not-a-tag')
+
+    with pytest.raises(ValueError, match='Unsupported recording tag'):
+        manager.update_meeting(added['id'], tag='invalid-tag')
+
+    # Attach completed summary and verify changing/clearing tag leaves summaryStale False
+    summary_json = recordings / f"{added['id']}.summary.json"
+    summary_md = recordings / f"{added['id']}.summary.md"
+    summary_json.write_text('{}', encoding='utf-8')
+    summary_md.write_text('# Summary\n\nBody\n', encoding='utf-8')
+    tx_hash = meeting_manager_module.meeting_norm.hash_text(
+        Path(added['transcriptPath']).read_text(encoding='utf-8')
+    )
+    manager.update_meeting_ai(
+        added['id'],
+        summary={
+            'status': 'completed',
+            'sourceTranscriptHash': tx_hash,
+            'tag': 'voice-note',
+            'template': 'voice-note',
+            'templateVersion': 'tag-templates-v1',
+        },
+    )
+
+    updated = manager.update_meeting(added['id'], tag='lecture')
+    assert updated['tag'] == 'lecture'
+    hydrated_updated = manager.get_meeting(added['id'])
+    assert hydrated_updated['summaryStale'] is False
+    assert hydrated_updated['ai']['summary']['sourceTranscriptHash'] == tx_hash
+
+    cleared = manager.update_meeting(added['id'], tag='')
+    assert cleared['tag'] is None
+    assert manager.get_meeting(added['id'])['summaryStale'] is False
+
+    # Legacy record missing 'tag' key lazily exposes tag: None without mutating meetings.json
+    legacy_audio, legacy_transcript = _create_source_files(recordings, 'legacy_rec')
+    legacy_added = manager.add_meeting(str(legacy_audio), str(legacy_transcript), 20.0)
+    raw_before = json.loads((recordings / 'meetings.json').read_text(encoding='utf-8'))
+    for item in raw_before:
+        item.pop('tag', None)
+    (recordings / 'meetings.json').write_text(json.dumps(raw_before), encoding='utf-8')
+    reloaded = MeetingManager(str(recordings))
+    assert reloaded.get_meeting(legacy_added['id'])['tag'] is None
+    raw_after_read = json.loads((recordings / 'meetings.json').read_text(encoding='utf-8'))
+    assert all('tag' not in item for item in raw_after_read)
+
+    # CLI add --tag, update --tag, update --clear-tag
+    cli_audio, cli_transcript = _create_source_files(recordings, 'cli_tagged')
+    import subprocess
+    import sys
+
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2] / 'backend')}
+    res_add = subprocess.run(
+        [
+            sys.executable, '-m', 'backend.meeting_manager',
+            '--recordings-dir', str(recordings),
+            'add', '--audio', str(cli_audio), '--transcript', str(cli_transcript), '--duration', '15', '--tag', 'podcast',
+        ],
+        capture_output=True, text=True, check=True, env=env,
+    )
+    cli_meeting = json.loads(res_add.stdout)
+    assert cli_meeting['tag'] == 'podcast'
+
+    res_upd = subprocess.run(
+        [
+            sys.executable, '-m', 'backend.meeting_manager',
+            '--recordings-dir', str(recordings),
+            'update', cli_meeting['id'], '--tag', 'brainstorm',
+        ],
+        capture_output=True, text=True, check=True, env=env,
+    )
+    assert json.loads(res_upd.stdout)['tag'] == 'brainstorm'
+
+    res_clr = subprocess.run(
+        [
+            sys.executable, '-m', 'backend.meeting_manager',
+            '--recordings-dir', str(recordings),
+            'update', cli_meeting['id'], '--clear-tag',
+        ],
+        capture_output=True, text=True, check=True, env=env,
+    )
+    assert json.loads(res_clr.stdout)['tag'] is None

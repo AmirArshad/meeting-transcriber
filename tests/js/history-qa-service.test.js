@@ -716,3 +716,22 @@ test('late stderr progress events are suppressed after cancel and threadContext 
     .filter((e) => e.channel === 'history-qa-progress' && e.payload.message === 'Late chunk after cancel');
   assert.equal(lateProgress.length, 0);
 });
+
+test('scope changes exclude whole mixed-citation turns from history and retrieval context', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-scoped-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const payloads = [];
+  const h = makeQaHarness({ tmpDir, onQaRunnerPayload(payload, proc) {
+    payloads.push(payload);
+    proc.stdout.emit('data', JSON.stringify({ status: 'answered', answerMarkdown: 'Answer [E1]', citations: payload.evidence }));
+    proc.emit('close', 0);
+  } });
+  const citation = (id, tag, date) => ({ evidenceId: id, meetingId: id, tag, meetingDate: date, text: 'text', excerpt: 'text' });
+  h.setRetrievalEvidence([citation('m1', 'call', '2026-11-18'), citation('m2', 'lecture', '2026-10-01')]);
+  const first = await h.handlers.get('ask-history')({}, { question: 'First?' });
+  h.setRetrievalEvidence([citation('m1', 'call', '2026-11-18')]);
+  await h.handlers.get('ask-history')({}, { threadId: first.thread.id, question: 'Follow up?', scope: { type: 'all', tags: ['call'], dateFrom: '2026-11-01', dateTo: '2026-11-30' } });
+  assert.deepEqual(payloads[1].history, []);
+  const retrieval = h.spawnedPython.filter((entry) => entry.args.includes('history_qa.retrieval'));
+  assert.equal(JSON.parse(retrieval[1].proc._stdinText).threadContext, undefined);
+});

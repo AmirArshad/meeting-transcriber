@@ -26,6 +26,7 @@ function createHarness({
   summaryExitCode = 0,
   metadataOutput = null,
   previousSummary = null,
+  meetingTag = null,
   checkAiAddonSetupStatus,
   platform = 'win32',
   arch = platform === 'darwin' ? 'arm64' : 'x64',
@@ -48,6 +49,7 @@ function createHarness({
     id: 'meeting_1',
     transcriptPath,
     transcriptionStatus: 'completed',
+    ...(meetingTag ? { tag: meetingTag } : {}),
     ai: {
       summary: previousSummary || {
         status: 'completed',
@@ -123,6 +125,7 @@ function createHarness({
       '--language', options.transcriptLanguage,
       '--source-transcript-hash', options.sourceTranscriptHash,
       '--model-id', options.modelId,
+      ...(options.tag ? ['--tag', options.tag] : []),
     ],
     collectPythonProcessOutput(python) {
       let stdout = '';
@@ -364,4 +367,32 @@ test('incorrect provenance or transcript change before finalization keeps prior 
     assert.equal(harness.getSpawnedArgs().some((args) => args.includes('update-ai')), false);
     assert.equal(fs.readdirSync(harness.recordingsDir).some((file) => file.endsWith('.tmp')), false);
   }
+});
+
+test('generate-summary forwards authoritative meeting.tag to Python and persists tag + templateVersion', async () => {
+  const harness = createHarness({
+    meetingTag: 'interview',
+    summaryMetadata: {
+      tag: 'interview',
+      template: 'interview',
+      templateVersion: 'tag-templates-v1',
+    },
+  });
+
+  const result = await harness.handlers['generate-summary']({}, confirmedOptions);
+  const runnerArgs = harness.getSpawnedArgs()[1];
+  const tagIdx = runnerArgs.indexOf('--tag');
+  assert.notEqual(tagIdx, -1);
+  assert.equal(runnerArgs[tagIdx + 1], 'interview');
+  assert.equal(result.meeting.ai.summary.tag, 'interview');
+  assert.equal(result.meeting.ai.summary.templateVersion, 'tag-templates-v1');
+});
+
+
+test('untagged regeneration clears a previous summary tag', async () => {
+  const harness = createHarness({ previousSummary: { status: 'completed', tag: 'interview' }, summaryMetadata: { tag: null } });
+  const result = await harness.handlers['generate-summary']({}, confirmedOptions);
+  assert.equal(result.meeting.ai.summary.tag, null);
+  const args = harness.getSpawnedArgs().find((entry) => entry.includes('update-ai'));
+  assert.equal(JSON.parse(args[args.indexOf('--summary-json') + 1]).tag, null);
 });

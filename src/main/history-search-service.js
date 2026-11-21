@@ -1,5 +1,7 @@
 'use strict';
 
+const { normalizeTagsFilter } = require('../renderer/tag-helpers');
+
 /**
  * Main-process SQLite FTS5 history search service for AvaNevis.
  *
@@ -204,6 +206,10 @@ function createHistorySearchService(deps) {
       : null;
     const dateFrom = normalizeOptionalDate(options.dateFrom);
     const dateTo = normalizeOptionalDate(options.dateTo);
+    const rawTags = options.tags !== undefined
+      ? options.tags
+      : (options.tag != null && options.tag !== '' ? [options.tag] : null);
+    const tags = normalizeTagsFilter(rawTags);
 
     return enqueueOperation(async () => {
       const indexPath = getIndexPath();
@@ -227,11 +233,14 @@ function createHistorySearchService(deps) {
       if (dateTo) {
         args.push('--date-to', dateTo);
       }
+      if (tags.length > 0) {
+        args.push('--tags', tags.join(','));
+      }
       if (!shouldSync) {
         args.push('--no-sync');
       }
 
-      const result = await runSearchCli(args, { query });
+      const result = await runSearchCli(args, { query, ...(tags.length > 0 ? { tags } : {}) });
       if (dirtyGeneration !== syncGen) throw new Error('History changed while searching; please retry.');
       if (shouldSync && dirtyGeneration === syncGen) {
         dirty = false;

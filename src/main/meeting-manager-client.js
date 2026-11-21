@@ -1,5 +1,7 @@
 'use strict';
 
+const { normalizeTagStrict } = require('../renderer/tag-helpers');
+
 /**
  * Meeting-manager IPC client for the AvaNevis main process.
  *
@@ -73,10 +75,14 @@ function createMeetingManagerClient(deps) {
   function addMeetingToHistory(meetingData) {
     let resolvedAudioPath;
     let resolvedTranscriptPath;
+    let normalizedTag = null;
 
     try {
       resolvedAudioPath = assertSafeExistingRecordingAudioPath(meetingData.audioPath);
       resolvedTranscriptPath = assertSafeExistingTranscriptPath(meetingData.transcriptPath);
+      if (Object.hasOwn(meetingData || {}, 'tag') && meetingData.tag !== undefined && meetingData.tag !== null && meetingData.tag !== '') {
+        normalizedTag = normalizeTagStrict(meetingData.tag);
+      }
     } catch (error) {
       return Promise.reject(error);
     }
@@ -105,6 +111,9 @@ function createMeetingManagerClient(deps) {
 
       if (title) {
         args.push(`--title=${title}`);
+      }
+      if (normalizedTag) {
+        args.push('--tag', normalizedTag);
       }
       if (transcriptionStatus) {
         args.push('--transcription-status', String(transcriptionStatus));
@@ -468,6 +477,14 @@ function createMeetingManagerClient(deps) {
       ];
       if (typeof updates.title === 'string') {
         args.push(`--title=${updates.title}`);
+      }
+      if (Object.hasOwn(updates, 'tag') && updates.tag !== undefined) {
+        const normalizedTag = normalizeTagStrict(updates.tag);
+        if (normalizedTag === null) {
+          args.push('--clear-tag');
+        } else {
+          args.push('--tag', normalizedTag);
+        }
       }
 
       return enqueueMeetingUpdate(meetingId, () => new Promise((resolve, reject) => {

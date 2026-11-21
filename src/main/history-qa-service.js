@@ -1033,7 +1033,39 @@ function createHistoryQaService(deps) {
         checkCurrent();
         if (historySearchService.getGeneration() !== generation) throw new Error('History changed while answering; please retry.');
       };
-      const existingMessages = Array.isArray(thread.messages) ? thread.messages : [];
+      const scopedSelectedIds = effectiveScope && effectiveScope.type === 'selected_meetings'
+        ? new Set((effectiveScope.meetingIds || []).map(String))
+        : null;
+      const scopedTags = Array.isArray(effectiveScope?.tags) && effectiveScope.tags.length
+        ? new Set(effectiveScope.tags)
+        : null;
+      const dateFrom = effectiveScope?.dateFrom || '';
+      const dateTo = effectiveScope?.dateTo || '';
+      const hasScopeFilter = scopedSelectedIds || scopedTags || dateFrom || dateTo;
+      const turnMatchesScope = (assistant) => {
+        if (!hasScopeFilter) return true;
+        if (!Array.isArray(assistant.citations) || !assistant.citations.length) return false;
+        return assistant.citations.every((citation) => {
+          if (!citation || typeof citation !== 'object') return false;
+          if (scopedSelectedIds && !scopedSelectedIds.has(String(citation.meetingId))) return false;
+          if (scopedTags && !scopedTags.has(citation.tag)) return false;
+          if (dateFrom || dateTo) {
+            const day = typeof citation.meetingDate === 'string' ? citation.meetingDate.slice(0, 10) : '';
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+            if ((dateFrom && day < dateFrom) || (dateTo && day > dateTo)) return false;
+          }
+          return true;
+        });
+      };
+      const messages = Array.isArray(thread.messages) ? thread.messages : [];
+      const existingMessages = hasScopeFilter ? messages.filter((message, index) => {
+        if (message.role === 'user') {
+          const next = messages[index + 1];
+          return next?.role === 'assistant' && next.status === 'answered' && turnMatchesScope(next);
+        }
+        return message.role === 'assistant' && message.status === 'answered'
+          && messages[index - 1]?.role === 'user' && turnMatchesScope(message);
+      }) : messages;
       let lastCitedMeetingIds = [];
       let lastQuestion = '';
       let lastAnsweredIdx = -1;
@@ -1170,9 +1202,6 @@ function createHistoryQaService(deps) {
       });
 
       const queueRunner = runQueuedCompute || ((action) => enqueueAiComputeAction(() => enqueueGpuResourceActionForQa(action)));
-      const scopedSelectedIds = effectiveScope && effectiveScope.type === 'selected_meetings'
-        ? new Set((effectiveScope.meetingIds || []).map(String))
-        : null;
       const historyTurns = [];
       for (let i = 0; i + 1 < existingMessages.length; i += 2) {
         const user = existingMessages[i];
@@ -1184,14 +1213,6 @@ function createHistoryQaService(deps) {
           && user.content
           && assistant.content
         ) {
-          if (
-            scopedSelectedIds
-            && Array.isArray(assistant.citations)
-            && assistant.citations.length > 0
-            && !assistant.citations.every((citation) => scopedSelectedIds.has(String(citation.meetingId)))
-          ) {
-            continue;
-          }
           historyTurns.push({ role: 'user', content: user.content }, { role: 'assistant', content: assistant.content });
         }
       }

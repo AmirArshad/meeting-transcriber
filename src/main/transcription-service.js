@@ -105,6 +105,7 @@ const {
   assertLinuxSpeakrsOnlyEngine,
 } = require('../ai-addon/manifest-store');
 const transcriptionPolicy = require('../transcription-policy');
+const { normalizeTagStrict } = require('../renderer/tag-helpers');
 const { runDiarizationOnlyProcess } = require('../main-process/transcription-runtime-helpers');
 
 /**
@@ -2998,11 +2999,15 @@ function createTranscriptionService(deps) {
     modelSize = 'small',
     transcriptionErrorNote = '',
     title = '',
+    tag = null,
     transcriptionSelection = null,
   } = {}) {
     if (typeof addMeetingToHistory !== 'function') {
       throw new Error('finalize-recording-transcription requires addMeetingToHistory');
     }
+    const normalizedTag = (tag === null || tag === undefined || (typeof tag === 'string' && !tag.trim()))
+      ? null
+      : normalizeTagStrict(tag);
 
     const request = resolveFinalizeTranscriptionRequest({
       audioPath,
@@ -3035,6 +3040,7 @@ function createTranscriptionService(deps) {
         language: normalizedLanguage,
         model: normalizedModel,
         title: title || undefined,
+        ...(normalizedTag ? { tag: normalizedTag } : {}),
         transcriptionStatus: 'pending',
         transcriptionError: transcriptionErrorNote || undefined,
         transcriptionRequest: request,

@@ -308,3 +308,108 @@ def test_repair_summary_json_extracts_fenced_or_wrapped_json():
 
     with pytest.raises(SummaryValidationError):
         repair_summary_json('no json here')
+
+
+def test_tag_templates_registry_prompts_validation_and_rendering():
+    from backend.meetings.normalization import VALID_RECORDING_TAGS
+    from backend.summaries.templates import (
+        SUMMARY_TEMPLATES,
+        TEMPLATE_VERSION,
+        get_template,
+        render_schema_instruction,
+        resolve_template_id,
+    )
+    from backend.summaries.language_labels import (
+        LANGUAGE_LABELS,
+        TAG_DISPLAY_LABELS,
+        TAG_META_LABELS,
+        TEMPLATE_FIELD_LABELS,
+        TEMPLATE_SECTION_LABELS,
+    )
+
+    assert TEMPLATE_VERSION == 'tag-templates-v1'
+    assert set(VALID_RECORDING_TAGS) == set(SUMMARY_TEMPLATES.keys())
+    assert resolve_template_id(None) == 'meeting'
+    assert resolve_template_id('voice memo') == 'voice-note'
+    assert resolve_template_id(None, fallback='other') == 'other'
+
+    # All 13 language rows cover every tag, section key, and field metadata label.
+    assert set(TAG_DISPLAY_LABELS.keys()) == set(LANGUAGE_LABELS.keys())
+    assert set(TAG_META_LABELS.keys()) == set(LANGUAGE_LABELS.keys())
+    assert set(TEMPLATE_SECTION_LABELS.keys()) == set(LANGUAGE_LABELS.keys())
+    assert set(TEMPLATE_FIELD_LABELS.keys()) == set(LANGUAGE_LABELS.keys())
+    all_section_keys = {
+        field
+        for tmpl in SUMMARY_TEMPLATES.values()
+        for field in tmpl['array_fields']
+    }
+    for lang in LANGUAGE_LABELS:
+        assert set(TAG_DISPLAY_LABELS[lang].keys()) == set(VALID_RECORDING_TAGS)
+        assert all_section_keys.issubset(set(TEMPLATE_SECTION_LABELS[lang].keys()))
+        assert all(bool(str(TAG_DISPLAY_LABELS[lang][t]).strip()) for t in VALID_RECORDING_TAGS)
+
+    # Every template builds valid chunk/merge prompts, validates empty payloads, and renders markdown.
+    for tag in VALID_RECORDING_TAGS:
+        tmpl = get_template(tag)
+        schema_text = render_schema_instruction(tag)
+        for field in tmpl['array_fields']:
+            assert f'"{field}"' in schema_text
+
+        for profile in ('action-items', 'concise', 'balanced', 'detailed'):
+            chunk_prompt = build_chunk_summary_prompt(
+                {'index': 1, 'text': '[00:01 - 00:05] Speaker 1: Substantive test point.'},
+                profile=profile,
+                tag=tag,
+            )
+            assert tmpl['persona'] in chunk_prompt
+
+        merge_prompt = build_final_merge_prompt([{'summary': 'Overview text'}], tag=tag)
+        assert tmpl['merge_persona'] in merge_prompt
+
+        validated = validate_summary_json({'summary': 'Overview text'}, tag=tag)
+        for field in tmpl['array_fields']:
+            assert validated[field] == []
+
+        rendered_empty = render_summary_markdown(
+            validated,
+            {'profile': 'balanced', 'model': 'Qwen', 'generatedAt': '2026-11-21T00:00:00Z', 'tag': tag},
+        )
+        assert '**Tag:**' in rendered_empty
+        if tag == 'meeting':
+            assert 'None captured.' in rendered_empty
+        else:
+            assert 'None captured.' not in rendered_empty
+
+    # Legacy call without tag still uses meeting schema and shows None captured.
+    legacy_md = render_summary_markdown({'summary': 'Legacy overview'})
+    assert '## Action Items\n\nNone captured.' in legacy_md
+
+
+
+def test_template_synonyms_detail_fallback_and_script_detection():
+    brainstorm = render_summary_markdown({
+        'summary': 'Overview', 'problem_or_goal': [{'goal': 'Ship release'}],
+        'next_experiments': [{'experiment': 'Test the build'}],
+    }, {'template': 'brainstorm'})
+    assert 'Ship release' in brainstorm
+    other = render_summary_markdown({
+        'summary': 'Overview', 'key_points': [{'summary': 'Detail alone'}],
+        'next_steps': [{'task': 'Follow up'}],
+    }, {'template': 'other'})
+    assert 'Detail alone' in other and 'Untitled: Detail alone' not in other
+    assert 'Follow up' in other
+    lecture = render_summary_markdown({
+        'summary': '简短', 'core_concepts': [{'concept': '學習課程'}],
+    }, {'template': 'lecture', 'language': 'zh'})
+    assert '學習' in lecture
+    from backend.summaries.language_labels import get_localized_labels
+    assert get_localized_labels('zh-Hant')['sections']['core_concepts'] in lecture
+
+
+@pytest.mark.parametrize('noun', ['recording', 'audio', 'appointment', 'call', 'interview', 'lecture', 'podcast', 'video', 'voice-note', 'voice note', 'brainstorm', 'music', 'session'])
+def test_denials_for_all_recording_types_are_rejected(noun):
+    with pytest.raises(SummaryValidationError):
+        assert_summary_grounded_in_transcript(
+            {'summary': f'No {noun} transcript was provided.'},
+            'The speaker described several substantive ideas during this session.',
+        )

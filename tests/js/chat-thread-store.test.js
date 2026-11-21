@@ -33,6 +33,7 @@ test('chat thread store persists atomically under userData/chat and supports ful
     meetingIds: ['m1', 'm2'],
     dateFrom: '2026-11-01',
     dateTo: null,
+    tags: [],
   });
 
   const turned = await store.appendTurn(created.id, {
@@ -67,6 +68,7 @@ test('chat thread store persists atomically under userData/chat and supports ful
     meetingIds: [],
     dateFrom: null,
     dateTo: null,
+    tags: [],
   });
 
   const fetched = await store.getThread(created.id);
@@ -199,4 +201,40 @@ test('chat thread store preserves extended v3.1 failure statuses, inspectedSourc
   assert.equal(reloaded.messages[1].status, 'no_matching_excerpts');
   assert.equal(reloaded.messages[3].status, 'verification_failed');
   assert.equal(reloaded.messages[3].inspectedSources[0].tag, 'interview');
+});
+
+test('chat thread store normalizes, dedupes, persists, and validates scope.tags', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-chat-tags-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const store = makeStore(tmpDir);
+  const created = await store.createThread({
+    scope: { type: 'all', tags: ['Voice Note', 'call', 'voice-note'] },
+  });
+  assert.deepEqual(created.scope.tags, ['voice-note', 'call']);
+
+  const updated = await store.updateThreadScope(created.id, {
+    type: 'selected_meetings',
+    meetingIds: ['m1'],
+    tags: ['Lecture / Study', 'music'],
+  });
+  assert.deepEqual(updated.scope, {
+    type: 'selected_meetings',
+    meetingIds: ['m1'],
+    dateFrom: null,
+    dateTo: null,
+    tags: ['lecture', 'music'],
+  });
+
+  const reloaded = await makeStore(tmpDir).getThread(created.id);
+  assert.deepEqual(reloaded.scope.tags, ['lecture', 'music']);
+
+  await assert.rejects(
+    store.createThread({ scope: { type: 'all', tags: ['not-a-tag'] } }),
+    /Invalid chat scope tags/,
+  );
+  assert.throws(
+    () => store.updateThreadScope(created.id, { type: 'all', tags: ['invalid'] }),
+    /Invalid chat scope tags/,
+  );
 });

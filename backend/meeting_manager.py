@@ -229,6 +229,7 @@ class MeetingManager:
         language: str = "en",
         model: str = "base",
         title: Optional[str] = None,
+        tag: Optional[str] = None,
         transcription_status: str = "completed",
         transcription_error: Optional[str] = None,
         transcription_device: Optional[str] = None,
@@ -254,6 +255,7 @@ class MeetingManager:
         Returns:
             Meeting object with metadata
         """
+        normalized_tag = meeting_norm.normalize_recording_tag(tag, strict=True)
         normalized_request = None
         if transcription_request is not None:
             normalized_request = meeting_norm.normalize_transcription_request(
@@ -369,6 +371,8 @@ class MeetingManager:
                     "transcriptionStatus": self._normalize_transcription_status(transcription_status),
                     "transcriptionError": self._normalize_transcription_error(transcription_error),
                 }
+                if normalized_tag is not None:
+                    meeting["tag"] = normalized_tag
                 normalized_device = meeting_norm.normalize_transcription_device(transcription_device)
                 normalized_compute_type = meeting_norm.normalize_transcription_compute_type(transcription_compute_type)
                 if normalized_device:
@@ -435,7 +439,7 @@ class MeetingManager:
                 print(f"Warning: Could not remove original transcript: {del_err}", file=sys.stderr)
 
         print(f"Meeting saved: {meeting_id}", file=sys.stderr)
-        return meeting
+        return meeting_norm.public_transcription_provenance(meeting)
 
     def _build_direct_meeting_record(
         self,
@@ -920,21 +924,30 @@ class MeetingManager:
             'captionsTimingPrecision': payload.get('timingPrecision'),
         }
 
-    def update_meeting(self, meeting_id: str, *, title: Optional[str] = None) -> Optional[Dict]:
+    def update_meeting(
+        self,
+        meeting_id: str,
+        *,
+        title: Optional[str] = None,
+        tag=_UNSET,
+    ) -> Optional[Dict]:
         """
-        Update editable fields on a meeting (currently: display title).
+        Update editable fields on a meeting (display title and/or canonical tag).
 
         The on-disk audio/transcript filenames are intentionally left untouched
-        so the underlying recording can always be located by ID. Only the
-        display label stored in metadata changes.
+        so the underlying recording can always be located by ID. Only metadata
+        fields change.
 
         Args:
             meeting_id: Meeting ID to update.
             title: New display title. If None, no change is made.
+            tag: New recording tag (canonical slug, alias, None/"" to clear, or _UNSET to skip).
 
         Returns:
             Updated meeting dict, or None if the meeting was not found.
         """
+        normalized_tag = _UNSET if tag is _UNSET else meeting_norm.normalize_recording_tag(tag, strict=True)
+
         with self._metadata_guard():
             meetings = self._list_meetings_locked()
             meeting = next((m for m in meetings if m['id'] == meeting_id), None)
@@ -949,11 +962,20 @@ class MeetingManager:
                     meeting['title'] = clean
                     changed = True
 
+            if normalized_tag is not _UNSET:
+                current_tag = meeting_norm.normalize_recording_tag(meeting.get('tag'), strict=False)
+                if normalized_tag != current_tag or ('tag' in meeting and normalized_tag is None and meeting.get('tag') is not None):
+                    if normalized_tag is None:
+                        meeting['tag'] = None
+                    else:
+                        meeting['tag'] = normalized_tag
+                    changed = True
+
             if changed:
                 self._save_meetings_unlocked(meetings)
                 print(f"Meeting updated: {meeting_id}", file=sys.stderr)
 
-            return meeting
+            return meeting_norm.public_transcription_provenance(meeting)
 
     def update_transcription(
         self,
@@ -1029,7 +1051,7 @@ class MeetingManager:
 
             if changed:
                 self._save_meetings_unlocked(meetings)
-            return meeting
+            return meeting_norm.public_transcription_provenance(meeting)
 
     def stage_transcription_request(
         self,
@@ -1327,7 +1349,7 @@ class MeetingManager:
                 self._save_meetings_unlocked(meetings)
                 print(f"Meeting AI metadata updated: {meeting_id}", file=sys.stderr)
 
-            return meeting
+            return meeting_norm.public_transcription_provenance(meeting)
 
     def delete_meeting(self, meeting_id: str) -> bool:
         """
@@ -1413,10 +1435,12 @@ def main():
     delete_parser = subparsers.add_parser('delete', help='Delete meeting')
     delete_parser.add_argument('id', help='Meeting ID')
 
-    # Update meeting (rename, etc.)
+    # Update meeting (rename, tag, etc.)
     update_parser = subparsers.add_parser('update', help='Update meeting metadata')
     update_parser.add_argument('id', help='Meeting ID')
     update_parser.add_argument('--title', help='New display title')
+    update_parser.add_argument('--tag', help='Canonical recording tag')
+    update_parser.add_argument('--clear-tag', action='store_true', help='Clear recording tag')
 
     update_transcription_parser = subparsers.add_parser('update-transcription', help='Update transcription metadata for a meeting')
     update_transcription_parser.add_argument('id', help='Meeting ID')
@@ -1474,6 +1498,7 @@ def main():
     add_parser.add_argument('--language', default='en', help='Language code')
     add_parser.add_argument('--model', default='base', help='Model size')
     add_parser.add_argument('--title', help='Custom title')
+    add_parser.add_argument('--tag', help='Canonical recording tag')
     add_parser.add_argument('--transcription-status', choices=sorted(_VALID_TRANSCRIPTION_STATUSES), default='completed', help='Transcription status')
     add_parser.add_argument('--transcription-error', help='Sanitized transcription error')
     add_parser.add_argument(
@@ -1512,7 +1537,12 @@ def main():
             sys.exit(1)
 
     elif args.command == 'update':
-        meeting = manager.update_meeting(args.id, title=args.title)
+        tag_arg = None if args.clear_tag else (args.tag if args.tag is not None else _UNSET)
+        try:
+            meeting = manager.update_meeting(args.id, title=args.title, tag=tag_arg)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
         if meeting:
             print(json.dumps(meeting, indent=2))
         else:
@@ -1634,14 +1664,15 @@ def main():
                 language=args.language,
                 model=args.model,
                 title=args.title,
+                tag=args.tag,
                 transcription_status=args.transcription_status,
                 transcription_error=args.transcription_error,
                 transcription_device=args.transcription_device,
                 transcription_compute_type=args.transcription_compute_type,
                 transcription_request=request,
             )
-        except meeting_norm.TranscriptionMetadataError as exc:
-            print(exc.code, file=sys.stderr)
+        except (meeting_norm.TranscriptionMetadataError, ValueError) as exc:
+            print(getattr(exc, 'code', None) or str(exc), file=sys.stderr)
             sys.exit(1)
         except OSError as exc:
             if exc.errno not in (errno.ENOSPC, errno.EDQUOT):

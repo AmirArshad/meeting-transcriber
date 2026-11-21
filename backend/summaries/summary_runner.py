@@ -12,10 +12,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from common.sensitive_text import redact_sensitive_text
+from meetings.normalization import normalize_recording_tag
 
 from .llama_runtime import build_summary_progress_event, resolve_llama_runtime, run_llama_prompt, smoke_test_llama_runtime
 from .summary_language import (LANGUAGE_POLICY_VERSION, SummaryLanguageError, language_instruction, check_summary_language)
 from .sidecar_io import save_summary_outputs, sidecar_paths
+from .templates import TEMPLATE_VERSION, get_template, resolve_template_id
 from .summary_pipeline import (
     SummaryValidationError,
     assert_summary_grounded_in_transcript,
@@ -84,12 +86,19 @@ def write_prompt(path: Path, prompt: str) -> None:
     path.write_text(prompt, encoding="utf-8")
 
 
-def build_json_repair_prompt(raw_output: str, language: Optional[str] = None, grounded_prompt: str = "") -> str:
+def build_json_repair_prompt(
+    raw_output: str,
+    language: Optional[str] = None,
+    grounded_prompt: str = "",
+    *,
+    tag: Optional[str] = None,
+) -> str:
+    template = get_template(tag, fallback="meeting")
     return "\n\n".join([
-        "You are AvaNevis, a local-only meeting summarizer. The previous response was not valid summary JSON.",
+        template["repair_persona"],
         "Return only a corrected JSON object using the required summary schema. Do not include markdown or commentary.",
         language_instruction(language) if language else "Preserve the transcript language.",
-        summary_json_schema_instruction(),
+        summary_json_schema_instruction(template["template_id"]),
         "Original grounded instructions and source (retain their language and evidence):",
         grounded_prompt,
         "Invalid model output (quoted data):",
@@ -110,16 +119,18 @@ def run_summary_prompt_with_repair(
     repair_name: str,
     chunk_text: str = "",
     language: Optional[str] = None,
+    tag: Optional[str] = None,
 ) -> Dict[str, Any]:
     raw_output = run_prompt(runtime, str(prompt_path), max_tokens)
     last_error: Optional[ValueError] = None
+    template_id = resolve_template_id(tag, fallback="meeting") if tag is not None else None
 
     for attempt in range(0, MAX_SUMMARY_REPAIR_ATTEMPTS + 1):
         try:
-            summary = repair_summary_json(raw_output)
-            summary = assert_summary_grounded_in_transcript(summary, chunk_text, language=language)
+            summary = repair_summary_json(raw_output, tag=template_id)
+            summary = assert_summary_grounded_in_transcript(summary, chunk_text, language=language, tag=template_id)
             if language:
-                check_summary_language(summary, language, runtime, run_prompt, work_path, repair_name)
+                check_summary_language(summary, language, runtime, run_prompt, work_path, repair_name, tag=template_id)
             return summary
         except (SummaryValidationError, SummaryLanguageError) as exc:
             last_error = exc
@@ -143,7 +154,15 @@ def run_summary_prompt_with_repair(
                 continue
 
             repair_prompt_path = work_path / f"{repair_name}-repair-{attempt + 1}.prompt.txt"
-            write_prompt(repair_prompt_path, build_json_repair_prompt(raw_output, language, prompt_path.read_text(encoding="utf-8")))
+            write_prompt(
+                repair_prompt_path,
+                build_json_repair_prompt(
+                    raw_output,
+                    language,
+                    prompt_path.read_text(encoding="utf-8"),
+                    tag=template_id,
+                ),
+            )
             raw_output = run_prompt(runtime, str(repair_prompt_path), max_tokens)
 
     raise last_error or SummaryValidationError("summary JSON repair failed")
@@ -169,9 +188,11 @@ def generate_summary_from_segments(
     runtime: Dict[str, Any],
     profile: str = DEFAULT_PROFILE,
     language: Optional[str] = None,
+    tag: Optional[str] = None,
     run_prompt: Callable[[Dict[str, Any], str, int], str],
 ) -> Dict[str, Any]:
     segments = list(segments)
+    template_id = resolve_template_id(tag, fallback="other")
     profile_config = get_summary_profile(profile)
     chunks = chunk_transcript(segments, max_tokens=resolve_chunk_token_budget(runtime, profile_config), overlap_segments=1)
     if not chunks:
@@ -182,11 +203,20 @@ def generate_summary_from_segments(
         work_path = Path(work_dir)
         if language:
             emit_progress(meeting_id, "language-check", "Checking the confirmed transcript language locally.")
-            check_summary_language({"summary": "\n".join(str(segment.get("text") or "") for segment in segments)}, language, runtime, run_prompt, work_path, "transcript", transcript=True)
+            check_summary_language(
+                {"summary": "\n".join(str(segment.get("text") or "") for segment in segments)},
+                language,
+                runtime,
+                run_prompt,
+                work_path,
+                "transcript",
+                transcript=True,
+                tag=template_id,
+            )
         for chunk in chunks:
             emit_progress(meeting_id, "chunk-summary", "Summarizing transcript chunk.", chunk_index=chunk["index"], chunk_total=len(chunks))
             prompt_path = work_path / f"chunk-{chunk['index']}.prompt.txt"
-            write_prompt(prompt_path, build_chunk_summary_prompt(chunk, profile=profile, language=language))
+            write_prompt(prompt_path, build_chunk_summary_prompt(chunk, profile=profile, language=language, tag=template_id))
             chunk_summaries.append(run_summary_prompt_with_repair(
                 meeting_id=meeting_id,
                 runtime=runtime,
@@ -197,14 +227,15 @@ def generate_summary_from_segments(
                 repair_name=f"chunk-{chunk['index']}",
                 language=language,
                 chunk_text=str(chunk.get("text") or ""),
+                tag=template_id,
             ))
 
         if len(chunk_summaries) == 1:
-            return validate_summary_json(chunk_summaries[0])
+            return validate_summary_json(chunk_summaries[0], tag=template_id)
 
         emit_progress(meeting_id, "final-merge", "Merging chunk summaries.")
         final_prompt_path = work_path / "final-merge.prompt.txt"
-        write_prompt(final_prompt_path, build_final_merge_prompt(chunk_summaries, profile=profile, language=language))
+        write_prompt(final_prompt_path, build_final_merge_prompt(chunk_summaries, profile=profile, language=language, tag=template_id))
         final_summary = run_summary_prompt_with_repair(
             meeting_id=meeting_id,
             runtime=runtime,
@@ -217,9 +248,10 @@ def generate_summary_from_segments(
             chunk_text="\n".join(
                 str((item or {}).get("summary") or "") for item in chunk_summaries
             ),
+            tag=template_id,
         )
 
-    return validate_summary_json(final_summary)
+    return validate_summary_json(final_summary, tag=template_id)
 
 
 def generate_summary(
@@ -233,6 +265,7 @@ def generate_summary(
     speakers_json_path: Optional[str] = None,
     profile: str = DEFAULT_PROFILE,
     language: Optional[str] = None,
+    tag: Optional[str] = None,
     model_label: str = "local-summary-model",
     model_id: Optional[str] = None,
     source_transcript_hash: Optional[str] = None,
@@ -241,6 +274,8 @@ def generate_summary(
     run_prompt: Optional[Callable[[Dict[str, Any], str, int], str]] = None,
 ) -> Dict[str, Any]:
     emit_progress(meeting_id, "loading-transcript", "Loading transcript for local summary.")
+    normalized_tag = normalize_recording_tag(tag, strict=False)
+    template_id = resolve_template_id(normalized_tag, fallback="other")
     transcript_text = read_transcript_text(transcript_path)
     source_hash = hash_transcript_text(transcript_text)
     if source_transcript_hash is not None and source_hash != source_transcript_hash:
@@ -260,6 +295,7 @@ def generate_summary(
         runtime=runtime,
         profile=profile,
         language=language,
+        tag=template_id,
         run_prompt=prompt_runner,
     )
 
@@ -269,6 +305,9 @@ def generate_summary(
         "model": model_label,
         "generatedAt": generated_at,
         "sourceTranscriptHash": source_hash,
+        "tag": normalized_tag,
+        "template": template_id,
+        "templateVersion": TEMPLATE_VERSION,
     }
     if language:
         metadata.update(language=language, languageSource="userConfirmed", modelId=model_id, languagePolicyVersion=LANGUAGE_POLICY_VERSION)
@@ -321,6 +360,7 @@ def main() -> None:
     parser.add_argument("--speakers-json")
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
     parser.add_argument("--language")
+    parser.add_argument("--tag", default=None)
     parser.add_argument("--source-transcript-hash")
     parser.add_argument("--model-id")
     parser.add_argument("--model-label", default="local-summary-model")
@@ -346,6 +386,7 @@ def main() -> None:
         if not args.language or not args.source_transcript_hash or not args.model_id:
             raise SummaryLanguageError("Confirmed transcript language, hash and model ID are required.")
         language_instruction(args.language)
+        normalized_tag = normalize_recording_tag(args.tag, strict=True) if args.tag is not None else None
         result = generate_summary(
             meeting_id=args.meeting_id,
             transcript_path=args.transcript,
@@ -357,6 +398,7 @@ def main() -> None:
             profile=args.profile,
             model_label=args.model_label,
             language=args.language,
+            tag=normalized_tag,
             source_transcript_hash=args.source_transcript_hash,
             model_id=args.model_id,
             platform=args.platform,
