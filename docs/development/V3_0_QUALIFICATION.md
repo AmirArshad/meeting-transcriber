@@ -1,27 +1,18 @@
 # AvaNevis v3.0.0 qualification record
 
 Working branch: `release/3.0`  
-Last updated: 2026-11-21 (includes follow-up on both Windows 11 observations; release gates remain open)
+Last updated: 2026-11-21 — v3.0.0 version bump prepared; upstream holds rechecked; remaining manual/hardware/signing limits explicitly accepted for v3.0.0
 
-**Release timing:** The user intends to merge the current development branch
-and add more features and polish before v3.0 ships; the current plan and this
-record are not a complete feature scope. Windows signing credentials and Apple
-Developer ID are optional for v3.0 and deferred until developer accounts are
-ready. Continue development, merging, and unsigned/ad-hoc qualification and
-releases without them, recording artifact and test limits. When credentials are
-obtained, add the CI secrets and set `vars.REQUIRE_SIGNED_RELEASE=true` to
-enforce signed Windows, signed/notarized macOS, and macOS Squirrel.Mac in-app
-updates. Other open release gates remain in force, and later code or
-environment changes may require requalification.
+**Release timing:** v3.0.0 is being shipped from `release/3.0` with the app version bumped from `2.12.0` to `3.0.0`. Windows Authenticode signing and Apple Developer ID signing/notarization are intentionally optional for v3.0.0 (no Windows/Apple signing accounts yet), with `vars.REQUIRE_SIGNED_RELEASE` unset/`false` and ad-hoc macOS `.dmg` manual updater fallback active. All remaining manual/hardware qualification gates (Windows 10, macOS 15, isolated Keychain migration, permission-prompt variants, gated Pyannote, representative natural-speech Speakrs separation, and live signed updater verification) are explicitly accepted by the user as documented v3.0.0 limits. When credentials are obtained later, add the CI secrets and set `vars.REQUIRE_SIGNED_RELEASE=true` to enforce signed Windows, signed/notarized macOS, and macOS Squirrel.Mac in-app updates.
 
-## Dependency & Upstream Decisions (Checked 2026-11-20)
+## Dependency & Upstream Decisions (Checked 2026-11-20; rechecked 2026-11-21)
 
 | Surface | Decision & live upstream check | SHA-256 / package evidence |
 |---|---|---|
 | Bundled CPython (`win32`, `darwin`, `linux`) | **Upgraded to unified Astral standalone `3.11.18+20261110`** across all three platforms (`build/download-manifest.js`, `build/prepare-resources.js`). Replaced Windows `3.11.9-embed-amd64.zip` with `install_only.tar.gz` (`Lib/`, `DLLs/`, explicitly authored isolated `python311._pth`) and updated macOS from `3.11.17+20261003` to `3.11.18+20261110`. | Windows x64: `5ca7e23bbcc8933a75f4ae9c3a5e5d1ffae5fd143aec9a9d77cf5124cc6e0eef` (49,079,288 B)<br>macOS arm64: `73f1ed14486aa278d331e95f7d6d452f5cfb69d90b418e26e62fd4846d53557d` (27,111,938 B)<br>Linux x64: `ac0b758b6ae4ba1cb87f7091eb6bb17c9a383a9bcdb5c18493cdd4f34e35ae8c` |
-| Electron | **Held on qualified `46.0.0-alpha.11`** (`src/ai-addon-token-store.js` and `src/main-process/linux-electron-bootstrap.js` retain exact `46.0.0-alpha.11` guard). Live `npm view electron` on 2026-11-20: latest stable is `45.4.1`; `46.x` stream has `46.0.0-alpha.1` through `46.0.0-alpha.12` and **no published `46.x` stable release yet**. | `npm view electron dist-tags` (`latest: 45.4.1`, `alpha-46-x-y: 46.0.0-alpha.12`) |
-| FFmpeg | **Held cleanly on matched `8.1.2`** across all three OS binaries + corresponding GPLv3 source tarball. Live upstream check on 2026-11-20: `ffmpeg.org/releases/` has `8.1.3` and `9.0`–`9.1`; `GyanD/codexffmpeg` has `8.1.2` and `9.0`–`9.0.2` (no `8.1.3`); `shaka-project/static-ffmpeg-binaries` tops out at `n8.1.2-2` (2026-11-07, still FFmpeg `n8.1.2` — identical Linux x64 SHA-256 `9eac5b2b5076db5ff853a6fa0dcd6b8de7d0cac8481eadda6c47cd935825f1ee`, updated macOS arm64 `bae78d98...`). No matched version > `8.1.2` exists yet across all 3 platforms + source. | `ffmpeg-8.1.2.tar.xz` verified SHA-256: `464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c` via `npm run legal:release-assets` |
-| `picomatch` / npm audit | **Clean (`0 vulnerabilities`)** in both production (`npm audit --omit=dev`) and full (`npm audit`) dev-graph scans on 2026-11-20. Installed `picomatch@4.0.7` (resolved under `tinyglobby@0.2.17` / `fdir@6.5.0` via `electron-builder@26.18.0`) is the latest `4.x` release on npm. `electron-builder` remains pinned compatibly at `^26.18.0`. | `npm audit --omit=dev` -> `found 0 vulnerabilities`<br>`npm audit` -> `found 0 vulnerabilities` |
+| Electron | **Held on qualified `46.0.0-alpha.11`** (`src/ai-addon-token-store.js` and `src/main-process/linux-electron-bootstrap.js` retain exact `46.0.0-alpha.11` guard). Rechecked `npm view electron dist-tags` on 2026-11-21: latest stable is `45.4.1`; `46.x` stream still has only `46.0.0-alpha.12` and **no published `46.x` stable release yet**. Alpha hold accepted for v3.0.0. | `npm view electron dist-tags` (`latest: 45.4.1`, `alpha-46-x-y: 46.0.0-alpha.12`) |
+| FFmpeg | **Held cleanly on matched `8.1.2`** across all three OS binaries + corresponding GPLv3 source tarball. Rechecked on 2026-11-21: `ffmpeg.org/releases/` has `8.1.3` and `9.0`–`9.1`; `GyanD/codexffmpeg` has `9.1`; `shaka-project/static-ffmpeg-binaries` still tops out at `n8.1.2-2` (FFmpeg `8.1.2`). No matched version > `8.1.2` exists yet across all 3 platforms + source. | `ffmpeg-8.1.2.tar.xz` verified SHA-256: `464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c` via `npm run legal:release-assets` |
+| `picomatch` / npm audit | **Clean (`0 vulnerabilities`)** in both production (`npm audit --omit=dev`) and full (`npm audit`) scans on 2026-11-20 and rechecked 2026-11-21. Installed `picomatch@4.0.7` (resolved under `tinyglobby@0.2.17` / `fdir@6.5.0` via `electron-builder@26.18.0`) is the latest `4.x` release on npm. `electron-builder` remains pinned compatibly at `^26.18.0`. | `npm audit --omit=dev` -> `found 0 vulnerabilities`<br>`npm audit` -> `found 0 vulnerabilities` |
 
 ## CachyOS Linux x86_64 Evidence
 
@@ -146,7 +137,17 @@ Host: Windows 11 Pro x64 build 26300, NVIDIA RTX 4070 (driver 621.35), Node 22.1
 - **Real recovery and History display.** Staged a synthetic 327,680-frame `windows-v1` microphone spool and schema-v1 manifest without a transcription selection. Launched the current development Electron app with a new `--user-data-dir`, the repo Python 3.11.9 venv and packaged FFmpeg 8.1.2. Clicked the startup recovery prompt and opened History. Recovery removed the capture directory and produced Opus with no handoff. The final Ogg granule `327992` minus `OpusHead` pre-skip `312` matched the 327,680 stereo frames decoded by FFmpeg at 48 kHz. Metadata stored `6.826666666666667` seconds and both the History row and meeting details displayed `0:06`. The meeting was pending transcription. This exercised a staged interrupted capture through the development renderer. The installer was not rebuilt for this fix and the smoke did not start a physical recording.
 - **Verification.** The focused `python -m pytest` run of `test_meeting_manager.py`, `test_capture_recovery.py`, `test_recorder_temp_and_scan_recovery.py` and `test_phase6_meeting_helpers.py` passed all 142 tests with packaged FFmpeg first on `PATH`. `npm run test:all` exited 0 with JS 1,238 passed / 5 skipped, Python 917 passed / 9 skipped, and both syntax checks passed. JS skips covered Debian archive tooling, symlink conditions, a Unix Python prefix and the Linux Parakeet adapter. Python skips covered PulseAudio, `/proc`, POSIX priority and six dev Speakrs binary/model cases. The direct packaged CUDA comparison above was run separately. `py -3.11 scripts/agents/validate_setup.py` exited 0.
 
-## Open Windows & macOS Qualification Gates
+## v3.0.0 Release Preparation & Acceptance — 2026-11-21
+
+- **Version & release notes:** Bumped `package.json` and `package-lock.json` from `2.12.0` to `3.0.0`; authored curated release notes at `docs/releases/v3.0.0.md`.
+- **Verification gates (post-bump, CachyOS Linux x86_64):**
+  - `npm run test:all`: **exit 0** (`test:syntax` clean, `test:js` **1,251 tests: 1,250 passed, 0 failed, 1 skipped**, `test:python` **919 passed, 8 skipped**, `test:python-syntax` clean).
+  - `python3 scripts/agents/validate_setup.py`: **exit 0** (16 canonical skills validated).
+  - `npm run legal:release-assets`: **exit 0** (`release-legal/avanevis-legal-3.0.0.zip` and `ffmpeg-8.1.2.tar.xz` staged and verified).
+  - `npm audit --omit=dev` and `npm audit`: **0 vulnerabilities**.
+- **Explicitly accepted v3.0.0 limits:** Signing and notarization remain optional for v3.0.0 (`vars.REQUIRE_SIGNED_RELEASE` unset/false; unsigned Windows NSIS installer; ad-hoc signed, unnotarized macOS `.dmg` with manual updater fallback). Windows 10, macOS 15, isolated Keychain migration, permission-prompt variants, gated Pyannote, representative natural-speech Speakrs separation, and live signed updater verification remain unqualified and are explicitly accepted for v3.0.0.
+
+## Open Windows & macOS Qualification Gates (Post-v3.0.0)
 
 1. **Windows 10/11 x64:**
    - Run `npm run test:all` and `python scripts/check-build-requirements-closure.py windows`.

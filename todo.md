@@ -9,21 +9,7 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 
 Phased implementation plan on `release/3.0`: [v3.0.0 release plan](docs/superpowers/plans/2026-11-20-v3.0-release-plan.md) · [v3.0 qualification record](docs/development/V3_0_QUALIFICATION.md).
 
-**Release direction, 2026-11-21:** v3.0 is still in development. The current
-plan and this list do not define its complete feature scope: more features and
-polish are planned before shipping. The user intends to merge the current
-development branch and continue that work. Windows signing certificates and
-Apple Developer ID credentials are optional for v3.0 and not expected until
-accounts are ready; their absence is not a blocker to development, ordinary
-testing, merging this branch, or shipping unsigned/ad-hoc v3.0 releases.
-`.github/workflows/build-release.yml` auto-activates signing when secrets are
-configured, allows unsigned Windows / ad-hoc macOS tag builds when secrets are
-absent (unless `vars.REQUIRE_SIGNED_RELEASE=true`), and `updater-service.js`
-falls back to manual `.dmg` download on ad-hoc macOS builds. Obtain credentials
-and enable `vars.REQUIRE_SIGNED_RELEASE=true` when ready for signed Windows,
-signed/notarized macOS, and macOS Squirrel.Mac in-app updates. Other
-outstanding release gates remain open and should be tested when feasible;
-repeat qualification for inputs changed by later work.
+**Release direction, 2026-11-21 (v3.0.0 ship):** Version bumped from `2.12.0` to `3.0.0` on `release/3.0` with curated [v3.0.0 release notes](docs/releases/v3.0.0.md). Upstream holds rechecked on 2026-11-21: Electron stays on qualified `46.0.0-alpha.11` (stable 46.x still unpublished; `latest: 45.4.1`, `alpha-46-x-y: 46.0.0-alpha.12`), FFmpeg stays on matched `8.1.2` (`shaka-project` still tops at `n8.1.2-2`), and `npm audit --omit=dev` / `npm audit` report `0 vulnerabilities`. Signing and notarization are intentionally optional for v3.0.0 (no Windows/Apple signing accounts yet; `vars.REQUIRE_SIGNED_RELEASE` unset/false, ad-hoc macOS `.dmg` manual updater fallback active). All remaining manual/hardware qualification gates (Windows 10, macOS 15, isolated Keychain migration, permission-prompt variants, gated Pyannote, natural-speech Speakrs separation, and live signed updater verification) are explicitly accepted by the user as documented v3.0.0 limits. Final pre-PR local gates on `release/3.0` (`3.0.0`): `npm run test:all` exit 0 (JS `1,250 passed, 0 failed, 1 skipped`; Python `919 passed, 8 skipped`; syntax clean), `python3 scripts/agents/validate_setup.py` exit 0, and `npm run legal:release-assets` exit 0.
 
 Progress across mandatory post-v2.12 gates and v3.0 feature tracks:
 
@@ -39,11 +25,9 @@ Progress across mandatory post-v2.12 gates and v3.0 feature tracks:
 - [x] **Modern in-app auto-updater (Phase 3):** Signed differential in-app download (`electron-updater@6.8.11`, `build.publish` GitHub metadata, macOS `zip` + `dmg` targets, `.blockmap` + `latest*.yml` release staging), main-process `updater-service.js` state machine with monotonic `seq`, atomic `userData/updater-preferences.json` (`autoDownload: false` default), cancellable downloads, recording/import/summary-metadata/AI-safe **Restart to Update** gate, Linux `pacman`/`.deb` manual-package detection + copyable install command, and non-intrusive left-rail circular-progress indicator, anchored release-notes popover (`STRICT_DOMPURIFY_CONFIG`), and Settings → Updates card. _(Repo implementation and unit/characterization suites verified on CachyOS Linux; live signed in-place Windows NSIS / macOS Squirrel.Mac / Linux AppImage updates pending Task 2.3 signing credentials and target-host acceptance.)_
 - [x] **Local History search & Q&A with timestamp citations (Phase 4 · `5827ac5`, `23a9aaf`, `bbeba81`, `a9fb129`, `36f243d`):** Disposable local SQLite FTS5 full-text search index across transcripts/summaries (zero AI add-on required) with instant timestamp jump, plus left-rail threaded `Chat` workspace powered by lazy loopback `llama-server` (`llama-cli` fallback), manual & automatic VRAM/memory unloads, bundled `marked@18.2.1` + `dompurify@3.4.18` strict XSS-safe Markdown rendering, and fail-closed clickable citations that seek playback to the exact timestamp. _(Verified on CachyOS Linux including real local Qwen `llama-server` smoke and packaged Linux artifacts; interactive desktop UX pass + Windows/macOS host checks pending.)_
 
-### Mandatory gates before the next release
+### Mandatory gates (accepted limits for v3.0.0; open for post-v3.0.0)
 
-All items below must be completed and their evidence recorded before the next
-release is published. The v2.12 acceptance of coverage limits does not waive
-these gates for a later release.
+Unchecked items below represent documented v3.0.0 coverage limits explicitly accepted by the user on 2026-11-21 and deferred for post-v3.0.0 verification.
 
 - [ ] Upgrade and qualify bundled CPython to 3.11.18 or newer on Windows and
   macOS. _(Repo port to Astral `3.11.18+20261110` implemented in `333ceef`;
