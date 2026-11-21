@@ -18,6 +18,7 @@ function fixture(api) {
     window: { electronAPI: api },
     document: { getElementById: (id) => id === 'chat-input' ? input : null },
     console, confirm: () => true, meetings: [],
+    summaryLibrary: () => null,
   });
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
   const start = source.indexOf('const chatState = {');

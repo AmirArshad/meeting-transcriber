@@ -9,18 +9,19 @@ re-enable acceleration only after its trust handling is patched and qualified.
 
 ## Rules
 
-### v2.10 summary language policy
+### Summary language policy
 
 The installed `qwen3.5-9b-q4-k-m` model has bounded local synthetic evidence for
 `en/es/fr/de/zh/ja/it/pa/hi/ko/pt`, including Chinese and Panjabi script cases.
 See [the recorded checks and limits](V2_10_SUMMARY_QUALIFICATION.md).
 `src/summary-language-policy.js` owns eligibility and policy revision; add-on
-status exposes it without inference or downloads. Replacement catalog entries
-have no enabled language policy. Existing platform runtime admission still applies.
+status exposes it without inference or downloads. Gemma 4 E4B and 12B offer
+English on Apple Silicon after the [v3.1 checks](V3_1_QUALIFICATION.md). Other
+Gemma language and platform combinations remain gated. Existing platform
+runtime admission still applies.
 Generation requires transcript-language confirmation tied to its hash; chunk,
-merge and repair share that language, and a separate local Qwen prose check
-rejects wrong or indeterminate language before committing sidecars. No detector
-package, alternative model or translation feature was added.
+merge and repair share that language, and the selected local model checks prose
+language before committing sidecars.
 
 ### Artifact and setup rules
 
@@ -33,10 +34,31 @@ package, alternative model or translation feature was added.
 - Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from catalog **download-related** keys only (`downloadUrl`, `url`, `indexUrl`, `extraIndexUrls`) plus known GitHub/Hugging Face/PyPI redirect hosts listed explicitly in `DOWNLOAD_REDIRECT_HOSTS` (`src/ai-addon/download-helpers.js`). `licenseUrl` / `releaseUrl` / docs links must not expand the allowlist. Do **not** wildcard `*.hf.co` / `*.huggingface.co`; when HF/Xet rotates CDN subdomains, add the new host to that set. HF-hosted summary models normally download via bundled Python `huggingface_hub` HTTP (bypassing the JS allowlist) and still require pinned SHA-256 verification. Arbitrary HTTPS hosts remain blocked.
 - Hugging Face summary model artifacts should download through the bundled Python `huggingface_hub` HTTP path when available. Keep it unauthenticated for public GGUF models (`token=False` / implicit token disabled), confine both temporary and final paths to the managed cache, and keep post-download SHA-256 verification in the app.
 - Prefer official model-owner GGUF artifacts. If unavailable, use established community quantizations with immutable revision URLs.
-- Keep summary runtime flags compatible with the selected catalog model. The current Qwen3.5/llama.cpp path runs with reasoning disabled; parameterize that before adding a non-Qwen3 model that needs different flags.
+- Keep context, native prompt format and CLI flags bound to the model and its pinned runtime. Setups test explicitly selected models and inference stays local.
 - Store artifacts under Electron `userData` via the AI add-on cache helpers so app updates do not remove installed add-ons.
 - Pyannote diarization must use the user's own Hugging Face token stored through Electron `safeStorage` only. Speakrs is token-free and must not inspect, decrypt, or store Hugging Face tokens.
 - Adding or renaming a speaker engine must keep Settings About credits, `THIRD_PARTY_NOTICES.md`, and `tests/js/legal-notices.test.js` in sync.
+
+### Summaries & Chat model library
+
+The two Qwen3.5 weights retain their existing pins. Gemma 4 E4B and 12B use the
+official ggml-org instruction-tuned `Q4_0` weights and a 32,768-token context.
+The pinned upstream repositories publish that quantization, with download sizes
+of 4,590,807,392 and 7,219,673,216 bytes respectively. Only text weights are used.
+
+Gemma uses `b12606` on macOS arm64 and Windows x64 CUDA and the ai-dock CUDA
+12.8 x64 `v1.0.0` build on Linux. Qwen retains its qualified runtime pins
+while the library shares each runtime version among compatible models. Existing
+private runtimes remain readable until verified adoption. Check the hardware
+results and remaining gates in the [v3.1 qualification record](V3_1_QUALIFICATION.md).
+
+Inkling 2 Mini uses the official ggml-org `IQ4_NL` pin. Each platform gate
+requires a distributable runtime that includes both initial support and the
+loop-layer scale fix, plus native validation with the pinned 32,768-token context.
+The newest numbered release checked, `b12608`, predates the fix. Apple Silicon
+source-build evidence and the separate Windows and Linux CUDA blockers are in
+the [v3.1 qualification record](V3_1_QUALIFICATION.md). Working-memory figures
+remain planning estimates until measured on representative supported hosts.
 
 ### Linux Qwen summary runtime pin
 
@@ -54,7 +76,7 @@ the managed CUDA 12 admission, all local artifact checks, and packaged RTX
 ## Runtime Cache Locations
 
 - The canonical location is whatever `src/main.js` logs as `app.getPath("userData")` at startup. AI add-ons are stored below that path in `ai-addons/`.
-- On Windows `npm start`, local testing has placed the app-managed AI add-ons at `%APPDATA%\avanevis\Cache\avanevis\ai-addons`. In that tree, Qwen summaries live under `models\summary`, the llama.cpp runtime lives under the selected summary model's `runtime`, Speakrs models live under `models\diarization\speakrs\<revision>\<install-id>`, and pyannote/PyTorch dependencies live under `dependencies\diarization`. Older Speakrs installations can also have a private ONNX Runtime under `runtimes\speakrs-ort`.
+- On Windows `npm start`, local testing has placed the app-managed AI add-ons at `%APPDATA%\avanevis\Cache\avanevis\ai-addons`. Summary weights live under `models\summary`, shared llama.cpp builds under `runtimes\llama-cpp\<runtime-id>`, and older private builds under the model's `runtime`. Speakrs models live under `models\diarization\speakrs\<revision>\<install-id>`, and pyannote/PyTorch dependencies live under `dependencies\diarization`. Older Speakrs installations can also have a private ONNX Runtime under `runtimes\speakrs-ort`.
 - Packaged Windows installs may resolve the same physical profile path because Windows paths are case-insensitive. Do not delete `ai-addons` when you intend to preserve installed Qwen/diarization setup for the packaged app.
 - Safe cleanup candidates for duplicate downloads are transient caches such as `%LOCALAPPDATA%\pip\cache`, `%LOCALAPPDATA%\Temp\pip-*`, incomplete `*.download` files, and stale Hugging Face/Xet transfer staging directories. These are redownloadable and are not the installed model/runtime cache.
 

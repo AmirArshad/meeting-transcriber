@@ -24,6 +24,10 @@ test('checked language policy retains product languages and rejects replacements
   }
   assert.deepEqual(getSummaryLanguagePolicy(modelId, 'darwin', 'x64').languages, []);
   assert.deepEqual(getSummaryLanguagePolicy(modelId, 'linux', 'x64').languages, policy.languages);
+  for (const id of ['gemma-4-e4b', 'gemma-4-12b']) {
+    assert.deepEqual(getSummaryLanguagePolicy(id, 'darwin', 'arm64').languages, ['en']);
+    assert.deepEqual(getSummaryLanguagePolicy(id, 'linux', 'x64').languages, []);
+  }
 });
 
 test('real composition-root CLI builder propagates language and hash without changing setup validation', () => {

@@ -48,6 +48,8 @@ function makeQaHarness({
   checkStatus = null,
   queueAction = null,
   getSummaryArtifactPath = null,
+  getSummaryDeviceMemory = async () => null,
+  ensureSummaryProcessExited = async () => {},
 } = {}) {
   const recordingsDir = path.join(tmpDir, 'recordings');
   const extractDir = path.join(tmpDir, 'ai-addons', 'models', 'summary', 'qwen3.5-9b-q4-k-m', 'runtime', `${platform}-${arch}`, 'extract', 'cuda-12.8');
@@ -122,6 +124,8 @@ function makeQaHarness({
     pythonConfig: { backendPath: path.join(tmpDir, 'backend') },
     getBackendModuleArgs: (mod, args) => ['-m', mod, ...args],
     getAiAddonRuntimeOptions: (opts) => opts || {},
+    getSummaryDeviceMemory,
+    ensureSummaryProcessExited,
     checkAiAddonSetupStatus: checkStatus || (async () => aiStatus || ({
       features: {
         summary: {
@@ -734,4 +738,52 @@ test('scope changes exclude whole mixed-citation turns from history and retrieva
   assert.deepEqual(payloads[1].history, []);
   const retrieval = h.spawnedPython.filter((entry) => entry.args.includes('history_qa.retrieval'));
   assert.equal(JSON.parse(retrieval[1].proc._stdinText).threadContext, undefined);
+});
+
+test('live memory is checked after server exit, and exact reuse does not reallocate', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-live-fit-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  let id = 'qwen3.5-9b-q4-k-m';
+  let memoryChecks = 0;
+  let gates = 0;
+  const h = makeQaHarness({
+    tmpDir,
+    getSummaryArtifactPath: () => path.join(tmpDir, `${id}.gguf`),
+    ensureSummaryProcessExited: async () => { gates += 1; },
+    getSummaryDeviceMemory: async () => { memoryChecks += 1; return { availableBytes: 100 }; },
+    checkStatus: async () => ({ features: { summary: {
+      status: 'ready', setupComplete: true, modelId: id,
+      cache: { valid: true }, runtimeCache: { valid: true }, fit: { blocked: false },
+    } } }),
+  });
+  await h.service.askHistory({ question: 'First?' });
+  await h.service.askHistory({ question: 'Reuse?' });
+  assert.equal(memoryChecks, 1);
+  id = 'qwen3.5-4b-q4-k-m';
+  await h.service.askHistory({ question: 'Switch?' });
+  assert.equal(memoryChecks, 2);
+  assert.ok(h.spawnedServers[0].proc.killedSignal);
+  assert.ok(gates >= 3);
+  await h.service.unloadModel('manual');
+  assert.ok(gates >= 4);
+});
+
+test('failed process exit or blocked live fit prevents a new model load', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-live-block-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  let failGate = true;
+  const h = makeQaHarness({
+    tmpDir,
+    ensureSummaryProcessExited: async () => { if (failGate) throw new Error('Process exit unconfirmed'); },
+    getSummaryDeviceMemory: async () => ({ availableBytes: 1 }),
+    checkStatus: async (opts) => ({ features: { summary: {
+      status: 'ready', setupComplete: true, modelId: 'qwen3.5-9b-q4-k-m',
+      cache: { valid: true }, runtimeCache: { valid: true },
+      fit: { blocked: Boolean(opts.deviceMemory), reason: 'Not enough memory' },
+    } } }),
+  });
+  await assert.rejects(h.service.askHistory({ question: 'First?' }), /Process exit unconfirmed/);
+  failGate = false;
+  await assert.rejects(h.service.askHistory({ question: 'Second?' }), /Not enough memory/);
+  assert.equal(h.spawnedServers.length, 0);
 });

@@ -325,6 +325,83 @@ const DIARIZATION_DEPENDENCY_ARTIFACTS = deepFreeze({
   },
 });
 
+const GEMMA_LLAMA_CPP_RUNTIME = deepFreeze({
+  runtime: 'llama.cpp',
+  version: 'b12606',
+  repository: 'ggml-org/llama.cpp',
+  commit: 'e412c6f468b7b9e0f16f2540244236f8ad68e9ae',
+  releaseUrl: 'https://github.com/ggml-org/llama.cpp/releases/tag/b12606',
+});
+
+function gemmaRuntimeArchive(fileName, sizeBytes, sha256, expandedBytes) {
+  return {
+    fileName, sizeBytes, sha256, expandedBytes,
+    archiveFormat: fileName.endsWith('.zip') ? 'zip' : 'tar.gz',
+    downloadUrl: `https://github.com/ggml-org/llama.cpp/releases/download/b12606/${fileName}`,
+  };
+}
+
+const GEMMA_SUMMARY_RUNTIME_ARTIFACTS = deepFreeze({
+  'win32-x64': {
+    ...SUMMARY_RUNTIME_ARTIFACTS['win32-x64'], ...GEMMA_LLAMA_CPP_RUNTIME,
+    id: 'llama-cpp-b12606-win32-x64-cuda-12.4',
+    label: 'llama.cpp b12606 for Windows CUDA 12.4',
+    artifacts: [
+      gemmaRuntimeArchive('llama-b12606-bin-win-cuda-12.4-x64.zip', 357938811, '23d08378e6771e5a4b8daf139d6ee53191d0ab2acd2cf7777ae9cefc74c9d958', 833257245),
+      { ...SUMMARY_RUNTIME_ARTIFACTS['win32-x64'].artifacts[1], expandedBytes: 574138880 },
+    ],
+  },
+  'darwin-arm64': {
+    ...SUMMARY_RUNTIME_ARTIFACTS['darwin-arm64'], ...GEMMA_LLAMA_CPP_RUNTIME,
+    id: 'llama-cpp-b12606-darwin-arm64-metal',
+    label: 'llama.cpp b12606 for macOS Metal',
+    artifacts: [
+      gemmaRuntimeArchive('llama-b12606-bin-macos-arm64.tar.gz', 16576375, '8d277d8a1289202e0553cf6489801303624973807ae6d07c666a61ea70a0e1c4', 42612678),
+    ],
+  },
+  'linux-x64': {
+    ...SUMMARY_RUNTIME_ARTIFACTS['linux-x64'],
+    id: 'llama-cpp-v1.0.0-linux-x64-cuda-12.8',
+    label: 'llama.cpp v1.0.0 for Linux CUDA 12.8',
+    version: 'v1.0.0',
+    sourceCommit: '2d8a32502909ca065c41c4cf5f2fb1c427c047fc',
+    upstreamCommit: '2d8a32502909ca065c41c4cf5f2fb1c427c047fc',
+    releaseUrl: 'https://github.com/ai-dock/llama.cpp-cuda/releases/tag/v1.0.0',
+    artifacts: [
+      {
+        ...SUMMARY_RUNTIME_ARTIFACTS['linux-x64'].artifacts[0],
+        id: 'ai-dock-llama-cpp-v1.0.0-linux-x64-cuda-12.8',
+        fileName: 'llama.cpp-v1.0.0-cuda-12.8-amd64.tar.gz',
+        sha256: '072d1f8c4f19fd652e90756eb2f89234b8faa74f485fdf87a42a5b1b79469edb',
+        sizeBytes: 178814766,
+        expandedBytes: 220835945,
+        downloadUrl: 'https://github.com/ai-dock/llama.cpp-cuda/releases/download/v1.0.0/llama.cpp-v1.0.0-cuda-12.8-amd64.tar.gz',
+        requiredFiles: [
+          { path: 'cuda-12.8/VERSION.txt', sha256: '4bb3519b6f81ad9db97fdbadf2e296a3c4dc80304d744c24de021589ccc367d5', sizeBytes: 217 },
+          { path: 'cuda-12.8/libggml-base.so.1.0.0', sha256: '2faa046247102bc5956b75950a01882d68084d91052dccb9b5e5f915faf50adf', sizeBytes: 937456 },
+          { path: 'cuda-12.8/libggml-cpu.so.1.0.0', sha256: 'f007e117eba39eaacc1a0f61cabbbc2c6839345831cfb6189f09459cb2da2312', sizeBytes: 1455112 },
+          { path: 'cuda-12.8/libggml-cuda.so.1.0.0', sha256: 'b03390bf70336ba219a1bf7340506c9b47e225ecebecea36df343821b4c5c616', sizeBytes: 191908744 },
+          { path: 'cuda-12.8/libggml.so.1.0.0', sha256: '5ac60fa3b199e602a7664bda1e1fcd72597eb70d5dfe9ddbad47542f81c624b4', sizeBytes: 55384 },
+          { path: 'cuda-12.8/libllama-batched-bench-impl.so', sha256: '604c6739068d5543557279fe15ada88189b6b1c3914cc22a765bfe83b73fc323', sizeBytes: 48904 },
+          { path: 'cuda-12.8/libllama-bench-impl.so', sha256: '60d0f18a296204c6ac4ca5fce437d389ef3477be41fe38c8f77f0caddcd8d21e', sizeBytes: 490960 },
+          { path: 'cuda-12.8/libllama-cli-impl.so', sha256: 'b470acbf79b6ed3b8843348c09382b1f74b65d0f70bc401b618f76f1e6768606', sizeBytes: 277032 },
+          { path: 'cuda-12.8/libllama-common.so.1.0.0', sha256: '604cedd5aa1d3000903d4e859e2f5f3e278cbe8e53c51d837b5c80e5a8eaf246', sizeBytes: 6910288 },
+          { path: 'cuda-12.8/libllama-completion-impl.so', sha256: '381f10b4e75333c5892e133c0ee6bc18464cf0062d6a82cc6675e31751d4c736', sizeBytes: 144976 },
+          { path: 'cuda-12.8/libllama-fit-params-impl.so', sha256: '63ae6813633aa5c5499f03b47da1a72a33743b261f3fadedbc5099fe56baef56', sizeBytes: 44304 },
+          { path: 'cuda-12.8/libllama-perplexity-impl.so', sha256: 'f4789707aff264157e251e6fc2d9c0ff3e2b76dfc6c43cc2e23789ca3b8d970a', sizeBytes: 171912 },
+          { path: 'cuda-12.8/libllama-quantize-impl.so', sha256: 'cf525a99d09b63cc6446d05d30929b6be4638a1f200a862c10372621bea8ac10', sizeBytes: 86384 },
+          { path: 'cuda-12.8/libllama-server-impl.so', sha256: '96a148e195a09e9cce0521fd1b42a6fa2dd37590afedab5deed81784ecc76366', sizeBytes: 8498728 },
+          { path: 'cuda-12.8/libllama.so.1.0.0', sha256: '1fbd3082d6d99e79a8515912051e6e7ca7c04519ef34847e7bc72c597a585bd2', sizeBytes: 5466824 },
+          { path: 'cuda-12.8/libmtmd.so.1.0.0', sha256: '883d7e64b7d95434e3e6f6bbbb5ababb17b5c0586e62977539620d666a93aed6', sizeBytes: 2341720 },
+          { path: 'cuda-12.8/llama-cli', sha256: '5cd6601d1b0c3389fe0ff580ecb752e7af684948619ac99096cfb52fa2cdf247', sizeBytes: 1121768 },
+          { path: 'cuda-12.8/llama-server', sha256: 'f17cb5069654308c41bcf5b9cad67d858bc1c6050e4ff5d9054c39137e161be2', sizeBytes: 14592 },
+        ],
+      },
+      ...SUMMARY_RUNTIME_ARTIFACTS['linux-x64'].artifacts.slice(1),
+    ],
+  },
+});
+
 function buildHuggingFaceModelSource({ repo, revision, fileName, sha256, sizeBytes }) {
   return {
     provider: 'huggingface',
@@ -361,6 +438,18 @@ const SUMMARY_MODEL_SOURCES = deepFreeze({
     sha256: '500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0',
     sizeBytes: 9001752960,
   }),
+  'gemma-4-e4b': buildHuggingFaceModelSource({
+    repo: 'ggml-org/gemma-4-E4B-it-GGUF', revision: '8903cb408c7df39cde2ed15fac397e6d7be92951',
+    fileName: 'gemma-4-E4B-it-Q4_0.gguf', sha256: 'a555b900214b477d8880e7832e0b8925e139b0159640036b09fe472b6f2097f2', sizeBytes: 4590807392,
+  }),
+  'gemma-4-12b': buildHuggingFaceModelSource({
+    repo: 'ggml-org/gemma-4-12B-it-GGUF', revision: '501d13dba70e3c02b1b12c78fd9e6b08ad413960',
+    fileName: 'gemma-4-12B-it-Q4_0.gguf', sha256: '3712b9bd32cae83a22f67ee7a4466d8d7a4f21646ac8a07d19bf9418e8767a70', sizeBytes: 7219673216,
+  }),
+  'inkling-2-mini': buildHuggingFaceModelSource({
+    repo: 'ggml-org/Inkling-2-Mini-GGUF', revision: 'e8a2cecf0e78914f07cc27b9be711a9b2c7561d9',
+    fileName: 'Inkling-2-Mini-IQ4_NL.gguf', sha256: 'cbdf3fa9dc50a4124977980f37da4f1fa764b0cfe800d275cd43d26ce2a81af4', sizeBytes: 17627940768,
+  }),
 });
 
 function buildSummaryArtifact({ modelId, label, runtimeArchitecture }) {
@@ -378,7 +467,7 @@ function buildSummaryArtifact({ modelId, label, runtimeArchitecture }) {
     source: source || null,
     validationStatus,
     llamaCpp: {
-      ...PINNED_LLAMA_CPP_RUNTIME,
+      ...(runtimeArchitecture === 'gemma4' ? GEMMA_LLAMA_CPP_RUNTIME : PINNED_LLAMA_CPP_RUNTIME),
       validationStatus: 'ready',
     },
     platformArtifacts: {
@@ -425,6 +514,18 @@ function buildSummaryArtifact({ modelId, label, runtimeArchitecture }) {
         validationStatus,
       },
     },
+  };
+}
+
+function gemmaSummaryModel(id, label, description, memoryGuidance) {
+  return {
+    id, label, description, memoryGuidance,
+    family: 'Gemma 4',
+    runtime: 'llama.cpp',
+    runtimeCatalog: 'gemma',
+    artifact: buildSummaryArtifact({ modelId: id, label, runtimeArchitecture: 'gemma4' }),
+    inference: { contextTokens: 32768, family: 'gemma', promptFormat: 'gemma', disableThinking: true, singleTurnOnly: true },
+    profiles: SUMMARY_PROFILES.map((profile) => profile.id),
   };
 }
 
@@ -517,14 +618,20 @@ const AI_MODEL_CATALOG = deepFreeze({
   summary: {
     defaultModelId: DEFAULT_SUMMARY_MODEL_ID,
     runtimeArtifacts: SUMMARY_RUNTIME_ARTIFACTS,
+    gemmaRuntimeArtifacts: GEMMA_SUMMARY_RUNTIME_ARTIFACTS,
     models: [
       {
         id: DEFAULT_SUMMARY_MODEL_ID,
         label: 'Qwen3.5 9B 4-bit GGUF',
+        description: 'Balanced choice for everyday questions and summaries.',
+        memoryGuidance: { gpu: 8, unified: 16 },
         family: 'Qwen3.5',
         runtime: 'llama.cpp',
         role: 'default',
         inference: {
+          contextTokens: 32768,
+          family: 'qwen',
+          promptFormat: 'chatml',
           runtime: 'llama.cpp',
           architecture: 'qwen35',
           disableThinking: true,
@@ -542,10 +649,15 @@ const AI_MODEL_CATALOG = deepFreeze({
       {
         id: 'qwen3.5-4b-q4-k-m',
         label: 'Qwen3.5 4B 4-bit GGUF',
+        description: 'Uses less memory for quick recaps and simple questions.',
+        memoryGuidance: { gpu: 6, unified: 8 },
         family: 'Qwen3.5',
         runtime: 'llama.cpp',
         role: 'lowMemoryReplacement',
         inference: {
+          contextTokens: 32768,
+          family: 'qwen',
+          promptFormat: 'chatml',
           runtime: 'llama.cpp',
           architecture: 'qwen35',
           disableThinking: true,
@@ -563,10 +675,14 @@ const AI_MODEL_CATALOG = deepFreeze({
       {
         id: 'qwen3-14b-q4-k-m',
         label: 'Qwen3 14B 4-bit GGUF',
+        description: 'A larger Qwen model for questions that need more detail.',
         family: 'Qwen3',
         runtime: 'llama.cpp',
         role: 'matureRuntimeReplacement',
         inference: {
+          contextTokens: 32768,
+          family: 'qwen',
+          promptFormat: 'chatml',
           runtime: 'llama.cpp',
           architecture: 'qwen3',
           disableThinking: true,
@@ -580,6 +696,21 @@ const AI_MODEL_CATALOG = deepFreeze({
           runtimeArchitecture: 'qwen3',
         }),
         profiles: SUMMARY_PROFILES.map((profile) => profile.id),
+      },
+      gemmaSummaryModel('gemma-4-e4b', 'Gemma 4 E4B', 'An option for follow-up questions about details across recordings.', { gpu: 8, unified: 16 }),
+      gemmaSummaryModel('gemma-4-12b', 'Gemma 4 12B', 'An option for pulling together themes and decisions from longer recordings.', { gpu: 16, unified: 24 }),
+      {
+        id: 'inkling-2-mini',
+        label: 'Inkling 2 Mini',
+        description: 'Intended for longer, more involved questions on high-memory devices.',
+        memoryGuidance: { gpu: 24, unified: 32 },
+        inference: { contextTokens: 32768 },
+        artifact: buildSummaryArtifact({ modelId: 'inkling-2-mini', label: 'Inkling 2 Mini', runtimeArchitecture: 'inkling2_loop' }),
+        supportedPlatforms: {
+          win32: { status: 'gated', reason: 'Inkling needs a Windows CUDA build with the loop-layer fix and native validation.' },
+          darwin: { status: 'gated', reason: 'Inkling needs a published Apple Silicon runtime with the loop-layer fix.' },
+          linux: { status: 'gated', reason: 'Inkling needs a verified build for the managed Linux CUDA 12 runtime and native validation.' },
+        },
       },
     ],
   },
@@ -671,7 +802,7 @@ function getSummaryArtifactForPlatform(modelId, platform = process.platform, arc
   const platformKey = `${platform}-${arch}`;
   const platformArtifact = artifact && artifact.platformArtifacts && artifact.platformArtifacts[platformKey];
 
-  if (!model || !artifact || !platformArtifact) {
+  if (!model || !artifact || !platformArtifact || (model.supportedPlatforms && model.supportedPlatforms[platform]?.status !== 'enabled')) {
     return null;
   }
 
@@ -692,14 +823,19 @@ function getSummaryArtifactForPlatform(modelId, platform = process.platform, arc
     acceleration: platformArtifact.acceleration || null,
     runtime: platformArtifact.runtime || model.runtime || null,
     runtimeArchitecture: platformArtifact.runtimeArchitecture || model.inference?.architecture || null,
+    inference: model.inference ? { ...model.inference } : null,
     artifactId: platformArtifact.id || `${model.id}-${platformKey}`,
     label: platformArtifact.label || model.label,
   };
 }
 
-function getSummaryRuntimeArtifactForPlatform(platform = process.platform, arch = process.arch, catalog = AI_MODEL_CATALOG) {
-  const runtimeArtifacts = catalog?.summary?.runtimeArtifacts || SUMMARY_RUNTIME_ARTIFACTS;
-  const runtimeArtifact = runtimeArtifacts[`${platform}-${arch}`];
+function getSummaryRuntimeArtifactForPlatform(platform = process.platform, arch = process.arch, catalog = AI_MODEL_CATALOG, modelId) {
+  const model = modelId && getModelById('summary', modelId, catalog);
+  if (model?.supportedPlatforms && model.supportedPlatforms[platform]?.status !== 'enabled') return null;
+  const runtimeArtifacts = model?.runtimeCatalog === 'gemma'
+    ? catalog.summary.gemmaRuntimeArtifacts
+    : catalog?.summary?.runtimeArtifacts || SUMMARY_RUNTIME_ARTIFACTS;
+  const runtimeArtifact = runtimeArtifacts?.[`${platform}-${arch}`];
   if (!runtimeArtifact) {
     return null;
   }
@@ -857,6 +993,7 @@ function normalizeSummaryState(value, catalog = AI_MODEL_CATALOG) {
     profile: normalizeSummaryProfile(state.profile),
     lastValidation: normalizeLastValidation(state.lastValidation),
     error: normalizeNullableString(state.error),
+    ...(state.removalPending === true ? { removalPending: true, replacementModelId: normalizeNullableString(state.replacementModelId) } : {}),
   };
 }
 
@@ -864,12 +1001,25 @@ function normalizeAiAddonManifest(value = {}, catalog = AI_MODEL_CATALOG) {
   const manifest = asPlainObject(value);
   const features = asPlainObject(manifest.features);
 
+  const summary = normalizeSummaryState(features.summary || manifest.summary, catalog);
+  const sourceLibrary = asPlainObject(manifest.summaryLibrary);
+  const sourceModels = asPlainObject(sourceLibrary.models);
+  const models = {};
+  for (const model of getModelList('summary', catalog)) {
+    if (sourceModels[model.id]) models[model.id] = normalizeSummaryState(sourceModels[model.id], catalog);
+  }
+  // A legacy ready installation remains available without downloading it again.
+  if (!Object.hasOwn(manifest, 'summaryLibrary') && summary.status === 'ready') models[summary.modelId] = summary;
+  const requestedDefault = normalizeNullableString(sourceLibrary.defaultModelId);
+  const defaultModelId = requestedDefault && models[requestedDefault] ? requestedDefault
+    : (!Object.hasOwn(manifest, 'summaryLibrary') && summary.status === 'ready' ? summary.modelId : null);
   return {
     manifestVersion: MANIFEST_VERSION,
     features: {
       diarization: normalizeDiarizationState(features.diarization || manifest.diarization, catalog),
-      summary: normalizeSummaryState(features.summary || manifest.summary, catalog),
+      summary,
     },
+    summaryLibrary: { defaultModelId, models },
   };
 }
 

@@ -7166,3 +7166,16 @@ button.history-transcript-timestamp:focus-visible {
     transition: none;
   }
 }
+
+.summary-library-model {
+  padding: 12px 0;
+  border-top: 1px solid var(--hairline);
+}
+.summary-library-model p { margin: 5px 0; }
+.summary-library-model .ai-addon-actions { margin-top: 8px; }
+#summary-model-library h4 { margin: 16px 0 8px; }
+#chat-model-select { width: auto; max-width: 190px; }
+@media (max-width: 900px) {
+  .chat-composer-dock { flex-wrap: wrap; }
+  #chat-model-select { max-width: 100%; }
+}

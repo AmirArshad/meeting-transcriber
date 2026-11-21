@@ -30,6 +30,25 @@ No cloud transcription. No telemetry or analytics. No background uploads. No net
 
 Settings and user-facing copy refer to the local summary/Q&A add-on as **Summaries & Chat**, while internal status keys, channels, and sidecars retain `summary` / `history-qa`.
 
+The add-on manifest holds a `summaryLibrary` of catalog model IDs and one
+`defaultModelId`. The legacy ready entry becomes the default without fetching
+weights. Models own their weights and cache under `ai-addons/models/summary`.
+`ai-addons/runtimes/llama-cpp/<runtime-id>` is shared by installations that pin the
+same runtime. A verified private runtime remains readable during adoption.
+Setup stages runtime downloads and reserves the resource queue before promotion.
+The setup smoke runs on the compute and resource queues before the installation
+becomes Ready. Removal reserves the resource queue, records a retryable intent
+in the manifest and preserves the chosen replacement across restart. Cleanup is
+scoped to app-managed model files and unreferenced runtimes. Saved output survives.
+
+Chat threads persist an optional model override. Summary requests start from the
+default each time. Submission freezes the selected model and artifact, and
+admission rechecks the model, runtime and policy. Library status distinguishes
+storage, working-memory guidance, device readings and runtime availability.
+Archive expansion uses measured pin metadata where available. Unqualified working
+memory estimates are advisory. An unknown reading permits an explicit setup test
+on a supported runtime.
+
 **Token handling (hard constraint).** Diarization uses `pyannote/speaker-diarization-community-1` with the **user's own** Hugging Face token only — never embed, proxy, log, or persist a maintainer token. Tokens stay in Electron `safeStorage` and must never reach manifests, meeting metadata, transcripts, summaries, progress events, or logs. Setup validation passes the token by stdin (`--token-stdin`) and clears `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, the deprecated `HUGGING_FACE_HUB_TOKEN`, and `HF_TOKEN_PATH` from the child env via `buildClearedHuggingFaceTokenEnv()`.
 
 **Speakrs is a user-selectable exclusive engine.** New users default to Speakrs. Pyannote remains selected for existing installations until the user switches. Explicit Speakrs setup stages and hashes the immutable 0.7 model leaves, validates native inference on staged paths, and activates the revision with an atomic manifest write. Cancellation or failure preserves the previous active manifest and files. After a successful switch, cleanup owns the old Pyannote cache and dependencies and retains the token. Pyannote removal deletes its token. Speakrs removal owns its model root and legacy private `runtimes/speakrs-ort` tree. Linux uses the shared managed CUDA 12 admission and native CUDA kernels. macOS targets native CoreML on arm64. Windows Speakrs uses native CUDA and restricts its Rust process DLL search to System32 before inference; failure to establish that policy fails closed. Native qualification remains bounded to the tested GPU and driver. Transcription and Parakeet retain their separate runtime ownership.
@@ -171,10 +190,10 @@ One main-process queue (`aiComputeActionQueue`, from `src/main/ai-compute-queue.
 
 ### Local History Q&A lazy session & safety unloads
 
-- **Readiness & Linux fail-closed gate:** History Q&A reuses the locally installed Summary AI add-on (`Qwen3.5` + pinned `llama.cpp`). On Linux x86_64, both eligibility checks and compute-start admission require the managed CUDA 12 runtime with zero CPU or cloud fallback. Never auto-download add-on files when opening Chat or asking a question.
+- **Readiness & Linux fail-closed gate:** History Q&A uses the selected installed model and its pinned `llama.cpp` runtime. On Linux x86_64, both eligibility checks and compute-start admission require the managed CUDA 12 runtime with zero CPU or cloud fallback. Never auto-download add-on files when opening Chat or asking a question.
 - **Zero-VRAM idle & zero-hit preflight:** Neither app startup nor switching to the `Chat` tab starts `llama-server`. Every `ask-history` call first syncs the FTS5 index and runs `backend/history_qa/retrieval.py` *before* acquiring `aiComputeActionQueue`; zero-hit queries fail closed immediately with `no_matching_excerpts` and do not load a model; a previously warm server remains resident until its normal unload.
 - **Loopback `llama-server` + `llama-cli` fallback:** When verified regular-file `llama-server` sits beside `llama-cli` inside `runtimeDir/extract` (and matches pinned Linux size/SHA-256), `history-qa-service.js` starts it lazily on `127.0.0.1` with an ephemeral port reserved on loopback and released before server launch, `--no-webui --parallel 1 --reasoning off`, and a per-launch 256-bit random `LLAMA_API_KEY` env var (never passed in CLI argv, logged, or exposed to the renderer). `backend/history_qa/qa_runner.py` enforces strict `http://127.0.0.1:<port>` loopback validation, bypasses proxies via `urllib.request.ProxyHandler({})`, receives its payload via `--stdin-json`, requests `response_format: {"type": "json_object"}` with bounded SSE `draftMarkdown` streaming over `history-qa-progress`, and passes `citation_verifier.py` fail-closed block-level Markdown verification (with 1 bounded JSON/citation repair pass, returning `verification_failed` if unverified after repair or `insufficient_evidence` when explicitly declined) where citation metadata comes solely from the immutable retrieved evidence map. When `llama-server` is absent or unverified, Q&A falls back cleanly to single-turn `llama-cli`.
-- **Manual & automatic unloads:** Users can release VRAM anytime via `unload-history-qa-model`. Main automatically unloads the resident worker: (1) before any competing GPU/compute action (`transcribe-audio`, `transcribe-audio-with-speakers`, `diarize-transcript`, `generate-summary`, `download-model`, GPU runtime mutation, exclusive removal), (2) after 10 minutes idle, (3) before Summary add-on setup/validation/removal (`beforeSummaryAddonMutation`), and (4) during `drainAiWorkBeforeQuit` / `onForceQuit`.
+- **Single model process:** A resident Chat server can serve another turn only when its model, artifact and runtime identity match. The shared slot covers the server, CLI Chat, summaries and setup smoke. Main releases the slot before loading another model, testing setup, mutating live add-on files or running a competing GPU job. POSIX release requires the process group to disappear. On Windows the launcher contains the model tree in a named kill-on-close Job Object and a separate probe confirms exit. Failure to confirm release blocks a subsequent load. Manual Free memory, idle unload and quit drain use the same release check.
 
 ### Parakeet allocation failure reporting
 

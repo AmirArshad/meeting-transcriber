@@ -161,6 +161,15 @@
         busy: true,
       };
     }
+    if (status === 'release_error') {
+      return {
+        status: 'release_error',
+        label: 'Memory release unconfirmed',
+        tone: 'unloading',
+        showUnload: true,
+        busy: false,
+      };
+    }
     return {
       status: 'unloaded',
       label: 'Not loaded',

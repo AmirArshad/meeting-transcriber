@@ -1953,6 +1953,7 @@ function applySummaryActionAvailability() {
   const control = getSummaryActionControlState(summary, {
     platformSupportsSummaries: platform === 'win32' || platform === 'darwin',
   });
+  if (aiAddonStatusSnapshot?.summaryLibrary && usableSummaryModels().length) { control.enabled = true; control.title = ''; }
   const mismatchButton = document.getElementById('summary-tag-mismatch-regenerate');
   if (mismatchButton) mismatchButton.disabled = !control.enabled || Boolean(summaryGenerationMeetingId);
   for (const button of getSummaryGenerationButtons()) {
@@ -5507,7 +5508,12 @@ function updateSummaryLanguageCaptions(meeting) {
   if (!helpers) return;
   const captions = [
     ['transcript-summary-language-caption', helpers.formatTranscriptLanguageCaption(meeting && meeting.language)],
-    ['summary-language-caption', helpers.formatSummaryLanguageCaption(meeting)],
+    ['summary-language-caption', (() => {
+      const caption = helpers.formatSummaryLanguageCaption(meeting);
+      const modelId = meeting?.ai?.summary?.modelId;
+      if (caption.visible && modelId && typeof summaryModelName === 'function') caption.value += ` · ${summaryModelName(modelId)}`;
+      return caption;
+    })()],
   ];
   for (const [id, caption] of captions) {
     const element = document.getElementById(id);
@@ -5526,7 +5532,20 @@ function updateSummaryLanguageCaptions(meeting) {
   }
 }
 
-function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash) {
+function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash, library = null) {
+  const modelSelect = document.getElementById('summary-model-select');
+  const modelField = document.getElementById('summary-model-field');
+  const manageModels = document.getElementById('summary-manage-models');
+  const usableModels = library ? usableSummaryModels(library) : [];
+  if (modelField) modelField.hidden = !library;
+  if (library && modelSelect) {
+    modelSelect.replaceChildren();
+    const defaultUsable = usableModels.some((model) => model.modelId === library.defaultModelId);
+    if (!defaultUsable) modelSelect.add(new Option('Choose an available model', ''));
+    for (const model of usableModels) modelSelect.add(new Option(`${model.modelName}${model.modelId === library.defaultModelId ? ' · Default' : ''}`, model.modelId));
+    modelSelect.value = defaultUsable ? library.defaultModelId : '';
+    modelSelect.disabled = usableModels.length === 1 && defaultUsable;
+  }
   const modal = document.getElementById('summary-language-modal');
   const select = document.getElementById('summary-transcript-language');
   const form = document.getElementById('summary-language-form');
@@ -5581,11 +5600,20 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
   const defaultLanguage = preferredLanguage || meeting.language;
   select.value = Object.hasOwn(policy.names || {}, defaultLanguage) ? defaultLanguage : '';
   let saving = false;
+  const selectedModel = () => usableModels.find((item) => item.modelId === modelSelect?.value);
+  const selectedLanguages = (model) => model?.qualifiedLanguages || model?.languagePolicy?.languages || (model && model.modelId !== library?.defaultModelId ? [] : policy.languages);
   const update = () => {
+    const model = selectedModel();
+    const languages = selectedLanguages(model);
+    for (const option of (select.options || [])) {
+      if (option.value && policy.names?.[option.value]) option.textContent = `${policy.names[option.value]}${languages.includes(option.value) ? '' : ' — summaries unavailable'}`;
+    }
     const name = policy.names?.[select.value];
-    const available = policy.languages.includes(select.value);
+    const available = languages.includes(select.value) && (!library || Boolean(model));
     submit.disabled = saving || !available;
-    message.textContent = !name ? 'Choose the main language spoken in this recording.'
+    message.textContent = library && !model ? 'The default model is unavailable. Choose an installed model.'
+      : !languages.length ? 'This model has no checked summary languages. Choose another model.'
+      : !name ? 'Choose the main language spoken in this recording.'
       : available ? `Summary will use ${name}.`
         : `Summaries are not available for ${name} with this model.`;
   };
@@ -5614,8 +5642,9 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
     };
     const onSubmit = async (event) => {
       event.preventDefault();
-      if (saving || !policy.languages.includes(select.value)) return;
+      if (saving || submit.disabled) return;
       const transcriptLanguage = select.value;
+      const selectedModelId = modelSelect?.value || null;
       const editedNames = { ...names };
       for (const [speaker, field] of fields) editedNames[speaker] = field.value;
       const speakerNames = diffSpeakerNames(names, editedNames);
@@ -5668,7 +5697,7 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
           return;
         }
       }
-      close(transcriptLanguage);
+      close(library ? { transcriptLanguage, modelId: selectedModelId } : transcriptLanguage);
     };
     const onCancel = () => close(null);
     const onKey = (event) => {
@@ -5686,6 +5715,14 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
     closeSummaryLanguageConfirmation = close;
     form.addEventListener('submit', onSubmit);
     select.addEventListener('change', update);
+    modelSelect?.addEventListener('change', () => {
+      if (!selectedLanguages(selectedModel()).includes(select.value)) select.value = '';
+      update();
+    }, { signal: controller.signal });
+    manageModels?.addEventListener('click', () => {
+      close(null);
+      openSettingsAtAiAddons();
+    }, { signal: controller.signal });
     cancel.addEventListener('click', onCancel);
     modal.addEventListener('keydown', onKey);
   });
@@ -5737,7 +5774,9 @@ async function generateSummaryForMeeting(meetingId) {
   }
 
   const summaryStatus = aiStatus && aiStatus.features && aiStatus.features.summary;
-  if (!summaryStatus || !summaryStatus.setupComplete || summaryStatus.status !== 'ready') {
+  const library = aiStatus?.summaryLibrary;
+  aiAddonStatusSnapshot = aiStatus;
+  if (library ? !usableSummaryModels(library).length : (!summaryStatus || !summaryStatus.setupComplete || summaryStatus.status !== 'ready')) {
     const message = getSummarySetupMessage(summaryStatus);
     addLog(message, summaryStatus && summaryStatus.status === 'unsupported' ? 'error' : 'warning');
     await restoreCurrentHistorySummary(normalizedMeetingId, message, { isError: summaryStatus?.status === 'error' });
@@ -5749,13 +5788,14 @@ async function generateSummaryForMeeting(meetingId) {
   }
 
   try {
-    const policy = summaryStatus.languagePolicy;
-    if (!policy || !policy.languages?.length) throw new Error('No transcript languages have been checked for the installed model.');
+    const policy = summaryStatus?.languagePolicy || usableSummaryModels(library)[0]?.languagePolicy;
+    if (!policy || (!library && !policy.languages?.length)) throw new Error('No transcript languages have been checked for the installed model.');
     const meeting = await window.electronAPI.getMeeting(normalizedMeetingId);
     const sourceTranscriptHash = await hashSummaryTranscript(meeting?.transcript);
     if (summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) throw new Error('Summary generation cancelled.');
     const preferredLanguage = window.summaryLanguageHelpers.reusableSummaryLanguage(meeting, sourceTranscriptHash, policy);
-    const transcriptLanguage = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash);
+    const selection = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash, library);
+    const transcriptLanguage = typeof selection === 'string' ? selection : selection?.transcriptLanguage;
     if (!transcriptLanguage || summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) {
       await restoreCurrentHistorySummary(normalizedMeetingId, 'Summary generation cancelled. Transcript is unchanged.', { showTab: false });
       return;
@@ -5767,6 +5807,7 @@ async function generateSummaryForMeeting(meetingId) {
       meetingId: normalizedMeetingId,
       transcriptLanguage,
       sourceTranscriptHash,
+      modelId: selection?.modelId || undefined,
       profile: (summaryProfileSelect && summaryProfileSelect.value) || summaryStatus.profile || DEFAULT_SUMMARY_PROFILE,
     });
 
@@ -6994,6 +7035,7 @@ function setAiAddonProgressState(feature, updates = {}) {
     ...updates,
   };
   renderAiAddonProgress(feature);
+  if (feature === 'summary' && typeof renderSummaryModelLibrary === 'function' && aiAddonStatusSnapshot?.summaryLibrary) renderSummaryModelLibrary(aiAddonStatusSnapshot.summaryLibrary);
 }
 
 const aiAddonProgressHideTimers = {
@@ -7055,9 +7097,11 @@ function handleAiAddonProgress(progress) {
     }
     setAiAddonProgressState(progress.feature, {
       active: holdProgress || isCancelled,
+      terminal: true,
       cancelling: false,
       percent: terminalPercent,
       message: progress.message || '',
+      modelId: progress.modelId || aiAddonDownloadState[progress.feature].modelId || null,
     });
     if (holdProgress || isCancelled) {
       hideAiAddonProgressSoon(progress.feature, progress.status === 'ready' ? 2500 : 5000);
@@ -7072,9 +7116,11 @@ function handleAiAddonProgress(progress) {
     clearAiAddonProgressHideTimer(progress.feature);
     setAiAddonProgressState(progress.feature, {
       active: true,
+      terminal: false,
       cancelling: false,
       percent: Math.max(0, Math.min(100, fallbackPercent || 0)),
       message: formatAiAddonProgressText(progress),
+      modelId: progress.modelId || aiAddonDownloadState[progress.feature].modelId || null,
     });
   }
 }
@@ -7284,7 +7330,214 @@ function shouldLogAiAddonProgress(progress) {
   return false;
 }
 
+function summaryLibrary() {
+  return aiAddonStatusSnapshot?.summaryLibrary || null;
+}
+
+function usableSummaryModels(library = summaryLibrary()) {
+  return (library?.models || []).filter((model) => model.installed && model.setupComplete && model.status === 'ready' && model.fit?.blocked !== true);
+}
+
+function summaryModelName(id, library = summaryLibrary()) {
+  return library?.models?.find((model) => model.modelId === id)?.modelName || id || 'No default';
+}
+
+function summaryModelHasFiles(model) {
+  return Boolean(model.installed || model.removalPending || model.installedBytes > 0 || /removal is incomplete/i.test(model.error || ''));
+}
+
+function summaryFitLabel(status) {
+  return ({ fits: 'Fits this device', needs_more_memory: 'May need more memory', runtime_needed: 'Runtime setup needed', unavailable: 'Unavailable on this device', unknown: 'Couldn’t check memory' })[status] || 'Compatibility not checked';
+}
+
+function summaryDownloadConfirmation(model, library) {
+  const size = (value) => value == null ? 'unknown' : formatBytes(value);
+  const shortfall = library.availableBytes != null && model.peakFreeBytes != null
+    ? Math.max(0, model.peakFreeBytes - library.availableBytes) : null;
+  return `Download ${model.modelName}?\nModel download: ${size(model.downloadBytes)} · Runtime download: ${size(model.runtimeDownloadBytes)} · Total additional download: ${size(model.additionalDownloadBytes)}.\nPeak free space needed: ${size(model.peakFreeBytes)} · Available: ${size(library.availableBytes)}.${shortfall ? ` Free another ${formatBytes(shortfall)} before setup.` : ''}`;
+}
+
+function renderSummaryModelLibrary(library) {
+  const container = document.getElementById('summary-model-library');
+  if (!container) return;
+  container.replaceChildren();
+  for (const id of ['summary-footprint', 'summary-status-text', 'setup-summary-btn', 'validate-summary-btn', 'remove-summary-btn']) {
+    const element = document.getElementById(id);
+    if (element) element.hidden = Boolean(library);
+  }
+  if (!library) return;
+  const total = document.createElement('p');
+  total.className = 'setting-description';
+  total.textContent = `${formatBytes(library.installedBytes || 0)} managed storage · ${formatBytes(library.sharedRuntimeBytes || 0)} shared files · ${library.availableBytes == null ? 'Free space unknown' : `${formatBytes(library.availableBytes)} free`}`;
+  container.appendChild(total);
+  for (const [heading, installed] of [['Installed', true], ['Available to download', false]]) {
+    const models = (library.models || []).filter((model) => summaryModelHasFiles(model) === installed);
+    if (!models.length) continue;
+    const title = document.createElement('h4'); title.textContent = heading; container.appendChild(title);
+    for (const model of models) {
+      const card = document.createElement('div'); card.className = 'summary-library-model';
+      const name = document.createElement('strong');
+      const removalIncomplete = Boolean(model.removalPending || /removal is incomplete/i.test(model.error || ''));
+      const progress = aiAddonDownloadState.summary;
+      const activeModel = progress.active && progress.modelId === model.modelId;
+      const state = activeModel ? (progress.message || 'Preparing setup…') : removalIncomplete ? 'Removal incomplete' : model.status === 'ready' ? 'Ready' : model.status === 'error' ? 'Needs attention' : model.status;
+      name.textContent = `${model.modelName} · ${state}${model.modelId === library.defaultModelId ? ' · Default' : ''}${chatState.modelState.modelId === model.modelId && chatState.modelState.status === 'loaded' ? ' · In memory' : ''}`;
+      card.appendChild(name);
+      for (const line of [model.description, `${summaryFitLabel(model.fit?.status)}${model.fit?.reason ? ` · ${model.fit.reason}` : ''}`, model.fit?.totalMemoryBytes != null ? `${formatBytes(model.fit.totalMemoryBytes)} ${model.fit.memoryType || 'device memory'} detected${model.fit.availableMemoryBytes != null ? ` · ${formatBytes(model.fit.availableMemoryBytes)} available` : ''}` : 'Device memory reading unavailable', model.fit?.contextTokens != null ? `${Number(model.fit.contextTokens).toLocaleString()} token context` : null, model.fit?.workingMemoryBytes != null ? `${formatBytes(model.fit.workingMemoryBytes)} provisional working memory estimate` : null, model.error, installed ? `${formatBytes(removalIncomplete ? (model.residualBytes ?? model.installedBytes ?? 0) : (model.installedBytes || 0))} ${removalIncomplete ? 'remaining after removal' : 'on disk'}` : `${model.downloadBytes == null ? 'Download size unknown' : `${formatBytes(model.downloadBytes)} download`} · ${model.estimatedInstalledBytes == null ? 'Installed size unknown' : `${formatBytes(model.estimatedInstalledBytes)} installed`}`]) {
+        if (!line) continue;
+        const p = document.createElement('p'); p.className = 'setting-description'; p.textContent = line; card.appendChild(p);
+      }
+      if (activeModel) {
+        const progressText = document.createElement('p'); progressText.className = 'setting-description';
+        progressText.textContent = `${progress.message || 'Preparing setup…'}${Number.isFinite(progress.percent) ? ` · ${Math.round(progress.percent)}%` : ''}`;
+        progressText.setAttribute('role', 'status'); card.appendChild(progressText);
+      }
+      const actions = document.createElement('div'); actions.className = 'ai-addon-actions';
+      if (activeModel && !progress.cancelling && !progress.terminal) {
+        const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-small btn-secondary'; cancel.textContent = 'Cancel setup';
+        cancel.addEventListener('click', async () => {
+          setAiAddonProgressState('summary', { cancelling: true, message: 'Cancelling and cleaning up partial files…' });
+          try { await window.electronAPI.cancelSummaryModelSetup(); }
+          catch (error) { setAiAddonProgressState('summary', { cancelling: false, message: error.message || 'Could not cancel setup.' }); showAppToast(error.message || 'Could not cancel setup.', 'error'); }
+        });
+        actions.appendChild(cancel);
+      }
+      if (!installed && library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes) {
+        const warning = document.createElement('p'); warning.className = 'setting-description';
+        warning.textContent = `Free ${formatBytes(model.peakFreeBytes - library.availableBytes)} to download this model. Manage installed models above.`; card.appendChild(warning);
+      }
+      const addAction = (label, action, disabled = false) => {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-small'; button.textContent = label; button.disabled = disabled || aiAddonDownloadState.summary.active;
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try { await action(); await refreshAiAddonSettings(); await refreshChatEligibility(); }
+          catch (error) { showAppToast(error.message || 'Could not update the model.', 'error'); await refreshAiAddonSettings(); }
+          finally { button.disabled = false; }
+        });
+        actions.appendChild(button);
+      };
+      const confirmSetup = async () => {
+        if (!window.confirm(summaryDownloadConfirmation(model, library))) return;
+        setAiAddonProgressState('summary', { active: true, terminal: false, modelId: model.modelId, percent: 0, message: 'Preparing setup…' });
+        try { await window.electronAPI.setupSummaryModel({ modelId: model.modelId }); }
+        catch (error) {
+          setAiAddonProgressState('summary', { active: true, terminal: true, modelId: model.modelId, message: error.message || 'Setup failed.' });
+          hideAiAddonProgressSoon('summary', 5000);
+          throw error;
+        }
+      };
+      const setupBlocked = model.fit?.blocked === true || (library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes);
+      if (!installed) {
+        addAction(model.status === 'error' ? 'Retry download' : 'Download', confirmSetup, setupBlocked);
+      } else {
+        if (!removalIncomplete) {
+          if (model.modelId !== library.defaultModelId) addAction('Set as default', () => window.electronAPI.setDefaultSummaryModel({ modelId: model.modelId }), !usableSummaryModels(library).includes(model));
+          addAction('Check setup', () => window.electronAPI.validateSummaryModel({ modelId: model.modelId }));
+          if (!model.setupComplete && model.status === 'error') addAction('Repair', confirmSetup, setupBlocked);
+        }
+        if (chatState.modelState.modelId === model.modelId && ['loaded', 'release_error'].includes(chatState.modelState.status)) addAction('Free memory', () => window.electronAPI.unloadHistoryQaModel());
+        addAction(removalIncomplete ? 'Retry removal' : 'Remove model', async () => {
+          const others = usableSummaryModels(library).filter((item) => item.modelId !== model.modelId);
+          let replacementModelId = null;
+          if (model.modelId === library.defaultModelId && others.length > 1) {
+            replacementModelId = await chooseSummaryReplacement(model, others);
+            if (!replacementModelId) return;
+          } else {
+            replacementModelId = others[0]?.modelId || null;
+            const replacement = model.modelId === library.defaultModelId ? `\n${others.length ? `${others[0].modelName} will become the default.` : 'There will be no default model.'}` : '';
+            if (!window.confirm(`Remove ${model.modelName}? About ${formatBytes(model.reclaimableBytes || 0)} can be freed. Saved summaries and conversations stay available.${replacement}`)) return;
+          }
+          await window.electronAPI.removeSummaryModel({ modelId: model.modelId, replacementModelId });
+        });
+      }
+      card.appendChild(actions); container.appendChild(card);
+    }
+  }
+}
+
+function chooseSummaryReplacement(model, choices) {
+  return new Promise((resolve) => {
+    const previousFocus = document.activeElement;
+    const overlay = document.createElement('div'); overlay.className = 'modal-overlay';
+    const dialog = document.createElement('div'); dialog.className = 'modal-content'; dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-label', 'Remove model');
+    const body = document.createElement('div'); body.className = 'modal-body';
+    const text = document.createElement('p'); text.textContent = `Remove ${model.modelName} and free about ${formatBytes(model.reclaimableBytes || 0)}. Saved summaries and conversations stay available. Choose a new default.`;
+    const select = document.createElement('select'); select.className = 'device-select'; select.setAttribute('aria-label', 'Replacement default model');
+    for (const choice of choices) select.add(new Option(choice.modelName, choice.modelId));
+    const cancel = document.createElement('button'); cancel.className = 'btn btn-secondary'; cancel.textContent = 'Cancel';
+    const remove = document.createElement('button'); remove.className = 'btn btn-danger'; remove.textContent = 'Remove model';
+    const finish = (value) => { overlay.remove(); if (previousFocus?.isConnected) previousFocus.focus(); resolve(value); };
+    cancel.onclick = () => finish(null); remove.onclick = () => finish(select.value);
+    overlay.onkeydown = (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); finish(null); return; }
+      if (event.key !== 'Tab') return;
+      const controls = [select, cancel, remove];
+      const index = controls.indexOf(document.activeElement);
+      if ((event.shiftKey && index <= 0) || (!event.shiftKey && index === controls.length - 1)) {
+        event.preventDefault(); controls[event.shiftKey ? controls.length - 1 : 0].focus();
+      }
+    };
+    body.append(text, select, cancel, remove); dialog.appendChild(body); overlay.appendChild(dialog); document.body.appendChild(overlay); select.focus();
+  });
+}
+
+async function refreshChatEligibility() {
+  if (!window.electronAPI?.getHistoryQaEligibility) return;
+  chatState.eligibility = await window.electronAPI.getHistoryQaEligibility();
+  renderChatOnboardingAndComposer();
+}
+
+function renderChatModelChoice() {
+  const select = document.getElementById('chat-model-select');
+  const manage = document.getElementById('chat-manage-models');
+  const library = summaryLibrary();
+  if (!select || !manage || !library) return;
+  select.hidden = false; manage.hidden = false;
+  const usable = usableSummaryModels(library);
+  let saved = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || '';
+  const savedModel = library.models?.find((model) => model.modelId === saved);
+  if (saved && !summaryModelHasFiles(savedModel || {}) && usable.some((model) => model.modelId === library.defaultModelId)) {
+    const thread = chatState.activeThread;
+    if (thread && chatState.resettingRemovedModelThreadId !== thread.id) {
+      chatState.resettingRemovedModelThreadId = thread.id;
+      void window.electronAPI.updateChatThreadModel({ threadId: thread.id, modelId: null }).then((result) => {
+        if (chatState.activeThread?.id === thread.id) {
+          chatState.activeThread = result?.thread || { ...thread, modelId: null };
+          chatState.resettingRemovedModelThreadId = null;
+          showAppToast(`The removed model was replaced by the default, ${summaryModelName(library.defaultModelId, library)}.`);
+          renderChatOnboardingAndComposer();
+        }
+      }).catch((error) => showAppToast(`Could not reset the removed model: ${error.message}`, 'error'))
+        .finally(() => { chatState.resettingRemovedModelThreadId = null; });
+    } else if (!thread) chatState.pendingModelId = null;
+    saved = '';
+  }
+  select.replaceChildren();
+  select.add(new Option(`Use default (${summaryModelName(library.defaultModelId, library)})`, ''));
+  for (const model of usable) select.add(new Option(`${model.modelName}${model.modelId === library.defaultModelId ? ' · Default' : ''}`, model.modelId));
+  if (saved && !usable.some((model) => model.modelId === saved)) {
+    select.add(new Option(`${summaryModelName(saved, library)} · unavailable`, saved));
+  }
+  select.value = saved;
+  select.disabled = chatState.sending || (usable.length === 1 && usable[0].modelId === (saved || library.defaultModelId));
+  manage.textContent = usable.length ? 'Manage models' : (library.models?.some((m) => m.installed) ? 'Manage models' : 'Set up a model');
+  manage.onclick = openSettingsAtAiAddons;
+  select.onchange = async () => {
+    const modelId = select.value || null;
+    try {
+      if (chatState.activeThread) {
+        const result = await window.electronAPI.updateChatThreadModel({ threadId: chatState.activeThread.id, modelId });
+        if (result?.thread) chatState.activeThread = result.thread;
+        else chatState.activeThread.modelId = modelId;
+      } else chatState.pendingModelId = modelId;
+      renderChatOnboardingAndComposer();
+    } catch (error) { showAppToast(`Could not change model: ${error.message}`, 'error'); renderChatModelChoice(); }
+  };
+}
+
 function updateAiAddonSettings(status) {
+  if (typeof renderSummaryModelLibrary === 'function') renderSummaryModelLibrary(status?.summaryLibrary);
+  if (typeof renderChatModelChoice === 'function') renderChatModelChoice();
   const diarization = status && status.features && status.features.diarization;
   const summary = status && status.features && status.features.summary;
   const diarizationUnsupported = diarization && diarization.status === 'unsupported';
@@ -10103,6 +10356,8 @@ const chatState = {
   listenersBound: false,
   threads: [],
   activeThread: null,
+  pendingModelId: null,
+  resettingRemovedModelThreadId: null,
   pendingScope: { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] },
   eligibility: null,
   modelState: { status: 'unloaded', modelId: null, modelName: null },
@@ -10209,12 +10464,17 @@ function renderChatOnboardingAndComposer() {
   const headerScope = document.getElementById('chat-header-scope');
   const scopeLabel = document.getElementById('chat-scope-btn-label');
 
-  const eligible = !chatState.eligibility || chatState.eligibility.eligible !== false;
+  renderChatModelChoice();
+  const library = summaryLibrary();
+  const selectedModelId = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || library?.defaultModelId;
+  const eligible = library ? !chatState.resettingRemovedModelThreadId && usableSummaryModels(library).some((model) => model.modelId === selectedModelId) : (!chatState.eligibility || chatState.eligibility.eligible !== false);
   if (onboarding) {
     onboarding.hidden = eligible;
   }
-  if (reasonEl && chatState.eligibility && chatState.eligibility.reason) {
-    reasonEl.textContent = `${chatState.eligibility.reason} Keyword search in History still works anytime.`;
+  if (reasonEl) {
+    const selected = library?.models?.find((model) => model.modelId === selectedModelId);
+    const reason = selected?.error || selected?.fit?.reason || chatState.eligibility?.reason || 'Choose an available model in Settings.';
+    reasonEl.textContent = `${reason} Keyword search in History still works anytime.`;
   }
 
   const scopeText = formatChatScopeLabel(
@@ -10570,6 +10830,10 @@ function renderChatStream() {
       wrap.appendChild(prose);
     }
 
+    if (msg.modelId || msg.modelName) {
+      const provenance = document.createElement('p'); provenance.className = 'setting-description';
+      provenance.textContent = `Model: ${msg.modelName || summaryModelName(msg.modelId)}`; wrap.appendChild(provenance);
+    }
     const citations = Array.isArray(msg.citations) ? msg.citations : [];
     const inspectedSources = citations.length === 0
       && notice?.showInspectedSources
@@ -10901,7 +11165,10 @@ async function sendChatQuestionText(rawQuestion, { overrideScope = null, restore
     return;
   }
 
-  if (chatState.eligibility && chatState.eligibility.eligible === false) {
+  const library = summaryLibrary();
+  const newThreadOverride = chatState.activeThread ? null : chatState.pendingModelId;
+  const effectiveModelId = (chatState.activeThread ? chatState.activeThread.modelId : newThreadOverride) || library?.defaultModelId;
+  if (library ? !usableSummaryModels(library).some((model) => model.modelId === effectiveModelId) : (chatState.eligibility && chatState.eligibility.eligible === false)) {
     openSettingsAtAiAddons();
     return;
   }
@@ -10909,7 +11176,7 @@ async function sendChatQuestionText(rawQuestion, { overrideScope = null, restore
   const input = document.getElementById('chat-input');
   const navigation = chatState.navigation;
   const originKey = chatState.draftKey;
-  const originThreadId = chatState.activeThread?.id || null;
+  let originThreadId = chatState.activeThread?.id || null;
   const scope = overrideScope || getCurrentChatScope();
   chatState.sending = true;
   chatState.sendingKey = originKey;
@@ -10920,7 +11187,14 @@ async function sendChatQuestionText(rawQuestion, { overrideScope = null, restore
   renderChatStream();
 
   try {
-    const res = await window.electronAPI.askHistory({ threadId: originThreadId, question, scope });
+    if (!originThreadId && newThreadOverride) {
+      const created = await window.electronAPI.createChatThread({ title: 'New chat', scope });
+      if (!created?.thread?.id) throw new Error('Could not create the chat.');
+      originThreadId = created.thread.id;
+      const updated = await window.electronAPI.updateChatThreadModel({ threadId: originThreadId, modelId: newThreadOverride });
+      if (navigation === chatState.navigation) chatState.activeThread = updated?.thread || created.thread;
+    }
+    const res = await window.electronAPI.askHistory({ threadId: originThreadId, question, scope, modelId: effectiveModelId });
     if (res && res.thread) {
       const threadKey = `thread:${res.thread.id}`;
       if (originKey !== threadKey) {
@@ -10929,7 +11203,7 @@ async function sendChatQuestionText(rawQuestion, { overrideScope = null, restore
         if (chatState.draftKey === originKey) chatState.draftKey = threadKey;
         if (chatState.newDraftKey === originKey) chatState.newDraftKey = `new:${++chatState.nextDraft}`;
       }
-      if (navigation === chatState.navigation) chatState.activeThread = res.thread;
+      if (navigation === chatState.navigation) { chatState.activeThread = res.thread; chatState.pendingModelId = null; }
     }
     chatState.optimisticQuestion = null;
     chatState.streamingDraft = '';
@@ -11064,6 +11338,11 @@ function setupChatWorkspace() {
       if (state) {
         chatState.modelState = state;
         renderChatModelPill();
+        renderSummaryModelLibrary(summaryLibrary());
+        if (chatState.sending && state.status === 'unloading') {
+          chatState.progress = { phase: 'releasing', message: `Releasing ${state.modelName || 'model'}…` };
+          syncChatProgressBanner();
+        }
       }
     }));
   }
@@ -11076,7 +11355,10 @@ function setupChatWorkspace() {
       if (progress.threadId && chatState.activeThread?.id && progress.threadId !== chatState.activeThread.id) {
         return;
       }
-      chatState.progress = progress;
+      const selectedId = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || summaryLibrary()?.defaultModelId;
+      chatState.progress = progress.phase === 'loading_model'
+        ? { ...progress, message: `Loading ${summaryModelName(selectedId)}…` }
+        : progress.phase === 'queued' ? { ...progress, message: 'Waiting for current work…' } : progress;
       if (typeof progress.draftMarkdown === 'string' && progress.draftMarkdown) {
         const hadDraft = Boolean(chatState.streamingDraft);
         chatState.streamingDraft = progress.draftMarkdown;

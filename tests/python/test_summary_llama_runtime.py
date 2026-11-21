@@ -444,3 +444,22 @@ def test_build_summary_progress_event_never_includes_prompt_text():
         'chunkIndex': 1,
         'chunkTotal': 3,
     }
+
+
+def test_catalog_inference_descriptor_bounds_context():
+    from backend.summaries.llama_runtime import apply_inference_descriptor
+    runtime = apply_inference_descriptor({}, {'contextTokens': 16384, 'family': 'gemma', 'promptFormat': 'gemma'})
+    assert runtime['contextTokens'] == 16384
+    with pytest.raises(ValueError):
+        apply_inference_descriptor({}, {'contextTokens': 999999, 'family': 'gemma', 'promptFormat': 'gemma'})
+
+
+def test_configured_runtime_smoke_uses_full_context_and_single_turn_flags():
+    from backend.summaries.llama_runtime import apply_inference_descriptor, build_llama_smoke_test_args
+    runtime = apply_inference_descriptor({
+        'platform': 'darwin', 'executable': '/runtime/llama-cli', 'modelPath': '/model.gguf',
+    }, {'contextTokens': 32768, 'family': 'gemma', 'promptFormat': 'gemma', 'singleTurnOnly': True})
+    args = build_llama_smoke_test_args(runtime, prompt_path='/prompt')
+    assert args[args.index('--ctx-size') + 1] == '32768'
+    assert '--single-turn' in args
+    assert '--no-conversation' not in args

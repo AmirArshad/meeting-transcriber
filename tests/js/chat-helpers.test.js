@@ -163,6 +163,7 @@ test('filterChatThreads, formatChatScopeLabel, and buildModelMemoryPillView prod
     showUnload: true,
     busy: false,
   });
+  assert.equal(buildModelMemoryPillView({ status: 'release_error' }).showUnload, true);
 
   const scopedPrompts = buildStarterPrompts(
     [{ id: 'm1', title: 'Q4 Launch' }],

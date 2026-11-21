@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { getSummaryModelFit } = require('./summary-device-fit');
 
 const {
   AI_MODEL_CATALOG,
@@ -33,9 +34,13 @@ const {
   getSummaryModelCacheDir,
   getSummaryRuntimeArchivePath,
   getSummaryRuntimeDir,
+  getSharedSummaryRuntimeDir,
+  getSummaryRuntimePeakBytes,
   getSummaryRuntimeExecutablePath,
   bindFsMethod,
   updateManifestFeature,
+  loadManifest,
+  saveAiAddonManifest,
   getSummaryRuntimeExtractDir,
   getSummaryRuntimeArchiveDir,
   hashFileSha256,
@@ -61,10 +66,12 @@ async function installSummaryRuntime({
   downloader = downloadFile,
   extractor = extractRuntimeArchive,
   cancelSignal,
+  runtimeDirOverride = null,
 } = {}) {
   throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
-  const artifact = getSummaryArtifactForPlatform(modelId, platform, arch, catalog);
-  const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog);
+  const sourceArtifact = getSummaryArtifactForPlatform(modelId, platform, arch, catalog);
+  const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog, modelId);
+  const artifact = sourceArtifact && { ...sourceArtifact, runtimeArtifactId: runtimeArtifact?.id, ...(runtimeDirOverride ? { runtimeDirOverride } : {}) };
   const runtimeError = validateSummaryRuntimeArtifact(runtimeArtifact);
   if (runtimeError) {
     throw new Error(runtimeError);
@@ -79,6 +86,7 @@ async function installSummaryRuntime({
     catalog,
     verifyChecksum: true,
     verifyChecksumIfChanged: true,
+    runtimeDirOverride,
   });
   if (existingCache.valid) {
     return existingCache;
@@ -242,6 +250,7 @@ async function installSummaryRuntime({
     fsModule,
     catalog,
     verifyChecksum: true,
+    runtimeDirOverride,
   });
   if (!runtimeCache.valid) {
     throw new Error(runtimeCache.reason || 'llama.cpp runtime installation did not produce the expected executable.');
@@ -264,8 +273,10 @@ async function validateSummaryModel({
   runtimeValidator,
   cancelSignal,
   cudaStatus,
+  deviceMemory,
 } = {}) {
-  const selectedModelId = resolveModelId('summary', modelId, catalog);
+  if (modelId && !catalog.summary.models.some((model) => model.id === modelId)) throw new Error('Unknown summary model.');
+  const selectedModelId = resolveModelId('summary', modelId || loadManifest({ userDataDir, fsModule, catalog }).summaryLibrary.defaultModelId, catalog);
   throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
   emitSafeProgress(emitProgress, {
     feature: 'summary',
@@ -312,6 +323,7 @@ async function validateSummaryModel({
         cache,
         runtimeCache,
         runtimeArtifact: runtimeCache.runtimeArtifact,
+        runtimeDir: runtimeCache.runtimeDir,
         cancelSignal,
       });
     } catch (runtimeError) {
@@ -323,6 +335,7 @@ async function validateSummaryModel({
     }
   }
 
+  throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
   updateManifestFeature({
     userDataDir,
     feature: 'summary',
@@ -356,6 +369,8 @@ async function validateSummaryModel({
     catalog,
     verifyChecksums: true,
     cudaStatus,
+    summaryModelId: selectedModelId,
+    deviceMemory,
   });
 }
 
@@ -378,13 +393,20 @@ async function setupSummaryModel({
   backendPath,
   cancelSignal,
   cudaStatus,
+  deviceMemory,
+  runExclusiveMutation = async (operation) => operation(),
 } = {}) {
-  const selectedModelId = resolveModelId('summary', modelId, catalog);
+  if (modelId && !catalog.summary.models.some((model) => model.id === modelId)) throw new Error('Unknown summary model.');
+  const selectedModelId = resolveModelId('summary', modelId || loadManifest({ userDataDir, fsModule, catalog }).summaryLibrary.defaultModelId, catalog);
   throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
-  const artifact = getSummaryArtifactForPlatform(selectedModelId, platform, arch, catalog);
-  const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog);
+  const sourceArtifact = getSummaryArtifactForPlatform(selectedModelId, platform, arch, catalog);
+  const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog, selectedModelId);
+  const artifact = sourceArtifact && { ...sourceArtifact, runtimeArtifactId: runtimeArtifact?.id };
   const availability = getSummaryAvailability(platform, arch, { cudaStatus });
   const artifactError = availability.supported ? validatePinnedSummarySetup({ artifact, runtimeArtifact }) : availability.reason;
+  const model = catalog.summary.models.find((item) => item.id === selectedModelId);
+  const fit = getSummaryModelFit({ model, artifact, availability, runtimeArtifact, deviceMemory, platform });
+  if (fit.blocked) throw new Error(fit.reason || 'This device cannot safely run the selected summary model.');
 
   emitSafeProgress(emitProgress, {
     feature: 'summary',
@@ -411,9 +433,32 @@ async function setupSummaryModel({
       }),
     });
     emitSafeProgress(emitProgress, { feature: 'summary', phase: status, status, message: artifactError, modelId: selectedModelId });
-    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, cudaStatus, deviceMemory, summaryModelId: selectedModelId });
   }
 
+  // Adopt a verified private runtime from a legacy installation without fetching it again.
+  const sharedRuntimeDir = getSharedSummaryRuntimeDir(userDataDir, artifact, catalog);
+  if (!fsModule.existsSync(sharedRuntimeDir) && typeof fsModule.renameSync === 'function') {
+    const manifest = loadManifest({ userDataDir, fsModule, catalog });
+    for (const installedModelId of Object.keys(manifest.summaryLibrary.models)) {
+      const candidate = await checkSummaryRuntimeCache({ userDataDir, platform, arch, modelId: installedModelId, fsModule, catalog, verifyChecksum: true });
+      if (candidate.valid && candidate.runtimeArtifact?.id === runtimeArtifact?.id && candidate.runtimeDir !== sharedRuntimeDir) {
+        try {
+          await runExclusiveMutation(async () => {
+            throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
+            if (!fsModule.existsSync(sharedRuntimeDir)) {
+              fsModule.mkdirSync(path.dirname(sharedRuntimeDir), { recursive: true });
+              fsModule.renameSync(candidate.runtimeDir, sharedRuntimeDir);
+            }
+          });
+        } catch (error) {
+          if (error.code !== 'EXDEV') throw error;
+          // A private runtime on a separate volume stays available to its owner.
+        }
+        break;
+      }
+    }
+  }
   const cache = await checkSummaryModelCache({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog, verifyChecksum: true });
   const runtimeCache = await checkSummaryRuntimeCache({
     userDataDir,
@@ -424,9 +469,23 @@ async function setupSummaryModel({
     catalog,
     verifyChecksum: true,
   });
+  const modelDownloadBytes = Number(artifact?.estimatedSizeBytes) || 0;
+  // Reserve room for temporary downloads plus extraction; unknown space is reported by status.
+  const peakFreeBytes = (cache.valid ? 0 : modelDownloadBytes * 2) + (runtimeCache.valid ? 0 : getSummaryRuntimePeakBytes(runtimeArtifact));
+  if (peakFreeBytes && typeof fsModule.statfsSync === 'function') {
+    const cacheRoot = path.join(userDataDir, 'ai-addons');
+    fsModule.mkdirSync(cacheRoot, { recursive: true });
+    const volume = fsModule.statfsSync(cacheRoot);
+    const shortfall = peakFreeBytes - Number(volume.bavail) * Number(volume.bsize);
+    if (shortfall > 0) {
+      throw new Error(`Not enough free disk space for the summary model download and setup. Free ${(shortfall / 1e9).toFixed(2)} GB and retry.`);
+    }
+  }
   const hadValidModelBeforeSetup = cache.valid;
   const hadValidRuntimeBeforeSetup = runtimeCache.valid;
-  const cleanupDownloadedSummaryArtifacts = ({ includeModel = !hadValidModelBeforeSetup, includeRuntime = !hadValidRuntimeBeforeSetup } = {}) => {
+  const hadRuntimeFilesBeforeSetup = fsModule.existsSync(getSummaryRuntimeDir(userDataDir, artifact, fsModule));
+  const otherRuntimeReference = Object.keys(loadManifest({ userDataDir, fsModule, catalog }).summaryLibrary.models).some((id) => id !== selectedModelId && getSummaryRuntimeArtifactForPlatform(platform, arch, catalog, id)?.id === runtimeArtifact?.id);
+  const cleanupDownloadedSummaryArtifacts = async ({ includeModel = !hadValidModelBeforeSetup, includeRuntime = !hadValidRuntimeBeforeSetup } = {}) => {
     const rmSync = bindFsMethod(fsModule, 'rmSync');
     const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
     if (unlinkSync && artifact) {
@@ -439,15 +498,15 @@ async function setupSummaryModel({
     if (!rmSync) {
       return;
     }
-    if (includeRuntime) {
-      rmSync(getSummaryRuntimeDir(userDataDir, artifact), { recursive: true, force: true });
+    await runExclusiveMutation(async () => {
+    if (includeRuntime && !hadRuntimeFilesBeforeSetup && !otherRuntimeReference) {
+      rmSync(getSummaryRuntimeDir(userDataDir, artifact, fsModule), { recursive: true, force: true });
     }
     if (includeModel) {
-      // The runtime is stored beneath the model cache directory. Remove only
-      // the model artifact so canceling a replacement download cannot delete
-      // a previously valid runtime.
+      // Remove only this download. The model can also own a legacy runtime.
       rmSync(getSummaryArtifactPath(userDataDir, artifact), { force: true });
     }
+    });
   };
   if (cache.valid && runtimeCache.valid) {
     try {
@@ -465,11 +524,12 @@ async function setupSummaryModel({
         runtimeValidator,
         cancelSignal,
         cudaStatus,
+        deviceMemory,
       });
     } catch (validationError) {
       if (isAiAddonCancelError(validationError)) {
         const message = 'Summary model setup was canceled. Existing local model and runtime were kept.';
-        cleanupDownloadedSummaryArtifacts({ includeModel: false, includeRuntime: false });
+        await cleanupDownloadedSummaryArtifacts({ includeModel: false, includeRuntime: false });
         updateManifestFeature({
           userDataDir,
           feature: 'summary',
@@ -485,7 +545,7 @@ async function setupSummaryModel({
           }),
         });
         emitSafeProgress(emitProgress, { feature: 'summary', phase: 'cancelled', status: 'ready', message, modelId: selectedModelId, percent: 100 });
-        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, cudaStatus, deviceMemory, summaryModelId: selectedModelId });
       }
       throw validationError;
     }
@@ -493,22 +553,31 @@ async function setupSummaryModel({
 
   if (!runtimeCache.valid) {
     try {
-      const installRuntime = () => {
-        throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
-        return installSummaryRuntime({
-          userDataDir,
-          platform,
-          arch,
-          modelId: selectedModelId,
-          fsModule,
-          catalog,
-          emitProgress,
-          downloader,
-          extractor,
-          cancelSignal,
+      throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
+      const target = getSharedSummaryRuntimeDir(userDataDir, artifact, catalog);
+      const staging = `${target}.staging`;
+      const backup = `${target}.backup`;
+      fsModule.rmSync(staging, { recursive: true, force: true });
+      try {
+        await installSummaryRuntime({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog,
+          emitProgress, downloader, extractor, cancelSignal, runtimeDirOverride: staging });
+        await runExclusiveMutation(async () => {
+          throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
+          if (!fsModule.existsSync(target) && fsModule.existsSync(backup)) fsModule.renameSync(backup, target);
+          fsModule.rmSync(backup, { recursive: true, force: true });
+          const hadTarget = fsModule.existsSync(target);
+          if (hadTarget) fsModule.renameSync(target, backup);
+          try {
+            fsModule.renameSync(staging, target);
+          } catch (error) {
+            if (hadTarget) fsModule.renameSync(backup, target);
+            throw error;
+          }
+          fsModule.rmSync(backup, { recursive: true, force: true });
         });
-      };
-      await installRuntime();
+      } finally {
+        fsModule.rmSync(staging, { recursive: true, force: true });
+      }
     } catch (runtimeError) {
       if (isAiAddonCancelError(runtimeError)) {
         const message = 'Summary model setup was canceled. Partial downloads were removed.';
@@ -526,9 +595,9 @@ async function setupSummaryModel({
             error: null,
           }),
         });
-        cleanupDownloadedSummaryArtifacts({ includeModel: false, includeRuntime: !hadValidRuntimeBeforeSetup });
+        await cleanupDownloadedSummaryArtifacts({ includeModel: false, includeRuntime: !hadValidRuntimeBeforeSetup });
         emitSafeProgress(emitProgress, { feature: 'summary', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
-        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, cudaStatus, deviceMemory, summaryModelId: selectedModelId });
       }
 
       const message = runtimeError.message || 'Local summary runtime setup failed.';
@@ -547,20 +616,9 @@ async function setupSummaryModel({
         }),
       });
       emitSafeProgress(emitProgress, { feature: 'summary', phase: 'error', status: 'error', message, modelId: selectedModelId });
-      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, cudaStatus, deviceMemory, summaryModelId: selectedModelId });
     }
   }
-
-  const runtimeCacheAfterInstall = await checkSummaryRuntimeCache({
-    userDataDir,
-    platform,
-    arch,
-    modelId: selectedModelId,
-    fsModule,
-    catalog,
-    verifyChecksum: true,
-    verifyChecksumIfChanged: true,
-  });
 
   if (!cache.valid) {
     const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
@@ -617,9 +675,9 @@ async function setupSummaryModel({
             error: null,
           }),
         });
-        cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
+        await cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
         emitSafeProgress(emitProgress, { feature: 'summary', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
-        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, cudaStatus, deviceMemory, summaryModelId: selectedModelId });
       }
       const message = downloadError.message || 'Local summary model download failed.';
       updateManifestFeature({
@@ -636,9 +694,9 @@ async function setupSummaryModel({
           error: message,
         }),
       });
-      cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
+      await cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
       emitSafeProgress(emitProgress, { feature: 'summary', phase: 'error', status: 'error', message, modelId: selectedModelId });
-      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, cudaStatus, deviceMemory, summaryModelId: selectedModelId });
     }
 
     try {
@@ -666,9 +724,9 @@ async function setupSummaryModel({
           error: null,
         }),
       });
-      cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
+      await cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
       emitSafeProgress(emitProgress, { feature: 'summary', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
-      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, cudaStatus, deviceMemory, summaryModelId: selectedModelId });
     }
 
     emitSafeProgress(emitProgress, {
@@ -703,15 +761,15 @@ async function setupSummaryModel({
           error: message,
         }),
       });
-      cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
+      await cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
       emitSafeProgress(emitProgress, { feature: 'summary', phase: 'error', status: 'error', message, modelId: selectedModelId });
-      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, cudaStatus, deviceMemory, summaryModelId: selectedModelId });
     }
 
     if (!renameSync) {
       throw new Error('File system does not support installing summary setup artifacts.');
     }
-    renameSync(tempPath, artifactPath);
+    await runExclusiveMutation(async () => renameSync(tempPath, artifactPath));
   }
 
   try {
@@ -729,12 +787,11 @@ async function setupSummaryModel({
       runtimeValidator,
       cancelSignal,
       cudaStatus,
+      deviceMemory,
     });
-    if (status.features.summary.status !== 'ready' && !hadValidRuntimeBeforeSetup && runtimeCacheAfterInstall.valid) {
-      const rmSync = bindFsMethod(fsModule, 'rmSync');
-      if (rmSync) {
-        rmSync(getSummaryRuntimeDir(userDataDir, artifact), { recursive: true, force: true });
-      }
+    if (status.features.summary.status !== 'ready') {
+      await cleanupDownloadedSummaryArtifacts();
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, cudaStatus, deviceMemory, summaryModelId: selectedModelId });
     }
     return status;
   } catch (validationError) {
@@ -744,7 +801,7 @@ async function setupSummaryModel({
       const message = hadValidModelBeforeSetup && hadValidRuntimeBeforeSetup
         ? 'Summary model setup was canceled. Existing local model and runtime were kept.'
         : 'Summary model setup was canceled. Partial downloads were removed.';
-      cleanupDownloadedSummaryArtifacts({
+      await cleanupDownloadedSummaryArtifacts({
         includeModel: !hadValidModelBeforeSetup,
         includeRuntime: !hadValidRuntimeBeforeSetup,
       });
@@ -763,57 +820,58 @@ async function setupSummaryModel({
         }),
       });
       emitSafeProgress(emitProgress, { feature: 'summary', phase: 'cancelled', status, message, modelId: selectedModelId, percent });
-      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, cudaStatus, deviceMemory, summaryModelId: selectedModelId });
     }
     throw validationError;
   }
 }
 
 async function removeSummaryModel({
-  userDataDir,
-  platform = process.platform,
-  arch = process.arch,
-  modelId,
-  safeStorage,
-  fsModule = fs,
-  catalog = AI_MODEL_CATALOG,
-  now = () => new Date().toISOString(),
-  emitProgress,
+  userDataDir, platform = process.platform, arch = process.arch, modelId,
+  replacementModelId, safeStorage, fsModule = fs, catalog = AI_MODEL_CATALOG,
+  now = () => new Date().toISOString(), emitProgress,
+  runExclusiveMutation = async (operation) => operation(),
 } = {}) {
-  const selectedModelId = resolveModelId('summary', modelId, catalog);
-  emitSafeProgress(emitProgress, {
-    feature: 'summary',
-    phase: 'removing',
-    message: 'Removing local summary model.',
-    modelId: selectedModelId,
-  });
-
-  if (fsModule.rmSync) {
-    fsModule.rmSync(getSummaryModelCacheDir(userDataDir, selectedModelId), { recursive: true, force: true });
+  const manifest = loadManifest({ userDataDir, fsModule, catalog });
+  const selectedModelId = modelId || manifest.summaryLibrary.defaultModelId || resolveModelId('summary', null, catalog);
+  if (!catalog.summary.models.some((model) => model.id === selectedModelId)) throw new Error('Unknown summary model.');
+  const pending = manifest.summaryLibrary.models[selectedModelId];
+  replacementModelId = replacementModelId || pending?.replacementModelId || undefined;
+  const alternatives = Object.entries(manifest.summaryLibrary.models)
+    .filter(([id, entry]) => id !== selectedModelId && entry.status === 'ready').map(([id]) => id);
+  if (manifest.summaryLibrary.defaultModelId === selectedModelId && alternatives.length > 1 && !replacementModelId) {
+    throw new Error('Choose a replacement default before removing this model.');
   }
-
-  updateManifestFeature({
-    userDataDir,
-    feature: 'summary',
-    fsModule,
-    catalog,
-    updates: buildFeatureUpdates({
-      status: 'notConfigured',
-      modelId: selectedModelId,
-      artifactId: null,
-      validation: createValidation('notConfigured', 'Local summary model was removed.', now),
-      error: null,
-    }),
-  });
-
-  emitSafeProgress(emitProgress, {
-    feature: 'summary',
-    phase: 'notConfigured',
-    status: 'notConfigured',
-    message: 'Local summary model was removed.',
-    modelId: selectedModelId,
-  });
-
+  if (replacementModelId && !alternatives.includes(replacementModelId)) throw new Error('Replacement summary model is not ready.');
+  const entry = manifest.summaryLibrary.models[selectedModelId] || { modelId: selectedModelId, status: 'error' };
+  entry.status = 'error';
+  entry.error = 'Removal is incomplete. Retry removal.';
+  entry.removalPending = true;
+  entry.replacementModelId = replacementModelId || alternatives[0] || null;
+  manifest.summaryLibrary.models[selectedModelId] = entry;
+  saveAiAddonManifest({ userDataDir, manifest, fsModule, catalog });
+  emitSafeProgress(emitProgress, { feature: 'summary', phase: 'removing', message: 'Removing local summary model.', modelId: selectedModelId });
+  try {
+    await runExclusiveMutation(async () => {
+      fsModule.rmSync(getSummaryModelCacheDir(userDataDir, selectedModelId), { recursive: true, force: true });
+      const runtimeId = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog, selectedModelId)?.id;
+      const otherReference = Object.keys(manifest.summaryLibrary.models).some((id) => id !== selectedModelId && getSummaryRuntimeArtifactForPlatform(platform, arch, catalog, id)?.id === runtimeId);
+      if (!otherReference) {
+        const artifact = getSummaryArtifactForPlatform(selectedModelId, platform, arch, catalog);
+        const shared = getSharedSummaryRuntimeDir(userDataDir, artifact, catalog);
+        for (const dir of [shared, `${shared}.staging`, `${shared}.backup`, `${shared}.adopting`]) fsModule.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  } catch (error) {
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, summaryModelId: selectedModelId });
+  }
+  delete manifest.summaryLibrary.models[selectedModelId];
+  if (manifest.summaryLibrary.defaultModelId === selectedModelId) manifest.summaryLibrary.defaultModelId = replacementModelId || alternatives[0] || null;
+  manifest.features.summary = manifest.summaryLibrary.models[manifest.summaryLibrary.defaultModelId] || {
+    status: 'notConfigured', modelId: selectedModelId, artifactId: null,
+    lastValidation: createValidation('notConfigured', 'Local summary model was removed.', now), error: null,
+  };
+  saveAiAddonManifest({ userDataDir, manifest, fsModule, catalog });
   return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
 }
 

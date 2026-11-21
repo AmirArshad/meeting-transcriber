@@ -238,3 +238,21 @@ test('chat thread store normalizes, dedupes, persists, and validates scope.tags'
     /Invalid chat scope tags/,
   );
 });
+
+test('model preference and answer provenance survive reload independently', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-chat-model-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const store = makeStore(tmpDir);
+  const thread = await store.createThread();
+  assert.equal(thread.modelId, null);
+  await store.updateThreadModel(thread.id, 'qwen3.5-4b-q4-k-m');
+  await store.appendTurn(thread.id, {
+    question: 'What happened?', answerMarkdown: 'An answer.',
+    modelId: 'qwen3.5-4b-q4-k-m', modelName: 'Qwen 4B',
+  });
+  await store.updateThreadModel(thread.id, null);
+  const reloaded = await makeStore(tmpDir).getThread(thread.id);
+  assert.equal(reloaded.modelId, null);
+  assert.equal(reloaded.messages[1].modelId, 'qwen3.5-4b-q4-k-m');
+  assert.equal(reloaded.messages[1].modelName, 'Qwen 4B');
+});

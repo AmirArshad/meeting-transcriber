@@ -188,14 +188,16 @@ function resolveLlamaServerBinary({
       const realServer = pathModule.resolve(fsModule.realpathSync(candidateServer));
       const rel = pathModule.relative(realExtractRoot, realServer);
       if (rel && !rel.startsWith('..') && !pathModule.isAbsolute(rel)) {
-        if (
-          platform === 'linux'
-          && runtimeArtifact
-          && runtimeArtifact.id === pinnedLinuxServer.runtimeId
-          && pinnedLinuxServer.sha256
-        ) {
-          const actualDigest = sha256File(fsModule, realServer);
-          if (stat.size !== pinnedLinuxServer.sizeBytes || actualDigest !== pinnedLinuxServer.sha256) {
+        if (platform === 'linux') {
+          const requiredFiles = [
+            ...(runtimeArtifact?.requiredFiles || []),
+            ...(runtimeArtifact?.artifacts || []).flatMap((archive) => archive.requiredFiles || []),
+          ];
+          const catalogPin = requiredFiles.find((entry) =>
+            typeof entry === 'object' && pathModule.basename(entry.path || entry.relativePath || '') === serverName);
+          const pin = catalogPin || (runtimeArtifact?.id === pinnedLinuxServer.runtimeId ? pinnedLinuxServer : null);
+          const actualDigest = pin?.sha256 ? sha256File(fsModule, realServer) : null;
+          if (!pin?.sha256 || stat.size !== pin.sizeBytes || actualDigest !== pin.sha256) {
             return {
               mode: 'cli',
               executablePath: cliPath,
@@ -295,6 +297,9 @@ function createHistoryQaService(deps) {
     http: httpModule = http,
     pythonConfig,
     spawnTrackedPython,
+    spawnSummaryPython = spawnTrackedPython,
+    ensureSummaryProcessExited = async () => {},
+    getSummaryDeviceMemory = async () => null,
     spawnServerProcess = defaultSpawnServerProcess,
     getBackendModuleArgs,
     collectPythonProcessOutput,
@@ -408,11 +413,13 @@ function createHistoryQaService(deps) {
     idleTimer.unref?.();
   }
 
-  async function resolveEligibility({ verifyChecksums = false, verifyChecksumsIfChanged = true } = {}) {
+  async function resolveEligibility({ verifyChecksums = false, verifyChecksumsIfChanged = true, summaryModelId = null, deviceMemory, checkFit = false } = {}) {
     const status = await checkAiAddonSetupStatus(
       getAiAddonRuntimeOptions({
         verifyChecksums,
         verifyChecksumsIfChanged,
+        ...(summaryModelId ? { summaryModelId } : {}),
+        ...(deviceMemory !== undefined ? { deviceMemory } : {}),
       }),
     );
     const summaryStatus = status && status.features && status.features.summary;
@@ -428,10 +435,15 @@ function createHistoryQaService(deps) {
     }
 
     const modelId = summaryStatus.modelId || null;
+    const modelFit = summaryStatus.fit || status.summaryLibrary?.models?.find((item) => item.modelId === modelId)?.fit;
+    if (checkFit && modelFit?.blocked === true) {
+      return { eligible: false, reason: modelFit.reason || 'This model cannot run safely on this device.', setupTarget: 'ai-addons', modelId };
+    }
     const modelMeta = modelId ? getModelById('summary', modelId) : null;
     const modelName = (modelMeta && (modelMeta.label || modelMeta.name)) || modelId || null;
     const artifact = modelId ? getSummaryArtifactForPlatform(modelId, platform, arch) : null;
-    const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch);
+    const runtimeArtifact = summaryStatus.runtimeCache?.runtimeArtifact || getSummaryRuntimeArtifactForPlatform(platform, arch, undefined, modelId);
+    const runtimeDir = summaryStatus.runtimeCache?.runtimeDir || null;
 
     if (platform === 'linux') {
       const managedRuntimePath = path.join(app.getPath('userData'), 'ai-addons', 'cuda', 'python');
@@ -442,7 +454,7 @@ function createHistoryQaService(deps) {
           setupTarget: 'ai-addons',
           modelId,
           modelName,
-          artifactId: artifact ? artifact.id : null,
+          artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
         };
       }
       const cacheReady = summaryStatus.cache?.valid === true && summaryStatus.runtimeCache?.valid === true;
@@ -453,7 +465,7 @@ function createHistoryQaService(deps) {
           setupTarget: 'ai-addons',
           modelId,
           modelName,
-          artifactId: artifact ? artifact.id : null,
+          artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
         };
       }
       return {
@@ -462,9 +474,10 @@ function createHistoryQaService(deps) {
         setupTarget: null,
         modelId,
         modelName,
-        artifactId: artifact.id,
+        artifactId: artifact.artifactId || artifact.id,
         artifact,
         runtimeArtifact,
+        runtimeDir,
       };
     }
 
@@ -477,7 +490,7 @@ function createHistoryQaService(deps) {
         setupTarget: 'ai-addons',
         modelId,
         modelName,
-        artifactId: artifact ? artifact.id : null,
+        artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
       };
     }
 
@@ -488,7 +501,7 @@ function createHistoryQaService(deps) {
         setupTarget: 'ai-addons',
         modelId,
         modelName,
-        artifactId: artifact ? artifact.id : null,
+        artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
       };
     }
 
@@ -498,9 +511,10 @@ function createHistoryQaService(deps) {
       setupTarget: null,
       modelId,
       modelName,
-      artifactId: artifact.id,
+      artifactId: artifact.artifactId || artifact.id,
       artifact,
       runtimeArtifact,
+      runtimeDir,
     };
   }
 
@@ -545,6 +559,10 @@ function createHistoryQaService(deps) {
     }
   }
 
+  function reportUnloaded(reason) {
+    emitModelState({ status: 'unloaded', modelId: null, modelName: null, backend: null, loadedAt: null, reason });
+  }
+
   async function unloadModel(reason = 'manual', { cancelActive = true } = {}) {
     if (activeUnloadPromise) {
       return activeUnloadPromise;
@@ -558,28 +576,24 @@ function createHistoryQaService(deps) {
 
       const server = residentServer;
       if (!server) {
-        if (modelState.status !== 'unloaded') {
-          emitModelState({
-            status: 'unloaded',
-            modelId: null,
-            modelName: null,
-            backend: null,
-            loadedAt: null,
-            reason,
-          });
-        }
+        await ensureSummaryProcessExited();
+        if (modelState.status !== 'unloaded') reportUnloaded(reason);
         return { unloaded: true, alreadyUnloaded: true };
       }
 
       emitModelState({ status: 'unloading', reason });
       server.unloading = true;
-      server.unloadReason = reason;
       server.token = null;
 
       await stopServer(server);
+      await ensureSummaryProcessExited();
+      reportUnloaded(reason);
 
       return { unloaded: true, alreadyUnloaded: false };
-    })().finally(() => {
+    })().catch((error) => {
+      emitModelState({ status: 'release_error', reason: 'exit_unconfirmed' });
+      throw error;
+    }).finally(() => {
       activeUnloadPromise = null;
     });
 
@@ -628,13 +642,14 @@ function createHistoryQaService(deps) {
     }
   }
 
-  function buildRuntimeSpawnEnv({ userDataDir, artifact, runtimeArtifact, serverToken = null }) {
+  function buildRuntimeSpawnEnv({ userDataDir, artifact, runtimeArtifact, runtimeDir, serverToken = null }) {
     let runtimeEnv = {};
     if (platform === 'linux') {
       runtimeEnv = buildSummaryRuntimeEnv({
         userDataDir,
         artifact,
         runtimeArtifact,
+        runtimeDir,
         platform,
         arch,
       });
@@ -659,9 +674,12 @@ function createHistoryQaService(deps) {
     runtimeArtifact,
     binaryInfo,
     cancelSignal,
+    checkLiveAdmission,
   }) {
     if (
       residentServer
+      && residentServer.modelId === modelId
+      && residentServer.artifactIdentity === JSON.stringify([artifact, runtimeArtifact])
       && residentServer.modelPath === modelPath
       && residentServer.runtimeDir === runtimeDir
       && !residentServer.exited
@@ -678,6 +696,9 @@ function createHistoryQaService(deps) {
       throw cancelSignal.reason instanceof Error ? cancelSignal.reason : createQaCancelError();
     }
 
+    await ensureSummaryProcessExited();
+    await checkLiveAdmission();
+    if (cancelSignal?.aborted || isQuitCommitted()) throw cancelSignal?.reason || createQaCancelError();
     const userDataDir = app.getPath('userData');
     const token = crypto.randomBytes(32).toString('hex');
     const port = await awaitAbortable(allocateLoopbackPort(), cancelSignal);
@@ -690,19 +711,21 @@ function createHistoryQaService(deps) {
       '--model',
       modelPath,
       '--ctx-size',
-      '32768',
+      String(artifact.inference?.contextTokens || 32768),
       '--n-gpu-layers',
-      '-1',
+      artifact.inference?.singleTurnOnly ? '999' : '-1',
       '--parallel',
       '1',
       '--no-webui',
       '--reasoning',
       'off',
     ];
+    if (artifact.inference?.singleTurnOnly) args.push('--fit', 'off');
     const spawnEnv = buildRuntimeSpawnEnv({
       userDataDir,
       artifact,
       runtimeArtifact,
+      runtimeDir,
       serverToken: token,
     });
 
@@ -757,9 +780,9 @@ function createHistoryQaService(deps) {
       modelName,
       modelPath,
       runtimeDir,
+      artifactIdentity: JSON.stringify([artifact, runtimeArtifact]),
       exited: false,
       unloading: false,
-      unloadReason: null,
       exitPromise,
     };
 
@@ -771,14 +794,7 @@ function createHistoryQaService(deps) {
       if (residentServer === serverEntry) {
         residentServer = null;
         clearIdleTimer();
-        emitModelState({
-          status: 'unloaded',
-          modelId: null,
-          modelName: null,
-          backend: null,
-          loadedAt: null,
-          reason: `server_error:${err?.message || 'spawn_failed'}`,
-        });
+        if (!serverEntry.unloading) reportUnloaded(`server_error:${err?.message || 'spawn_failed'}`);
       }
       resolveExit();
     });
@@ -791,14 +807,7 @@ function createHistoryQaService(deps) {
       if (residentServer === serverEntry) {
         residentServer = null;
         clearIdleTimer();
-        emitModelState({
-          status: 'unloaded',
-          modelId: null,
-          modelName: null,
-          backend: null,
-          loadedAt: null,
-          reason: serverEntry.unloading ? (serverEntry.unloadReason || 'manual') : `process_exited_${code}`,
-        });
+        if (!serverEntry.unloading) reportUnloaded(`process_exited_${code}`);
       }
       resolveExit();
     });
@@ -835,11 +844,8 @@ function createHistoryQaService(deps) {
       }
       throw new Error('Timed out waiting for local Q&A model server to finish loading.');
     } catch (error) {
-      serverEntry.unloading = true;
-      serverEntry.unloadReason = 'startup_aborted';
-      serverEntry.token = null;
       try {
-        await stopServer(serverEntry);
+        await unloadModel('startup_aborted', { cancelActive: false });
       } catch (_stopError) {
         // Keep ownership until the child actually exits; later unloads can retry.
       }
@@ -847,7 +853,7 @@ function createHistoryQaService(deps) {
     }
   }
 
-  function runPythonStdinJson({ moduleName, args = [], payload, env = {}, timeoutMs, registrar, threadId, emitProgressEvents = false }) {
+  function runPythonStdinJson({ moduleName, args = [], payload, env = {}, timeoutMs, registrar, threadId, emitProgressEvents = false, modelBearing = false }) {
     return new Promise((resolve, reject) => {
       try {
         registrar.throwIfCancelled();
@@ -856,7 +862,7 @@ function createHistoryQaService(deps) {
         return;
       }
 
-      const python = spawnTrackedPython(
+      const python = (modelBearing ? spawnSummaryPython : spawnTrackedPython)(
         getBackendModuleArgs(moduleName, args),
         {
           cwd: pythonConfig.backendPath,
@@ -986,21 +992,25 @@ function createHistoryQaService(deps) {
       if (hasInFlightAiAddonSetup()) throw new Error('Local AI setup is in progress; please retry.');
     };
     try {
-    const eligibility = await awaitAbortable(resolveEligibility({
-      verifyChecksums: true,
-      verifyChecksumsIfChanged: true,
-    }), controller.signal);
-    if (!eligibility.eligible) {
-      throw new Error(eligibility.reason || 'Local Q&A is not available until the local Summary AI add-on is installed.');
-    }
-
     checkCurrent();
     if (options.threadId) {
       thread = await chatThreadStore.getThread(options.threadId);
     } else {
       thread = await chatThreadStore.createThread({ scope: requestedScope });
     }
-
+    const eligibility = await awaitAbortable(resolveEligibility({
+      verifyChecksums: true,
+      verifyChecksumsIfChanged: true,
+      summaryModelId: thread.modelId || null,
+    }), controller.signal);
+    if (!eligibility.eligible || (thread.modelId && eligibility.modelId !== thread.modelId)) {
+      throw new Error(eligibility.reason || 'The selected Chat model is unavailable. Choose another model in Settings.');
+    }
+    if (options.modelId && options.modelId !== eligibility.modelId) {
+      throw new Error('The Chat model changed. Review the model selection and retry.');
+    }
+    const frozenModelId = eligibility.modelId;
+    const frozenArtifact = JSON.stringify([eligibility.artifact, eligibility.runtimeArtifact, eligibility.runtimeDir]);
     checkCurrent();
     const effectiveScope = requestedScope ?? thread.scope;
 
@@ -1255,15 +1265,16 @@ function createHistoryQaService(deps) {
             const admitted = await resolveEligibility({
               verifyChecksums: true,
               verifyChecksumsIfChanged: true,
+              summaryModelId: frozenModelId,
             });
-            if (!admitted.eligible) {
+            if (!admitted.eligible || admitted.modelId !== frozenModelId || JSON.stringify([admitted.artifact, admitted.runtimeArtifact, admitted.runtimeDir]) !== frozenArtifact) {
               throw new Error(admitted.reason || 'Local Summary AI add-on changed while queued.');
             }
             registrar.throwIfCancelled();
 
             const userDataDir = app.getPath('userData');
             const modelPath = getSummaryArtifactPath(userDataDir, admitted.artifact);
-            const runtimeDir = getSummaryRuntimeDir(userDataDir, admitted.artifact);
+            const runtimeDir = admitted.runtimeDir || getSummaryRuntimeDir(userDataDir, admitted.artifact);
 
             if (platform === 'linux') {
               if (typeof resolveCudaStatusForTranscription !== 'function') {
@@ -1290,6 +1301,20 @@ function createHistoryQaService(deps) {
               throw new Error('Local Q&A runtime executable could not be verified.');
             }
 
+            const checkLiveAdmission = async () => {
+              registrar.throwIfCancelled();
+              const deviceMemory = await getSummaryDeviceMemory({ live: true });
+              registrar.throwIfCancelled();
+              const live = await resolveEligibility({
+                verifyChecksums: true, verifyChecksumsIfChanged: true,
+                summaryModelId: frozenModelId, deviceMemory, checkFit: true,
+              });
+              if (!live.eligible || live.modelId !== frozenModelId
+                || JSON.stringify([live.artifact, live.runtimeArtifact, live.runtimeDir]) !== frozenArtifact) {
+                throw new Error(live.reason || 'The selected Chat model changed or no longer fits. Check Settings and retry.');
+              }
+              registrar.throwIfCancelled();
+            };
             let executionMode = 'cli';
             let serverUrl = null;
             let serverToken = null;
@@ -1315,11 +1340,16 @@ function createHistoryQaService(deps) {
                 runtimeArtifact: admitted.runtimeArtifact,
                 binaryInfo,
                 cancelSignal: combinedController.signal,
+                checkLiveAdmission,
               });
               executionMode = 'server';
               serverUrl = server.url;
               serverToken = server.token;
             } else {
+              await unloadModel('cli_fallback', { cancelActive: false });
+              await ensureSummaryProcessExited();
+              await checkLiveAdmission();
+              registrar.throwIfCancelled();
               transientCliState = true;
               emitModelState({
                 status: 'loading',
@@ -1339,6 +1369,7 @@ function createHistoryQaService(deps) {
               userDataDir,
               artifact: admitted.artifact,
               runtimeArtifact: admitted.runtimeArtifact,
+              runtimeDir,
               serverToken: null,
             });
 
@@ -1355,6 +1386,7 @@ function createHistoryQaService(deps) {
                   detectedDateFilter,
                   retrievalMode,
                   executionMode,
+                  inferenceDescriptor: admitted.artifact.inference || { contextTokens: 32768, family: 'qwen', promptFormat: 'chatml', disableThinking: true },
                   stream: executionMode === 'server',
                   ...(executionMode === 'server' ? { serverUrl, serverToken } : { runtimeDir, modelPath }),
                 },
@@ -1363,6 +1395,7 @@ function createHistoryQaService(deps) {
                 registrar,
                 threadId: thread.id,
                 emitProgressEvents: true,
+                modelBearing: executionMode === 'cli',
               });
               return output;
             } finally {
@@ -1398,6 +1431,8 @@ function createHistoryQaService(deps) {
         answerMarkdown: qaResult.answerMarkdown || '',
         citations: Array.isArray(qaResult.citations) ? qaResult.citations : [],
         inspectedSources: finalInspectedSources,
+        modelId: frozenModelId,
+        modelName: eligibility.modelName,
         searchedMeetingCount: Number(qaResult.searchedMeetingCount) || searchedMeetingCount,
         evidenceCount: Number(qaResult.evidenceCount) || evidence.length,
         scope: options.scope || null,
@@ -1504,6 +1539,16 @@ function createHistoryQaService(deps) {
       assertTrustedRendererSender(event);
       const threadId = typeof options === 'string' ? options : options?.threadId;
       return chatThreadStore.deleteThread(threadId);
+    });
+
+    ipcMain.handle('update-chat-thread-model', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      const modelId = options?.modelId;
+      if (modelId !== null && (typeof modelId !== 'string' || !getModelById('summary', modelId))) {
+        throw new Error('Invalid Chat model selection.');
+      }
+      const thread = await chatThreadStore.updateThreadModel(options?.threadId, modelId);
+      return { thread };
     });
 
     ipcMain.handle('update-chat-thread-scope', async (event, options = {}) => {

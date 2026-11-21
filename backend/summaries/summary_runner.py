@@ -15,8 +15,8 @@ from common.sensitive_text import redact_sensitive_text
 from meetings.normalization import normalize_recording_tag
 from meetings.speaker_names import normalize_speaker_names, speaker_names_hash
 
-from .llama_runtime import build_summary_progress_event, resolve_llama_runtime, run_llama_prompt, smoke_test_llama_runtime
-from .summary_language import (LANGUAGE_POLICY_VERSION, SummaryLanguageError, language_instruction, check_summary_language)
+from .llama_runtime import apply_inference_descriptor, build_summary_progress_event, resolve_llama_runtime, run_llama_prompt, smoke_test_llama_runtime
+from .summary_language import (LANGUAGE_POLICY_VERSION, is_model_language_supported, SummaryLanguageError, language_instruction, check_summary_language)
 from .sidecar_io import save_summary_outputs, sidecar_paths
 from .templates import TEMPLATE_VERSION, get_template, resolve_template_id
 from .summary_pipeline import (
@@ -277,6 +277,7 @@ def generate_summary(
     platform: Optional[str] = None,
     arch: Optional[str] = None,
     run_prompt: Optional[Callable[[Dict[str, Any], str, int], str]] = None,
+    inference_descriptor: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     emit_progress(meeting_id, "loading-transcript", "Loading transcript for local summary.")
     normalized_tag = normalize_recording_tag(tag, strict=False)
@@ -286,7 +287,7 @@ def generate_summary(
     if source_transcript_hash is not None and source_hash != source_transcript_hash:
         raise SummaryLanguageError("Transcript changed. Confirm the transcript language again.")
     segments = load_summary_segments(transcript_path, speakers_json_path, speaker_names)
-    runtime = resolve_llama_runtime(runtime_dir=runtime_dir, model_path=model_path, platform=platform, arch=arch)
+    runtime = apply_inference_descriptor(resolve_llama_runtime(runtime_dir=runtime_dir, model_path=model_path, platform=platform, arch=arch), inference_descriptor)
 
     prompt_runner = run_prompt or (lambda resolved_runtime, prompt_path, max_tokens: run_llama_prompt(
         resolved_runtime,
@@ -344,8 +345,9 @@ def validate_summary_runtime(
     model_path: str,
     platform: Optional[str] = None,
     arch: Optional[str] = None,
+    inference_descriptor: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    runtime = resolve_llama_runtime(runtime_dir=runtime_dir, model_path=model_path, platform=platform, arch=arch)
+    runtime = apply_inference_descriptor(resolve_llama_runtime(runtime_dir=runtime_dir, model_path=model_path, platform=platform, arch=arch), inference_descriptor)
     smoke_test_llama_runtime(runtime)
     return {
         "status": "ready",
@@ -370,6 +372,7 @@ def main() -> None:
     parser.add_argument("--tag", default=None)
     parser.add_argument("--source-transcript-hash")
     parser.add_argument("--model-id")
+    parser.add_argument("--inference-json", default="{}")
     parser.add_argument("--model-label", default="local-summary-model")
     parser.add_argument("--platform")
     parser.add_argument("--arch")
@@ -383,6 +386,7 @@ def main() -> None:
                 model_path=args.model_path,
                 platform=args.platform,
                 arch=args.arch,
+                inference_descriptor=json.loads(args.inference_json),
             )
             print(json.dumps(result, ensure_ascii=True))
             return
@@ -393,6 +397,8 @@ def main() -> None:
         if not args.language or not args.source_transcript_hash or not args.model_id:
             raise SummaryLanguageError("Confirmed transcript language, hash and model ID are required.")
         language_instruction(args.language)
+        if not is_model_language_supported(args.model_id, args.language, args.platform, args.arch):
+            raise SummaryLanguageError("Summary language is not qualified for this model.")
         normalized_tag = normalize_recording_tag(args.tag, strict=True) if args.tag is not None else None
         speaker_names = normalize_speaker_names(json.loads(args.speaker_names_json), strict=True)
         result = generate_summary(
@@ -410,6 +416,7 @@ def main() -> None:
             tag=normalized_tag,
             source_transcript_hash=args.source_transcript_hash,
             model_id=args.model_id,
+            inference_descriptor=json.loads(args.inference_json),
             platform=args.platform,
             arch=args.arch,
         )

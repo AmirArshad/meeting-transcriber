@@ -5,6 +5,17 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 
 ## Status
 
+### v3.1 Phase 4 model library · 2026-11-21
+
+The model library, scoped selection, process-exit admission and managed removal
+are on `codex/v3.1-phase4-model-library`. Gemma 4 archive and weight verification,
+32k Metal smokes and isolated two-model installation and removal are recorded in
+the [Phase 4 qualification record](docs/development/V3_1_QUALIFICATION.md).
+Inkling's exact IQ4_NL weights passed 32,768-token Metal setup validation
+with a local build of the loop-layer fix. The Apple Silicon gate requires a
+published archive containing the fix and native checks on that archive.
+Windows and Linux CUDA acceptance and host-specific memory limits remain open.
+
 ### v3.1 Phase 3 speaker labels · 2026-11-21
 
 Implemented on `feat/v3.1-phase3-speaker-labels` from `e5502d1`.

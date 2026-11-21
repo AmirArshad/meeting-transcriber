@@ -141,6 +141,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   renameChatThread: (threadId, title) => ipcRenderer.invoke('rename-chat-thread', { threadId, title }),
   deleteChatThread: (threadId) => ipcRenderer.invoke('delete-chat-thread', { threadId }),
   updateChatThreadScope: (threadId, scope) => ipcRenderer.invoke('update-chat-thread-scope', { threadId, scope }),
+  updateChatThreadModel: (options) => ipcRenderer.invoke('update-chat-thread-model', options),
 
   // GPU acceleration
   checkGPU: () => ipcRenderer.invoke('check-gpu'),
@@ -180,6 +181,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cancelSummaryModelSetup: () => ipcRenderer.invoke('cancel-summary-model-setup'),
   validateSummaryModel: (options) => ipcRenderer.invoke('validate-summary-model', options),
   removeSummaryModel: (options) => ipcRenderer.invoke('remove-summary-model', options),
+  setDefaultSummaryModel: (options) => ipcRenderer.invoke('set-default-summary-model', options),
 
   // Event listeners
   onRecordingProgress: (callback) => addListener('recording-progress', callback),

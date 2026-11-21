@@ -469,7 +469,7 @@ def test_summary_runner_persists_tag_template_metadata_and_defaults_untagged_to_
             '--model-path', str(tmp_path / 'model.gguf'),
             '--language', 'en',
             '--source-transcript-hash', tx_hash,
-            '--model-id', 'qwen-test',
+            '--model-id', 'qwen3.5-9b-q4-k-m',
             '--tag', 'appointment',
         ],
     )

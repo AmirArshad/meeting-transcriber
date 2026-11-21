@@ -69,6 +69,11 @@
         <form id="summary-language-form" class="modal-form">
           <div class="modal-body">
             <p id="summary-language-description" class="setting-description">Choose the main language spoken in this recording. Mixed-language recordings without one main language are not supported.</p>
+            <div class="ai-addon-field" id="summary-model-field">
+              <label for="summary-model-select">Model</label>
+              <select id="summary-model-select" class="device-select"></select>
+              <button id="summary-manage-models" type="button" class="btn btn-small btn-secondary">Manage models</button>
+            </div>
             <div class="ai-addon-field">
               <label for="summary-transcript-language">Transcript language</label>
               <select id="summary-transcript-language" class="device-select"></select>
@@ -1416,6 +1421,9 @@
                       <span class="chat-scope-dot" aria-hidden="true"></span>
                       <span id="chat-scope-btn-label">All recordings</span>
                     </button>
+                    <label class="sr-only" for="chat-model-select">Model for this chat</label>
+                    <select id="chat-model-select" class="device-select" hidden aria-label="Model for this chat"></select>
+                    <button type="button" id="chat-manage-models" class="btn btn-small" hidden>Manage models</button>
                     <textarea
                       id="chat-input"
                       class="chat-input"
@@ -1702,6 +1710,7 @@
                         </select>
                       </div>
 
+                      <div id="summary-model-library" aria-live="polite"></div>
                       <div class="ai-addon-footprint" id="summary-footprint" aria-live="polite"></div>
                       <p class="ai-addon-status-text" id="summary-status-text">Checking setup&hellip;</p>
                       <div class="ai-addon-progress" id="summary-progress" style="display: none">
@@ -1881,6 +1890,10 @@
                       rel="noopener noreferrer"
                       >Qwen</a
                     >
+                    (Apache-2.0),
+                    <a href="https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF" target="_blank" rel="noopener noreferrer">Gemma 4</a>
+                    (Apache-2.0), and, where available,
+                    <a href="https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF" target="_blank" rel="noopener noreferrer">Inkling 2 Mini</a>
                     (Apache-2.0) with
                     <a
                       href="https://github.com/ggml-org/llama.cpp"
