@@ -342,7 +342,10 @@ function createChatThreadStore(deps) {
     });
   }
 
-  function createThread({ title = DEFAULT_THREAD_TITLE, scope = null } = {}) {
+  function createThread({ title = DEFAULT_THREAD_TITLE, scope = null, modelId = null } = {}) {
+    const normalizedModelId = typeof modelId === 'string' && modelId.trim()
+      ? modelId.trim().slice(0, 120)
+      : null;
     return enqueueMutation(async () => {
       const store = await readStoreUnsafe();
       const now = nowIso();
@@ -352,7 +355,7 @@ function createChatThreadStore(deps) {
         createdAt: now,
         updatedAt: now,
         scope: sanitizeScope(scope),
-        modelId: null,
+        modelId: normalizedModelId,
         messages: [],
       };
       store.threads.unshift(thread);

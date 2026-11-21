@@ -255,4 +255,9 @@ test('model preference and answer provenance survive reload independently', asyn
   assert.equal(reloaded.modelId, null);
   assert.equal(reloaded.messages[1].modelId, 'qwen3.5-4b-q4-k-m');
   assert.equal(reloaded.messages[1].modelName, 'Qwen 4B');
+
+  const withOverride = await store.createThread({ title: 'Override', modelId: 'gemma-4-e4b' });
+  assert.equal(withOverride.modelId, 'gemma-4-e4b');
+  const reloadedOverride = await makeStore(tmpDir).getThread(withOverride.id);
+  assert.equal(reloadedOverride.modelId, 'gemma-4-e4b');
 });

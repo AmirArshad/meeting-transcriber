@@ -104,6 +104,7 @@ function createSummaryService(deps) {
     pythonConfig,
     spawnTrackedPython,
     spawnSummaryPython = spawnTrackedPython,
+    ensureSummaryProcessExited = async () => {},
     getSummaryDeviceMemory = async () => null,
     getBackendModuleArgs,
     enqueueAiComputeAction,
@@ -498,7 +499,9 @@ function createSummaryService(deps) {
             }),
           };
         }
-        return new Promise((resolve, reject) => {
+        let spawnedSummary = false;
+        try {
+        return await new Promise((resolve, reject) => {
         if (!activeSummaryGeneration || activeSummaryGeneration.controller !== controller || controller.signal.aborted) {
           clearActiveSummaryGeneration();
           reject(createAiAddonCancelError('Summary generation was canceled.'));
@@ -524,10 +527,11 @@ function createSummaryService(deps) {
           modelId: selectedModelId,
           transcriptLanguage,
           sourceTranscriptHash,
+          inferenceDescriptor: artifact.inference || { contextTokens: 32768, family: 'qwen', promptFormat: 'chatml', disableThinking: true },
           ...(meetingTag ? { tag: meetingTag } : {}),
         });
-        summaryArgs.push('--inference-json', JSON.stringify(artifact.inference || { contextTokens: 32768, family: 'qwen', promptFormat: 'chatml', disableThinking: true }));
         const python = spawnSummaryPython(summaryArgs, { cwd: pythonConfig.backendPath, env: summaryEnv });
+        spawnedSummary = true;
         activeSummaryGeneration.process = python;
         registerProcess(python);
 
@@ -789,6 +793,11 @@ function createSummaryService(deps) {
           finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error);
         });
         });
+        } finally {
+          if (spawnedSummary) {
+            await ensureSummaryProcessExited().catch(() => {});
+          }
+        }
         },
         });
       }).catch((error) => {

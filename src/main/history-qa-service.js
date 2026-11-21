@@ -299,6 +299,7 @@ function createHistoryQaService(deps) {
     spawnTrackedPython,
     spawnSummaryPython = spawnTrackedPython,
     ensureSummaryProcessExited = async () => {},
+    hasActiveSummaryProcess = () => false,
     getSummaryDeviceMemory = async () => null,
     spawnServerProcess = defaultSpawnServerProcess,
     getBackendModuleArgs,
@@ -413,7 +414,14 @@ function createHistoryQaService(deps) {
     idleTimer.unref?.();
   }
 
-  async function resolveEligibility({ verifyChecksums = false, verifyChecksumsIfChanged = true, summaryModelId = null, deviceMemory, checkFit = false } = {}) {
+  async function resolveEligibility({
+    verifyChecksums = false,
+    verifyChecksumsIfChanged = true,
+    summaryModelId = null,
+    deviceMemory,
+    checkFit = false,
+    fallbackToUsableLibraryModel = false,
+  } = {}) {
     const status = await checkAiAddonSetupStatus(
       getAiAddonRuntimeOptions({
         verifyChecksums,
@@ -422,52 +430,90 @@ function createHistoryQaService(deps) {
         ...(deviceMemory !== undefined ? { deviceMemory } : {}),
       }),
     );
-    const summaryStatus = status && status.features && status.features.summary;
-    if (!summaryStatus) {
-      return {
-        eligible: false,
-        reason: 'Chat uses the Summaries & Chat add-on, which is not set up.',
-        setupTarget: 'ai-addons',
-        modelId: null,
-        modelName: null,
-        artifactId: null,
-      };
-    }
-
-    const modelId = summaryStatus.modelId || null;
-    const modelFit = summaryStatus.fit || status.summaryLibrary?.models?.find((item) => item.modelId === modelId)?.fit;
-    if (checkFit && modelFit?.blocked === true) {
-      return { eligible: false, reason: modelFit.reason || 'This model cannot run safely on this device.', setupTarget: 'ai-addons', modelId };
-    }
-    const modelMeta = modelId ? getModelById('summary', modelId) : null;
-    const modelName = (modelMeta && (modelMeta.label || modelMeta.name)) || modelId || null;
-    const artifact = modelId ? getSummaryArtifactForPlatform(modelId, platform, arch) : null;
-    const runtimeArtifact = summaryStatus.runtimeCache?.runtimeArtifact || getSummaryRuntimeArtifactForPlatform(platform, arch, undefined, modelId);
-    const runtimeDir = summaryStatus.runtimeCache?.runtimeDir || null;
-
-    if (platform === 'linux') {
-      const managedRuntimePath = path.join(app.getPath('userData'), 'ai-addons', 'cuda', 'python');
-      if (!fs.existsSync(managedRuntimePath)) {
+    const evaluateStatus = (targetStatus) => {
+      const summaryStatus = targetStatus && targetStatus.features && targetStatus.features.summary;
+      if (!summaryStatus) {
         return {
           eligible: false,
-          reason: 'Chat on Linux requires the CUDA 12 runtime and the Summaries & Chat add-on.',
+          reason: 'Chat uses the Summaries & Chat add-on, which is not set up.',
+          setupTarget: 'ai-addons',
+          modelId: null,
+          modelName: null,
+          artifactId: null,
+        };
+      }
+
+      const modelId = summaryStatus.modelId || null;
+      const modelFit = summaryStatus.fit || targetStatus.summaryLibrary?.models?.find((item) => item.modelId === modelId)?.fit;
+      if (checkFit && modelFit?.blocked === true) {
+        return { eligible: false, reason: modelFit.reason || 'This model cannot run safely on this device.', setupTarget: 'ai-addons', modelId };
+      }
+      const modelMeta = modelId ? getModelById('summary', modelId) : null;
+      const modelName = (modelMeta && (modelMeta.label || modelMeta.name)) || modelId || null;
+      const artifact = modelId ? getSummaryArtifactForPlatform(modelId, platform, arch) : null;
+      const runtimeArtifact = summaryStatus.runtimeCache?.runtimeArtifact || getSummaryRuntimeArtifactForPlatform(platform, arch, undefined, modelId);
+      const runtimeDir = summaryStatus.runtimeCache?.runtimeDir || null;
+
+      if (platform === 'linux') {
+        const managedRuntimePath = path.join(app.getPath('userData'), 'ai-addons', 'cuda', 'python');
+        if (!fs.existsSync(managedRuntimePath)) {
+          return {
+            eligible: false,
+            reason: 'Chat on Linux requires the CUDA 12 runtime and the Summaries & Chat add-on.',
+            setupTarget: 'ai-addons',
+            modelId,
+            modelName,
+            artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
+          };
+        }
+        const cacheReady = summaryStatus.cache?.valid === true && summaryStatus.runtimeCache?.valid === true;
+        if (!cacheReady || !artifact || !runtimeArtifact) {
+          return {
+            eligible: false,
+            reason: 'Install or repair the Summaries & Chat add-on in Settings before using Chat.',
+            setupTarget: 'ai-addons',
+            modelId,
+            modelName,
+            artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
+          };
+        }
+        return {
+          eligible: true,
+          reason: null,
+          setupTarget: null,
+          modelId,
+          modelName,
+          artifactId: artifact.artifactId || artifact.id,
+          artifact,
+          runtimeArtifact,
+          runtimeDir,
+        };
+      }
+
+      if (summaryStatus.status === 'unsupported') {
+        return {
+          eligible: false,
+          reason: (summaryStatus.availability && summaryStatus.availability.reason)
+            || summaryStatus.error
+            || 'Chat is not supported on this platform.',
           setupTarget: 'ai-addons',
           modelId,
           modelName,
           artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
         };
       }
-      const cacheReady = summaryStatus.cache?.valid === true && summaryStatus.runtimeCache?.valid === true;
-      if (!cacheReady || !artifact || !runtimeArtifact) {
+
+      if (summaryStatus.status !== 'ready' || !summaryStatus.setupComplete || !artifact) {
         return {
           eligible: false,
-          reason: 'Install or repair the Summaries & Chat add-on in Settings before using Chat.',
+          reason: 'Enable the Summaries & Chat add-on in Settings to use Chat.',
           setupTarget: 'ai-addons',
           modelId,
           modelName,
           artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
         };
       }
+
       return {
         eligible: true,
         reason: null,
@@ -479,43 +525,29 @@ function createHistoryQaService(deps) {
         runtimeArtifact,
         runtimeDir,
       };
-    }
-
-    if (summaryStatus.status === 'unsupported') {
-      return {
-        eligible: false,
-        reason: (summaryStatus.availability && summaryStatus.availability.reason)
-          || summaryStatus.error
-          || 'Chat is not supported on this platform.',
-        setupTarget: 'ai-addons',
-        modelId,
-        modelName,
-        artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
-      };
-    }
-
-    if (summaryStatus.status !== 'ready' || !summaryStatus.setupComplete || !artifact) {
-      return {
-        eligible: false,
-        reason: 'Enable the Summaries & Chat add-on in Settings to use Chat.',
-        setupTarget: 'ai-addons',
-        modelId,
-        modelName,
-        artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
-      };
-    }
-
-    return {
-      eligible: true,
-      reason: null,
-      setupTarget: null,
-      modelId,
-      modelName,
-      artifactId: artifact.artifactId || artifact.id,
-      artifact,
-      runtimeArtifact,
-      runtimeDir,
     };
+
+    const primary = evaluateStatus(status);
+    if (!primary.eligible && !summaryModelId && fallbackToUsableLibraryModel) {
+      const candidates = (status?.summaryLibrary?.models || []).filter(
+        (item) => item.installed && item.setupComplete && item.status === 'ready' && item.fit?.blocked !== true,
+      );
+      for (const candidate of candidates) {
+        const candidateStatus = await checkAiAddonSetupStatus(
+          getAiAddonRuntimeOptions({
+            verifyChecksums,
+            verifyChecksumsIfChanged,
+            summaryModelId: candidate.modelId,
+            ...(deviceMemory !== undefined ? { deviceMemory } : {}),
+          }),
+        );
+        const evaluated = evaluateStatus(candidateStatus);
+        if (evaluated.eligible) {
+          return evaluated;
+        }
+      }
+    }
+    return primary;
   }
 
   function sanitizeEligibilityResponse(full) {
@@ -576,6 +608,9 @@ function createHistoryQaService(deps) {
 
       const server = residentServer;
       if (!server) {
+        if (hasActiveSummaryProcess()) {
+          return { unloaded: true, alreadyUnloaded: true };
+        }
         await ensureSummaryProcessExited();
         if (modelState.status !== 'unloaded') reportUnloaded(reason);
         return { unloaded: true, alreadyUnloaded: true };
@@ -853,8 +888,10 @@ function createHistoryQaService(deps) {
     }
   }
 
-  function runPythonStdinJson({ moduleName, args = [], payload, env = {}, timeoutMs, registrar, threadId, emitProgressEvents = false, modelBearing = false }) {
-    return new Promise((resolve, reject) => {
+  async function runPythonStdinJson({ moduleName, args = [], payload, env = {}, timeoutMs, registrar, threadId, emitProgressEvents = false, modelBearing = false }) {
+    let spawnedModelBearing = false;
+    try {
+      return await new Promise((resolve, reject) => {
       try {
         registrar.throwIfCancelled();
       } catch (err) {
@@ -869,6 +906,9 @@ function createHistoryQaService(deps) {
           env,
         },
       );
+      if (modelBearing) {
+        spawnedModelBearing = true;
+      }
 
       let registered = false;
       try {
@@ -964,7 +1004,12 @@ function createHistoryQaService(deps) {
           // Child closed before stdin write; close/error handler will settle.
         }
       }
-    });
+      });
+    } finally {
+      if (spawnedModelBearing) {
+        await ensureSummaryProcessExited().catch(() => {});
+      }
+    }
   }
 
   async function askHistory(options = {}, { runQueuedCompute = null } = {}) {
@@ -993,21 +1038,27 @@ function createHistoryQaService(deps) {
     };
     try {
     checkCurrent();
+    const requestedThreadModelId = options.threadModelId == null ? null : String(options.threadModelId).trim() || null;
+    if (requestedThreadModelId !== null && (typeof options.threadModelId !== 'string' || !getModelById('summary', requestedThreadModelId))) {
+      throw new Error('Invalid Chat model selection.');
+    }
     if (options.threadId) {
       thread = await chatThreadStore.getThread(options.threadId);
-    } else {
-      thread = await chatThreadStore.createThread({ scope: requestedScope });
     }
+    const targetModelId = (thread ? thread.modelId : requestedThreadModelId) || null;
     const eligibility = await awaitAbortable(resolveEligibility({
       verifyChecksums: true,
       verifyChecksumsIfChanged: true,
-      summaryModelId: thread.modelId || null,
+      summaryModelId: targetModelId,
     }), controller.signal);
-    if (!eligibility.eligible || (thread.modelId && eligibility.modelId !== thread.modelId)) {
+    if (!eligibility.eligible || (targetModelId && eligibility.modelId !== targetModelId)) {
       throw new Error(eligibility.reason || 'The selected Chat model is unavailable. Choose another model in Settings.');
     }
     if (options.modelId && options.modelId !== eligibility.modelId) {
       throw new Error('The Chat model changed. Review the model selection and retry.');
+    }
+    if (!thread) {
+      thread = await chatThreadStore.createThread({ scope: requestedScope, modelId: requestedThreadModelId });
     }
     const frozenModelId = eligibility.modelId;
     const frozenArtifact = JSON.stringify([eligibility.artifact, eligibility.runtimeArtifact, eligibility.runtimeDir]);
@@ -1478,11 +1529,19 @@ function createHistoryQaService(deps) {
   }
 
   function registerIpc(ipcMain) {
-    ipcMain.handle('get-history-qa-eligibility', async (event) => {
+    ipcMain.handle('get-history-qa-eligibility', async (event, options = {}) => {
       assertTrustedRendererSender(event);
+      const requestedModelId = typeof options?.modelId === 'string' && options.modelId.trim()
+        ? options.modelId.trim()
+        : null;
+      if (requestedModelId !== null && !getModelById('summary', requestedModelId)) {
+        throw new Error('Invalid Chat model selection.');
+      }
       const result = await resolveEligibility({
         verifyChecksums: false,
         verifyChecksumsIfChanged: true,
+        summaryModelId: requestedModelId,
+        fallbackToUsableLibraryModel: !requestedModelId,
       });
       return sanitizeEligibilityResponse(result);
     });
@@ -1525,7 +1584,11 @@ function createHistoryQaService(deps) {
 
     ipcMain.handle('create-chat-thread', async (event, options = {}) => {
       assertTrustedRendererSender(event);
-      const thread = await chatThreadStore.createThread(options || {});
+      const modelId = options?.modelId ?? null;
+      if (modelId !== null && (typeof modelId !== 'string' || !getModelById('summary', modelId))) {
+        throw new Error('Invalid Chat model selection.');
+      }
+      const thread = await chatThreadStore.createThread({ ...(options || {}), modelId });
       return { thread };
     });
 

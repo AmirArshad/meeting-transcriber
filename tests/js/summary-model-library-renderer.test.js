@@ -30,19 +30,31 @@ test('partial removal stays in managed storage and blocked models cannot be sele
   assert.equal(context.summaryFitLabel('unknown'), 'Couldn’t check memory');
 });
 
-test('replacement dialog traps keyboard focus and restores it on cancel', async () => {
-  const makeElement = () => ({ children: [], append(...items) { this.children.push(...items); }, appendChild(item) { this.children.push(item); }, setAttribute() {}, remove() { this.removed = true; }, focus() { document.activeElement = this; } });
-  const prior = makeElement(); prior.isConnected = true;
-  const document = { activeElement: prior, body: makeElement(), createElement: makeElement };
+test('replacement dialog uses modal structure, traps keyboard focus, and restores it on cancel', async () => {
+  const makeElement = (tag) => ({ tag, children: [], attributes: {}, append(...items) { this.children.push(...items); }, appendChild(item) { this.children.push(item); }, setAttribute(k, v) { this.attributes[k] = v; }, remove() { this.removed = true; }, focus() { document.activeElement = this; } });
+  const prior = makeElement('button'); prior.isConnected = true;
+  const document = { activeElement: prior, body: makeElement('body'), createElement: makeElement };
   const dialogSource = source.slice(source.indexOf('function chooseSummaryReplacement('), source.indexOf('async function refreshChatEligibility('));
   const ctx = vm.createContext({ document, formatBytes: () => '1 GB', Option: function Option(name, value) { this.text = name; this.value = value; } });
   // The dialog only needs the native select's add method in addition to ordinary elements.
-  document.createElement = (tag) => { const element = makeElement(); if (tag === 'select') element.add = (item) => element.children.push(item); return element; };
+  document.createElement = (tag) => { const element = makeElement(tag); if (tag === 'select') element.add = (item) => element.children.push(item); return element; };
   vm.runInContext(dialogSource, ctx);
   const pending = ctx.chooseSummaryReplacement({ modelName: 'First', reclaimableBytes: 1 }, [{ modelName: 'Second', modelId: 'b' }]);
   const overlay = document.body.children[0];
-  const body = overlay.children[0].children[0];
-  const [, select, cancel, remove] = body.children;
+  const dialog = overlay.children[0];
+  const [header, body, actions] = dialog.children;
+  assert.equal(header.className, 'modal-header');
+  assert.equal(header.children[0].tag, 'h2');
+  assert.equal(header.children[0].textContent, 'Remove model');
+  assert.equal(body.className, 'modal-body');
+  const [, field] = body.children;
+  assert.equal(field.className, 'ai-addon-field');
+  const [label, select] = field.children;
+  assert.equal(label.tag, 'label');
+  assert.equal(actions.className, 'modal-actions');
+  const [cancel, remove] = actions.children;
+  assert.equal(cancel.type, 'button');
+  assert.equal(remove.type, 'button');
   assert.equal(document.activeElement, select);
   let prevented = false;
   overlay.onkeydown({ key: 'Tab', shiftKey: true, preventDefault() { prevented = true; } });
@@ -110,4 +122,209 @@ test('incomplete removal offers retry and reports remaining bytes', () => {
   ctx.renderSummaryModelLibrary({ models: [{ modelId: 'a', modelName: 'A', status: 'error', removalPending: true, residualBytes: 20, fit: { status: 'unknown' } }] });
   assert.ok(elements.some((el) => el.textContent === 'Retry removal'));
   assert.ok(elements.some((el) => el.textContent === '20 bytes remaining after removal'));
+});
+
+test('in-place progress updates preserve Cancel button node, hide legacy summary progress, and display language capabilities', async () => {
+  function makeDomElement(tag = 'div') {
+    return {
+      tag,
+      className: '',
+      children: [],
+      dataset: {},
+      style: {},
+      hidden: false,
+      disabled: false,
+      textContent: '',
+      classList: { toggle() {}, add() {}, remove() {} },
+      get firstChild() { return this.children[0] || null; },
+      appendChild(child) { this.children.push(child); return child; },
+      insertBefore(child, ref) {
+        const idx = ref ? this.children.indexOf(ref) : -1;
+        if (idx === -1) this.children.push(child);
+        else this.children.splice(idx, 0, child);
+        return child;
+      },
+      replaceChildren(...items) { this.children = [...items]; },
+      remove() { this.removed = true; },
+      setAttribute() {},
+      addEventListener(type, fn) { this[type] = fn; },
+      matchesClass(sel) {
+        const cls = sel.startsWith('.') ? sel.slice(1) : sel;
+        return this.className.split(/\s+/).includes(cls);
+      },
+      querySelectorAll(sel) {
+        const out = [];
+        const walk = (node) => {
+          for (const child of node.children || []) {
+            if (sel === 'button' ? child.tag === 'button' : child.matchesClass?.(sel)) out.push(child);
+            walk(child);
+          }
+        };
+        walk(this);
+        return out;
+      },
+      querySelector(sel) { return this.querySelectorAll(sel)[0] || null; },
+    };
+  }
+  const byId = {
+    'summary-model-library': makeDomElement('div'),
+    'summary-progress': makeDomElement('div'),
+    'cancel-summary-btn': makeDomElement('button'),
+    'summary-addon-card': makeDomElement('div'),
+    'summary-status-badge': makeDomElement('span'),
+    'ai-addons-status-badge': makeDomElement('span'),
+    'summary-profile-select': makeDomElement('select'),
+    'summary-status-text': makeDomElement('p'),
+    'setup-summary-btn': makeDomElement('button'),
+    'validate-summary-btn': makeDomElement('button'),
+    'remove-summary-btn': makeDomElement('button'),
+    'summary-footprint': makeDomElement('div'),
+  };
+  const legacyActions = makeDomElement('div');
+  legacyActions.appendChild(byId['setup-summary-btn']);
+  byId['setup-summary-btn'].parentElement = legacyActions;
+
+  const library = {
+    defaultModelId: 'gemma-4-e4b',
+    models: [
+      {
+        modelId: 'gemma-4-e4b',
+        modelName: 'Gemma 4 E4B',
+        description: 'Follow-ups.',
+        installed: true,
+        setupComplete: true,
+        status: 'ready',
+        languagePolicy: { languages: ['en'], names: { en: 'English' } },
+        fit: { status: 'fits' },
+      },
+      {
+        modelId: 'qwen3.5-9b-q4-k-m',
+        modelName: 'Qwen3.5 9B',
+        description: 'Everyday choice.',
+        installed: false,
+        setupComplete: false,
+        status: 'notConfigured',
+        languagePolicy: { languages: ['en', 'es'], names: { en: 'English', es: 'Spanish' } },
+        fit: { status: 'fits' },
+      },
+    ],
+  };
+  const state = { active: true, terminal: false, cancelling: false, modelId: 'qwen3.5-9b-q4-k-m', percent: 10, message: 'Downloading' };
+  const ctx = vm.createContext({
+    document: {
+      createElement: (tag) => makeDomElement(tag),
+      getElementById: (id) => byId[id] || null,
+    },
+    aiAddonDownloadState: { summary: state, diarization: { active: false } },
+    aiAddonStatusSnapshot: { summaryLibrary: library },
+    chatState: { modelState: {}, activeThread: null, pendingModelId: null },
+    formatBytes: (n) => `${n} B`,
+    DEFAULT_SUMMARY_PROFILE: 'balanced',
+    isAiAddonSetupLockingControls: ({ progressActive }) => Boolean(progressActive),
+    setStatusBadge: (el, status) => { if (el) el.textContent = status; },
+    buildAiAddonControlState: () => ({ canConfigure: false }),
+    loadSettings: () => ({ summaryProfile: 'balanced' }),
+    applyAiAddonButtonState: () => {},
+    getSummarySetupButtonLabel: () => 'Enable',
+    getAiAddonValidateButtonLabel: () => 'Check',
+    getAiAddonRemoveButtonLabel: () => 'Remove',
+    getSummarySetupMessage: () => '',
+    isAiAddonTerminalStatus: () => false,
+    updateSummaryFootprint: () => {},
+    updateAiAddonFootprintWarning: () => {},
+    updateSummaryGenerationButtons: () => {},
+    historyLanguageCaptionMeeting: null,
+    openSettingsAtAiAddons: () => {},
+    renderChatOnboardingAndComposer: () => {},
+    window: { electronAPI: { cancelSummaryModelSetup: async () => {} } },
+  });
+  vm.runInContext(
+    source.slice(source.indexOf('function renderAiAddonProgress('), source.indexOf('const aiAddonProgressHideTimers'))
+    + '\n'
+    + source.slice(source.indexOf('function summaryLibrary()'), source.indexOf('async function refreshAiAddonSettings(')),
+    ctx,
+  );
+  ctx.renderSummaryModelLibrary(library);
+  const cancelBtnBefore = byId['summary-model-library'].querySelector('.summary-library-cancel-btn');
+  assert.ok(cancelBtnBefore);
+  assert.equal(byId['summary-progress'].hidden, true);
+  assert.equal(byId['cancel-summary-btn'].hidden, true);
+  assert.equal(legacyActions.hidden, true);
+  assert.ok(byId['summary-model-library'].querySelectorAll('.summary-library-model-desc').some((el) => el.textContent.includes('English summaries & Chat')));
+  assert.ok(byId['summary-model-library'].querySelectorAll('.summary-library-model-desc').some((el) => el.textContent.includes('Summaries (2 languages) & Chat')));
+
+  ctx.setAiAddonProgressState('summary', { percent: 65, message: 'Downloading weights' });
+  const cancelBtnAfter = byId['summary-model-library'].querySelector('.summary-library-cancel-btn');
+  assert.equal(cancelBtnAfter, cancelBtnBefore);
+  assert.equal(byId['summary-model-library'].querySelector('.progress-text').textContent, 'Downloading weights · 65%');
+  assert.equal(byId['summary-progress'].style.display, 'none');
+
+  // When setup finishes and a usable library model is ready, badges and profile select reflect summaryLibrary.
+  ctx.setAiAddonProgressState('summary', { active: false, terminal: false });
+  ctx.updateAiAddonSettings({
+    summaryLibrary: library,
+    features: { summary: { status: 'notConfigured' } },
+  });
+  assert.equal(byId['summary-status-badge'].textContent, 'ready');
+  assert.equal(byId['ai-addons-status-badge'].textContent, 'ready');
+  assert.equal(byId['summary-profile-select'].disabled, false);
+});
+
+test('renderChatModelChoice implements 0/1/2+ usable model UX without duplicate default entries', () => {
+  function makeControl(tag) {
+    return { tag, hidden: false, disabled: false, textContent: '', value: '', children: [], add(o) { this.children.push(o); }, replaceChildren(...items) { this.children = [...items]; } };
+  }
+  const els = {
+    'chat-model-select': makeControl('select'),
+    'chat-model-label': makeControl('span'),
+    'chat-manage-models': makeControl('button'),
+  };
+  let library = { defaultModelId: null, models: [] };
+  const ctx = vm.createContext({
+    document: { getElementById: (id) => els[id] || null },
+    Option: function Option(text, value) { this.text = text; this.value = value; },
+    aiAddonStatusSnapshot: null,
+    chatState: { activeThread: null, pendingModelId: null, sending: false },
+    openSettingsAtAiAddons: () => {},
+    renderChatOnboardingAndComposer: () => {},
+  });
+  vm.runInContext(
+    source.slice(source.indexOf('function summaryLibrary()'), source.indexOf('function formatSummaryModelCapabilities('))
+    + '\n'
+    + source.slice(source.indexOf('function renderChatModelChoice('), source.indexOf('function updateAiAddonSettings(')),
+    ctx,
+  );
+
+  // 0 usable models
+  ctx.aiAddonStatusSnapshot = { summaryLibrary: library };
+  ctx.renderChatModelChoice();
+  assert.equal(els['chat-model-select'].hidden, true);
+  assert.equal(els['chat-model-label'].hidden, true);
+  assert.equal(els['chat-manage-models'].hidden, false);
+  assert.equal(els['chat-manage-models'].textContent, 'Set up a model');
+
+  // 1 usable model
+  library = { defaultModelId: 'a', models: [{ modelId: 'a', modelName: 'Qwen3.5 9B', installed: true, setupComplete: true, status: 'ready' }] };
+  ctx.aiAddonStatusSnapshot = { summaryLibrary: library };
+  ctx.renderChatModelChoice();
+  assert.equal(els['chat-model-select'].hidden, true);
+  assert.equal(els['chat-model-label'].hidden, false);
+  assert.equal(els['chat-model-label'].textContent, 'Qwen3.5 9B');
+
+  // 2+ usable models: no duplicate default entry
+  library = {
+    defaultModelId: 'a',
+    models: [
+      { modelId: 'a', modelName: 'Qwen3.5 9B', installed: true, setupComplete: true, status: 'ready' },
+      { modelId: 'b', modelName: 'Gemma 4 E4B', installed: true, setupComplete: true, status: 'ready' },
+    ],
+  };
+  ctx.aiAddonStatusSnapshot = { summaryLibrary: library };
+  ctx.renderChatModelChoice();
+  assert.equal(els['chat-model-select'].hidden, false);
+  assert.equal(els['chat-model-label'].hidden, true);
+  assert.deepEqual(els['chat-model-select'].children.map((o) => [o.text, o.value]), [
+    ['Qwen3.5 9B · Default', ''],
+    ['Gemma 4 E4B', 'b'],
+  ]);
 });

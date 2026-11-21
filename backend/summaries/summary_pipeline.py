@@ -37,6 +37,14 @@ TOPIC_BOUNDARY_RE = re.compile(
     r"\bagenda\s+item\b",
     re.IGNORECASE,
 )
+_THINK_BLOCK_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
+_UNCLOSED_THINK_RE = re.compile(r"<think>[\s\S]*$", re.IGNORECASE)
+_GEMMA_THOUGHT_BLOCK_RE = re.compile(r"<\|channel>thought[\s\S]*?<channel\|>", re.IGNORECASE)
+_UNCLOSED_GEMMA_THOUGHT_RE = re.compile(r"<\|channel>thought[\s\S]*$", re.IGNORECASE)
+_CHAT_CONTROL_TOKEN_RE = re.compile(
+    r"<start_of_turn>|<end_of_turn>|<\|im_start\|>|<\|im_end\|>|<\|channel>|<channel\|>",
+    re.IGNORECASE,
+)
 
 SUMMARY_PROFILE_CONFIGS: Dict[str, Dict[str, Any]] = {
     "concise": {
@@ -85,6 +93,20 @@ def _to_float(value: Any, default: float = 0.0) -> float:
 
 def _clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def sanitize_prompt_control_tokens(value: Any) -> str:
+    """Strip chat-template control tokens from untrusted text before prompting."""
+    return _CHAT_CONTROL_TOKEN_RE.sub(" ", str(value or ""))
+
+
+def _strip_model_reasoning(raw_output: str) -> str:
+    cleaned = str(raw_output or "").strip()
+    cleaned = _THINK_BLOCK_RE.sub("", cleaned)
+    cleaned = _UNCLOSED_THINK_RE.sub("", cleaned)
+    cleaned = _GEMMA_THOUGHT_BLOCK_RE.sub("", cleaned)
+    cleaned = _UNCLOSED_GEMMA_THOUGHT_RE.sub("", cleaned)
+    return cleaned.strip()
 
 
 def format_timestamp(seconds: Any) -> str:
@@ -215,14 +237,14 @@ def normalize_transcript_segments(segments: Iterable[Dict[str, Any]]) -> List[Di
     normalized: List[Dict[str, Any]] = []
 
     for segment in segments:
-        text = _clean_text(segment.get("text"))
+        text = _clean_text(sanitize_prompt_control_tokens(segment.get("text")))
         if not text:
             continue
 
         start = _to_float(segment.get("start"))
         end = _to_float(segment.get("end"), start)
         speaker_value = segment.get("speaker")
-        speaker = speaker_value.strip() if isinstance(speaker_value, str) else ""
+        speaker = _clean_text(sanitize_prompt_control_tokens(speaker_value)) if isinstance(speaker_value, str) else ""
         speaker = speaker or "Unknown"
         if segment.get("start") is None or segment.get("end") is None:
             line = f"{speaker}: {text}"
@@ -372,7 +394,7 @@ def build_chunk_summary_prompt(
         template["chunk_instructions"],
         "Do not claim the transcript is missing, empty, or only system/CLI status.",
         f"Chunk {chunk.get('index', 1)} transcript:",
-        str(chunk.get("text", "")),
+        sanitize_prompt_control_tokens(chunk.get("text", "")),
     ])
 
 
@@ -397,13 +419,13 @@ def build_final_merge_prompt(
         template["merge_instructions"],
         summary_json_schema_instruction(template["template_id"]),
         "Validated chunk summaries JSON:",
-        json.dumps(normalized_summaries, ensure_ascii=False, indent=2),
+        sanitize_prompt_control_tokens(json.dumps(normalized_summaries, ensure_ascii=False, indent=2)),
     ])
 
 
 def extract_json_object(raw_output: str) -> Dict[str, Any]:
     """Extract one JSON object from model output, tolerating fenced text."""
-    output = str(raw_output or "").strip()
+    output = _strip_model_reasoning(raw_output)
     if output.startswith("```"):
         output = re.sub(r"^```(?:json)?\s*", "", output, flags=re.IGNORECASE)
         output = re.sub(r"\s*```$", "", output).strip()

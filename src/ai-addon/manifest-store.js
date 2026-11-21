@@ -662,37 +662,62 @@ function getSummaryRuntimePeakBytes(runtimeArtifact) {
 }
 
 function getSharedSummaryRuntimeDir(userDataDir, artifact, catalog = AI_MODEL_CATALOG) {
-  const runtime = artifact && getSummaryRuntimeArtifactForPlatform(artifact.platform, artifact.arch, catalog, artifact.modelId);
-  return path.join(getAiAddonPaths(userDataDir).rootDir, 'runtimes', 'llama-cpp', safePathSegment(artifact?.runtimeArtifactId || runtime?.id || 'current'));
+  if (!artifact) {
+    return null;
+  }
+  const runtime = getSummaryRuntimeArtifactForPlatform(artifact.platform, artifact.arch, catalog, artifact.modelId);
+  const runtimeId = artifact.runtimeArtifactId || runtime?.id;
+  if (!runtimeId) {
+    return null;
+  }
+  return path.join(getAiAddonPaths(userDataDir).rootDir, 'runtimes', 'llama-cpp', safePathSegment(runtimeId));
 }
 
-function getSummaryRuntimeDir(userDataDir, artifact, fsModule = fs) {
+function getLegacySummaryRuntimeDir(userDataDir, artifact) {
+  if (!artifact) {
+    return null;
+  }
+  return path.join(
+    getSummaryModelCacheDir(userDataDir, artifact.modelId),
+    'runtime',
+    artifact.platform ? `${artifact.platform}-${artifact.arch}` : 'current',
+  );
+}
+
+function getSummaryRuntimeDir(userDataDir, artifact, fsModule = fs, catalog = AI_MODEL_CATALOG) {
   if (artifact?.runtimeDirOverride) return artifact.runtimeDirOverride;
-  const shared = getSharedSummaryRuntimeDir(userDataDir, artifact);
-  const legacy = path.join(getSummaryModelCacheDir(userDataDir, artifact && artifact.modelId), 'runtime', artifact && artifact.platform ? `${artifact.platform}-${artifact.arch}` : 'current');
+  if (!artifact) return null;
+  const shared = getSharedSummaryRuntimeDir(userDataDir, artifact, catalog);
+  const legacy = getLegacySummaryRuntimeDir(userDataDir, artifact);
+  if (!shared) {
+    return legacy && fsModule.existsSync?.(legacy) ? legacy : null;
+  }
   // Legacy installs stay readable until explicitly adopted after verification.
   return fsModule.existsSync?.(shared) || !fsModule.existsSync?.(legacy) ? shared : legacy;
 }
 
-function getSummaryRuntimeExecutablePath(userDataDir, artifact, runtimeArtifact) {
+function getSummaryRuntimeExecutablePath(userDataDir, artifact, runtimeArtifact, fsModule = fs, catalog = AI_MODEL_CATALOG) {
   const executableName = runtimeArtifact && runtimeArtifact.executableName;
-  return executableName ? path.join(getSummaryRuntimeDir(userDataDir, artifact), executableName) : null;
+  const runtimeDir = executableName ? getSummaryRuntimeDir(userDataDir, artifact, fsModule, catalog) : null;
+  return runtimeDir && executableName ? path.join(runtimeDir, executableName) : null;
 }
 
-function getSummaryRuntimeExtractDir(userDataDir, artifact, runtimeArtifact) {
-  return path.join(getSummaryRuntimeDir(userDataDir, artifact), 'extract');
+function getSummaryRuntimeExtractDir(userDataDir, artifact, runtimeArtifact, fsModule = fs, catalog = AI_MODEL_CATALOG) {
+  const runtimeDir = getSummaryRuntimeDir(userDataDir, artifact, fsModule, catalog);
+  return runtimeDir ? path.join(runtimeDir, 'extract') : null;
 }
 
-function getSummaryRuntimeArchiveDir(userDataDir, artifact) {
-  return path.join(getSummaryRuntimeDir(userDataDir, artifact), 'archives');
+function getSummaryRuntimeArchiveDir(userDataDir, artifact, fsModule = fs, catalog = AI_MODEL_CATALOG) {
+  const runtimeDir = getSummaryRuntimeDir(userDataDir, artifact, fsModule, catalog);
+  return runtimeDir ? path.join(runtimeDir, 'archives') : null;
 }
 
-function getSummaryRuntimeArchivePath(userDataDir, artifact, runtimeArchive) {
+function getSummaryRuntimeArchivePath(userDataDir, artifact, runtimeArchive, fsModule = fs, catalog = AI_MODEL_CATALOG) {
   if (!runtimeArchive || !runtimeArchive.fileName) {
     return null;
   }
-
-  return path.join(getSummaryRuntimeArchiveDir(userDataDir, artifact), runtimeArchive.fileName);
+  const archiveDir = getSummaryRuntimeArchiveDir(userDataDir, artifact, fsModule, catalog);
+  return archiveDir ? path.join(archiveDir, runtimeArchive.fileName) : null;
 }
 
 function findRuntimeExecutablePath(runtimeDir, executableName, fsModule = fs) {
@@ -801,19 +826,25 @@ function saveAiAddonManifest({ userDataDir, manifest, fsModule = fs, catalog = A
 function updateManifestFeature({ userDataDir, feature, updates, fsModule = fs, catalog = AI_MODEL_CATALOG } = {}) {
   const manifest = loadManifest({ userDataDir, fsModule, catalog });
   const library = manifest.summaryLibrary;
+  let syncedSummaryUpdate = updates;
   if (feature === 'summary' && updates.modelId) {
     const entry = { ...(library.models[updates.modelId] || {}), ...updates };
     library.models[updates.modelId] = entry;
     if (!library.defaultModelId && updates.status === 'ready') library.defaultModelId = updates.modelId;
+    if (library.defaultModelId && library.models[library.defaultModelId]) {
+      syncedSummaryUpdate = library.models[library.defaultModelId];
+    }
   }
   const nextManifest = normalizeAiAddonManifest({
     ...manifest,
     features: {
       ...manifest.features,
-      [feature]: {
-        ...manifest.features[feature],
-        ...updates,
-      },
+      [feature]: feature === 'summary' && library.defaultModelId && library.models[library.defaultModelId]
+        ? syncedSummaryUpdate
+        : {
+          ...manifest.features[feature],
+          ...updates,
+        },
     },
   }, catalog);
 
@@ -2013,7 +2044,7 @@ async function checkSummaryRuntimeCache({
   const sourceArtifact = getSummaryArtifactForPlatform(modelId, platform, arch, catalog);
   const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog, modelId);
   const artifact = sourceArtifact && { ...sourceArtifact, runtimeArtifactId: runtimeArtifact?.id, ...(runtimeDirOverride ? { runtimeDirOverride } : {}) };
-  const runtimeDir = artifact ? getSummaryRuntimeDir(userDataDir, artifact, fsModule) : null;
+  const runtimeDir = artifact ? getSummaryRuntimeDir(userDataDir, artifact, fsModule, catalog) : null;
   const expectedExecutablePath = runtimeDir && runtimeArtifact?.executableName
     ? path.join(runtimeDir, runtimeArtifact.executableName)
     : null;
@@ -2067,6 +2098,7 @@ function buildSummaryRuntimeEnv({
   platform = process.platform,
   arch = process.arch,
   fsModule = fs,
+  catalog = AI_MODEL_CATALOG,
   driverLibraryDirs = null,
   runtimeDir: runtimeDirOverride = null,
 } = {}) {
@@ -2077,8 +2109,8 @@ function buildSummaryRuntimeEnv({
     throw new Error('Linux local summaries require x86_64.');
   }
   const selectedRuntimeArtifact = runtimeArtifact
-    || getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG);
-  const runtimeDir = runtimeDirOverride || getSummaryRuntimeDir(userDataDir, artifact);
+    || getSummaryRuntimeArtifactForPlatform(platform, arch, catalog, artifact?.modelId);
+  const runtimeDir = runtimeDirOverride || getSummaryRuntimeDir(userDataDir, artifact, fsModule, catalog);
   const extractRoot = path.join(runtimeDir, 'extract');
   const realpathSync = bindFsMethod(fsModule, 'realpathSync');
   const existsSync = bindFsMethod(fsModule, 'existsSync');
@@ -2564,6 +2596,24 @@ async function checkAiAddonSetupStatus({
   });
 
   const verifyLibraryChecksums = Boolean(verifyChecksums && !summaryModelId);
+  const sharedRuntimeTreeSizeCache = new Map();
+  const getSharedRuntimeTreeSizeBytes = (sharedDir) => {
+    if (!sharedDir) return 0;
+    if (sharedRuntimeTreeSizeCache.has(sharedDir)) {
+      return sharedRuntimeTreeSizeCache.get(sharedDir);
+    }
+    const size = [sharedDir, `${sharedDir}.staging`, `${sharedDir}.backup`, `${sharedDir}.adopting`]
+      .reduce((sum, dir) => sum + getDirectorySizeBytes(dir, fsModule), 0);
+    sharedRuntimeTreeSizeCache.set(sharedDir, size);
+    return size;
+  };
+  const modelDirSizeCache = new Map();
+  const getCachedModelDirSizeBytes = (id) => {
+    if (modelDirSizeCache.has(id)) return modelDirSizeCache.get(id);
+    const size = getDirectorySizeBytes(getSummaryModelCacheDir(userDataDir, id), fsModule);
+    modelDirSizeCache.set(id, size);
+    return size;
+  };
   const libraryModels = await Promise.all((catalog.summary?.models || []).map(async (model) => {
     const modelOptions = {
       userDataDir, platform, arch, modelId: model.id, fsModule, catalog,
@@ -2574,17 +2624,28 @@ async function checkAiAddonSetupStatus({
     const runtime = model.id === summary.modelId ? summaryRuntimeCache : await checkSummaryRuntimeCache(modelOptions);
     const entry = { ...status.features.summary, ...(manifest.summaryLibrary.models[model.id] || { status: 'notConfigured', modelId: model.id, error: null }) };
     const derived = deriveSummaryStatus(entry, cache, runtime);
-    const bytes = getDirectorySizeBytes(getSummaryModelCacheDir(userDataDir, model.id), fsModule);
+    const bytes = getCachedModelDirSizeBytes(model.id);
     const artifact = getSummaryArtifactForPlatform(model.id, platform, arch, catalog);
     const estimatedInstalledBytes = Number(artifact?.estimatedSizeBytes || model.artifact?.estimatedSizeBytes) || null;
     const runtimeDownloadBytes = (runtime.runtimeArtifact?.artifacts || []).reduce((sum, item) => sum + (Number(item.sizeBytes) || 0), 0);
     const peakFreeBytes = (cache.valid ? 0 : (estimatedInstalledBytes || 0) * 2) + (runtime.valid ? 0 : getSummaryRuntimePeakBytes(runtime.runtimeArtifact));
     const fit = getSummaryModelFit({ model, artifact, availability: entry.availability, runtimeArtifact: runtime.runtimeArtifact, deviceMemory, platform });
     const runtimeId = runtime.runtimeArtifact?.id;
-    const otherReference = Object.keys(manifest.summaryLibrary.models).some((id) => id !== model.id && getSummaryRuntimeArtifactForPlatform(platform, arch, catalog, id)?.id === runtimeId);
+    const otherReference = hasOtherActiveSummaryRuntimeReference({
+      userDataDir,
+      manifest,
+      excludeModelId: model.id,
+      runtimeId,
+      platform,
+      arch,
+      fsModule,
+      catalog,
+      getModelDirBytes: getCachedModelDirSizeBytes,
+    });
     const sharedDir = getSharedSummaryRuntimeDir(userDataDir, artifact, catalog);
-    const runtimeOwnedBytes = [sharedDir, `${sharedDir}.staging`, `${sharedDir}.backup`, `${sharedDir}.adopting`].reduce((sum, dir) => sum + getDirectorySizeBytes(dir, fsModule), 0);
-    const reclaimableBytes = bytes + (manifest.summaryLibrary.models[model.id] && !otherReference ? runtimeOwnedBytes : 0);
+    const runtimeOwnedBytes = getSharedRuntimeTreeSizeBytes(sharedDir);
+    const ownsFilesOrActive = Boolean(cache.installed || bytes || entry.removalPending || manifest.summaryLibrary.models[model.id]?.status === 'ready');
+    const reclaimableBytes = bytes + (ownsFilesOrActive && !otherReference && sharedDir ? runtimeOwnedBytes : 0);
     return {
       modelId: model.id,
       modelName: model.label,
@@ -2607,8 +2668,12 @@ async function checkAiAddonSetupStatus({
     };
   }));
   summaryWithStorage.fit = libraryModels.find((item) => item.modelId === summary.modelId)?.fit || null;
-  const sharedRuntimeDirs = new Set((catalog.summary?.models || []).map((model) => getSharedSummaryRuntimeDir(userDataDir, getSummaryArtifactForPlatform(model.id, platform, arch, catalog), catalog)));
-  const sharedRuntimeBytes = [...sharedRuntimeDirs].reduce((sum, dir) => sum + [dir, `${dir}.staging`, `${dir}.backup`, `${dir}.adopting`].reduce((subtotal, item) => subtotal + getDirectorySizeBytes(item, fsModule), 0), 0);
+  const sharedRuntimeDirs = new Set(
+    (catalog.summary?.models || [])
+      .map((model) => getSharedSummaryRuntimeDir(userDataDir, getSummaryArtifactForPlatform(model.id, platform, arch, catalog), catalog))
+      .filter(Boolean),
+  );
+  const sharedRuntimeBytes = [...sharedRuntimeDirs].reduce((sum, dir) => sum + getSharedRuntimeTreeSizeBytes(dir), 0);
   let availableBytes = null;
   try {
     const addonRoot = getAiAddonPaths(userDataDir).rootDir;
@@ -2690,6 +2755,52 @@ function buildFeatureUpdates({ status, modelId, engine, speakerCount, artifactId
   return updates;
 }
 
+function hasOtherActiveSummaryRuntimeReference({
+  userDataDir,
+  manifest,
+  excludeModelId,
+  runtimeId,
+  platform = process.platform,
+  arch = process.arch,
+  fsModule = fs,
+  catalog = AI_MODEL_CATALOG,
+  getModelDirBytes = null,
+} = {}) {
+  if (!runtimeId) {
+    return false;
+  }
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const libraryModels = manifest?.summaryLibrary?.models || {};
+  const candidateIds = new Set([
+    ...((catalog?.summary?.models || []).map((model) => model.id)),
+    ...Object.keys(libraryModels),
+  ]);
+  for (const id of candidateIds) {
+    if (!id || id === excludeModelId) {
+      continue;
+    }
+    if (getSummaryRuntimeArtifactForPlatform(platform, arch, catalog, id)?.id !== runtimeId) {
+      continue;
+    }
+    const entry = libraryModels[id];
+    if (entry?.status === 'ready' || entry?.removalPending === true) {
+      return true;
+    }
+    const otherArtifact = getSummaryArtifactForPlatform(id, platform, arch, catalog);
+    const otherArtifactPath = getSummaryArtifactPath(userDataDir, otherArtifact);
+    if (otherArtifactPath && existsSync?.(otherArtifactPath)) {
+      return true;
+    }
+    const dirBytes = getModelDirBytes
+      ? getModelDirBytes(id)
+      : getDirectorySizeBytes(getSummaryModelCacheDir(userDataDir, id), fsModule);
+    if (dirBytes > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function setDefaultSummaryModel({ userDataDir, modelId, fsModule = fs, catalog = AI_MODEL_CATALOG } = {}) {
   const manifest = loadManifest({ userDataDir, fsModule, catalog });
   if (!manifest.summaryLibrary.models[modelId] || manifest.summaryLibrary.models[modelId].status !== 'ready') {
@@ -2738,6 +2849,8 @@ module.exports = {
   getSummaryRuntimeArchivePath,
   getSummaryRuntimeDir,
   getSharedSummaryRuntimeDir,
+  getLegacySummaryRuntimeDir,
+  hasOtherActiveSummaryRuntimeReference,
   getSummaryRuntimePeakBytes,
   getSummaryRuntimeExecutablePath,
   // Private helpers used by setup flows / other ai-addon modules

@@ -130,7 +130,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getHistoryIndexStatus: () => ipcRenderer.invoke('get-history-index-status'),
 
   // Grounded local Q&A & threaded Chat
-  getHistoryQaEligibility: () => ipcRenderer.invoke('get-history-qa-eligibility'),
+  getHistoryQaEligibility: (options) => ipcRenderer.invoke('get-history-qa-eligibility', options),
   getHistoryQaModelState: () => ipcRenderer.invoke('get-history-qa-model-state'),
   unloadHistoryQaModel: () => ipcRenderer.invoke('unload-history-qa-model'),
   askHistory: (options = {}) => ipcRenderer.invoke('ask-history', options),

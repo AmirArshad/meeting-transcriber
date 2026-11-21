@@ -1,16 +1,33 @@
 'use strict';
 
 const GiB = 1024 ** 3;
+const MiB = 1024 ** 2;
+const MACOS_OS_HEADROOM_BYTES = 3 * GiB;
+const MACOS_MAX_UNIFIED_RATIO = 0.75;
 
 function getSummaryModelFit({ model, artifact, availability, runtimeArtifact, deviceMemory, platform }) {
   const unified = platform === 'darwin';
   const memoryType = unified ? 'unified memory' : 'graphics memory';
   const workingMemoryBytes = model?.memoryGuidance?.[unified ? 'unified' : 'gpu'] * GiB || null;
-  const minimumBytes = artifact?.estimatedSizeBytes || null;
+  const weightBytes = Number(artifact?.estimatedSizeBytes) || 0;
+  const measuredFloor = Number(model?.memoryGuidance?.minRuntimeBytes) || 0;
   const contextTokens = artifact?.inference?.contextTokens || null;
+  const estimatedReserve = weightBytes
+    ? Math.max(768 * MiB, Math.round(weightBytes * (contextTokens && contextTokens >= 32768 ? 0.16 : 0.12)))
+    : 0;
+  const minimumRuntimeBytes = measuredFloor > 0
+    ? Math.max(measuredFloor, weightBytes)
+    : (weightBytes ? weightBytes + estimatedReserve : null);
   const total = deviceMemory?.totalBytes || null;
   const available = deviceMemory?.availableBytes ?? null;
-  const readings = { workingMemoryBytes, contextTokens, totalMemoryBytes: total, availableMemoryBytes: available, memoryType };
+  const readings = {
+    workingMemoryBytes,
+    minimumRuntimeBytes,
+    contextTokens,
+    totalMemoryBytes: total,
+    availableMemoryBytes: available,
+    memoryType,
+  };
   const result = (status, reason, blocked = false) => ({ status, reason, blocked, ...readings });
   const platformSupport = model?.supportedPlatforms?.[platform];
   if (platformSupport && platformSupport.status !== 'enabled') {
@@ -19,10 +36,23 @@ function getSummaryModelFit({ model, artifact, availability, runtimeArtifact, de
   if (!artifact || !runtimeArtifact) return result('unavailable', 'This model has no verified runtime for this platform.', true);
   if (!availability?.supported) return result('runtime_needed', availability?.reason || 'Set up the required local runtime first.', true);
   if (!total) return result('unknown', `AvaNevis could not read this device’s ${memoryType}. Check setup to test the model.`);
-  if (minimumBytes && (total < minimumBytes || available !== null && available < minimumBytes)) {
-    return result('needs_more_memory', total < minimumBytes
-      ? `The weights alone exceed this device’s ${memoryType}.`
-      : `There is not enough free ${memoryType} to load these weights. Free memory or choose a smaller model.`, true);
+  if (unified) {
+    const macSafeLimit = Math.min(total * MACOS_MAX_UNIFIED_RATIO, total - MACOS_OS_HEADROOM_BYTES);
+    if (minimumRuntimeBytes && (macSafeLimit <= 0 || minimumRuntimeBytes > macSafeLimit)) {
+      return result(
+        'needs_more_memory',
+        'Running this model at a 32,768-token context would not leave enough unified memory for macOS and AvaNevis. Choose a smaller model.',
+        true,
+      );
+    }
+  } else if (minimumRuntimeBytes && (total < minimumRuntimeBytes || (available !== null && available < minimumRuntimeBytes))) {
+    return result(
+      'needs_more_memory',
+      total < minimumRuntimeBytes
+        ? 'This model needs more graphics memory for its weights and context buffer than this GPU has.'
+        : 'There is not enough free graphics memory to load this model and its context buffer. Free memory or choose a smaller model.',
+      true,
+    );
   }
   if (workingMemoryBytes && total < workingMemoryBytes) {
     return result('needs_more_memory', `The detected ${memoryType} is below the estimate for this context. Check setup to test it.`);

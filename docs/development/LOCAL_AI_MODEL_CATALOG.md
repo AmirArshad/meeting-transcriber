@@ -60,18 +60,20 @@ source-build evidence and the separate Windows and Linux CUDA blockers are in
 the [v3.1 qualification record](V3_1_QUALIFICATION.md). Working-memory figures
 remain planning estimates until measured on representative supported hosts.
 
-### Linux Qwen summary runtime pin
+### Linux Qwen and Gemma 4 summary runtime pins
 
-The active Linux summary lane uses the catalog entry
+The active Linux Qwen summary lane uses the catalog entry
 `llama-cpp-v0.3.0-linux-x64-cuda-12.8`: ai-dock's MIT llama.cpp v0.3.0
-CUDA 12.8 amd64 release, plus the pinned NVIDIA CUDA runtime and NCCL wheels.
-The release archive, wheel sizes, SHA-256 values, extracted regular-file pins,
-and license links live in `src/ai-addon-state.js` and the v2.9 compatibility
-matrix. The NCCL wheel's applicable notice is
+CUDA 12.8 amd64 release, and the Linux Gemma 4 lane uses
+`llama-cpp-v1.0.0-linux-x64-cuda-12.8` (ai-dock's v1.0.0 CUDA 12.8 amd64
+release), both paired with the pinned NVIDIA CUDA runtime and NCCL wheels.
+The release archives, wheel sizes, SHA-256 values, extracted regular-file pins,
+and license links live in `src/ai-addon-state.js` and the v2.9 / v3.1
+qualification records. The NCCL wheel's applicable notice is
 `nvidia/nccl/lib/LICENSE.txt`. NCCL is kept with the summary runtime rather than broadened into the
 Task 2 transcription runtime catalog. Linux status stays `unsupported` unless
-the managed CUDA 12 admission, all local artifact checks, and packaged RTX
-4070 evidence pass.
+the managed CUDA 12 admission, all local artifact checks, and native hardware
+qualification pass.
 
 ## Runtime Cache Locations
 

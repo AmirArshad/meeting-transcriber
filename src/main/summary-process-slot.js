@@ -84,6 +84,7 @@ function createSummaryProcessSlot({
     spawnModel,
     ensureExited,
     hasOutstandingProcess: () => Boolean(owner),
+    hasActiveNonClosedProcess: () => Boolean(owner && !owner.closed),
     getOutstandingProcess: () => owner?.proc || null,
   };
 }

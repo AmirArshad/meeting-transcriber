@@ -515,3 +515,23 @@ test('summary library preserves independent models and migrates a legacy ready d
   assert.equal(next.summaryLibrary.defaultModelId, first.id);
   assert.equal(next.summaryLibrary.models[second.id].status, 'ready');
 });
+
+test('catalog excludes legacy qwen3-14b placeholder and keeps features.summary synced to defaultModelId', () => {
+  assert.deepEqual(
+    AI_MODEL_CATALOG.summary.models.map((model) => model.id),
+    ['qwen3.5-9b-q4-k-m', 'qwen3.5-4b-q4-k-m', 'gemma-4-e4b', 'gemma-4-12b', 'inkling-2-mini'],
+  );
+  assert.equal(getModelById('summary', 'qwen3-14b-q4-k-m'), null);
+  const normalized = normalizeAiAddonManifest({
+    features: { summary: { status: 'notConfigured', modelId: 'qwen3.5-4b-q4-k-m' } },
+    summaryLibrary: {
+      defaultModelId: 'qwen3.5-9b-q4-k-m',
+      models: {
+        'qwen3.5-9b-q4-k-m': { status: 'ready', modelId: 'qwen3.5-9b-q4-k-m' },
+        'qwen3.5-4b-q4-k-m': { status: 'notConfigured', modelId: 'qwen3.5-4b-q4-k-m' },
+      },
+    },
+  });
+  assert.equal(normalized.features.summary.modelId, 'qwen3.5-9b-q4-k-m');
+  assert.equal(normalized.features.summary.status, 'ready');
+});

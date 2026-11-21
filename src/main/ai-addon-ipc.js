@@ -25,6 +25,9 @@ const {
   isLikelyHuggingFaceToken,
 } = require('../ai-addon-setup');
 const {
+  validateSummaryModelRemovalRequest,
+} = require('../ai-addon/summary-setup');
+const {
   buildSummaryRuntimeEnv: defaultBuildSummaryRuntimeEnv,
   setDefaultSummaryModel,
 } = require('../ai-addon/manifest-store');
@@ -91,6 +94,7 @@ function createAiAddonIpc(deps) {
     pythonConfig,
     spawnTrackedPython,
     spawnSummaryPython = spawnTrackedPython,
+    ensureSummaryProcessExited = async () => {},
     appendSpawnLogBuffer,
     sendToRenderer,
     getSafeStorage,
@@ -542,77 +546,87 @@ function createAiAddonIpc(deps) {
         timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
         label: 'Summary model validation',
         terminateProcess: terminateProcessBestEffort,
-        action: (registerProcess) => new Promise((resolve, reject) => {
-          if (cancelSignal && cancelSignal.aborted) {
-            reject(createAiAddonCancelError('Summary model setup was canceled.'));
-            return;
-          }
+        action: async (registerProcess) => {
+          let spawned = false;
+          try {
+            return await new Promise((resolve, reject) => {
+              if (cancelSignal && cancelSignal.aborted) {
+                reject(createAiAddonCancelError('Summary model setup was canceled.'));
+                return;
+              }
 
-          const summaryEnv = buildSummaryRuntimeEnv({
-            userDataDir: app.getPath('userData'),
-            artifact,
-            runtimeArtifact,
-            runtimeDir,
-            platform: process.platform,
-            arch: process.arch,
-          });
-          const python = registerProcess(spawnSummaryPython(buildSummaryArgs({
-            meetingId: 'setup-validation',
-            runtimeDir,
-            modelPath,
-            validateRuntime: true,
-            modelId,
-            modelLabel: artifact.modelLabel || artifact.modelId,
-            inferenceDescriptor: artifact.inference,
-          }), {
-            cwd: pythonConfig.backendPath,
-            env: buildClearedHuggingFaceTokenEnv(summaryEnv),
-          }));
+              const summaryEnv = buildSummaryRuntimeEnv({
+                userDataDir: app.getPath('userData'),
+                artifact,
+                runtimeArtifact,
+                runtimeDir,
+                platform: process.platform,
+                arch: process.arch,
+              });
+              const python = registerProcess(spawnSummaryPython(buildSummaryArgs({
+                meetingId: 'setup-validation',
+                runtimeDir,
+                modelPath,
+                validateRuntime: true,
+                modelId,
+                modelLabel: artifact.modelLabel || artifact.modelId,
+                inferenceDescriptor: artifact.inference,
+              }), {
+                cwd: pythonConfig.backendPath,
+                env: buildClearedHuggingFaceTokenEnv(summaryEnv),
+              }));
+              spawned = true;
 
-          let output = '';
-          let errorOutput = '';
-          let settled = false;
-          const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
-            ? (() => {
-              const handleAbort = () => {
+              let output = '';
+              let errorOutput = '';
+              let settled = false;
+              const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
+                ? (() => {
+                  const handleAbort = () => {
+                    if (settled) {
+                      return;
+                    }
+                    settled = true;
+                    terminateProcessBestEffort(python);
+                    reject(createAiAddonCancelError('Summary model setup was canceled.'));
+                  };
+                  cancelSignal.addEventListener('abort', handleAbort, { once: true });
+                  return () => cancelSignal.removeEventListener('abort', handleAbort);
+                })()
+                : () => {};
+              const finish = (callback, value) => {
                 if (settled) {
                   return;
                 }
                 settled = true;
-                terminateProcessBestEffort(python);
-                reject(createAiAddonCancelError('Summary model setup was canceled.'));
+                cleanupCancel();
+                callback(value);
               };
-              cancelSignal.addEventListener('abort', handleAbort, { once: true });
-              return () => cancelSignal.removeEventListener('abort', handleAbort);
-            })()
-            : () => {};
-          const finish = (callback, value) => {
-            if (settled) {
-              return;
+              python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
+              python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
+              python.on('close', (code) => {
+                if (code === 0) {
+                  try {
+                    finish(resolve, JSON.parse(output));
+                  } catch (error) {
+                    finish(reject, new Error(`Failed to parse summary runtime validation: ${error.message}`));
+                  }
+                  return;
+                }
+                const reason = summarizeSummaryValidationError(errorOutput);
+                const message = reason && /^local summary runtime validation failed/i.test(reason)
+                  ? reason
+                  : `Local summary runtime validation failed${reason ? `: ${reason}` : '.'}`;
+                finish(reject, new Error(message));
+              });
+              python.on('error', (error) => finish(reject, error));
+            });
+          } finally {
+            if (spawned) {
+              await ensureSummaryProcessExited().catch(() => {});
             }
-            settled = true;
-            cleanupCancel();
-            callback(value);
-          };
-          python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
-          python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
-          python.on('close', (code) => {
-            if (code === 0) {
-              try {
-                finish(resolve, JSON.parse(output));
-              } catch (error) {
-                finish(reject, new Error(`Failed to parse summary runtime validation: ${error.message}`));
-              }
-              return;
-            }
-            const reason = summarizeSummaryValidationError(errorOutput);
-            const message = reason && /^local summary runtime validation failed/i.test(reason)
-              ? reason
-              : `Local summary runtime validation failed${reason ? `: ${reason}` : '.'}`;
-            finish(reject, new Error(message));
-          });
-          python.on('error', (error) => finish(reject, error));
-        }),
+          }
+        },
         });
       },
     });
@@ -778,7 +792,7 @@ function createAiAddonIpc(deps) {
           backendPath: pythonConfig.backendPath,
           runtimeValidator: validateSummaryRuntimeSmoke,
           runExclusiveMutation: runExclusiveSummaryMutation,
-          deviceMemory: await getSummaryDeviceMemory(),
+          deviceMemory: await getSummaryDeviceMemory({ live: true }),
           cancelSignal,
           cudaStatus: await runWallClockComputeAction({
             timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
@@ -798,24 +812,30 @@ function createAiAddonIpc(deps) {
     ipcMain.handle('validate-summary-model', async (event, options = {}) => {
       assertTrustedRendererSender(event);
       return runCancellableAiAddonSetup('summary', async (cancelSignal) => {
+        let resolvedCudaStatus = null;
         try {
+          resolvedCudaStatus = await runWallClockComputeAction({
+            timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+            label: 'Linux CUDA summary validation',
+            terminateProcess: terminateProcessBestEffort,
+            action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal }),
+          });
           return await validateSummaryModel(getAiAddonRuntimeOptions({
             modelId: options.modelId,
             profile: options.profile,
             runtimeValidator: validateSummaryRuntimeSmoke,
-            deviceMemory: await getSummaryDeviceMemory(),
+            runExclusiveMutation: runExclusiveSummaryMutation,
+            deviceMemory: await getSummaryDeviceMemory({ live: true }),
             cancelSignal,
-            cudaStatus: await runWallClockComputeAction({
-              timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
-              label: 'Linux CUDA summary validation',
-              terminateProcess: terminateProcessBestEffort,
-              action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal }),
-            }),
+            cudaStatus: resolvedCudaStatus,
           }));
         } catch (error) {
           if (!cancelSignal.aborted && error.code !== AI_ADDON_CANCEL_CODE) throw error;
           emitAiAddonProgress({ feature: 'summary', phase: 'cancelled', modelId: options.modelId, message: 'Setup check canceled.' });
-          return { canceled: true };
+          return checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+            deviceMemory: await getSummaryDeviceMemory({ live: true }),
+            cudaStatus: resolvedCudaStatus || getCachedCudaStatus(),
+          }));
         }
       });
     });
@@ -826,9 +846,21 @@ function createAiAddonIpc(deps) {
         throw new Error('Summary model setup is already running. Cancel it before removing the model.');
       }
       assertRemovalCanRun('summary');
+      validateSummaryModelRemovalRequest({
+        userDataDir: app.getPath('userData'),
+        modelId: options.modelId,
+        replacementModelId: options.replacementModelId,
+        fsModule: fs,
+      });
 
       return enqueueAiAddonAction(() => {
         assertRemovalCanRun('summary');
+        validateSummaryModelRemovalRequest({
+          userDataDir: app.getPath('userData'),
+          modelId: options.modelId,
+          replacementModelId: options.replacementModelId,
+          fsModule: fs,
+        });
         return enqueueGpuExclusiveRemovalAction(async () => {
           return removeSummaryModel(getAiAddonRuntimeOptions({
             modelId: options.modelId,
@@ -845,7 +877,7 @@ function createAiAddonIpc(deps) {
         if (!getModelById('summary', options.modelId)) throw new Error('Unknown summary model.');
         const status = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
           summaryModelId: options.modelId,
-          deviceMemory: await getSummaryDeviceMemory(),
+          deviceMemory: await getSummaryDeviceMemory({ live: true }),
         }));
         const model = status.features.summary;
         if (model.modelId !== options.modelId || !model.setupComplete || model.fit?.blocked) {

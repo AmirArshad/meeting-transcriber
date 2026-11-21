@@ -70,9 +70,12 @@
           <div class="modal-body">
             <p id="summary-language-description" class="setting-description">Choose the main language spoken in this recording. Mixed-language recordings without one main language are not supported.</p>
             <div class="ai-addon-field" id="summary-model-field">
-              <label for="summary-model-select">Model</label>
+              <div class="summary-model-field-header">
+                <label for="summary-model-select">Model</label>
+                <button id="summary-manage-models" type="button" class="btn btn-small btn-secondary">Manage models</button>
+              </div>
               <select id="summary-model-select" class="device-select"></select>
-              <button id="summary-manage-models" type="button" class="btn btn-small btn-secondary">Manage models</button>
+              <span id="summary-model-static-label" class="summary-model-static-label" hidden></span>
             </div>
             <div class="ai-addon-field">
               <label for="summary-transcript-language">Transcript language</label>
@@ -1410,36 +1413,41 @@
                   </div>
 
                   <div class="chat-composer-dock">
-                    <button
-                      type="button"
-                      id="chat-scope-btn"
-                      class="chat-scope-btn"
-                      aria-expanded="false"
-                      aria-controls="chat-scope-popover"
-                      title="Choose which recordings or dates to search"
-                    >
-                      <span class="chat-scope-dot" aria-hidden="true"></span>
-                      <span id="chat-scope-btn-label">All recordings</span>
-                    </button>
-                    <label class="sr-only" for="chat-model-select">Model for this chat</label>
-                    <select id="chat-model-select" class="device-select" hidden aria-label="Model for this chat"></select>
-                    <button type="button" id="chat-manage-models" class="btn btn-small" hidden>Manage models</button>
-                    <textarea
-                      id="chat-input"
-                      class="chat-input"
-                      rows="1"
-                      maxlength="2000"
-                      placeholder="Ask a question…"
-                      aria-label="Ask a question about your recordings"
-                      title="Enter to send. Shift+Enter for a new line."
-                    ></textarea>
-                    <button
-                      type="button"
-                      id="chat-send-btn"
-                      class="btn btn-primary btn-small chat-send-btn"
-                    >
-                      Send
-                    </button>
+                    <div class="chat-composer-input-row">
+                      <textarea
+                        id="chat-input"
+                        class="chat-input"
+                        rows="1"
+                        maxlength="2000"
+                        placeholder="Ask a question…"
+                        aria-label="Ask a question about your recordings"
+                        title="Enter to send. Shift+Enter for a new line."
+                      ></textarea>
+                      <button
+                        type="button"
+                        id="chat-send-btn"
+                        class="btn btn-primary btn-small chat-send-btn"
+                      >
+                        Send
+                      </button>
+                    </div>
+                    <div class="chat-composer-controls">
+                      <button
+                        type="button"
+                        id="chat-scope-btn"
+                        class="chat-scope-btn"
+                        aria-expanded="false"
+                        aria-controls="chat-scope-popover"
+                        title="Choose which recordings or dates to search"
+                      >
+                        <span class="chat-scope-dot" aria-hidden="true"></span>
+                        <span id="chat-scope-btn-label">All recordings</span>
+                      </button>
+                      <label class="sr-only" for="chat-model-select">Model for this chat</label>
+                      <select id="chat-model-select" class="device-select" hidden aria-label="Model for this chat"></select>
+                      <span id="chat-model-label" class="chat-model-pill" hidden></span>
+                      <button type="button" id="chat-manage-models" class="btn btn-small" hidden>Manage models</button>
+                    </div>
                   </div>
                 </div>
               </div>

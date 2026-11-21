@@ -28,6 +28,7 @@ from .summary_pipeline import (
     get_summary_profile,
     parse_markdown_transcript,
     repair_summary_json,
+    sanitize_prompt_control_tokens,
     validate_summary_json,
     summary_json_schema_instruction,
 )
@@ -108,7 +109,7 @@ def build_json_repair_prompt(
         "Invalid model output (quoted data):",
         # Match the byte-based chunk estimate: at most 3,000 estimated tokens
         # of quoted output, leaving reserve for instructions/template overhead.
-        str(raw_output or "").encode("utf-8")[:JSON_REPAIR_OUTPUT_BYTE_LIMIT].decode("utf-8", errors="ignore"),
+        sanitize_prompt_control_tokens(raw_output).encode("utf-8")[:JSON_REPAIR_OUTPUT_BYTE_LIMIT].decode("utf-8", errors="ignore"),
     ])
 
 

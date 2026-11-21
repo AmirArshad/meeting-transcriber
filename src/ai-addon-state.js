@@ -431,13 +431,6 @@ const SUMMARY_MODEL_SOURCES = deepFreeze({
     sha256: '00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4',
     sizeBytes: 2740937888,
   }),
-  'qwen3-14b-q4-k-m': buildHuggingFaceModelSource({
-    repo: 'Qwen/Qwen3-14B-GGUF',
-    revision: '530227a7d994db8eca5ab5ced2fb692b614357fd',
-    fileName: 'Qwen3-14B-Q4_K_M.gguf',
-    sha256: '500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0',
-    sizeBytes: 9001752960,
-  }),
   'gemma-4-e4b': buildHuggingFaceModelSource({
     repo: 'ggml-org/gemma-4-E4B-it-GGUF', revision: '8903cb408c7df39cde2ed15fac397e6d7be92951',
     fileName: 'gemma-4-E4B-it-Q4_0.gguf', sha256: 'a555b900214b477d8880e7832e0b8925e139b0159640036b09fe472b6f2097f2', sizeBytes: 4590807392,
@@ -672,38 +665,13 @@ const AI_MODEL_CATALOG = deepFreeze({
         }),
         profiles: SUMMARY_PROFILES.map((profile) => profile.id),
       },
-      {
-        id: 'qwen3-14b-q4-k-m',
-        label: 'Qwen3 14B 4-bit GGUF',
-        description: 'A larger Qwen model for questions that need more detail.',
-        family: 'Qwen3',
-        runtime: 'llama.cpp',
-        role: 'matureRuntimeReplacement',
-        inference: {
-          contextTokens: 32768,
-          family: 'qwen',
-          promptFormat: 'chatml',
-          runtime: 'llama.cpp',
-          architecture: 'qwen3',
-          disableThinking: true,
-          structuredOutput: 'json',
-          windowsAcceleration: 'cuda',
-          macosAcceleration: 'metal',
-        },
-        artifact: buildSummaryArtifact({
-          modelId: 'qwen3-14b-q4-k-m',
-          label: 'Qwen3 14B Q4_K_M GGUF',
-          runtimeArchitecture: 'qwen3',
-        }),
-        profiles: SUMMARY_PROFILES.map((profile) => profile.id),
-      },
-      gemmaSummaryModel('gemma-4-e4b', 'Gemma 4 E4B', 'An option for follow-up questions about details across recordings.', { gpu: 8, unified: 16 }),
-      gemmaSummaryModel('gemma-4-12b', 'Gemma 4 12B', 'An option for pulling together themes and decisions from longer recordings.', { gpu: 16, unified: 24 }),
+      gemmaSummaryModel('gemma-4-e4b', 'Gemma 4 E4B', 'An option for follow-up questions about details across recordings.', { gpu: 8, unified: 16, minRuntimeBytes: 5331582976 }),
+      gemmaSummaryModel('gemma-4-12b', 'Gemma 4 12B', 'An option for pulling together themes and decisions from longer recordings.', { gpu: 16, unified: 24, minRuntimeBytes: 8409792512 }),
       {
         id: 'inkling-2-mini',
         label: 'Inkling 2 Mini',
         description: 'Intended for longer, more involved questions on high-memory devices.',
-        memoryGuidance: { gpu: 24, unified: 32 },
+        memoryGuidance: { gpu: 24, unified: 32, minRuntimeBytes: 19217088512 },
         inference: { contextTokens: 32768 },
         artifact: buildSummaryArtifact({ modelId: 'inkling-2-mini', label: 'Inkling 2 Mini', runtimeArchitecture: 'inkling2_loop' }),
         supportedPlatforms: {
@@ -1013,11 +981,14 @@ function normalizeAiAddonManifest(value = {}, catalog = AI_MODEL_CATALOG) {
   const requestedDefault = normalizeNullableString(sourceLibrary.defaultModelId);
   const defaultModelId = requestedDefault && models[requestedDefault] ? requestedDefault
     : (!Object.hasOwn(manifest, 'summaryLibrary') && summary.status === 'ready' ? summary.modelId : null);
+  const syncedSummary = defaultModelId && models[defaultModelId]
+    ? { ...models[defaultModelId], profile: models[defaultModelId].profile || summary.profile }
+    : summary;
   return {
     manifestVersion: MANIFEST_VERSION,
     features: {
       diarization: normalizeDiarizationState(features.diarization || manifest.diarization, catalog),
-      summary,
+      summary: syncedSummary,
     },
     summaryLibrary: { defaultModelId, models },
   };
