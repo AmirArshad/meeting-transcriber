@@ -57,7 +57,7 @@ function assertActionsReachable(measurement, minimumReadingHeight) {
   }
 }
 
-test('short history layouts keep summary actions clickable and the reading area usable', { timeout: 60000 }, async () => {
+test('History and Chat preserve summary layout, pending edits, and keyboard controls', { timeout: 60000 }, async () => {
   const result = await runRendererFixture();
   assert.ok(result.short.viewport.width >= 560 && result.short.viewport.width <= 660, JSON.stringify(result.short.viewport));
   assert.ok(result.short.viewport.height >= 360 && result.short.viewport.height <= 440, JSON.stringify(result.short.viewport));
@@ -83,4 +83,28 @@ test('short history layouts keep summary actions clickable and the reading area 
   assert.equal(result.install.pointerEvents, 'none');
   assert.equal(result.install.color, 'rgba(0, 0, 0, 0)');
   assert.notEqual(result.install.afterContent, 'none');
+
+  assert.equal(result.speakerSave.readBeforeSummarySave, 0);
+  assert.equal(result.speakerSave.preparedName, 'Maya Chen');
+  for (const style of result.speakerSave.sectionStyles) {
+    assert.deepEqual(style, result.speakerSave.sectionStyles[0]);
+    assert.equal(style[1], '13px');
+    assert.equal(style[5], 'none');
+  }
+  assert.equal(result.speakerSave.selectionBeforeSave, 'meeting-1');
+  assert.equal(result.speakerSave.readBeforeSwitchSave, 0);
+  assert.equal(result.speakerSave.selected, 'meeting-2');
+  assert.deepEqual(result.speakerSave.reads, ['meeting-2']);
+
+  assert.equal(result.chatAndTags.historyFocusRestored, true);
+  assert.equal(result.chatAndTags.scopeFocusRestored, true);
+  assert.equal(result.chatAndTags.escapeClosesScope, true);
+  assert.deepEqual(result.chatAndTags.overflow, { maxHeight: '460px', overflowY: 'auto', topClipped: false });
+  assert.equal(result.chatAndTags.unavailableControls.sendDisabled, true);
+  assert.ok(result.chatAndTags.unavailableControls.starterDisabled.length);
+  assert.ok(result.chatAndTags.unavailableControls.starterDisabled.every(Boolean));
+  assert.equal(result.chatAndTags.availableControls.sendDisabled, false);
+  assert.ok(result.chatAndTags.availableControls.starterDisabled.every((disabled) => !disabled));
+  assert.deepEqual(result.chatAndTags.recoveryCards, ['ready', 'ready', 'unavailable']);
+  assert.deepEqual(result.chatAndTags.sourceChip, { marginRight: '0px', textTransform: 'none' });
 });

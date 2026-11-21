@@ -749,3 +749,16 @@ test('transcript parsing preserves custom names and filters empty headings safel
     { start: null, end: null, speaker: 'Speaker 2', text: 'More' },
   ]);
 });
+
+
+test('mixes custom untimed speakers with plain paragraphs and skips empty speaker headings', () => {
+  const { parseTranscriptMarkdownSegments } = require('../../src/renderer/history-detail-helpers');
+  assert.deepEqual(parseTranscriptMarkdownSegments([
+    '# Audio Transcript', '', 'Plain opening', '', '**Dr. Lee:** Hello',
+    'Followed by more details', '', 'Plain closing', '', '**Morgan:**',
+  ].join('\n')), [
+    { start: null, end: null, speaker: '', text: 'Plain opening' },
+    { start: null, end: null, speaker: 'Dr. Lee', text: 'Hello Followed by more details' },
+    { start: null, end: null, speaker: '', text: 'Plain closing' },
+  ]);
+});

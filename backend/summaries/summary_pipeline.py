@@ -28,7 +28,7 @@ TRANSCRIPT_TIMESTAMP_RE = re.compile(
     r"^(?:\*\*)?\[(?P<start>\d{1,2}:\d{2}(?::\d{2})?)\s+-\s+(?P<end>\d{1,2}:\d{2}(?::\d{2})?)\](?:\*\*)?\s*(?P<tail>.*)$"
 )
 SPEAKER_PREFIX_RE = re.compile(r"^(?:\*\*(?P<speaker>[^*\n:]{1,64}):\*\*|(?P<plain_speaker>Speaker\s+\d+|Unknown):)\s*(?P<text>.*)$", re.IGNORECASE)
-UNTIMED_SPEAKER_RE = re.compile(r"^\*\*(?P<speaker>Speaker (?:[1-9]|[1-9]\d)|SPEAKER_\d{2}):\*\*\s*(?P<text>.*)$")
+UNTIMED_SPEAKER_RE = re.compile(r"^\*\*(?P<speaker>[^*\n:]{1,64}):\*\*\s*(?P<text>.*)$")
 TOPIC_BOUNDARY_RE = re.compile(
     r"\b(next|new|another)\s+(topic|item|section)\b|"
     r"\b(moving|move)\s+on\b|"
@@ -159,13 +159,18 @@ def _pull_following_body_line(lines: List[str], index: int) -> tuple[int, str]:
     if next_index < 0:
         return index, ""
     if (TRANSCRIPT_TIMESTAMP_RE.match(lines[next_index].strip())
-            or UNTIMED_SPEAKER_RE.match(lines[next_index].strip())):
+            or UNTIMED_SPEAKER_RE.match(lines[next_index].strip())
+            or _is_transcript_structure(lines[next_index].strip())):
         return index, ""
     return next_index, next_text
 
 
+def _is_transcript_structure(line: str) -> bool:
+    return bool(re.match(r"^#{1,6}(?:\s|$)", line)) or line in ("---", "***", "___")
+
+
 def parse_markdown_transcript(markdown_text: str) -> List[Dict[str, Any]]:
-    """Parse AvaNevis Markdown transcripts back into timestamped segments.
+    """Parse AvaNevis Markdown transcripts into timed and untimed segments.
 
     Supports both common shapes produced by the app:
 
@@ -183,21 +188,22 @@ def parse_markdown_transcript(markdown_text: str) -> List[Dict[str, Any]]:
         match = TRANSCRIPT_TIMESTAMP_RE.match(line)
         if not match:
             untimed = UNTIMED_SPEAKER_RE.match(line)
-            if not untimed:
+            if not line or _is_transcript_structure(line):
                 index += 1
                 continue
-            text_parts = [_clean_text(untimed.group("text"))]
+            speaker = _clean_text(untimed.group("speaker")) if untimed else "Unknown"
+            text_parts = [untimed.group("text") if untimed else line]
             cursor = index + 1
             while cursor < len(lines):
                 body = lines[cursor].strip()
-                if (not body or body.startswith("#") or TRANSCRIPT_TIMESTAMP_RE.match(body)
+                if (not body or _is_transcript_structure(body) or TRANSCRIPT_TIMESTAMP_RE.match(body)
                         or UNTIMED_SPEAKER_RE.match(body)):
                     break
                 text_parts.append(_clean_text(body))
                 cursor += 1
-            text = " ".join(part for part in text_parts if part)
+            text = _clean_text(" ".join(text_parts))
             if text:
-                segments.append({"start": None, "end": None, "speaker": untimed.group("speaker"), "text": text})
+                segments.append({"start": None, "end": None, "speaker": speaker, "text": text})
             index = cursor
             continue
 
@@ -282,6 +288,33 @@ def is_topic_boundary_segment(segment: Dict[str, Any]) -> bool:
     return bool(TOPIC_BOUNDARY_RE.search(text))
 
 
+def _split_oversized_segment(segment: Dict[str, Any], max_bytes: int) -> Iterable[Dict[str, Any]]:
+    if len(segment["line"].encode("utf-8")) <= max_bytes:
+        yield segment
+        return
+
+    text = segment["text"].encode("utf-8")
+    prefix = segment["line"][:-len(segment["text"])]
+    # Keep attribution on every piece when it fits beside a Unicode character.
+    if max_bytes - len(prefix.encode("utf-8")) < 4:
+        prefix = ""
+    body_budget = max_bytes - len(prefix.encode("utf-8"))
+    offset = 0
+    while offset < len(text):
+        body = text[offset : offset + body_budget].decode("utf-8", errors="ignore")
+        if offset + body_budget < len(text):
+            sentence_ends = list(re.finditer(r"(?:[.!?؟](?=\s)|[。！？])", body))
+            if sentence_ends:
+                body = body[:sentence_ends[-1].end()]
+            elif " " in body:
+                body = body.rsplit(" ", 1)[0] or body
+        offset += len(body.encode("utf-8"))
+        if offset < len(text) and text[offset] == ord(" "):
+            offset += 1
+        if body.strip():
+            yield {**segment, "text": body.strip(), "line": prefix + body.strip()}
+
+
 def chunk_transcript(
     segments: Iterable[Dict[str, Any]],
     *,
@@ -303,52 +336,49 @@ def chunk_transcript(
     if min_topic_chunk_tokens is not None and min_topic_chunk_tokens < 0:
         raise ValueError("min_topic_chunk_tokens must not be negative")
 
-    normalized = normalize_transcript_segments(segments)
+    max_bytes = max_tokens * 4
+    normalized = (
+        piece
+        for segment in normalize_transcript_segments(segments)
+        for piece in _split_oversized_segment(segment, max_bytes)
+    )
     chunks: List[Dict[str, Any]] = []
     current_segments: List[Dict[str, Any]] = []
-    current_tokens = 0
+    current_bytes = 0
     topic_threshold = min_topic_chunk_tokens if min_topic_chunk_tokens is not None else max(1, int(max_tokens * 0.5))
 
     def flush_current() -> None:
-        nonlocal current_segments, current_tokens
+        nonlocal current_segments, current_bytes
         if not current_segments:
             return
 
-        chunk_index = len(chunks) + 1
+        text = "\n".join(item["line"] for item in current_segments)
         chunks.append({
-            "index": chunk_index,
+            "index": len(chunks) + 1,
             "start": current_segments[0]["start"],
             "end": current_segments[-1]["end"],
-            "text": "\n".join(item["line"] for item in current_segments),
+            "text": text,
             "segments": [dict(item) for item in current_segments],
-            "estimatedTokens": current_tokens,
+            "estimatedTokens": estimate_token_count(text),
         })
 
-        if overlap_segments:
-            current_segments = current_segments[-overlap_segments:]
-            current_tokens = sum(estimate_token_count(item["line"]) for item in current_segments)
-        else:
-            current_segments = []
-            current_tokens = 0
+        current_segments = current_segments[-overlap_segments:] if overlap_segments else []
+        current_bytes = len("\n".join(item["line"] for item in current_segments).encode("utf-8"))
 
     for segment in normalized:
-        segment_tokens = estimate_token_count(segment["line"])
-        if (
-            prefer_topic_boundaries
-            and current_segments
-            and current_tokens >= topic_threshold
-            and is_topic_boundary_segment(segment)
+        segment_bytes = len(segment["line"].encode("utf-8"))
+        if current_segments and (
+            current_bytes + 1 + segment_bytes > max_bytes
+            or (prefer_topic_boundaries
+                and (current_bytes + 3) // 4 >= topic_threshold
+                and is_topic_boundary_segment(segment))
         ):
             flush_current()
+            while current_segments and current_bytes + 1 + segment_bytes > max_bytes:
+                current_bytes -= len(current_segments.pop(0)["line"].encode("utf-8")) + 1
 
-        if current_segments and current_tokens + segment_tokens > max_tokens:
-            flush_current()
-            if current_segments and current_tokens + segment_tokens > max_tokens:
-                current_segments = []
-                current_tokens = 0
-
+        current_bytes += segment_bytes + bool(current_segments)
         current_segments.append(segment)
-        current_tokens += segment_tokens
 
     flush_current()
 
@@ -509,11 +539,11 @@ def transcript_chunk_has_speech(chunk_text: str) -> bool:
     # Require at least one alphabetic token beyond timestamps/speaker labels.
     # Use Unicode letters so non-Latin transcripts still enable grounding checks.
     without_labels = re.sub(
-        r"\[\d{1,2}:\d{2}(?::\d{2})?\s+-\s+\d{1,2}:\d{2}(?::\d{2})?\]|"
-        r"\bSpeaker\s+\d+\b|\bUnknown\b",
-        " ",
-        cleaned,
-        flags=re.IGNORECASE,
+        r"^[ \t]*(?:\[\d{1,2}:\d{2}(?::\d{2})?(?:\s+-\s+\d{1,2}:\d{2}(?::\d{2})?)?\][ \t]*)?"
+        r"[^:\n]{1,64}:[ \t]*",
+        "",
+        str(chunk_text or ""),
+        flags=re.MULTILINE,
     )
     # Combining vowel signs can separate alphabetic characters in Hindi/Panjabi
     # words. Count letters within a whitespace-delimited word, not consecutive

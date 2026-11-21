@@ -287,6 +287,7 @@ let stopSpeakerPreview = null;
 let currentRecordingMeeting = null;
 let currentRecordingTranscriptMarkdown = '';
 let meetingDetailRequestEpoch = 0;
+let meetingSelectionRequestEpoch = 0;
 let summaryGenerationMeetingId = null;
 let summaryGenerationCancelling = false;
 let historyLanguageCaptionMeeting = null;
@@ -1687,9 +1688,13 @@ function renderHistorySpeakers(meeting, segments) {
   const rows = document.getElementById('history-speaker-rows');
   const status = document.getElementById('history-speaker-status');
   const player = document.getElementById('audio-player');
+  const pendingSaves = new Set();
   const state = {
     meeting,
     samples,
+    async flushPendingSaves() {
+      while (pendingSaves.size) await Promise.all(pendingSaves);
+    },
     names: meeting.ai?.diarization?.speakerNames || {},
     fields: new Map(),
     requestedNames: new Map(),
@@ -1747,12 +1752,16 @@ function renderHistorySpeakers(meeting, segments) {
         console.warn('Speaker name update failed:', error.message);
       }
     };
-    field.addEventListener('blur', (event) => void save(event.relatedTarget));
+    const trackSave = (nextFocus) => {
+      const pending = save(nextFocus).finally(() => pendingSaves.delete(pending));
+      pendingSaves.add(pending);
+    };
+    field.addEventListener('blur', (event) => trackSave(event.relatedTarget));
     field.addEventListener('keydown', (event) => {
       if (event.isComposing) return;
       if (event.key === 'Enter') {
         event.preventDefault();
-        void save();
+        trackSave();
       } else if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
@@ -3211,7 +3220,7 @@ function renderRecordingTagControl() {
   applyTagPillView(btn, label, selectedRecordingTag, { untaggedLabel: 'Add tag' });
 }
 
-function renderHistoryTagFilterBar() {
+function renderHistoryTagFilterBar(focusedTag) {
   const bar = document.getElementById('history-tag-filter-bar');
   if (!bar) return;
 
@@ -3226,12 +3235,15 @@ function renderHistoryTagFilterBar() {
     return;
   }
 
+  if (focusedTag === undefined && bar.contains(document.activeElement)) {
+    focusedTag = document.activeElement.dataset.tag;
+  }
   bar.hidden = false;
   clearElement(bar);
 
-  const applyFilter = (tag) => {
+  const applyFilter = (tag, triggerTag) => {
     activeHistoryTagFilter = tag;
-    renderHistoryTagFilterBar();
+    renderHistoryTagFilterBar(triggerTag);
     if (normalizeHistorySearchQuery(meetingSearchQuery)) {
       clearTimeout(meetingSearchDebounceTimer);
       meetingSearchDebounceTimer = null;
@@ -3244,12 +3256,14 @@ function renderHistoryTagFilterBar() {
   const allChip = document.createElement('button');
   allChip.type = 'button';
   allChip.className = 'history-tag-filter-chip';
+  allChip.dataset.tag = '';
   allChip.classList.toggle('is-active', !activeHistoryTagFilter);
   allChip.setAttribute('aria-pressed', String(!activeHistoryTagFilter));
   allChip.textContent = 'All';
-  allChip.addEventListener('click', () => applyFilter(null));
+  allChip.addEventListener('click', () => applyFilter(null, ''));
   bar.appendChild(allChip);
 
+  let focusTarget = allChip;
   for (const tag of used) {
     const chip = document.createElement('button');
     chip.type = 'button';
@@ -3264,9 +3278,11 @@ function renderHistoryTagFilterBar() {
     const text = document.createElement('span');
     text.textContent = tag.shortLabel;
     chip.append(dot, text);
-    chip.addEventListener('click', () => applyFilter(isActive ? null : tag.slug));
+    chip.addEventListener('click', () => applyFilter(isActive ? null : tag.slug, tag.slug));
     bar.appendChild(chip);
+    if (focusedTag === tag.slug) focusTarget = chip;
   }
+  if (focusedTag !== undefined) focusTarget.focus();
 }
 
 function updateSummaryTagMismatchBanner(meeting) {
@@ -3527,6 +3543,7 @@ async function deleteCheckedMeetings() {
 
 // Select meeting from history
 async function selectMeeting(meetingId) {
+  const selectionEpoch = ++meetingSelectionRequestEpoch;
   const targetId = String(meetingId);
   const meeting = meetings.find((m) => String(m.id) === targetId);
   if (!meeting) {
@@ -3540,6 +3557,11 @@ async function selectMeeting(meetingId) {
     titleEditorOpen: isHistoryTitleEditorOpen(),
   })) {
     return;
+  }
+
+  if (historySpeakers) {
+    await historySpeakers.flushPendingSaves();
+    if (selectionEpoch !== meetingSelectionRequestEpoch) return;
   }
 
   if (currentMeetingId !== null && String(currentMeetingId) !== targetId) {
@@ -5790,6 +5812,7 @@ async function generateSummaryForMeeting(meetingId) {
   addLog('Checking summary availability…');
   let aiStatus;
   try {
+    await historySpeakers?.flushPendingSaves();
     aiStatus = await window.electronAPI.getAiAddonStatus();
   } catch (error) {
     addLog(`Summary setup status unavailable: ${error.message}`, 'error');
@@ -5829,6 +5852,7 @@ async function generateSummaryForMeeting(meetingId) {
   try {
     const policy = summaryStatus?.languagePolicy || usableSummaryModels(library)[0]?.languagePolicy;
     if (!policy || (!library && !policy.languages?.length)) throw new Error('No transcript languages have been checked for the installed model.');
+    await historySpeakers?.flushPendingSaves();
     const meeting = await window.electronAPI.getMeeting(normalizedMeetingId);
     const sourceTranscriptHash = await hashSummaryTranscript(meeting?.transcript);
     if (summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) throw new Error('Summary generation cancelled.');
@@ -7596,6 +7620,9 @@ function renderSummaryModelLibrary(library) {
     legacyActionsRow.hidden = Boolean(library);
   }
   if (!library) return;
+  const modelsWithFiles = (library.models || []).filter(summaryModelHasFiles);
+  const releaseModelId = modelsWithFiles.some((model) => model.modelId === chatState.modelState.modelId)
+    ? chatState.modelState.modelId : library.defaultModelId;
   const total = document.createElement('p');
   total.className = 'summary-library-storage-bar';
   total.textContent = `${formatBytes(library.installedBytes || 0)} used by models · ${formatBytes(library.sharedRuntimeBytes || 0)} shared runtime · ${library.availableBytes == null ? 'Free space unknown' : `${formatBytes(library.availableBytes)} free`}`;
@@ -7797,7 +7824,10 @@ function renderSummaryModelLibrary(library) {
           addAction('Check setup', () => window.electronAPI.validateSummaryModel({ modelId: model.modelId }), false, 'secondary');
           if (!model.setupComplete && model.status === 'error') addAction('Repair', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
         }
-        if (chatState.modelState.modelId === model.modelId && ['loaded', 'release_error'].includes(chatState.modelState.status)) addAction('Free memory', () => window.electronAPI.unloadHistoryQaModel(), false, 'secondary');
+        if ((chatState.modelState.status === 'loaded' && chatState.modelState.modelId === model.modelId)
+          || (chatState.modelState.status === 'release_error' && releaseModelId === model.modelId)) {
+          addAction('Free memory', () => window.electronAPI.unloadHistoryQaModel(), false, 'secondary');
+        }
         addAction(removalIncomplete ? 'Retry removal' : 'Remove model', async () => {
           const others = usableSummaryModels(library).filter((item) => item.modelId !== model.modelId);
           let replacementModelId = null;
@@ -10873,6 +10903,13 @@ function renderChatModelPill() {
   unloadBtn.disabled = view.busy;
 }
 
+function isChatModelEligible(library = summaryLibrary()) {
+  if (chatState.resettingRemovedModelThreadId && chatState.activeThread?.id === chatState.resettingRemovedModelThreadId) return false;
+  if (!library) return chatState.eligibility?.eligible !== false;
+  const selectedModelId = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || library.defaultModelId;
+  return usableSummaryModels(library).some((model) => model.modelId === selectedModelId);
+}
+
 function renderChatOnboardingAndComposer() {
   const onboarding = document.getElementById('chat-onboarding-card');
   const reasonEl = document.getElementById('chat-onboarding-reason');
@@ -10891,11 +10928,12 @@ function renderChatOnboardingAndComposer() {
     && chatState.activeThread?.id === chatState.resettingRemovedModelThreadId
     && usableSummaryModels(library).some((model) => model.modelId === library.defaultModelId),
   );
-  const eligible = library
-    ? (resettingRemovedOverride || usableSummaryModels(library).some((model) => model.modelId === selectedModelId))
-    : (!chatState.eligibility || chatState.eligibility.eligible !== false);
+  const eligible = isChatModelEligible(library);
   if (onboarding) {
-    onboarding.hidden = eligible;
+    onboarding.hidden = eligible || resettingRemovedOverride;
+  }
+  for (const starter of document.getElementById('chat-starter-prompts')?.children || []) {
+    starter.disabled = !eligible || meetings.length === 0 || chatThreadDetailPending();
   }
   if (reasonEl) {
     const selected = library?.models?.find((model) => model.modelId === selectedModelId);
@@ -10928,7 +10966,7 @@ function renderChatOnboardingAndComposer() {
       sendBtn.textContent = 'Send';
       sendBtn.classList.remove('btn-danger');
       sendBtn.classList.add('btn-primary');
-      sendBtn.disabled = !eligible || resettingRemovedOverride || chatThreadDetailPending();
+      sendBtn.disabled = !eligible || chatThreadDetailPending();
     }
   }
   if (input) {
@@ -11113,7 +11151,7 @@ function renderChatStream() {
 
   if (!hasMessages && starterGrid) {
     clearElement(starterGrid);
-    const eligible = !chatState.eligibility || chatState.eligibility.eligible !== false;
+    const eligible = isChatModelEligible();
     const prompts = buildStarterPrompts(meetings, getCurrentChatScope());
     for (const promptText of prompts) {
       const btn = document.createElement('button');
@@ -11447,7 +11485,7 @@ async function deleteChatThreadWithConfirm(threadId, title) {
   }
 }
 
-function renderScopePopover() {
+function renderScopePopover(focusedTag) {
   const allBtn = document.getElementById('chat-scope-all-btn');
   const selBtn = document.getElementById('chat-scope-selected-btn');
   const selPanel = document.getElementById('chat-scope-selected-panel');
@@ -11465,6 +11503,9 @@ function renderScopePopover() {
   if (toEl) toEl.value = draft.dateTo ? String(draft.dateTo).slice(0, 10) : '';
 
   if (tagsRow) {
+    if (focusedTag === undefined && tagsRow.contains(document.activeElement)) {
+      focusedTag = document.activeElement.dataset.tag;
+    }
     clearElement(tagsRow);
     const usedEntries = getUsedRecordingTags(meetings);
     const usedSlugs = new Set(usedEntries.map((entry) => entry.slug));
@@ -11483,6 +11524,7 @@ function renderScopePopover() {
       tagsToggleBtn.textContent = chatState.showAllScopeTags ? 'Used tags' : 'All 11 types';
     }
 
+    let focusTarget = tagsToggleBtn;
     for (const entry of entriesToShow) {
       const selected = selectedTags.has(entry.slug);
       const pill = document.createElement('button');
@@ -11521,11 +11563,13 @@ function renderScopePopover() {
           nextSet.add(entry.slug);
         }
         chatState.scopeDraft.tags = [...nextSet];
-        renderScopePopover();
+        renderScopePopover(entry.slug);
       });
 
       tagsRow.appendChild(pill);
+      if (focusedTag === entry.slug) focusTarget = pill;
     }
+    if (focusedTag !== undefined) focusTarget?.focus({ preventScroll: true });
   }
 
   if (listEl) {
@@ -11964,6 +12008,13 @@ function setupChatWorkspace() {
       renderChatStream();
     }
     toggleChatScopePopover(false);
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || event.defaultPrevented || !chatState.popoverOpen) return;
+    event.preventDefault();
+    toggleChatScopePopover(false);
+    document.getElementById('chat-scope-btn')?.focus();
   });
 
   document.addEventListener('pointerdown', (e) => {

@@ -79,12 +79,8 @@ def load_summary_segments(transcript_path: str, speakers_json_path: Optional[str
             return [{**segment, "speaker": normalized_names.get(segment.get("speaker")) or segment.get("speaker")}
                     for segment in segments if isinstance(segment, dict)]
 
-    segments = parse_markdown_transcript(transcript_text)
-    if segments:
-        return [{**segment, "speaker": normalized_names.get(segment.get("speaker")) or segment.get("speaker")}
-                for segment in segments]
-    cleaned = transcript_text.strip()
-    return [{"start": 0.0, "end": 0.0, "speaker": "Unknown", "text": cleaned}] if cleaned else []
+    return [{**segment, "speaker": normalized_names.get(segment.get("speaker")) or segment.get("speaker")}
+            for segment in parse_markdown_transcript(transcript_text)]
 
 
 def write_prompt(path: Path, prompt: str) -> None:

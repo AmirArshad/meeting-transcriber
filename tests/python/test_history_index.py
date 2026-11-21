@@ -2,6 +2,7 @@ import json
 import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 from pathlib import Path
 
 from backend.meeting_manager import MeetingManager
@@ -409,7 +410,7 @@ def test_unbound_summary_is_not_indexed(tmp_path):
     assert legacy_res['meetings'][0]['bestPassage']['kind'] == 'summary'
 
 
-def test_schema_v2_rebuild_from_v1_untimed_speakers_and_tag_sync(tmp_path):
+def test_schema_rebuild_from_v1_untimed_speakers_and_tag_sync(tmp_path):
     rec_dir = tmp_path / 'recordings'
     index_path = tmp_path / 'search' / 'history-index.sqlite'
     _seed_meeting(
@@ -463,8 +464,8 @@ def test_schema_v2_rebuild_from_v1_untimed_speakers_and_tag_sync(tmp_path):
 
     stats = sync_history_index(rec_dir, index_path)
     assert stats['rebuilt'] is True
-    assert stats['schemaVersion'] == '2'
-    assert INDEX_SCHEMA_VERSION == '2'
+    assert stats['schemaVersion'] == INDEX_SCHEMA_VERSION
+    assert INDEX_SCHEMA_VERSION == '3'
 
     res = search_history_index(rec_dir, index_path, query='quarterly planning')
     assert res['matchedMeetingCount'] == 1
@@ -514,11 +515,11 @@ def test_cli_reads_leading_hyphen_query_from_stdin(tmp_path):
     assert json.loads(result.stdout)['query'] == '-private'
 
 
-def test_untimed_speaker_persists_across_blank_lines_and_superseded_legacy_summary_excluded(tmp_path):
+def test_mixed_untimed_speech_is_indexed_and_superseded_legacy_summary_excluded(tmp_path):
     rec_dir = tmp_path / "recordings"
     index_path = tmp_path / "search" / "history-index.sqlite"
 
-    # 1. Untimed multi-paragraph speaker persistence across blank lines, reset on heading / ---.
+    # 1. Untimed labeled speech, continuation lines and unlabeled paragraphs.
     _seed_meeting(
         rec_dir,
         meeting_id="m_untimed_multi",
@@ -526,10 +527,13 @@ def test_untimed_speaker_persists_across_blank_lines_and_superseded_legacy_summa
         date_iso="2026-11-20T10:00:00",
         transcript_md=(
             "# Audio Transcript\n\n"
-            "**Alice:** First paragraph by Alice about onboarding.\n\n"
-            "Second paragraph continuing Alice thoughts on quotas.\n\n"
+            "Opening paragraph on inventory.\n\n"
+            "**Alice:** First paragraph by Alice about onboarding.\n"
+            "Continuation about training.\n\n"
+            "Second paragraph on quotas.\n\n"
             "---\n\n"
-            "Third paragraph after divider with no speaker.\n"
+            "Third paragraph after divider with no speaker.\n\n"
+            "**Dr. Li:** Closing remarks.\n"
         ),
     )
 
@@ -575,6 +579,11 @@ def test_untimed_speaker_persists_across_blank_lines_and_superseded_legacy_summa
 
     sync_history_index(rec_dir, index_path)
 
+    with closing(sqlite3.connect(index_path)) as conn, conn:
+        conn.execute("UPDATE index_meta SET value = '2' WHERE key = 'schema_version'")
+    assert sync_history_index(rec_dir, index_path)["rebuilt"] is True
+    assert search_history_index(rec_dir, index_path, query="quotas")["meetings"][0]["meetingId"] == "m_untimed_multi"
+
     from backend.search.history_index import list_indexed_meeting_headers
 
     conn = sqlite3.connect(str(index_path))
@@ -583,15 +592,16 @@ def test_untimed_speaker_persists_across_blank_lines_and_superseded_legacy_summa
         rows = conn.execute(
             "SELECT speaker, text FROM passages WHERE meeting_id = 'm_untimed_multi' AND kind = 'transcript' ORDER BY seq_index"
         ).fetchall()
-        assert len(rows) == 2
-        assert rows[0]["speaker"] == "Alice"
-        assert "First paragraph" in rows[0]["text"] and "Second paragraph" in rows[0]["text"]
-        assert rows[1]["speaker"] == ""
-        assert "Third paragraph" in rows[1]["text"]
+        assert [(row["speaker"], row["text"]) for row in rows] == [
+            ("", "Opening paragraph on inventory."),
+            ("Alice", "First paragraph by Alice about onboarding. Continuation about training."),
+            ("", "Second paragraph on quotas. Third paragraph after divider with no speaker."),
+            ("Dr. Li", "Closing remarks."),
+        ]
 
         headers = list_indexed_meeting_headers(conn, meeting_ids=["m_untimed_multi"])
         assert len(headers) == 1
-        assert headers[0]["speakers"] == ["Alice"]
+        assert headers[0]["speakers"] == ["Alice", "Dr. Li"]
     finally:
         conn.close()
 

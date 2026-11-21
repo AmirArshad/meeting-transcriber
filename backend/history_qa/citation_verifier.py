@@ -107,55 +107,44 @@ def parse_qa_json(raw_text: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _normalize_inline_citations(markdown: str, valid_ids: set[str]) -> Tuple[str, List[str]]:
-    """Expand multi-ID groups `[E1, E2]` -> `[E1] [E2]` and strip unverified `[Ek]`."""
-    found_valid: List[str] = []
-
+def _normalize_inline_citations(markdown: str, valid_ids: set[str]) -> Tuple[str, bool]:
+    """Expand grouped citations and detect citation-only lines before stripping invalid IDs."""
     def replace_marker(match: re.Match[str]) -> str:
-        eid = match.group(1)
-        if eid in valid_ids:
-            if eid not in found_valid:
-                found_valid.append(eid)
-            return f"[{eid}]"
-        return ""
+        return match.group(0) if match.group(1) in valid_ids else ""
 
     out_lines: List[str] = []
+    standalone_citation = False
     close_fence_re: Optional[re.Pattern[str]] = None
     for line in str(markdown or "").splitlines():
-        if close_fence_re is not None:
+        if close_fence_re is not None and close_fence_re.match(line):
+            close_fence_re = None
             out_lines.append(line)
-            if close_fence_re.match(line):
-                close_fence_re = None
             continue
 
-        fence_match = _FENCE_LINE_RE.match(line)
+        fence_match = _FENCE_LINE_RE.match(line) if close_fence_re is None else None
         if fence_match:
             fence_char = fence_match.group(1)[0]
             fence_len = len(fence_match.group(1))
             close_fence_re = re.compile(rf"^\s{{0,3}}{re.escape(fence_char)}{{{fence_len},}}\s*$")
-            out_lines.append(line)
-            continue
 
         expanded = _EVIDENCE_GROUP_RE.sub(
-            lambda m: " ".join(
-                f"[{tok.strip()}]"
-                for tok in re.split(r"\s*[,;/]\s*", m.group(1))
-                if tok.strip()
-            ),
+            lambda m: " ".join(f"[{tok}]" for tok in re.split(r"\s*[,;/]\s*", m.group(1))),
             line,
         )
+        body = re.sub(r"^\s*(?:>\s*)+", "", expanded)
+        body = _LIST_ITEM_START_RE.sub("", body, count=1)
+        # Table cells are handled as blocks, including the header exemption.
+        if "|" not in body and _SINGLE_EVIDENCE_RE.search(body) and not _block_has_factual_text(body):
+            standalone_citation = True
+
         sanitized_line = _SINGLE_EVIDENCE_RE.sub(replace_marker, expanded)
-        # Collapse leftover extra spaces before punctuation or between inline words without altering leading indentation.
-        sanitized_line = re.sub(r"(?<=\S)[ \t]+([.,;:!?])", r"\1", sanitized_line)
-        sanitized_line = re.sub(r"(?<=\S)[ \t]{2,}", " ", sanitized_line)
-        out_lines.append(sanitized_line.rstrip())
+        if close_fence_re is None:
+            # Collapse spaces left by removed citations without changing indentation.
+            sanitized_line = re.sub(r"(?<=\S)[ \t]+([.,;:!?])", r"\1", sanitized_line)
+            sanitized_line = re.sub(r"(?<=\S)[ \t]{2,}", " ", sanitized_line).rstrip()
+        out_lines.append(sanitized_line)
 
-    while out_lines and not out_lines[0].strip():
-        out_lines.pop(0)
-    while out_lines and not out_lines[-1].strip():
-        out_lines.pop()
-
-    return "\n".join(out_lines), found_valid
+    return "\n".join(out_lines).strip("\n"), standalone_citation
 
 
 def _is_table_separator(line: str) -> bool:
@@ -201,14 +190,14 @@ def _parse_markdown_blocks(markdown: str) -> List[Dict[str, str]]:
         if fence_match:
             fence_char = fence_match.group(1)[0]
             fence_len = len(fence_match.group(1))
-            code_lines = [line]
+            code_lines = []
             i += 1
             close_re = re.compile(rf"^\s{{0,3}}{re.escape(fence_char)}{{{fence_len},}}\s*$")
             while i < n:
-                code_lines.append(lines[i])
                 if close_re.match(lines[i]):
                     i += 1
                     break
+                code_lines.append(lines[i])
                 i += 1
             blocks.append({"type": "code", "text": "\n".join(code_lines)})
             continue
@@ -372,12 +361,13 @@ def verify_grounded_response(
             "citations": [],
         }
 
-    cleaned_answer, inline_valid_ids = _normalize_inline_citations(raw_answer, set(evidence_map))
+    cleaned_answer, standalone_citation = _normalize_inline_citations(raw_answer, set(evidence_map))
     blocks = _parse_markdown_blocks(cleaned_answer)
 
     has_content = False
-    unsupported = False
-    exempt_types = {"heading", "table_header", "table_sep", "hr", "code"}
+    unsupported = standalone_citation
+    ordered_valid_ids: Dict[str, None] = {}
+    exempt_types = {"heading", "table_header", "table_sep", "hr"}
 
     for idx, block in enumerate(blocks):
         btype = block["type"]
@@ -416,15 +406,21 @@ def verify_grounded_response(
                 if has_following_citation:
                     continue
 
-        if not _block_has_factual_text(block["text"]):
+        body = block["text"]
+        if btype == "list_item":
+            body = _LIST_ITEM_START_RE.sub("", body, count=1)
+        ids = _SINGLE_EVIDENCE_RE.findall(body)
+        if not _block_has_factual_text(body):
+            unsupported |= bool(ids)
             continue
 
         has_content = True
-        if not _SINGLE_EVIDENCE_RE.search(block["text"]):
+        if not ids:
             unsupported = True
             break
+        ordered_valid_ids.update(dict.fromkeys(ids))
 
-    if not has_content:
+    if not has_content and not unsupported:
         return {
             "ok": False,
             "needsRepair": True,
@@ -434,7 +430,7 @@ def verify_grounded_response(
             "reason": "empty_answer",
         }
 
-    if not inline_valid_ids or unsupported:
+    if not ordered_valid_ids or unsupported:
         return {
             "ok": False,
             "needsRepair": True,
@@ -443,8 +439,6 @@ def verify_grounded_response(
             "citations": [],
             "reason": "missing_citations",
         }
-
-    ordered_valid_ids = inline_valid_ids
 
     citations: List[Dict[str, Any]] = []
     for eid in ordered_valid_ids:

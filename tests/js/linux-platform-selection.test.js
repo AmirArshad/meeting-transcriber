@@ -867,3 +867,156 @@ test('Linux summary smoke validation honors passed cudaStatus when cached TTL ex
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
+
+test('Linux Chat uses a stale reading for passive status and the fresh probe for live fit', async (t) => {
+  const { createHistoryQaService } = require('../../src/main/history-qa-service');
+  const { createChatThreadStore } = require('../../src/main/chat-thread-store');
+  const { getSummaryModelFit } = require('../../src/ai-addon/summary-device-fit');
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-chat-cuda-'));
+  t.after(() => fs.rmSync(userDataDir, { recursive: true, force: true }));
+  const app = { getPath: () => userDataDir };
+  fs.mkdirSync(path.join(userDataDir, 'ai-addons', 'cuda', 'python'), { recursive: true });
+  const runtimeDir = path.join(userDataDir, 'runtime');
+  fs.mkdirSync(path.join(runtimeDir, 'extract'), { recursive: true });
+  fs.writeFileSync(path.join(runtimeDir, 'extract', 'llama-cli'), 'test CLI');
+  const readyCuda = {
+    statusCode: 'ready', installed: true, deviceAvailable: true, runtimeLoadable: true,
+    missingLibraries: [], matchedProfile: 'cuda12',
+  };
+  const staleCuda = { ...readyCuda };
+  const cachedAt = Date.now() - 6 * 60 * 1000;
+  let cached = staleCuda;
+  const { getAiAddonRuntimeOptions } = createAiAddonIpc({
+    app, path, fs,
+    getCachedCudaStatus: ({ allowStale } = {}) => (
+      allowStale || Date.now() - cachedAt < 5 * 60 * 1000 ? cached : null
+    ),
+  });
+  assert.equal(getAiAddonRuntimeOptions().cudaStatus, staleCuda);
+  const artifact = { id: 'model-artifact', estimatedSizeBytes: 2 * 1024 ** 3 };
+  const runtimeArtifact = { id: 'runtime-artifact', executableName: 'llama-cli' };
+  const deviceMemory = { totalBytes: 16 * 1024 ** 3, availableBytes: 12 * 1024 ** 3 };
+  const evidence = [{ evidenceId: 'E1', meetingId: 'm1', text: 'Calibrated sensor.' }];
+  const liveStatuses = [];
+  let probes = 0;
+  const service = createHistoryQaService({
+    app, path, fs, platform: 'linux', arch: 'x64',
+    pythonConfig: { backendPath: userDataDir },
+    getBackendModuleArgs: (name) => [name],
+    getAiAddonRuntimeOptions,
+    getSummaryArtifactForPlatform: () => artifact,
+    getSummaryRuntimeArtifactForPlatform: () => runtimeArtifact,
+    getSummaryArtifactPath: () => path.join(userDataDir, 'model.gguf'),
+    buildSummaryRuntimeEnv: () => ({}),
+    getSummaryDeviceMemory: async () => deviceMemory,
+    resolveCudaStatusForTranscription: async () => {
+      probes += 1;
+      // Deliberately leave the shared snapshot cold after the queued probe.
+      cached = null;
+      return readyCuda;
+    },
+    checkAiAddonSetupStatus: async (options) => {
+      if (options.deviceMemory) liveStatuses.push(options.cudaStatus);
+      const availability = getSummaryAvailability('linux', 'x64', options);
+      const fit = getSummaryModelFit({ artifact, runtimeArtifact, availability, deviceMemory: options.deviceMemory, platform: 'linux' });
+      return { features: { summary: {
+        modelId: 'qwen3.5-9b-q4-k-m', fit, cache: { valid: true },
+        runtimeCache: { valid: true, runtimeDir, runtimeArtifact },
+      } } };
+    },
+    historySearchService: {
+      getGeneration: () => 1, ensureSynced: async () => {},
+      enqueueOperation: (action) => action(), getIndexPath: () => path.join(userDataDir, 'index.sqlite'),
+    },
+    chatThreadStore: createChatThreadStore({ app, path, fs }),
+    enqueueAiComputeAction: (action) => action(),
+    spawnTrackedPython([moduleName]) {
+      const proc = new EventEmitter();
+      proc.stdin = { end() {} };
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      setImmediate(() => {
+        const result = moduleName === 'history_qa.retrieval'
+          ? { evidence, searchedMeetingCount: 1 }
+          : { status: 'answered', answerMarkdown: 'Calibrated sensor [E1].', citations: evidence };
+        proc.stdout.emit('data', JSON.stringify(result));
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+    collectPythonProcessOutput(proc) {
+      let stdout = '';
+      proc.stdout.on('data', (chunk) => { stdout += chunk; });
+      return { getStdout: () => stdout, getStderr: () => '', assertStdoutWithinLimit() {} };
+    },
+  });
+
+  const handlers = {};
+  service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+  assert.equal((await handlers['get-history-qa-eligibility']({})).eligible, true);
+  assert.equal(probes, 0);
+  assert.equal((await handlers['ask-history']({}, { question: 'Was the sensor calibrated?' })).status, 'answered');
+  assert.equal(getAiAddonRuntimeOptions().cudaStatus, null);
+  assert.equal(liveStatuses.length, 1);
+  assert.equal(liveStatuses[0], readyCuda);
+  assert.equal(probes, 1);
+});
+
+test('default selection and removal return status with Linux CUDA and device memory', async (t) => {
+  const { loadManifest, saveAiAddonManifest } = require('../../src/ai-addon/manifest-store');
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-set-default-'));
+  t.after(() => fs.rmSync(userDataDir, { recursive: true, force: true }));
+  const oldDefault = 'qwen3.5-9b-q4-k-m';
+  const newDefault = 'qwen3.5-4b-q4-k-m';
+  const modelEntry = (modelId) => ({ modelId, status: 'ready' });
+  saveAiAddonManifest({ userDataDir, manifest: {
+    summaryLibrary: { defaultModelId: oldDefault, models: {
+      [oldDefault]: modelEntry(oldDefault), [newDefault]: modelEntry(newDefault),
+    } },
+  } });
+  const staleCuda = {
+    statusCode: 'ready', installed: true, deviceAvailable: true, runtimeLoadable: true,
+    missingLibraries: [], matchedProfile: 'cuda12',
+  };
+  const deviceMemory = { totalBytes: 16 * 1024 ** 3 };
+  const statusCalls = [];
+  const memoryReads = [];
+  const service = createAiAddonIpc({
+    app: { getPath: () => userDataDir }, path, fs,
+    assertTrustedRendererSender() {},
+    sendToRenderer() {},
+    getSummaryDeviceMemory: async ({ live }) => {
+      memoryReads.push(live);
+      return deviceMemory;
+    },
+    getCachedCudaStatus: ({ allowStale } = {}) => (allowStale ? staleCuda : null),
+    checkAiAddonSetupStatus: async (options) => {
+      statusCalls.push(options);
+      const { defaultModelId } = loadManifest({ userDataDir }).summaryLibrary;
+      return {
+        summaryLibrary: { defaultModelId },
+        features: { summary: { modelId: options.summaryModelId || defaultModelId, setupComplete: true } },
+      };
+    },
+  });
+  const handlers = {};
+  service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+  const status = await withProcessRuntimeAsync({ platform: 'linux', arch: 'x64' }, () => (
+    handlers['set-default-summary-model']({}, { modelId: newDefault })
+  ));
+  assert.equal(status.summaryLibrary.defaultModelId, newDefault);
+  assert.equal(status.features.summary.setupComplete, true);
+  assert.deepEqual(statusCalls.map(({ summaryModelId }) => summaryModelId), [newDefault, undefined]);
+  for (const options of statusCalls) {
+    assert.equal(options.deviceMemory, deviceMemory);
+    assert.equal(options.cudaStatus, staleCuda);
+  }
+  const afterRemoval = await withProcessRuntimeAsync({ platform: 'linux', arch: 'x64' }, () => (
+    handlers['remove-summary-model']({}, { modelId: oldDefault })
+  ));
+  assert.equal(afterRemoval.summaryLibrary.defaultModelId, newDefault);
+  assert.equal(afterRemoval.features.summary.availability.supported, true);
+  const remaining = afterRemoval.summaryLibrary.models.find((model) => model.modelId === newDefault);
+  assert.equal(remaining.fit.totalMemoryBytes, deviceMemory.totalBytes);
+  assert.deepEqual(memoryReads, [true, false]);
+});

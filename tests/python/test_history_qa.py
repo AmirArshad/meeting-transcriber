@@ -330,11 +330,10 @@ def test_scope_and_citation_fail_closed():
         assert result["status"] == "verification_failed", answer
         assert result["reason"] == "missing_citations", answer
 
-    for empty_answer in ("[E1]", "# Heading Only"):
-        result = verify_grounded_response(json.dumps({"answerMarkdown": empty_answer, "citedEvidenceIds": ["E1"]}), evidence)
-        assert result["ok"] is False, empty_answer
-        assert result["needsRepair"] is True, empty_answer
-        assert result["reason"] == "empty_answer", empty_answer
+    result = verify_grounded_response(json.dumps({"answerMarkdown": "# Heading Only"}), evidence)
+    assert result["ok"] is False
+    assert result["needsRepair"] is True
+    assert result["reason"] == "empty_answer"
 
 
 def test_cli_delimiters_and_redirect_handler():
@@ -446,7 +445,7 @@ def test_block_level_markdown_headings_tables_leadins_and_partial_answers():
             "| Linux tests | Bob [E2] |",
             "",
             "```text",
-            "uncited code sample block",
+            "Beta freeze confirmed [E1].",
             "```",
             "",
             "Note: Travel reimbursement policy was not covered in the selected excerpts [E1].",
@@ -846,7 +845,7 @@ def test_citation_verifier_preserves_indentation_bold_leadins_nested_lists_and_s
             "",
             "```python",
             "def keep_indent():",
-            "    x = '[E99]'  # verbatim inside code",
+            "    x = '[E99]'  # grounded in approval [E1]",
             "    return   2",
             "```",
         ]
@@ -857,7 +856,7 @@ def test_citation_verifier_preserves_indentation_bold_leadins_nested_lists_and_s
     assert "  - Adopted SQLite FTS5 [E1] [E2]." in out
     assert "    - Verified offline index sync [E2] [E3]." in out
     assert "   - Ship Linux CUDA check [E1]." in out
-    assert "    x = '[E99]'  # verbatim inside code" in out
+    assert "    x = ''  # grounded in approval [E1]" in out
     assert "    return   2" in out
 
     # Uncited standalone bold line or uncited leaf bullet must still fail closed.
@@ -1282,3 +1281,25 @@ def test_standalone_citation_bullets_fail_closed_and_prompts_forbid_them():
     repair = build_repair_prompt(bad_payload, evidence, reason="missing_citations", include_previous_output=False)
     assert "standalone citation" in repair
     assert "'- [E1]'" in repair
+
+
+def test_mixed_answer_rejects_citation_only_blocks_and_uncited_fences():
+    evidence = [
+        {"evidenceId": eid, "meetingId": "m1", "meetingTitle": "Sensor Sync"}
+        for eid in ("E1", "E2")
+    ]
+    for unsupported in (
+        "- [E2]", "- [E1]", "- [E99]", "1. [E2]", "1. [E99]", "> [E2]",
+        "> [E99]", "[E2]", "[E99]", "```text\nApproved deployment.\n```",
+        "~~~text\nApproved deployment [E99].\n~~~",
+    ):
+        answer = f"- Approved calibration [E1].\n{unsupported}"
+        verified = verify_grounded_response(json.dumps({"answerMarkdown": answer}), evidence)
+        assert (verified["ok"], verified["reason"]) == (False, "missing_citations"), answer
+        assert verified["answerMarkdown"] == ""
+        assert verified["citations"] == []
+
+    # Citations attached only to exempt headings never appear in the evidence list.
+    verified = verify_grounded_response(json.dumps({"answerMarkdown": "## Calibration [E2]\n\nApproved calibration [E1]."}), evidence)
+    assert verified["ok"] is True
+    assert [citation["evidenceId"] for citation in verified["citations"]] == ["E1"]

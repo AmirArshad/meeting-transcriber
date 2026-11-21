@@ -299,7 +299,8 @@ function createHistoryQaService(deps) {
     spawnTrackedPython,
     spawnSummaryPython = spawnTrackedPython,
     ensureSummaryProcessExited = async () => {},
-    hasActiveSummaryProcess = () => false,
+    getOutstandingSummaryProcess = () => null,
+    hasActiveSummaryGeneration = () => false,
     getSummaryDeviceMemory = async () => null,
     spawnServerProcess = defaultSpawnServerProcess,
     getBackendModuleArgs,
@@ -419,6 +420,7 @@ function createHistoryQaService(deps) {
     verifyChecksumsIfChanged = true,
     summaryModelId = null,
     deviceMemory,
+    cudaStatus,
     checkFit = false,
     fallbackToUsableLibraryModel = false,
   } = {}) {
@@ -429,6 +431,7 @@ function createHistoryQaService(deps) {
         verifyChecksumsIfChanged,
         ...(summaryModelId ? { summaryModelId } : {}),
         ...(deviceMemory !== undefined ? { deviceMemory } : {}),
+        ...(cudaStatus !== undefined ? { cudaStatus } : {}),
       }),
     );
     const evaluateStatus = (targetStatus) => {
@@ -541,6 +544,7 @@ function createHistoryQaService(deps) {
             verifyChecksumsIfChanged,
             summaryModelId: candidate.modelId,
             ...(deviceMemory !== undefined ? { deviceMemory } : {}),
+            ...(cudaStatus !== undefined ? { cudaStatus } : {}),
           }),
         );
         const evaluated = evaluateStatus(candidateStatus);
@@ -597,11 +601,22 @@ function createHistoryQaService(deps) {
     emitModelState({ status: 'unloaded', modelId: null, modelName: null, backend: null, loadedAt: null, reason });
   }
 
+  async function confirmSummaryProcessExit() {
+    const modelId = modelState.modelId;
+    try {
+      await ensureSummaryProcessExited();
+    } catch (error) {
+      emitModelState({ status: 'release_error', modelId: modelState.modelId || modelId, reason: 'exit_unconfirmed' });
+      throw error;
+    }
+  }
+
   async function unloadModel(reason = 'manual', { cancelActive = true } = {}) {
     if (activeUnloadPromise) {
       return activeUnloadPromise;
     }
 
+    const lastModelId = modelState.modelId;
     activeUnloadPromise = (async () => {
       clearIdleTimer();
       if (cancelActive) {
@@ -610,12 +625,14 @@ function createHistoryQaService(deps) {
 
       const server = residentServer;
       if (!server) {
-        if (hasActiveSummaryProcess()) {
+        const outstanding = getOutstandingSummaryProcess();
+        if (outstanding && (hasActiveSummaryGeneration(outstanding) || hasInFlightAiAddonSetup())) {
           return { unloaded: true, alreadyUnloaded: true };
         }
+        if (outstanding) await terminateProcessBestEffort(outstanding);
         await ensureSummaryProcessExited();
         if (modelState.status !== 'unloaded') reportUnloaded(reason);
-        return { unloaded: true, alreadyUnloaded: true };
+        return { unloaded: true, alreadyUnloaded: !outstanding };
       }
 
       emitModelState({ status: 'unloading', reason });
@@ -628,7 +645,7 @@ function createHistoryQaService(deps) {
 
       return { unloaded: true, alreadyUnloaded: false };
     })().catch((error) => {
-      emitModelState({ status: 'release_error', reason: 'exit_unconfirmed' });
+      emitModelState({ status: 'release_error', modelId: modelState.modelId || lastModelId, reason: 'exit_unconfirmed' });
       throw error;
     }).finally(() => {
       activeUnloadPromise = null;
@@ -733,7 +750,7 @@ function createHistoryQaService(deps) {
       throw cancelSignal.reason instanceof Error ? cancelSignal.reason : createQaCancelError();
     }
 
-    await ensureSummaryProcessExited();
+    await confirmSummaryProcessExit();
     await checkLiveAdmission();
     if (cancelSignal?.aborted || isQuitCommitted()) throw cancelSignal?.reason || createQaCancelError();
     const userDataDir = app.getPath('userData');
@@ -1009,7 +1026,7 @@ function createHistoryQaService(deps) {
       });
     } finally {
       if (spawnedModelBearing) {
-        await ensureSummaryProcessExited().catch(() => {});
+        await confirmSummaryProcessExit().catch(() => {});
       }
     }
   }
@@ -1329,11 +1346,12 @@ function createHistoryQaService(deps) {
             const modelPath = getSummaryArtifactPath(userDataDir, admitted.artifact);
             const runtimeDir = admitted.runtimeDir || getSummaryRuntimeDir(userDataDir, admitted.artifact);
 
+            let cudaStatus;
             if (platform === 'linux') {
               if (typeof resolveCudaStatusForTranscription !== 'function') {
                 throw new Error('Linux local Q&A requires the live CUDA runtime resolver.');
               }
-              const cudaStatus = await resolveCudaStatusForTranscription({
+              cudaStatus = await resolveCudaStatusForTranscription({
                 registerProcess: (proc) => registrar.register(proc),
               });
               registrar.throwIfCancelled();
@@ -1360,7 +1378,7 @@ function createHistoryQaService(deps) {
               registrar.throwIfCancelled();
               const live = await resolveEligibility({
                 verifyChecksums: true, verifyChecksumsIfChanged: true,
-                summaryModelId: frozenModelId, deviceMemory, checkFit: true,
+                summaryModelId: frozenModelId, deviceMemory, cudaStatus, checkFit: true,
               });
               if (!live.eligible || live.modelId !== frozenModelId
                 || JSON.stringify([live.artifact, live.runtimeArtifact, live.runtimeDir]) !== frozenArtifact) {
@@ -1400,7 +1418,7 @@ function createHistoryQaService(deps) {
               serverToken = server.token;
             } else {
               await unloadModel('cli_fallback', { cancelActive: false });
-              await ensureSummaryProcessExited();
+              await confirmSummaryProcessExit();
               await checkLiveAdmission();
               registrar.throwIfCancelled();
               transientCliState = true;
@@ -1452,15 +1470,8 @@ function createHistoryQaService(deps) {
               });
               return output;
             } finally {
-              if (transientCliState) {
-                emitModelState({
-                  status: 'unloaded',
-                  modelId: null,
-                  modelName: null,
-                  backend: null,
-                  loadedAt: null,
-                  reason: 'cli_turn_finished',
-                });
+              if (transientCliState && modelState.status === 'loading') {
+                reportUnloaded('cli_turn_finished');
               }
             }
           } finally {

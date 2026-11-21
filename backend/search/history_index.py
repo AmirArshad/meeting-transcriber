@@ -25,7 +25,7 @@ from summaries import language_labels as summary_language_labels
 from summaries import summary_pipeline
 from transcription import captions as transcript_captions
 
-INDEX_SCHEMA_VERSION = "2"
+INDEX_SCHEMA_VERSION = "3"
 TOKENIZER_SPEC = "porter unicode61 remove_diacritics 2"
 SNIPPET_START = "\x01"
 SNIPPET_END = "\x02"
@@ -526,6 +526,12 @@ def _build_markdown_passages(transcript_text: str) -> List[Dict[str, Any]]:
     lines = str(transcript_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
     passages: List[Dict[str, Any]] = []
     index = 0
+    plain_lines: List[str] = []
+
+    def flush_plain() -> None:
+        for passage in _chunk_plain_paragraphs("\n".join(plain_lines), kind="transcript"):
+            passages.append({**passage, "speaker": passage["speaker"] or None})
+        plain_lines.clear()
 
     while index < len(lines):
         stripped = lines[index].strip()
@@ -533,15 +539,17 @@ def _build_markdown_passages(transcript_text: str) -> List[Dict[str, Any]]:
         if not ts_match:
             untimed = summary_pipeline.UNTIMED_SPEAKER_RE.match(stripped)
             if not untimed:
+                plain_lines.append(lines[index])
                 index += 1
                 continue
-            speaker = untimed.group("speaker")
+            flush_plain()
+            speaker = _clean_inline(untimed.group("speaker"))
             initial_text = _clean_inline(untimed.group("text"))
             text_parts = [initial_text] if initial_text else []
             cursor = index + 1
             while cursor < len(lines):
                 body = lines[cursor].strip()
-                if (not body or body.startswith("#")
+                if (not body or body.startswith("#") or body in ("---", "***", "___")
                         or summary_pipeline.TRANSCRIPT_TIMESTAMP_RE.match(body)
                         or summary_pipeline.UNTIMED_SPEAKER_RE.match(body)):
                     break
@@ -554,6 +562,7 @@ def _build_markdown_passages(transcript_text: str) -> List[Dict[str, Any]]:
             index = cursor
             continue
 
+        flush_plain()
         start_sec = max(0.0, float(summary_pipeline.parse_timestamp(ts_match.group("start"))))
         end_sec = max(start_sec, float(summary_pipeline.parse_timestamp(ts_match.group("end"))))
         start_ms = int(round(start_sec * 1000.0))
@@ -605,8 +614,7 @@ def _build_markdown_passages(transcript_text: str) -> List[Dict[str, Any]]:
             )
         index = cursor
 
-    if not passages:
-        return _chunk_plain_paragraphs(transcript_text, kind="transcript")
+    flush_plain()
     return passages
 
 

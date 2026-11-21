@@ -154,8 +154,9 @@ def test_chunk_transcript_drops_overlap_when_it_would_break_budget():
 
     chunks = chunk_transcript(segments, max_tokens=18, overlap_segments=1)
 
-    assert all(chunk['estimatedTokens'] <= 30 for chunk in chunks)
-    assert chunks[1]['segments'][0]['text'] == 'b' * 80
+    assert all(chunk['estimatedTokens'] <= 18 for chunk in chunks)
+    assert chunks[1]['segments'][0]['text'].startswith('b')
+    assert ''.join(part['text'] for chunk in chunks for part in chunk['segments'] if part['start'] == 1) == 'b' * 80
 
 
 def test_chunk_transcript_prefers_topic_boundaries_after_threshold():
@@ -524,3 +525,11 @@ def test_summary_prompts_sanitize_chat_template_control_tokens():
     for prompt in (chunk_prompt, merge_prompt, repair_prompt):
         for token in ("<start_of_turn>", "<end_of_turn>", "<|im_start|>", "<|im_end|>", "<|channel>", "<channel|>"):
             assert token not in prompt
+
+
+def test_custom_speaker_labels_without_words_do_not_count_as_speech():
+    from backend.summaries.summary_pipeline import transcript_chunk_has_speech
+
+    labels = "Alexandra Rivera:\n[00:01] Benjamin Martin:\n[00:05 - 00:09] Dr. Li: ... 42"
+    assert not transcript_chunk_has_speech(labels)
+    assert transcript_chunk_has_speech(labels + "\nMorgan: Approved calibration yesterday.")
