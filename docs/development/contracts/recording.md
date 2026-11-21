@@ -59,5 +59,8 @@ remain intact on failed recovery or transcription.
 
 When scan/import creates an audio-only meeting for a recovered capture, preserve
 the positive finite duration from its matching durable recovery handoff. Check
-the handoff identity across the unlocked scan and metadata commit; malformed,
-unmatched, or symlink handoffs must not supply a duration.
+the handoff and audio identities across the unlocked scan and metadata commit;
+malformed, unmatched, or symlink handoffs must not supply a duration. When no
+matching handoff exists (such as a legacy capture manifest without
+`transcriptionSelection` or a promoted `.pcm.tmp` WAV), fall back to probing the
+local `.opus` or `.wav` audio file duration directly outside `meetings.json.lock`.

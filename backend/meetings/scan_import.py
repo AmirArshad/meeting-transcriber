@@ -6,7 +6,9 @@ import json
 import math
 import re
 import shutil
+import struct
 import sys
+import wave
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -28,6 +30,7 @@ class ScanCandidate:
     captions_identity: object = None
     matched_captions: Optional[Dict] = None
     handoff_identity: object = None
+    audio_identity: object = None
 
 
 def file_identity(path: Path):
@@ -56,6 +59,89 @@ def recovery_handoff_duration(audio_file: Path) -> Optional[float]:
         return float(duration)
     except (OSError, ValueError, TypeError, AttributeError, OverflowError):
         return None
+
+
+_OGG_OPUS_RATE = 48000.0
+_OGG_HEAD_READ_BYTES = 4096
+_OGG_MAX_PAGE_BYTES = 27 + 255 + 255 * 255
+
+
+def _probe_ogg_opus_duration(audio_file: Path) -> Optional[float]:
+    """Read duration for the single-stream Ogg Opus format written by FFmpeg."""
+    try:
+        with audio_file.open("rb") as handle:
+            head = handle.read(_OGG_HEAD_READ_BYTES)
+            if len(head) < 28 or head[0:4] != b"OggS" or head[4] != 0:
+                return None
+            if (head[5] & 0x02) == 0:
+                return None
+            page_segments = head[26]
+            header_end = 27 + page_segments
+            if len(head) < header_end + 19:
+                return None
+            payload_len = sum(head[27:header_end])
+            if payload_len < 19 or len(head) < header_end + payload_len:
+                return None
+            if head[header_end : header_end + 8] != b"OpusHead":
+                return None
+            pre_skip = struct.unpack_from("<H", head, header_end + 10)[0]
+            serial = struct.unpack_from("<I", head, 14)[0]
+
+            handle.seek(0, 2)
+            file_size = handle.tell()
+            tail_start = max(0, file_size - _OGG_MAX_PAGE_BYTES)
+            handle.seek(tail_start)
+            tail = handle.read(file_size - tail_start)
+    except (OSError, struct.error, ValueError):
+        return None
+
+    pos = len(tail)
+    while True:
+        idx = tail.rfind(b"OggS", 0, pos)
+        if idx < 0:
+            return None
+        pos = idx
+        if idx + 27 > len(tail) or tail[idx + 4] != 0:
+            continue
+        if not tail[idx + 5] & 0x04 or struct.unpack_from("<I", tail, idx + 14)[0] != serial:
+            continue
+        seg_count = tail[idx + 26]
+        seg_end = idx + 27 + seg_count
+        if seg_end > len(tail):
+            continue
+        body_len = sum(tail[idx + 27 : seg_end])
+        if not body_len or seg_end + body_len != len(tail):
+            continue
+        granule = struct.unpack_from("<q", tail, idx + 6)[0]
+        return (granule - pre_skip) / _OGG_OPUS_RATE if granule > pre_skip else None
+
+
+def _probe_wav_duration(audio_file: Path) -> Optional[float]:
+    """Read RIFF/WAVE PCM duration without spawning external tools."""
+    try:
+        with wave.open(str(audio_file), "rb") as wav_file:
+            frames = wav_file.getnframes()
+            rate = wav_file.getframerate()
+        if frames <= 0 or rate <= 0:
+            return None
+        duration = float(frames) / float(rate)
+        if math.isfinite(duration) and duration > 0:
+            return duration
+    except (OSError, EOFError, wave.Error, ValueError, OverflowError):
+        return None
+    return None
+
+
+def probe_audio_duration_from_file(audio_file: Path) -> Optional[float]:
+    """Probe positive finite audio duration from a local .opus or .wav file."""
+    if audio_file.is_symlink():
+        return None
+    suffix = audio_file.suffix.lower()
+    if suffix == ".opus":
+        return _probe_ogg_opus_duration(audio_file)
+    if suffix == ".wav":
+        return _probe_wav_duration(audio_file)
+    return None
 
 
 @contextmanager

@@ -634,6 +634,7 @@ class MeetingManager:
 
                 captions_file = transcript_captions.captions_sidecar_path_for_audio(resolved_audio)
                 try:
+                    audio_identity = meeting_scan.file_identity(audio_file)
                     transcript_identity = meeting_scan.file_identity(transcript_file)
                     captions_identity = meeting_scan.file_identity(captions_file)
                     handoff_file = audio_file.with_name(f"{audio_file.stem}.recovery-request.json")
@@ -647,8 +648,11 @@ class MeetingManager:
                         if transcript_text:
                             matched_captions = self._find_valid_sibling_captions(resolved_audio, transcript_text)
                     else:
-                        duration = meeting_scan.recovery_handoff_duration(audio_file) or 0.0
-                    if (transcript_identity != meeting_scan.file_identity(transcript_file)
+                        duration = meeting_scan.recovery_handoff_duration(audio_file)
+                        if duration is None:
+                            duration = meeting_scan.probe_audio_duration_from_file(audio_file) or 0.0
+                    if (audio_identity != meeting_scan.file_identity(audio_file)
+                            or transcript_identity != meeting_scan.file_identity(transcript_file)
                             or captions_identity != meeting_scan.file_identity(captions_file)
                             or handoff_identity != meeting_scan.file_identity(handoff_file)):
                         skipped += 1
@@ -669,6 +673,7 @@ class MeetingManager:
                         captions_identity=captions_identity,
                         matched_captions=matched_captions,
                         handoff_identity=handoff_identity,
+                        audio_identity=audio_identity,
                     )
                 )
 
@@ -721,7 +726,8 @@ class MeetingManager:
 
                             captions_file = transcript_captions.captions_sidecar_path_for_audio(resolved_audio)
                             try:
-                                if (candidate.transcript_identity != meeting_scan.file_identity(candidate.transcript_file)
+                                if (candidate.audio_identity != meeting_scan.file_identity(candidate.audio_file)
+                                        or candidate.transcript_identity != meeting_scan.file_identity(candidate.transcript_file)
                                         or candidate.captions_identity != meeting_scan.file_identity(captions_file)
                                         or candidate.handoff_identity != meeting_scan.file_identity(
                                             candidate.audio_file.with_name(f"{candidate.audio_file.stem}.recovery-request.json"))):

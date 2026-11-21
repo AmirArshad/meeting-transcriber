@@ -995,3 +995,35 @@ def test_real_ffmpeg_recovery_retains_selection_for_restart_cli(tmp_path):
     audio = Path(payload['handoffs'][0]['audioPath'])
     assert audio.is_file()
     assert spp.ffmpeg_can_decode(audio, ffmpeg)
+
+
+def test_legacy_recovery_without_selection_preserves_duration_on_scan(tmp_path):
+    import shutil
+    from backend.meeting_manager import MeetingManager
+
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        pytest.skip('ffmpeg is required for real recovery promotion')
+    session = _build_interrupted_session(
+        tmp_path,
+        stem='recording_2026-11-21T02-00-00',
+        started_at_iso='2026-11-21T02:00:00.000Z',
+        state='recording',
+        mic_frames=48000 * 7,
+        desktop_frames=None,
+    )
+    recovered = recover_capture(tmp_path, session, ffmpeg_path=ffmpeg)
+    assert 'transcriptionSelection' not in recovered
+    assert not (tmp_path / 'recording_2026-11-21T02-00-00.recovery-request.json').exists()
+    assert recovered['duration'] == pytest.approx(7.0, abs=0.05)
+    audio = Path(recovered['audioPath'])
+    assert audio.suffix == '.opus'
+    assert spp.ffmpeg_can_decode(audio, ffmpeg)
+
+    manager = MeetingManager(recordings_dir=str(tmp_path))
+    scan = manager.scan_and_sync_recordings()
+    assert scan['added'] == 1
+    meetings = manager.list_meetings()
+    assert len(meetings) == 1
+    assert meetings[0]['durationSeconds'] == pytest.approx(7.0, abs=1 / 48000)
+    assert meetings[0]['duration'] == '0:07'

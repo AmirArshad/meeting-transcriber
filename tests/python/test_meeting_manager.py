@@ -1,9 +1,13 @@
 import json
 import hashlib
 import os
+import struct
+import wave
 from contextlib import contextmanager
 from datetime import datetime as real_datetime
 from pathlib import Path
+
+import pytest
 
 import backend.meeting_manager as meeting_manager_module
 from backend.meeting_manager import MeetingManager
@@ -2329,3 +2333,140 @@ def test_scan_reads_outside_metadata_lock_and_rejects_changed_transcript(tmp_pat
     monkeypatch.setattr(manager, '_find_valid_sibling_captions', change_after_caption_read)
     assert manager.scan_and_sync_recordings()['added'] == 0
     assert manager.list_meetings() == []
+
+
+def _build_minimal_ogg_opus_bytes(*, duration_seconds: float, pre_skip: int = 312, serial: int = 0x12345678) -> bytes:
+    def _ogg_page(header_type: int, granule: int, seq: int, payload: bytes) -> bytes:
+        assert len(payload) < 255
+        header = struct.pack(
+            '<4sBBqIIIB',
+            b'OggS',
+            0,
+            header_type,
+            granule,
+            serial,
+            seq,
+            0,
+            1,
+        )
+        return header + bytes([len(payload)]) + payload
+
+    opus_head = struct.pack('<8sBBHIhB', b'OpusHead', 1, 2, pre_skip, 48000, 0, 0)
+    opus_tags = b'OpusTags' + struct.pack('<II', 0, 0)
+    final_granule = pre_skip + int(round(duration_seconds * 48000))
+    return (
+        _ogg_page(0x02, 0, 0, opus_head)
+        + _ogg_page(0x00, 0, 1, opus_tags)
+        + _ogg_page(0x04, final_granule, 2, b'\x00' * 16)
+    )
+
+
+def test_scan_probes_audio_duration_without_recovery_handoff(tmp_path):
+    recordings = tmp_path / 'recordings'
+    recordings.mkdir()
+    manager = MeetingManager(str(recordings))
+
+    opus_path = recordings / 'recording_2026-11-21T01-00-00.opus'
+    opus_path.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=6.826666666666667))
+
+    wav_path = recordings / 'recording_2026-11-21T01-05-00.wav'
+    with wave.open(str(wav_path), 'wb') as wav_file:
+        wav_file.setnchannels(2)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(48000)
+        wav_file.writeframes(b'\x00' * (48000 * 12 * 2 * 2))
+
+    # When a valid matching handoff exists, it remains authoritative.
+    handoff_audio = recordings / 'recording_2026-11-21T01-10-00.opus'
+    handoff_audio.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=5.0))
+    (recordings / 'recording_2026-11-21T01-10-00.recovery-request.json').write_text(
+        json.dumps({
+            'audioPath': str(handoff_audio),
+            'duration': 14.5,
+            'transcriptionSelection': {
+                'schemaVersion': 1,
+                'attemptId': '11111111-1111-4111-8111-111111111111',
+                'engine': 'whisper',
+                'language': 'en',
+                'modelSize': 'small',
+                'artifactRevision': None,
+            },
+        }),
+        encoding='utf-8',
+    )
+
+    result = manager.scan_and_sync_recordings()
+    assert result == {'scanned': 3, 'added': 3, 'skipped': 0}
+
+    by_id = {m['id']: m for m in manager.list_meetings()}
+    assert by_id['20261121_010000']['durationSeconds'] == pytest.approx(6.826666666666667, abs=0.01)
+    assert by_id['20261121_010000']['duration'] == '0:06'
+    assert by_id['20261121_010500']['durationSeconds'] == pytest.approx(12.0, abs=0.01)
+    assert by_id['20261121_010500']['duration'] == '0:12'
+    assert by_id['20261121_011000']['durationSeconds'] == pytest.approx(14.5, abs=0.01)
+    assert by_id['20261121_011000']['duration'] == '0:14'
+
+
+@pytest.mark.parametrize('handoff_type', ['malformed', 'symlink'])
+def test_scan_falls_back_to_audio_for_unusable_handoff(tmp_path, handoff_type):
+    manager = MeetingManager(str(tmp_path))
+    audio = tmp_path / 'recording_2026-11-21T01-00-00.opus'
+    audio.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=8.25))
+    handoff = audio.with_suffix('.recovery-request.json')
+    if handoff_type == 'symlink':
+        target = tmp_path / 'other.json'
+        target.write_text(json.dumps({'audioPath': str(audio), 'duration': 99,
+                                      'transcriptionSelection': {}}), encoding='utf-8')
+        try:
+            handoff.symlink_to(target)
+        except OSError as error:
+            pytest.skip(f'cannot create symlink: {error}')
+    else:
+        handoff.write_text('{invalid JSON', encoding='utf-8')
+
+    assert manager.scan_and_sync_recordings()['added'] == 1
+    assert manager.get_meeting('20261121_010000')['durationSeconds'] == 8.25
+
+
+def test_opus_probe_rejects_truncated_final_page(tmp_path):
+    audio = tmp_path / 'truncated.opus'
+    audio.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=8.25)[:-1])
+    assert meeting_manager_module.meeting_scan.probe_audio_duration_from_file(audio) is None
+
+
+@pytest.mark.parametrize('change_phase', ['probe', 'commit'])
+def test_scan_rejects_audio_changed_after_duration_read(tmp_path, monkeypatch, change_phase):
+    manager = MeetingManager(str(tmp_path))
+    audio = tmp_path / 'recording_2026-11-21T01-00-00.opus'
+    audio.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=8.25))
+    probe = meeting_manager_module.meeting_scan.probe_audio_duration_from_file
+    metadata_guard = manager._metadata_guard
+    probed = False
+
+    def replace_audio():
+        replacement = audio.with_suffix('.replacement')
+        replacement.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=12.5))
+        replacement.replace(audio)
+
+    def probe_audio(path):
+        nonlocal probed
+        duration = probe(path)
+        probed = True
+        if change_phase == 'probe':
+            replace_audio()
+        return duration
+
+    @contextmanager
+    def guard_metadata():
+        if probed and change_phase == 'commit':
+            replace_audio()
+        with metadata_guard():
+            yield
+
+    with monkeypatch.context() as patch:
+        patch.setattr(meeting_manager_module.meeting_scan, 'probe_audio_duration_from_file', probe_audio)
+        patch.setattr(manager, '_metadata_guard', guard_metadata)
+        assert manager.scan_and_sync_recordings()['added'] == 0
+    assert not audio.with_suffix('.md').exists()
+    assert manager.scan_and_sync_recordings()['added'] == 1
+    assert manager.get_meeting('20261121_010000')['durationSeconds'] == 12.5
