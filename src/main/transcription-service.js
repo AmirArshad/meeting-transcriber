@@ -65,6 +65,10 @@ const {
 } = require('../main-process-helpers');
 const { checkAiAddonSetupStatus: defaultCheckAiAddonSetupStatus } = require('../ai-addon-setup');
 const crypto = require('crypto');
+const {
+  CAPTIONS_SCHEMA_VERSION,
+  normalizeSubtitleCues,
+} = require('../renderer/subtitle-export-helpers');
 const { modelDir: parakeetModelDir, runtimeDir: parakeetRuntimeDir, vadDir: parakeetVadDir } = require('./parakeet-setup');
 const { getAdapterSpec } = require('./transcription-engine-catalog');
 const { isLinuxCudaStatusReadyForAdmission } = require('../main-process/linux-cuda-runtime-helpers');
@@ -1299,6 +1303,168 @@ function createTranscriptionService(deps) {
     });
   }
 
+  function speakerLabelSortKey(rawLabel) {
+    const text = String(rawLabel || '').trim();
+    const lastSep = text.lastIndexOf('_');
+    const suffix = lastSep >= 0 ? text.slice(lastSep + 1) : text;
+    if (/^\d+$/.test(suffix)) {
+      return [0, Number(suffix), text];
+    }
+    return [1, 0, text];
+  }
+
+  function buildNormalizedSpeakerLabelMap(speakerSegments) {
+    const rawLabels = [...new Set(
+      (Array.isArray(speakerSegments) ? speakerSegments : [])
+        .map((turn) => String(turn && turn.speaker || '').trim())
+        .filter(Boolean),
+    )].sort((a, b) => {
+      const ka = speakerLabelSortKey(a);
+      const kb = speakerLabelSortKey(b);
+      if (ka[0] !== kb[0]) return ka[0] - kb[0];
+      if (ka[0] === 0 && ka[1] !== kb[1]) return ka[1] - kb[1];
+      return ka[2].localeCompare(kb[2]);
+    });
+    const map = new Map();
+    rawLabels.forEach((raw, index) => {
+      map.set(raw, `Speaker ${index + 1}`);
+    });
+    return map;
+  }
+
+  function attachSpeakerLabelsToCaptionCues(cues, speakerSegments) {
+    const normalizedCues = normalizeSubtitleCues(cues);
+    const turns = Array.isArray(speakerSegments)
+      ? speakerSegments.filter((turn) => turn && Number.isFinite(Number(turn.start))
+        && Number.isFinite(Number(turn.end)) && Number(turn.end) > Number(turn.start)
+        && String(turn.speaker || '').trim())
+      : [];
+    if (turns.length === 0 || normalizedCues.length === 0) {
+      return normalizedCues;
+    }
+    const labelMap = buildNormalizedSpeakerLabelMap(turns);
+    return normalizedCues.map((cue) => {
+      const cueStart = cue.startMs / 1000;
+      const cueEnd = cue.endMs / 1000;
+      let bestSpeaker = null;
+      let bestOverlap = 0;
+      let bestDuration = 0;
+      for (const turn of turns) {
+        const tStart = Number(turn.start);
+        const tEnd = Number(turn.end);
+        const overlap = Math.max(0, Math.min(cueEnd, tEnd) - Math.max(cueStart, tStart));
+        const duration = Math.max(0, tEnd - tStart);
+        if (overlap > bestOverlap || (overlap > 0 && overlap === bestOverlap && duration > bestDuration)) {
+          bestSpeaker = String(turn.speaker).trim();
+          bestOverlap = overlap;
+          bestDuration = duration;
+        }
+      }
+      if (bestSpeaker) {
+        return { ...cue, speaker: labelMap.get(bestSpeaker) || 'Unknown' };
+      }
+      return { ...cue, speaker: cue.speaker || 'Unknown' };
+    });
+  }
+
+  function resolveCaptionEngineName(transcriptionResult, fallbackEngine = 'faster-whisper') {
+    const raw = String(
+      (transcriptionResult && (transcriptionResult.captionEngine || transcriptionResult.engine)) || fallbackEngine,
+    ).trim().toLowerCase();
+    if (raw === 'parakeet') return 'parakeet';
+    if (raw === 'mlx-whisper' || raw === 'lightning-whisper-mlx' || raw === 'mlx') return 'mlx-whisper';
+    return 'faster-whisper';
+  }
+
+  async function writeCaptionsSidecarFile({
+    targetPath,
+    sourceMarkdown,
+    engine,
+    timingPrecision = 'segment',
+    cues,
+  }) {
+    if (!targetPath || !sourceMarkdown || !Array.isArray(cues) || cues.length === 0) {
+      return null;
+    }
+    const normalizedCues = normalizeSubtitleCues(cues);
+    if (normalizedCues.length === 0) {
+      return null;
+    }
+    const recordingsDir = getRecordingsDir();
+    if (!isSafeRecordingsJsonPath({ filePath: targetPath, recordingsDir })) {
+      throw new Error('Captions sidecar must be a JSON file in the recordings directory.');
+    }
+    const normalizedMarkdown = String(sourceMarkdown).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    const sourceTranscriptHash = `sha256:${crypto.createHash('sha256').update(normalizedMarkdown, 'utf8').digest('hex')}`;
+    const payload = {
+      schemaVersion: CAPTIONS_SCHEMA_VERSION,
+      sourceTranscriptHash,
+      engine: resolveCaptionEngineName({ captionEngine: engine }),
+      timingPrecision: timingPrecision === 'word' ? 'word' : 'segment',
+      cues: normalizedCues,
+    };
+    const resolvedTarget = path.resolve(targetPath);
+    const jsonText = `${JSON.stringify(payload, null, 2)}\n`;
+    if (typeof fs.promises.rename === 'function') {
+      const parsed = path.parse(resolvedTarget);
+      const tempPath = path.join(parsed.dir, `.${parsed.base}.${process.pid}.${Date.now()}.tmp`);
+      await fs.promises.writeFile(tempPath, jsonText, 'utf8');
+      try {
+        await fs.promises.rename(tempPath, resolvedTarget);
+      } catch (error) {
+        await fs.promises.rm(tempPath, { force: true }).catch(() => {});
+        throw error;
+      }
+    } else {
+      await fs.promises.writeFile(resolvedTarget, jsonText, 'utf8');
+    }
+    return resolvedTarget;
+  }
+
+  async function writeAttemptCaptionsSidecar({
+    audioFile,
+    attemptId = null,
+    transcriptMarkdown = '',
+    transcriptPath = null,
+    transcriptionResult = null,
+    postPassDiarizationResult = null,
+  }) {
+    const rawCues = transcriptionResult && Array.isArray(transcriptionResult.captionCues)
+      ? transcriptionResult.captionCues
+      : null;
+    if (!rawCues || rawCues.length === 0 || !audioFile) {
+      return null;
+    }
+    let markdown = transcriptMarkdown;
+    if (!markdown && transcriptPath) {
+      markdown = await fs.promises.readFile(transcriptPath, 'utf8');
+    }
+    if (!markdown || !markdown.trim()) {
+      return null;
+    }
+    const cues = postPassDiarizationResult && Array.isArray(postPassDiarizationResult.speakerSegments)
+      ? attachSpeakerLabelsToCaptionCues(rawCues, postPassDiarizationResult.speakerSegments)
+      : rawCues;
+    const parsedAudio = path.parse(audioFile);
+    const targetPath = attemptId
+      ? path.join(parsedAudio.dir, `${parsedAudio.name}.captions-${attemptId}.json`)
+      : path.join(parsedAudio.dir, `${parsedAudio.name}.captions.json`);
+    return writeCaptionsSidecarFile({
+      targetPath,
+      sourceMarkdown: markdown,
+      engine: resolveCaptionEngineName(transcriptionResult, getTranscriberBackendName().includes('mlx') ? 'mlx-whisper' : 'faster-whisper'),
+      timingPrecision: (transcriptionResult && transcriptionResult.captionTimingPrecision) || 'segment',
+      cues,
+    });
+  }
+
+  async function cleanupAttemptCaptionsSidecar(captionsPath) {
+    if (!captionsPath || typeof fs?.promises?.rm !== 'function') {
+      return;
+    }
+    await fs.promises.rm(captionsPath, { force: true }).catch(() => {});
+  }
+
   function runPostPassDiarizationProcess({
     audioPath,
     segments,
@@ -1627,6 +1793,7 @@ function createTranscriptionService(deps) {
   async function runParakeetMeetingJob({ meetingId, request, epoch = getJobEpoch(meetingId) }) {
     const jobRequest = Object.freeze({ ...request });
     let candidatePath = null;
+    let captionsCandidatePath = null;
     let completed = false;
     let guidedDiarizationStatus = null;
     let guidedDiarizationResult = null;
@@ -1804,12 +1971,20 @@ function createTranscriptionService(deps) {
         throwIfJobBlocked(meetingId, epoch);
         upsertQueueJob(transcriptionQueueState, { meetingId, phase: QUEUE_JOB_PHASES.persisting });
         publishTranscriptionQueueState();
+        captionsCandidatePath = await writeAttemptCaptionsSidecar({
+          audioFile,
+          attemptId: jobRequest.attemptId,
+          transcriptMarkdown: childResult.transcriptContent,
+          transcriptPath: candidatePath,
+          transcriptionResult: childResult,
+        });
         const committed = await runWallClockComputeAction({
           timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
           label: 'Meeting status update', meetingId,
           terminateProcess: terminateProcessBestEffort,
           action: (registerProcess) => commitTranscriptionAttempt(meetingId, {
             attemptId: jobRequest.attemptId, candidatePath,
+            ...(captionsCandidatePath ? { captionsCandidatePath } : {}),
             result: {
               ...jobRequest,
               device: childResult.device === 'metal' ? 'mps' : childResult.device,
@@ -1820,6 +1995,7 @@ function createTranscriptionService(deps) {
           }, registerProcess),
         });
         completed = true;
+        captionsCandidatePath = null;
 
         let diarizationError = null;
         if (guidedDiarizationResult) {
@@ -1870,6 +2046,7 @@ function createTranscriptionService(deps) {
       publishTranscriptionQueueState();
       return result;
     } catch (error) {
+      await cleanupAttemptCaptionsSidecar(captionsCandidatePath);
       setActiveQueueMeeting(transcriptionQueueState, null);
       if (!completed && !isQuitCommitted() && !isTranscriptionJobDeleted(transcriptionQueueState, meetingId)
           && error?.code !== 'TRANSCRIPTION_QUIT_SKIPPED' && typeof failTranscriptionAttempt === 'function') {
@@ -1930,6 +2107,7 @@ function createTranscriptionService(deps) {
     let result = null;
     let updatedMeeting = null;
     let attemptCandidatePath = null;
+    let attemptCaptionsCandidatePath = null;
     let outputTranscriptPath = null;
     // Once durable `completed` is written, the job must never downgrade the
     // meeting to `failed` — the transcript on disk is already good.
@@ -2323,6 +2501,14 @@ function createTranscriptionService(deps) {
 
         if (jobRequest) {
           throwIfJobBlocked(meetingId, epoch);
+          attemptCaptionsCandidatePath = await writeAttemptCaptionsSidecar({
+            audioFile,
+            attemptId: jobRequest.attemptId,
+            transcriptMarkdown: transcriptionResult.transcriptContent,
+            transcriptPath: outputTranscriptPath,
+            transcriptionResult,
+            postPassDiarizationResult,
+          });
           const committed = await runWallClockComputeAction({
             timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
             label: 'Meeting status update',
@@ -2331,6 +2517,7 @@ function createTranscriptionService(deps) {
             action: (registerProcess) => commitTranscriptionAttempt(meetingId, {
               attemptId: jobRequest.attemptId,
               candidatePath: attemptCandidatePath,
+              ...(attemptCaptionsCandidatePath ? { captionsCandidatePath: attemptCaptionsCandidatePath } : {}),
               result: {
                 ...jobRequest,
                 device: (transcriptionResult.transcriptionDevice || transcriptionResult.device) === 'metal'
@@ -2348,7 +2535,20 @@ function createTranscriptionService(deps) {
           }
           updatedMeeting = committed;
           completedPersisted = true;
+          attemptCaptionsCandidatePath = null;
           throwIfJobBlocked(meetingId, epoch);
+        } else {
+          try {
+            await writeAttemptCaptionsSidecar({
+              audioFile,
+              transcriptMarkdown: transcriptionResult.transcriptContent,
+              transcriptPath: outputTranscriptPath,
+              transcriptionResult,
+              postPassDiarizationResult,
+            });
+          } catch (captionsError) {
+            console.warn('Could not persist caption timing sidecar:', captionsError && captionsError.message);
+          }
         }
 
         // Sidecar / AI-metadata persistence. Contained: the transcript is
@@ -2473,6 +2673,7 @@ function createTranscriptionService(deps) {
         meeting: result.meeting || updatedMeeting,
       };
     } catch (error) {
+      await cleanupAttemptCaptionsSidecar(attemptCaptionsCandidatePath);
       setActiveQueueMeeting(transcriptionQueueState, null);
 
       if (
@@ -3537,12 +3738,23 @@ function createTranscriptionService(deps) {
           label: 'Transcription',
           terminateProcess: terminateProcessBestEffort,
           action: async (registerProcess) => {
-            return runNormalTranscriptionWithCudaFallback({
+            const transcriptionResult = await runNormalTranscriptionWithCudaFallback({
               audioFile,
               language,
               modelSize,
               registerProcess,
             });
+            try {
+              await writeAttemptCaptionsSidecar({
+                audioFile,
+                transcriptMarkdown: transcriptionResult?.transcriptContent || '',
+                transcriptPath: transcriptionResult?.output_file || null,
+                transcriptionResult,
+              });
+            } catch (captionsError) {
+              console.warn('Could not persist caption timing sidecar:', captionsError && captionsError.message);
+            }
+            return transcriptionResult;
           },
         });
       });
@@ -3605,7 +3817,7 @@ function createTranscriptionService(deps) {
           terminateProcess: terminateProcessBestEffort,
           action: async (registerProcess) => {
             const admitted = await requireDiarizationComputeAdmission(guidedEngine, { registerProcess });
-            return runGuidedTranscriptionProcess({
+            const guidedResult = await runGuidedTranscriptionProcess({
             spawnProcess: spawnTrackedPython,
             args: buildManagedDiarizationGuidedTranscriptionArgs({
               audioPath: resolvedAudioPath,
@@ -3640,6 +3852,17 @@ function createTranscriptionService(deps) {
               }
             },
             });
+            try {
+              await writeAttemptCaptionsSidecar({
+                audioFile: resolvedAudioPath,
+                transcriptMarkdown: guidedResult?.transcriptContent || '',
+                transcriptPath: guidedResult?.output_file || finalTranscriptPath,
+                transcriptionResult: guidedResult,
+              });
+            } catch (captionsError) {
+              console.warn('Could not persist caption timing sidecar:', captionsError && captionsError.message);
+            }
+            return guidedResult;
           },
         });
       });

@@ -1,6 +1,6 @@
 # Backend Development Notes
 
-The backend is a set of Python 3.11 modules spawned by the Electron main process. It records audio, enumerates devices, manages meeting metadata, runs transcription, and executes optional local AI add-ons.
+The backend is a set of Python 3.11 modules spawned by the Electron main process. It records audio, enumerates devices, manages recording metadata (retaining legacy `meeting` module/file/schema names until a dedicated refactor), runs transcription, and executes optional local AI add-ons.
 
 For cross-process invariants (recorder stdout JSON, compute queue, AI add-ons, packaging), use root `AGENTS.md`. Electron spawns these modules from Pattern C services under `src/main/` (wired by `src/main.js`).
 
@@ -10,16 +10,19 @@ For cross-process invariants (recorder stdout JSON, compute queue, AI add-ons, p
 
 - `backend/device_manager.py` — enumerate and validate audio devices (CLI/JSON contract unchanged).
 - `backend/check_permissions.py` — macOS permission checks.
-- `backend/meeting_manager.py` — meeting history CLI/orchestration (`python -m meeting_manager`); public methods remain instance-method monkeypatch seams over `backend/meetings/`.
+- `backend/meeting_manager.py` — recording history CLI/orchestration (`python -m meeting_manager`); public methods remain instance-method monkeypatch seams over `backend/meetings/`.
 - `backend/audio/windows_recorder.py` — Windows microphone plus WASAPI loopback recording.
 - `backend/audio/macos_recorder.py` — macOS microphone plus desktop/system audio recording.
 - `backend/audio/linux_recorder.py` — Linux microphone plus Pulse/PipeWire monitor recording.
-- `backend/transcription/faster_whisper_transcriber.py` — Windows and Linux Whisper transcription (Linux Core Beta is CPU-only).
-- `backend/transcription/mlx_whisper_transcriber.py` — Apple Silicon MLX transcription.
+- `backend/transcription/faster_whisper_transcriber.py` — Windows and Linux Whisper transcription (Linux defaults to CPU; optional managed CUDA 12).
+- `backend/transcription/mlx_whisper_transcriber.py` — Apple Silicon MLX Whisper transcription.
+- `backend/transcription/parakeet_transcriber.py` — optional English-only Parakeet v2 transcription (Windows CUDA, Linux CUDA, macOS Metal).
 - `backend/diarization/guided_transcription.py` — diarization-first speaker-guided transcription.
 - `backend/diarization/diarization_pipeline.py` — engine dispatch (`--engine speakrs|pyannote`), pyannote runner, and speaker merge.
-- `backend/diarization/speakrs_runner.py` — token-free Speakrs CLI wrapper (Windows CUDA / macOS CoreML; not shipped on Linux Core Beta).
-- `backend/summaries/summary_runner.py` — local summary generation and sidecar output.
+- `backend/diarization/speakrs_runner.py` — token-free Speakrs CLI wrapper (Windows CUDA, macOS CoreML, Linux CUDA).
+- `backend/summaries/summary_runner.py` — local summary generation and sidecar output (Summaries & Chat add-on).
+- `backend/search/history_index.py` — disposable SQLite FTS5 search index over local recordings, transcripts, and summaries.
+- `backend/history_qa/qa_runner.py` — local Chat Q&A runner with citation verification.
 
 ### Shared / extracted helpers (post-refactor)
 

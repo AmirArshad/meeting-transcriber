@@ -9,6 +9,7 @@
   const ACTIONS = [
     'goto-record',
     'goto-history',
+    'goto-chat',
     'goto-settings',
     'start-recording',
     'stop-recording',
@@ -23,11 +24,13 @@
     const mod = mac ? 'Command' : 'Ctrl';
     switch (action) {
       case 'goto-record':
-        return `${mod}+Shift+1`;
+        return `${mod}+${mac ? '' : 'Shift+'}1`;
       case 'goto-history':
-        return `${mod}+Shift+2`;
+        return `${mod}+${mac ? '' : 'Shift+'}2`;
+      case 'goto-chat':
+        return `${mod}+${mac ? '' : 'Shift+'}3`;
       case 'goto-settings':
-        return `${mod}+Shift+3`;
+        return `${mod}+${mac ? '' : 'Shift+'}4`;
       case 'start-recording':
         return `${mod}+Shift+R`;
       case 'stop-recording':
@@ -42,11 +45,13 @@
     const mod = mac ? 'Meta' : 'Control';
     switch (action) {
       case 'goto-record':
-        return `${mod}+Shift+1`;
+        return `${mod}+${mac ? '' : 'Shift+'}1`;
       case 'goto-history':
-        return `${mod}+Shift+2`;
+        return `${mod}+${mac ? '' : 'Shift+'}2`;
+      case 'goto-chat':
+        return `${mod}+${mac ? '' : 'Shift+'}3`;
       case 'goto-settings':
-        return `${mod}+Shift+3`;
+        return `${mod}+${mac ? '' : 'Shift+'}4`;
       case 'start-recording':
         return `${mod}+Shift+R`;
       case 'stop-recording':
@@ -58,8 +63,9 @@
 
   function getKeyboardShortcutBindings({ platform } = {}) {
     return [
-      { action: 'goto-record', label: 'Record page', display: getKeyboardShortcutDisplay('goto-record', { platform }) },
+      { action: 'goto-record', label: 'Record', display: getKeyboardShortcutDisplay('goto-record', { platform }) },
       { action: 'goto-history', label: 'History', display: getKeyboardShortcutDisplay('goto-history', { platform }) },
+      { action: 'goto-chat', label: 'Chat', display: getKeyboardShortcutDisplay('goto-chat', { platform }) },
       { action: 'goto-settings', label: 'Settings', display: getKeyboardShortcutDisplay('goto-settings', { platform }) },
       { action: 'start-recording', label: 'Start recording (Mic + Desktop)', display: getKeyboardShortcutDisplay('start-recording', { platform }) },
       { action: 'stop-recording', label: 'Stop and save recording', display: getKeyboardShortcutDisplay('stop-recording', { platform }) },
@@ -81,6 +87,9 @@
     if (key === '#' || key === '3') {
       return 'Digit3';
     }
+    if (key === '$' || key === '4') {
+      return 'Digit4';
+    }
     if (lower === 'r') {
       return 'KeyR';
     }
@@ -90,13 +99,13 @@
     return key;
   }
 
-  function hasExactShortcutModifiers(event, { platform } = {}) {
+  function hasExactShortcutModifiers(event, { platform, navigation = false } = {}) {
     const mac = isMacPlatform(platform);
     const ctrl = Boolean(event && event.ctrlKey);
     const meta = Boolean(event && event.metaKey);
     const shift = Boolean(event && event.shiftKey);
     const alt = Boolean(event && event.altKey);
-    if (!shift || alt) {
+    if (alt || (mac && navigation ? shift : !shift)) {
       return false;
     }
     if (mac) {
@@ -137,10 +146,11 @@
     if (isShortcutEventRejected(event)) {
       return null;
     }
-    if (!hasExactShortcutModifiers(event, { platform })) {
+    const code = normalizeShortcutKey(event);
+    const navigation = /^(Digit|Numpad)[1-4]$/.test(code);
+    if (!hasExactShortcutModifiers(event, { platform, navigation })) {
       return null;
     }
-    const code = normalizeShortcutKey(event);
     switch (code) {
       case 'Digit1':
       case 'Numpad1':
@@ -150,6 +160,9 @@
         return 'goto-history';
       case 'Digit3':
       case 'Numpad3':
+        return 'goto-chat';
+      case 'Digit4':
+      case 'Numpad4':
         return 'goto-settings';
       case 'KeyR':
         return 'start-recording';

@@ -18,6 +18,9 @@ test('THIRD_PARTY_NOTICES.md exists and documents key optional models', () => {
   assert.match(contents, /speakrs-cli/i);
   assert.match(contents, /avencera\/speakrs/i);
   assert.match(contents, /Qwen/i);
+  assert.match(contents, /parakeet-tdt-0\.6b-v2/i);
+  assert.match(contents, /marked/i);
+  assert.match(contents, /dompurify/i);
   assert.match(contents, /ffmpeg/i);
   assert.match(contents, /GPL/i);
 });
@@ -47,9 +50,11 @@ test('getLegalNoticesPath falls back to repository root in development', () => {
   assert.equal(resolved, path.join(repoRoot, 'THIRD_PARTY_NOTICES.md'));
 });
 
-test('Settings About credits name Speakrs and pyannote', () => {
+test('Settings About credits name Speakrs, pyannote, and Parakeet', () => {
   const aboutHtml = fs.readFileSync(path.join(repoRoot, 'src', 'renderer', 'index.html'), 'utf8');
   assert.match(aboutHtml, /class="about-credits"/);
+  assert.match(aboutHtml, /NVIDIA Parakeet/);
+  assert.match(aboutHtml, /parakeet-tdt-0\.6b-v2/);
   assert.match(aboutHtml, /https:\/\/github\.com\/avencera\/speakrs/);
   assert.match(aboutHtml, />Speakrs</);
   assert.match(aboutHtml, /Apache-2\.0/);

@@ -4,7 +4,7 @@ Current user-facing documentation lives here.
 
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [Transcription guide](TRANSCRIPTION_GUIDE.md)
-- [Meeting transcription and history](MEETING_TRANSCRIPTION.md)
+- [Recording history and transcript storage](MEETING_TRANSCRIPTION.md)
 - [macOS installation](MACOS_INSTALLATION.md)
 - [macOS feature compatibility](MACOS_FEATURE_COMPATIBILITY.md)
 - [Linux experimental beta](LINUX_EXPERIMENTAL.md)

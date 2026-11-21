@@ -44,7 +44,7 @@ test('prompt visible only when available and promptEligible', () => {
   const shown = getRecoveryPromptView(oneCandidate, formatBytes);
   assert.equal(shown.visible, true);
   assert.equal(shown.title, 'Finish an interrupted recording?');
-  assert.match(shown.body, /a recording/);
+  assert.match(shown.body, /this recording/);
   assert.match(shown.detail, /Interrupted recordings: 1/);
   assert.match(shown.detail, /45 MB/);
   assert.equal(shown.primaryLabel, 'Recover Now');
@@ -181,7 +181,7 @@ test('error banner partial-failure copy distinguishes finished vs remaining', ()
     lastBatchSize: 2,
     lastSuccessCount: 1,
   }, 'idle', formatBytes);
-  assert.match(view.text, /1 of 2 recordings was finished/);
+  assert.match(view.text, /1 of 2 recordings recovered/);
   assert.match(view.text, /1 still needs another try/);
   assert.match(view.text, /kept safe/);
 });

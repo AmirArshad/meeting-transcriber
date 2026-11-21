@@ -109,6 +109,34 @@ app.whenReady().then(async () => {
       const immediateOpenFocus = document.activeElement.id;
       return { historyOpened, opened, name, focus, inert, resultActionsHidden, resultTitle, resultFocus, activeStatus, readyStatus, staleStatus, call, closed, restored, draftPreserved, returnedToEdit, finalFocus, diskMessage, diskRetry, retryResult, placeholderText, hasActivity, previousText, cancelChip, rowFocus, failedRetryVisible, failedText, readyText, readyRetryHidden, focusAfterDismiss, pickerMessage, immediateOpenId, immediateOpenFocus };
     })()`, true);
+    win.setContentSize(420, 360);
+    win.webContents.enableDeviceEmulation({
+      screenPosition: 'desktop',
+      screenSize: { width: 420, height: 360 },
+      viewSize: { width: 420, height: 360 },
+    });
+    result.shortWindowLayout = await win.webContents.executeJavaScript(`(async () => {
+      document.getElementById('import-audio-button').click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const dialog = document.querySelector('#import-audio-modal .modal-content');
+      document.getElementById('import-audio-name').textContent = 'QuarterlyPlanningSession'.repeat(10) + '.wav';
+      dialog.getAnimations().forEach(animation => animation.finish());
+      const footer = dialog.querySelector('.modal-actions');
+      const formBody = dialog.querySelector('.modal-body');
+      const model = document.getElementById('import-audio-model');
+      const initialFooterTop = footer.getBoundingClientRect().top;
+      formBody.scrollTop = formBody.scrollHeight;
+      const dialogBounds = dialog.getBoundingClientRect();
+      const footerBounds = footer.getBoundingClientRect();
+      return {
+        dialogFits: dialogBounds.top >= 0 && dialogBounds.bottom <= innerHeight,
+        bodyScrolls: formBody.scrollHeight > formBody.clientHeight && formBody.scrollTop > 0,
+        bodyFitsWidth: formBody.scrollWidth <= formBody.clientWidth,
+        footerVisible: footerBounds.bottom <= dialogBounds.bottom &&
+          footerBounds.top > model.getBoundingClientRect().bottom,
+        footerStaysPut: footerBounds.top === initialFooterTop
+      };
+    })()`, true);
   } catch (error) { result = { error: error.stack || String(error) }; }
   process.stdout.write('IMPORT_RENDERER_RESULT ' + JSON.stringify(result) + '\n');
   app.exit(result.error ? 1 : 0);

@@ -13,6 +13,16 @@ const {
 
 
 test('BUILD_DOWNLOADS uses pinned direct download URLs', () => {
+  assert.equal(
+    BUILD_DOWNLOADS.pythonWin.url,
+    'https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18+20261110-x86_64-pc-windows-msvc-install_only.tar.gz',
+  );
+  assert.equal(BUILD_DOWNLOADS.pythonWin.sha256, '5ca7e23bbcc8933a75f4ae9c3a5e5d1ffae5fd143aec9a9d77cf5124cc6e0eef');
+  assert.equal(
+    BUILD_DOWNLOADS.pythonMac.url,
+    'https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18+20261110-aarch64-apple-darwin-install_only.tar.gz',
+  );
+  assert.equal(BUILD_DOWNLOADS.pythonMac.sha256, '73f1ed14486aa278d331e95f7d6d452f5cfb69d90b418e26e62fd4846d53557d');
   assert.equal(BUILD_DOWNLOADS.ffmpegWin.url, 'https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-essentials_build.zip');
   assert.equal(BUILD_DOWNLOADS.ffmpegWin.sha256, 'db580001caa24ac104c8cb856cd113a87b0a443f7bdf47d8c12b1d740584a2ec');
   assert.equal(
@@ -51,7 +61,8 @@ test('BUILD_DOWNLOADS does not pin speakrs or ort compile-time downloads', () =>
 
 
 test('getBuildDownload returns manifest entries and rejects unknown keys', () => {
-  assert.equal(getBuildDownload('pythonWin').label, 'Windows embedded Python 3.11.9');
+  assert.equal(getBuildDownload('pythonWin').label, 'Windows standalone Python 3.11.18+20261110');
+  assert.equal(getBuildDownload('pythonMac').label, 'macOS standalone Python 3.11.18+20261110');
   assert.throws(() => getBuildDownload('missing'), /Unknown build download/);
 });
 

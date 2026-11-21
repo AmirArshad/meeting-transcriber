@@ -1,7 +1,7 @@
 {
   "name": "avanevis",
-  "version": "2.12.0",
-  "description": "AvaNevis private meeting recorder and local AI transcriber",
+  "version": "3.0.0",
+  "description": "Local audio recorder and transcriber for microphone, desktop audio, and audio files",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -18,11 +18,12 @@
     "prepare-build": "npm run clean && node build/prepare-resources.js",
     "legal:sbom": "node scripts/generate-python-sbom.js",
     "legal:release-assets": "node scripts/stage-release-legal-assets.js",
-    "build": "npm run prepare-build && electron-builder build --win --publish never",
-    "build:dir": "npm run prepare-build && electron-builder build --win --dir",
-    "build:mac": "node scripts/check-mac-signing-identity.js && npm run prepare-build && electron-builder build --mac --publish never",
-    "build:mac:dir": "npm run prepare-build && electron-builder build --mac --dir",
+    "build": "node scripts/check-win-signing-config.js --preflight && npm run prepare-build && node scripts/check-win-signing-config.js --run -- --win --publish never",
+    "build:dir": "node scripts/check-win-signing-config.js --preflight && npm run prepare-build && node scripts/check-win-signing-config.js --run -- --win --dir",
+    "build:mac": "node scripts/check-mac-signing-identity.js --preflight && npm run prepare-build && node scripts/check-mac-signing-identity.js --run -- --mac --publish never",
+    "build:mac:dir": "node scripts/check-mac-signing-identity.js --preflight && npm run prepare-build && node scripts/check-mac-signing-identity.js --run -- --mac --dir",
     "verify:mac:packaged": "bash scripts/verify-macos-packaged-app.sh",
+    "verify:mac:installer": "bash scripts/verify-macos-installer.sh",
     "build:linux": "npm run prepare-build && electron-builder build --linux --x64 --publish never",
     "build:linux:dir": "npm run prepare-build && electron-builder build --linux dir --x64 --publish never",
     "verify:linux:packaged": "node scripts/verify-linux-packaging.js"
@@ -30,15 +31,19 @@
   "keywords": [
     "transcription",
     "whisper",
-    "meeting",
-    "audio"
+    "parakeet",
+    "audio",
+    "recorder"
   ],
   "author": "AvaNevis",
   "homepage": "https://github.com/AmirArshad/meeting-transcriber",
   "desktopName": "avanevis",
   "license": "MIT",
   "dependencies": {
-    "adm-zip": "0.6.1"
+    "adm-zip": "0.6.1",
+    "dompurify": "3.4.18",
+    "electron-updater": "6.8.11",
+    "marked": "18.2.1"
   },
   "devDependencies": {
     "electron": "46.0.0-alpha.11",
@@ -61,6 +66,15 @@
   "build": {
     "appId": "com.avanevis.app",
     "productName": "AvaNevis",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "AmirArshad",
+        "repo": "meeting-transcriber",
+        "releaseType": "release"
+      }
+    ],
+    "afterPack": "build/after-pack.js",
     "win": {
       "target": [
         {
@@ -70,7 +84,14 @@
           ]
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "rfc3161TimeStampServer": "http://timestamp.digicert.com",
+        "timeStampServer": "http://timestamp.digicert.com"
+      }
     },
     "linux": {
       "target": [
@@ -97,12 +118,12 @@
       "category": "AudioVideo",
       "executableName": "avanevis",
       "syncDesktopName": true,
-      "synopsis": "Private meeting recorder and local AI transcriber",
+      "synopsis": "Local audio recorder and transcriber for microphone and desktop audio",
       "maintainer": "AvaNevis <AmirArshad@users.noreply.github.com>",
       "desktop": {
         "entry": {
           "Name": "AvaNevis",
-          "Comment": "Private meeting recorder and local AI transcriber",
+          "Comment": "Local audio recorder and transcriber for microphone and desktop audio",
           "Categories": "AudioVideo;Audio;Office;Utility;"
         }
       },
@@ -156,9 +177,16 @@
     },
     "mac": {
       "identity": "-",
+      "sign": "build/mac-sign.js",
       "target": [
         {
           "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
           "arch": [
             "arm64"
           ]
@@ -178,12 +206,12 @@
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
         "LSMinimumSystemVersion": "15.0",
-        "CFBundleDisplayName": "AvaNevis Meeting Recorder & Transcriber",
-        "NSMicrophoneUsageDescription": "AvaNevis needs microphone access to record your voice during meetings.",
-        "NSAudioCaptureUsageDescription": "AvaNevis needs system audio access to capture desktop audio locally for meeting transcription.",
+        "CFBundleDisplayName": "AvaNevis Audio Recorder & Transcriber",
+        "NSMicrophoneUsageDescription": "AvaNevis needs microphone access to record your voice.",
+        "NSAudioCaptureUsageDescription": "AvaNevis needs system audio access to capture desktop audio locally for transcription.",
         "NSAppleMusicUsageDescription": "AvaNevis does not access your music library.",
         "NSCameraUsageDescription": "AvaNevis does not use your camera.",
-        "NSScreenCaptureUsageDescription": "AvaNevis needs screen recording permission to capture system audio (desktop audio) using ScreenCaptureKit. No screen video is recorded, only audio."
+        "NSScreenCaptureUsageDescription": "AvaNevis needs screen recording permission to capture desktop audio using ScreenCaptureKit. Only audio is recorded; no screen video is saved."
       }
     },
     "dmg": {
@@ -209,7 +237,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "AvaNevis Meeting Recorder & Transcriber",
+      "shortcutName": "AvaNevis Audio Recorder & Transcriber",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",

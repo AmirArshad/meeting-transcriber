@@ -1,7 +1,7 @@
 (function attachTranscriptionActivityHelpers(root) {
   const SESSION_READY_CAP = 5;
   const SOFT_QUEUE_DEPTH_WARNING = 3;
-  const DEFAULT_MEETING_TITLE_RE = /^Meeting \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
+  const DEFAULT_MEETING_TITLE_RE = /^(?:Meeting|Recording) \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 
   const ACTIVITY_CHIP_LABELS = Object.freeze({
     queued: 'Queued',
@@ -244,7 +244,7 @@
     }
     const status = String(job.status || '');
     const chip = getActivityChipLabel(job);
-    const title = String(job.title || 'Untitled meeting').trim() || 'Untitled meeting';
+    const title = String(job.title || 'Untitled recording').trim() || 'Untitled recording';
     const durationLabel = formatDurationLabel(job.durationSeconds);
     const actions = ['rename', 'delete'];
     if (status === 'queued' || status === 'active') {
@@ -285,7 +285,7 @@
       : ['rename', 'delete', 'cancel', 'open'];
     return {
       meetingId: String(meeting.id),
-      title: String(meeting.title || 'Untitled meeting').trim() || 'Untitled meeting',
+      title: String(meeting.title || 'Untitled recording').trim() || 'Untitled recording',
       durationLabel: formatDurationLabel(resolveMeetingDurationSeconds(meeting)),
       chip,
       status: status === 'failed' ? 'failed' : 'queued',

@@ -3,14 +3,14 @@ const fs = require('fs');
 
 const BUILD_DOWNLOADS = Object.freeze({
   pythonWin: Object.freeze({
-    label: 'Windows embedded Python 3.11.9',
-    url: 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-embed-amd64.zip',
-    sha256: '009d6bf7e3b2ddca3d784fa09f90fe54336d5b60f0e0f305c37f400bf83cfd3b',
+    label: 'Windows standalone Python 3.11.18+20261110',
+    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18+20261110-x86_64-pc-windows-msvc-install_only.tar.gz',
+    sha256: '5ca7e23bbcc8933a75f4ae9c3a5e5d1ffae5fd143aec9a9d77cf5124cc6e0eef',
   }),
   pythonMac: Object.freeze({
-    label: 'macOS standalone Python 3.11.17+20261003',
-    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.11.17+20261003-aarch64-apple-darwin-install_only.tar.gz',
-    sha256: '3663b71c18364eccfbad74c4f21f9f6149e40b07329cd776287410cc1da5d612',
+    label: 'macOS standalone Python 3.11.18+20261110',
+    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18+20261110-aarch64-apple-darwin-install_only.tar.gz',
+    sha256: '73f1ed14486aa278d331e95f7d6d452f5cfb69d90b418e26e62fd4846d53557d',
   }),
   pythonLinux: Object.freeze({
     label: 'Linux standalone Python 3.11.18+20261110',

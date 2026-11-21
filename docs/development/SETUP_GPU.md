@@ -6,7 +6,7 @@ This guide helps you set up GPU acceleration for faster transcription using AvaN
 
 - **NVIDIA GPU** with CUDA support (GTX 10xx series or newer recommended)
 - **A recent NVIDIA driver** visible to `nvidia-smi`
-- **Windows 10/11** for AvaNevis packaged CUDA transcription acceleration
+- **Windows 10/11** (or optional managed CUDA 12 on supported x86_64 Linux) for AvaNevis CUDA transcription acceleration
 
 ## Quick Setup
 
@@ -86,33 +86,21 @@ If you see "Using CPU (safer default)" in the logs but you have CUDA installed:
 AvaNevis currently ships transcription dependencies validated against the CUDA 12 runtime profile (`nvidia-cublas-cu12` + `nvidia-cudnn-cu12`).
 If your machine has only newer runtime DLLs (for example `cublas64_13.dll`) and not CUDA 12 runtime DLLs, AvaNevis will detect this mismatch and safely fall back to CPU transcription.
 
-Use the in-app **Repair GPU Runtime** action to add the CUDA 12 libraries AvaNevis needs. This does not remove newer CUDA runtime libraries used by other applications.
+Use the in-app **Repair GPU runtime** action to add the CUDA 12 libraries AvaNevis needs. This does not remove newer CUDA runtime libraries used by other applications.
 
-Speaker identification is separate: it uses managed PyTorch CUDA dependencies under Electron `userData` only after explicit speaker setup.
+Speaker identification and Summaries & Chat are separate: Speakrs uses native CUDA kernels (and Pyannote on Windows uses managed PyTorch CUDA dependencies under Electron `userData`) only after explicit add-on setup.
 
-## Performance Comparison
+## Model & Engine Choices
 
-With GPU acceleration, transcription is **4-5x faster**:
-
-| Model  | CPU (approx) | GPU (approx) | Quality        |
-|--------|--------------|--------------|----------------|
-| tiny   | 0.5x realtime| 2x realtime  | Basic          |
-| base   | 0.3x realtime| 1.5x realtime| Good           |
-| small  | 0.2x realtime| 1x realtime  | Better         |
-| medium | 0.1x realtime| 0.5x realtime| Excellent      |
-| large  | 0.05x realtime| 0.3x realtime| Best           |
-
-**Example:** A 10-minute recording:
-- **CPU (base model):** ~30 minutes to transcribe
-- **GPU (base model):** ~6 minutes to transcribe
-- **GPU (medium model):** ~20 minutes to transcribe (but much better accuracy!)
+- **Whisper Small** (default): good balance of speed and accuracy across 11 languages; works on CPU and GPU.
+- **Whisper Medium**: more accurate on noisy audio or overlapping speech; benefits noticeably from GPU acceleration.
+- **Whisper Large v3**: highest Whisper accuracy across 11 languages; requires more VRAM/RAM and disk space.
+- **Parakeet v2** (optional, English only): requires explicit setup and a supported GPU (Windows CUDA, Linux managed CUDA 12, or Apple Silicon Metal); no CPU fallback.
 
 ## Recommended Setup
 
-For best experience:
-- **GPU users:** Use `medium` model with CUDA
-- **CPU users:** Use `base` or `small` model
-- **Fast preview:** Use `tiny` model
+- **GPU users:** `small` or `medium` Whisper with CUDA (or Parakeet v2 for English-only audio)
+- **CPU users:** `small` Whisper model
 
 ## Still Having Issues?
 

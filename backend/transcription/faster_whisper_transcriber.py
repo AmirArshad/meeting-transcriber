@@ -12,6 +12,12 @@ from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 from .base_transcriber import BaseTranscriber
+from .captions import (
+    build_caption_cues,
+    build_captions_payload,
+    hash_transcript_text,
+    write_captions_sidecar_atomic,
+)
 from .formatting import format_timestamp, merge_segments, save_transcript_markdown
 from .nvidia_dll_loader import add_python_nvidia_bin_dirs_to_path
 from common.hf_runtime import hugging_face_offline_mode
@@ -429,31 +435,75 @@ class TranscriberService(BaseTranscriber):
         segments, info = self.model.transcribe(
             audio_path,
             language=self.language,
+            word_timestamps=True,
             beam_size=5,  # Good balance of accuracy and speed
             vad_filter=True,  # Voice activity detection - removes silence
             vad_parameters=dict(min_silence_duration_ms=500)  # Remove pauses > 500ms
         )
 
-        segments_list = []
+        raw_segments: List[Dict[str, Any]] = []
         full_text = []
 
         print(f"Processing segments...", file=sys.stderr)
         for segment in segments:
-            segments_list.append({
+            text = segment.text.strip()
+            seg_dict: Dict[str, Any] = {
                 'start': segment.start,
                 'end': segment.end,
-                'text': segment.text.strip()
-            })
-            full_text.append(segment.text.strip())
+                'text': text,
+            }
+            raw_words = getattr(segment, 'words', None)
+            if isinstance(raw_words, (list, tuple)) and raw_words:
+                raw_word_texts = [
+                    str(
+                        word.get('word') if isinstance(word, dict) and word.get('word') is not None
+                        else (word.get('text', '') if isinstance(word, dict) else (
+                            getattr(word, 'word', None) if getattr(word, 'word', None) is not None else getattr(word, 'text', '')
+                        )) or ''
+                    )
+                    for word in raw_words
+                ]
+                uses_leading_space_tokens = any(w[:1].isspace() for w in raw_word_texts[1:])
+                seg_words = []
+                for idx, word in enumerate(raw_words):
+                    raw_w = raw_word_texts[idx]
+                    if isinstance(word, dict):
+                        w_start = word.get('start', segment.start)
+                        w_end = word.get('end', w_start)
+                    else:
+                        w_start = getattr(word, 'start', segment.start)
+                        w_end = getattr(word, 'end', w_start)
+                    if raw_w.strip():
+                        seg_words.append({
+                            'start': float(w_start or 0.0),
+                            'end': float(w_end or 0.0),
+                            'text': raw_w.strip(),
+                            'joinNoSpace': idx > 0 and uses_leading_space_tokens and raw_w == raw_w.lstrip(),
+                        })
+                if seg_words:
+                    seg_dict['words'] = seg_words
+            raw_segments.append(seg_dict)
+            full_text.append(text)
+
+        caption_cues, caption_precision = build_caption_cues(
+            raw_segments,
+            audio_duration=getattr(info, 'duration', None),
+        )
 
         # Merge segments into larger chunks for better readability
         # Target: ~20 seconds per chunk (good for long meetings)
-        print(f"Merging {len(segments_list)} segments into larger chunks...", file=sys.stderr)
-        segments_list = self._merge_segments(segments_list, target_duration=20.0)
+        print(f"Merging {len(raw_segments)} segments into larger chunks...", file=sys.stderr)
+        segments_list = self._merge_segments(
+            [{'start': s['start'], 'end': s['end'], 'text': s['text']} for s in raw_segments],
+            target_duration=20.0,
+        )
 
         return {
             'text': ' '.join(full_text),
             'segments': segments_list,
+            'captionCues': caption_cues,
+            'captionEngine': 'faster-whisper',
+            'captionTimingPrecision': caption_precision,
             'language': info.language,
             'duration': info.duration,
             'output_file': None,
@@ -463,7 +513,8 @@ class TranscriberService(BaseTranscriber):
         self,
         audio_path: str,
         output_path: Optional[str] = None,
-        save_markdown: bool = True
+        save_markdown: bool = True,
+        captions_output_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Transcribe an audio file to text.
@@ -529,6 +580,16 @@ class TranscriberService(BaseTranscriber):
 
             self._save_markdown(results, audio_path, output_path)
             results['output_file'] = output_path
+            if captions_output_path:
+                markdown_text = Path(output_path).read_text(encoding='utf-8')
+                payload = build_captions_payload(
+                    source_transcript_hash=hash_transcript_text(markdown_text),
+                    engine=results.get('captionEngine') or 'faster-whisper',
+                    cues=results.get('captionCues') or [],
+                    timing_precision=results.get('captionTimingPrecision') or 'segment',
+                )
+                write_captions_sidecar_atomic(captions_output_path, payload)
+                results['captions_file'] = captions_output_path
 
         # Add audio path and resolved device to results for meeting manager / Electron
         results['audioPath'] = str(audio_path)
@@ -600,6 +661,7 @@ def main():
     parser.add_argument("audio_file", nargs="?", help="Path to audio file")
     parser.add_argument("--file", dest="file_arg", help="Path to audio file (alternative)")
     parser.add_argument("--output", help="Optional Markdown destination")
+    parser.add_argument("--captions-output", help="Optional captions JSON sidecar destination")
     parser.add_argument("--language", default="en", help="Language code (default: en)")
     parser.add_argument("--model", default="base", help="Model size (default: base)")
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"], help="Inference device (default: auto)")
@@ -646,7 +708,11 @@ def main():
         transcriber.load_model()
 
         # Transcribe
-        results = transcriber.transcribe_file(audio_file, output_path=args.output)
+        results = transcriber.transcribe_file(
+            audio_file,
+            output_path=args.output,
+            captions_output_path=args.captions_output,
+        )
 
         if args.json:
             # Output JSON to stdout for integration

@@ -49,6 +49,7 @@ const EXPECTED_RENDERER_GLOBALS = [
   'recoveryUiHelpers',
   'updateNotificationHelpers',
   'historyDetailHelpers',
+  'historySearchHelpers',
   'formatters',
   'summaryUiHelpers',
   'summaryLanguageHelpers',
@@ -60,10 +61,18 @@ const EXPECTED_RENDERER_GLOBALS = [
   'canvasHelpers',
   'keyboardShortcutHelpers',
   'transcriptionEngineHelpers',
+  'subtitleExportHelpers',
+  'markdownRenderHelpers',
+  'chatHelpers',
   // v2.10 Slice A shared policy (src/transcription-policy.js, UMD) loads
   // before app.js so Record UI + main use one curated source of truth.
   'transcriptionPolicy',
 ];
+
+const VENDOR_SCRIPT_SRCS = new Set([
+  '../../node_modules/marked/lib/marked.umd.js',
+  '../../node_modules/dompurify/dist/purify.min.js',
+]);
 
 const EXPECTED_SCRIPT_ORDER = [
   'recording-state-helpers.js',
@@ -71,6 +80,7 @@ const EXPECTED_SCRIPT_ORDER = [
   'recovery-ui-helpers.js',
   'update-notification-helpers.js',
   'history-detail-helpers.js',
+  'history-search-helpers.js',
   'formatters.js',
   'summary-ui-helpers.js',
   'summary-language-helpers.js',
@@ -82,6 +92,11 @@ const EXPECTED_SCRIPT_ORDER = [
   'canvas-helpers.js',
   'keyboard-shortcut-helpers.js',
   'transcription-engine-helpers.js',
+  'subtitle-export-helpers.js',
+  '../../node_modules/marked/lib/marked.umd.js',
+  '../../node_modules/dompurify/dist/purify.min.js',
+  'markdown-render-helpers.js',
+  'chat-helpers.js',
   '../transcription-policy.js',
   'app.js',
 ];
@@ -226,7 +241,12 @@ test('index.html loads renderer helpers before app.js with unique globals', () =
   const helperFiles = EXPECTED_SCRIPT_ORDER.slice(0, -1);
   const globals = [];
   for (const fileName of helperFiles) {
-    const source = readUtf8(path.join(ROOT, 'src', 'renderer', fileName));
+    const resolvedPath = path.join(ROOT, 'src', 'renderer', fileName);
+    if (VENDOR_SCRIPT_SRCS.has(fileName)) {
+      assert.equal(require('node:fs').existsSync(resolvedPath), true, `missing bundled vendor script ${fileName}`);
+      continue;
+    }
+    const source = readUtf8(resolvedPath);
     const match = source.match(/root\.([A-Za-z0-9_]+)\s*=/);
     assert.ok(match, `${fileName} must attach a root.<global>`);
     globals.push(match[1]);
@@ -265,7 +285,7 @@ test('meeting detail exposes semantic header and labelled action region without 
   assert.match(html, /<header\s+class="meeting-header meeting-detail-header"/);
   assert.match(
     html,
-    /<div\s+class="meeting-detail-actions"\s+role="group"\s+aria-label="Meeting actions">[\s\S]*?id="delete-meeting"[\s\S]*?<\/div>/,
+    /<div\s+class="meeting-detail-actions"\s+role="group"\s+aria-label="Recording actions">[\s\S]*?id="delete-meeting"[\s\S]*?<\/div>/,
   );
   for (const id of [
     'meeting-title',
@@ -397,10 +417,10 @@ test('Record navigation uses the microphone treatment and Record page naming', (
   const railButtons = [...html.matchAll(/<button[^>]+class="rail-btn[^"]*"[^>]*data-tab="([^"]+)"[^>]*aria-label="([^"]+)"[^>]*>([\s\S]*?)<\/button>/g)];
   assert.ok(railButtons.length >= 3);
   assert.equal(railButtons[0][1], 'record');
-  assert.equal(railButtons[0][2], 'Record page');
+  assert.equal(railButtons[0][2], 'Record');
   assert.match(railButtons[0][3], /M12 2a3 3/);
   assert.doesNotMatch(railButtons[0][3], /circle cx="12" cy="12" r="6"/);
-  assert.match(html, /<span class="rail-tooltip">Record page<\/span>/);
+  assert.match(html, /<span class="rail-tooltip">Record<\/span>/);
 });
 
 test('keyboard shortcuts dispatch through guarded actions without new IPC', () => {
@@ -954,7 +974,7 @@ test('AI Add-on Log keeps exactly 250 entries across single and multiline append
 
 test('removal confirmations and surfaced reasons use disable/enable wording', () => {
   const appSource = readAppSource();
-  assert.match(appSource, /Disable and remove the local summary model from this device\?/);
+  assert.match(appSource, /Disable and remove the Summaries & Chat model from this device\?/);
   assert.doesNotMatch(appSource, /confirm\('Remove the local summary model/);
   const manifestSource = readUtf8(path.join(ROOT, 'src', 'ai-addon', 'manifest-store.js'));
   assert.match(manifestSource, /Disable and remove speaker identification setup, then enable it again\./);

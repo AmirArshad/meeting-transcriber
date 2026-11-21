@@ -258,3 +258,95 @@ def test_metal_loader_uses_local_config_weights_float32_and_gpu(tmp_path, monkey
     assert ('weights', str(model_dir / 'model.safetensors')) in events
     assert ('cast', core.float32) in events
     assert adapter.model is not None
+
+
+def test_parakeet_transcribe_file_writes_hash_bound_word_captions_and_speaker_runs(tmp_path):
+    from backend.transcription.captions import hash_transcript_text, validate_captions_payload
+
+    class MultiSpeakerWordAdapter:
+        device = 'cuda'
+
+        def transcribe_window(self, _pcm, *, input_start, input_end):
+            if input_start < 1.0:
+                return [
+                    {'start': 0.2, 'end': 0.6, 'text': 'Hello'},
+                    {'start': 0.7, 'end': 1.1, 'text': 'team'},
+                ]
+            return [
+                {'start': 2.6, 'end': 3.0, 'text': 'Second'},
+                {'start': 3.1, 'end': 3.6, 'text': 'turn'},
+            ]
+
+    transcriber = ParakeetTranscriber(
+        model_dir='unused',
+        adapter_id='parakeet-onnx-linux-cuda-v1',
+        ffmpeg='ffmpeg',
+        artifact_revision='pin',
+        runtime_lock_id='lock',
+    )
+    transcriber.adapter = MultiSpeakerWordAdapter()
+    transcriber._duration = lambda _: 4.5
+    transcriber._decode = lambda _audio, start, end: bytes(int((end - start) * 16000) * 2)
+
+    output_md = tmp_path / 'guided-parakeet.md'
+    captions_json = tmp_path / 'guided-parakeet.captions.json'
+    result = transcriber.transcribe_file(
+        'audio.opus',
+        str(output_md),
+        guided_turns={
+            'speakerSegments': [
+                {'start': 0.0, 'end': 1.5, 'speaker': 'SPEAKER_00'},
+                {'start': 2.4, 'end': 4.0, 'speaker': 'SPEAKER_01'},
+            ],
+            'speakerCount': 2,
+            'modelRef': 'speakrs-community1-vbx',
+            'annotationSource': 'exclusive_speaker_diarization',
+            'device': 'cuda',
+        },
+        captions_output_path=str(captions_json),
+    )
+
+    assert result['captionEngine'] == 'parakeet'
+    assert result['captionTimingPrecision'] == 'word'
+    assert result['captions_file'] == str(captions_json)
+    assert result['captionCues'] == [
+        {'startMs': 200, 'endMs': 1100, 'text': 'Hello team', 'speaker': 'Speaker 1'},
+        {'startMs': 2600, 'endMs': 3600, 'text': 'Second turn', 'speaker': 'Speaker 2'},
+    ]
+    payload = json.loads(captions_json.read_text(encoding='utf-8'))
+    expected_hash = hash_transcript_text(output_md.read_text(encoding='utf-8'))
+    assert payload['engine'] == 'parakeet'
+    assert payload['timingPrecision'] == 'word'
+    assert payload['sourceTranscriptHash'] == expected_hash
+    assert validate_captions_payload(payload, expected_transcript_hash=expected_hash, require_non_empty=True) == (True, None)
+
+
+def test_parakeet_unguided_writes_hash_bound_word_captions(tmp_path):
+    from backend.transcription.captions import hash_transcript_text, validate_captions_payload
+
+    transcriber = ParakeetTranscriber(
+        model_dir='unused',
+        adapter_id='parakeet-mlx-metal-v1',
+        ffmpeg='ffmpeg',
+        artifact_revision='pin',
+        runtime_lock_id='lock',
+    )
+    transcriber.adapter = FakeAdapter()
+    transcriber._duration = lambda _: 2.0
+    transcriber._decode = lambda _audio, start, end: bytes(int((end - start) * 16000) * 2)
+
+    output_md = tmp_path / 'unguided.md'
+    captions_json = tmp_path / 'unguided.captions.json'
+    result = transcriber.transcribe_file(
+        'audio.opus',
+        str(output_md),
+        captions_output_path=str(captions_json),
+    )
+
+    assert result['captionEngine'] == 'parakeet'
+    assert result['captionTimingPrecision'] == 'word'
+    assert result['captions_file'] == str(captions_json)
+    assert result['captionCues'] == [{'startMs': 500, 'endMs': 700, 'text': 'hello'}]
+    payload = json.loads(captions_json.read_text(encoding='utf-8'))
+    expected_hash = hash_transcript_text(output_md.read_text(encoding='utf-8'))
+    assert validate_captions_payload(payload, expected_transcript_hash=expected_hash, require_non_empty=True) == (True, None)

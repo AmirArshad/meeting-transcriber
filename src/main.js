@@ -80,7 +80,7 @@ const {
   formatQueuedTranscriptionBusyMessage,
 } = require('./main-process-helpers');
 const { signalProcessTree, signalOwnedProcessGroup } = require('./main-process/quit-lifecycle-helpers');
-const { checkForUpdates, openDownloadPage } = require('./updater');
+const { createUpdaterService } = require('./main/updater-service');
 const {
   checkAiAddonSetupStatus,
   getSummaryArtifactPath,
@@ -114,6 +114,9 @@ const {
 const { createTranscriptionService } = require('./main/transcription-service');
 const { createAudioImportService } = require('./main/audio-import-service');
 const { createSummaryService } = require('./main/summary-service');
+const { createHistorySearchService } = require('./main/history-search-service');
+const { createChatThreadStore } = require('./main/chat-thread-store');
+const { createHistoryQaService } = require('./main/history-qa-service');
 const { createRecorderService } = require('./main/recorder-service');
 const { createRecordingsMaintenanceGate } = require('./main/recordings-maintenance-gate');
 const {
@@ -171,14 +174,16 @@ let aiQuitDrainPromise = null;
 let allowImmediateQuit = false;
 /** Once a quit drain begins, reject new recording/summary work until quit completes or is canceled. */
 let quitCommitted = false;
-let pendingUpdateInfo = null;
+let pendingUpdateInstall = false;
 // Assigned at composition root after services are constructed.
 let aiAddonIpc = null;
 let gpuRuntimeService = null;
 let summaryService = null;
+let historyQaService = null;
 let transcriptionService = null;
 let recorderService = null;
 let recordingPresenceService = null;
+let updaterService = null;
 let appStartupComplete = false;
 let revealWindowWhenReady = false;
 
@@ -244,8 +249,21 @@ const {
 // deliberately stay outside the compute queue. Serialize only those resource
 // actions so neither can begin while the other is active.
 const gpuResourceActionQueue = createAsyncActionQueue();
+const enqueueGpuResourceActionWithUnload = (action) => (
+  gpuResourceActionQueue.enqueue(async () => {
+    if (historyQaService) {
+      await historyQaService.ensureUnloadedForCompetingWork('gpu_resource_action');
+    }
+    return action();
+  })
+);
 const enqueueGpuExclusiveComputeAction = (action) => (
-  enqueueAiComputeAction(() => gpuResourceActionQueue.enqueue(action))
+  enqueueAiComputeAction(() => gpuResourceActionQueue.enqueue(async () => {
+    if (historyQaService) {
+      await historyQaService.ensureUnloadedForCompetingWork('competing_compute');
+    }
+    return action();
+  }))
 );
 const createGpuExclusiveAbortableComputeAction = ({ cancelSignal, cancelMessage, onWaiting, action }) => (
   waitForAiComputeQueueIdle({ cancelSignal, cancelMessage, onWaiting })
@@ -269,11 +287,14 @@ const enqueueGpuExclusiveRemovalAction = (action) => {
   }
   // Reserve the resource queue synchronously. New compute/preload/runtime work
   // queues behind this deletion instead of racing files that are being removed.
-  return gpuResourceActionQueue.enqueue(() => {
+  return gpuResourceActionQueue.enqueue(async () => {
     if (quitCommitted) {
       const error = new Error('Cannot remove local AI files while the app is quitting.');
       error.code = 'QUIT_IN_PROGRESS';
       throw error;
+    }
+    if (historyQaService) {
+      await historyQaService.ensureUnloadedForCompetingWork('addon_removal');
     }
     return action();
   });
@@ -382,6 +403,7 @@ function assertTrustedRendererSender(event) {
 function hasInFlightAiWork() {
   return (audioImportService && audioImportService.hasActive()) || (aiAddonIpc ? aiAddonIpc.hasInFlightAiAddonSetup() : false)
     || (summaryService ? summaryService.hasActiveSummaryGeneration() : false)
+    || (historyQaService ? historyQaService.hasLoadedOrActiveWork() : false)
     || aiComputeActionQueue.hasPendingWork()
     || gpuResourceActionQueue.hasPendingWork()
     || (gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false);
@@ -405,6 +427,7 @@ function markQuitCommitted() {
 
 function clearQuitCommitted() {
   quitCommitted = false;
+  pendingUpdateInstall = false;
 }
 
 function abortInFlightAiSetup() {
@@ -420,6 +443,9 @@ function abortInFlightAiWork() {
   }
   if (summaryService) {
     summaryService.abortActiveSummaryForQuit('Summary generation was canceled because the app is quitting.');
+  }
+  if (historyQaService) {
+    historyQaService.cancelActiveQuestion('Local Q&A was canceled because the app is quitting.');
   }
 }
 
@@ -479,6 +505,9 @@ async function drainAiWorkBeforeQuit() {
   const drainTimeoutMs = metadataPhaseActive || gpuRuntimeBusy ? 90000 : 30000;
   try {
     const drains = [];
+    if (historyQaService) {
+      drains.push(historyQaService.abortActiveAndUnloadForQuit());
+    }
     if (!skipComputeDrain) {
       drains.push(aiComputeActionQueue.drain());
     }
@@ -508,11 +537,6 @@ async function drainAiWorkBeforeQuit() {
       );
     }
   }
-}
-
-function sendUpdateAvailable(updateInfo) {
-  pendingUpdateInfo = updateInfo;
-  sendToRenderer('update-available', updateInfo);
 }
 
 function openTrustedExternalUrl(url) {
@@ -582,6 +606,21 @@ function buildTranscriptionPlaceholderMarkdown({
 // ============================================================================
 const recordingsMaintenanceGate = createRecordingsMaintenanceGate();
 
+const historySearchService = createHistorySearchService({
+  app,
+  path,
+  fs,
+  pythonConfig,
+  spawnTrackedPython,
+  getBackendModuleArgs,
+  collectPythonProcessOutput,
+  assertTrustedRendererSender,
+  getRecordingsDir,
+  isQuitCommitted,
+  terminateProcessBestEffort,
+});
+historySearchService.registerIpc(ipcMain);
+
 const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
   app,
   path,
@@ -644,6 +683,9 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
       });
     }
   },
+  onMeetingsMutated: () => {
+    historySearchService.triggerBackgroundSync();
+  },
 });
 const {
   addMeetingToHistory,
@@ -655,6 +697,7 @@ const {
   isRecordingsScanInProgress,
   scanRecordings,
   listMeetings,
+  getMeeting,
 } = meetingManagerClient;
 
 const deviceIpc = registerDeviceIpc(ipcMain, {
@@ -687,6 +730,8 @@ registerFileExportIpc(ipcMain, {
   isSafeRecordingsMarkdownPath,
   isSafeRecordingsJsonPath,
   getLegalNoticesPath,
+  getMeeting,
+  assertTrustedRendererSender,
   dirname: __dirname,
 });
 
@@ -723,7 +768,7 @@ gpuRuntimeService = createGpuRuntimeService({
       : 0
   ),
   formatQueuedTranscriptionBusyMessage,
-  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
+  enqueueGpuResourceAction: enqueueGpuResourceActionWithUnload,
   isQuitCommitted,
   isLinuxCudaProfileEnabled: () => isLinuxCudaOffered({ userDataPath: app.getPath('userData') }),
 });
@@ -751,12 +796,17 @@ aiAddonIpc = createAiAddonIpc({
   resolveSpeakrsCliPath: resolveAppSpeakrsCliPath,
   getCachedCudaStatus,
   resolveCudaStatusForTranscription,
+  beforeSummaryAddonMutation: () => (
+    historyQaService
+      ? historyQaService.ensureUnloadedForCompetingWork('addon_mutation')
+      : Promise.resolve()
+  ),
   buildSummaryArgs,
   summarizeDiarizationError,
   summarizeSummaryValidationError,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   hasPendingGpuResourceWork: () => gpuResourceActionQueue.hasPendingWork(),
-  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
+  enqueueGpuResourceAction: enqueueGpuResourceActionWithUnload,
   enqueueGpuExclusiveRemovalAction,
   isQuitCommitted,
 });
@@ -790,7 +840,7 @@ transcriptionService = createTranscriptionService({
   enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
   createAbortableComputeAction: createGpuExclusiveAbortableComputeAction,
   waitForAiComputeQueueIdle,
-  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
+  enqueueGpuResourceAction: enqueueGpuResourceActionWithUnload,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   getCachedCudaStatus,
   resolveCudaStatusForTranscription,
@@ -859,8 +909,41 @@ summaryService = createSummaryService({
   terminateProcessBestEffort,
   summarizeSummaryValidationError,
   isQuitCommitted,
+  onSummaryCommitted: () => {
+    historySearchService.triggerBackgroundSync();
+  },
 });
 summaryService.registerIpc(ipcMain);
+
+const chatThreadStore = createChatThreadStore({
+  app,
+  path,
+  fs,
+});
+
+historyQaService = createHistoryQaService({
+  app,
+  path,
+  fs,
+  pythonConfig,
+  spawnTrackedPython,
+  getBackendModuleArgs,
+  collectPythonProcessOutput,
+  enqueueAiComputeAction,
+  enqueueGpuResourceActionForQa: gpuResourceActionQueue.enqueue,
+  hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
+  hasInFlightAiAddonSetup: () => Boolean(aiAddonIpc?.hasInFlightAiAddonSetup()),
+  getAiAddonRuntimeOptions,
+  buildSummaryRuntimeEnv,
+  resolveCudaStatusForTranscription,
+  historySearchService,
+  chatThreadStore,
+  sendToRenderer,
+  assertTrustedRendererSender,
+  terminateProcessBestEffort,
+  isQuitCommitted,
+});
+historyQaService.registerIpc(ipcMain);
 
 recorderService = createRecorderService({
   app,
@@ -926,6 +1009,39 @@ recordingPresenceService = createRecordingPresenceService({
   toggleMainWindow,
   quitApp: () => app.quit(),
 });
+
+updaterService = createUpdaterService({
+  app,
+  platform: process.platform,
+  env: process.env,
+  userDataPath: app.getPath('userData'),
+  fs,
+  sendToRenderer,
+  getQuitInterceptState,
+  getRecorderQuitInputs: () => (
+    recorderService
+      ? recorderService.getQuitInterceptInputs()
+      : { hasRecordingProcess: false, recordingStartTime: null, stopInProgress: false }
+  ),
+  hasActiveAudioImport: () => Boolean(audioImportService && audioImportService.hasActive()),
+  hasProtectedSummaryWrite: () => Boolean(summaryService && summaryService.getActiveSummaryPhase() === 'metadata'),
+  hasInFlightAiWork,
+  drainAiWorkBeforeQuit,
+  armUpdateQuit: () => {
+    pendingUpdateInstall = true;
+    allowImmediateQuit = true;
+    isQuitting = true;
+    markQuitCommitted();
+  },
+  disarmUpdateQuit: () => {
+    pendingUpdateInstall = false;
+    allowImmediateQuit = false;
+    isQuitting = false;
+    clearQuitCommitted();
+    sendToRenderer('app-quit-progress', { code: 'QUIT_CANCELLED' });
+  },
+});
+updaterService.registerIpcHandlers(ipcMain, assertTrustedRendererSender);
 
 function getBackendModuleArgs(moduleName, extraArgs = []) {
   return buildPythonModuleArgs(moduleName, extraArgs);
@@ -1429,18 +1545,10 @@ function createApplicationMenu() {
       submenu: [
         {
           label: 'Check for Updates...',
-          click: async () => {
-            const updateInfo = await checkForUpdates();
-            if (updateInfo && mainWindow) {
-              sendUpdateAvailable(updateInfo);
-            } else if (mainWindow) {
-              dialog.showMessageBox(mainWindow, {
-                type: 'info',
-                title: 'No Updates Available',
-                message: 'You\'re up to date!',
-                detail: `AvaNevis v${app.getVersion()} is the latest version.`,
-                buttons: ['OK']
-              });
+          click: () => {
+            showMainWindow();
+            if (updaterService) {
+              void updaterService.checkForUpdates({ manual: true });
             }
           }
         },
@@ -1637,13 +1745,10 @@ app.whenReady().then(async () => {
   // Whisper model download is renderer-driven via download-model IPC (with
   // compute-queue idle wait) so FTUE gets progress feedback without VRAM contention.
 
-  // Check for updates after app loads (5 second delay to not slow startup)
-  setTimeout(async () => {
-    const updateInfo = await checkForUpdates();
-    if (updateInfo && mainWindow) {
-      sendUpdateAvailable(updateInfo);
-    }
-  }, 5000);
+  // Start periodic update checks after app loads (5 second startup delay).
+  if (updaterService) {
+    updaterService.startPeriodicChecks();
+  }
 
   app.on('activate', () => {
     showMainWindow();
@@ -1674,6 +1779,7 @@ app.on('before-quit', (event) => {
     immediateQuitArmed,
     interceptQuit: Boolean(quitState.interceptQuit),
     hasInFlightAiWork: hasInFlightAiWork(),
+    pendingUpdateInstall,
   });
 
   // Armed pass: re-check recording only (new recording during drain needs graceful
@@ -1708,6 +1814,9 @@ app.on('before-quit', (event) => {
       if (recorderService) {
         recorderService.forceKillRecordingOnShutdown();
       }
+      if (historyQaService) {
+        historyQaService.forceKillOnShutdown();
+      }
 
       const protectedProcess = getProtectedQuitProcess();
 
@@ -1732,6 +1841,10 @@ app.on('before-quit', (event) => {
 
       pythonRuntime.drainActiveProcesses();
 
+      if (updaterService) {
+        updaterService.dispose();
+      }
+
       // Clean up tray / presence
       if (recordingPresenceService) {
         recordingPresenceService.destroy();
@@ -1744,6 +1857,12 @@ app.on('before-quit', (event) => {
   });
 });
 
+app.on('will-quit', () => {
+  if (updaterService) {
+    updaterService.dispose();
+  }
+});
+
 // ============================================================================
 // IPC Handlers - Communication between UI and Python backend
 // ============================================================================
@@ -1753,7 +1872,9 @@ app.on('before-quit', (event) => {
 // registered by registerDeviceIpc above. run-recording-preflight is registered
 // by createRecorderService.
 
-ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
+// Updater IPC handlers (get-update-state, check-for-updates, download-update,
+// cancel-update-download, install-update-now, set-auto-download-updates,
+// open-update-release-page) are registered by createUpdaterService above.
 
 function getRecordingsDir() {
   return path.join(app.getPath('userData'), 'recordings');
@@ -1997,19 +2118,6 @@ ipcMain.handle('get-system-info', async () => {
 // open-legal-notices is registered by registerFileExportIpc above.
 // check-gpu / check-cuda / install-gpu / ensure-compatible-gpu-runtime /
 // uninstall-gpu are registered by createGpuRuntimeService above.
-
-/**
- * Open update download page in browser
- */
-ipcMain.handle('download-update', async (event) => {
-  assertTrustedRendererSender(event);
-
-  if (!pendingUpdateInfo || !pendingUpdateInfo.downloadUrl) {
-    throw new Error('No pending update is available to download.');
-  }
-
-  await openDownloadPage(pendingUpdateInfo.downloadUrl);
-  return { success: true };
-});
+// Updater IPC handlers are registered by createUpdaterService above.
 
 console.log('AvaNevis - Main process started');

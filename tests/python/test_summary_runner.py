@@ -230,7 +230,7 @@ def test_save_summary_outputs_writes_json_and_markdown(tmp_path):
     payload = json.loads(json_path.read_text(encoding='utf-8'))
     assert payload['summary']['summary'] == 'Saved summary'
     assert payload['metadata']['profile'] == 'balanced'
-    assert '# Meeting Summary' in markdown_path.read_text(encoding='utf-8')
+    assert '# Summary' in markdown_path.read_text(encoding='utf-8')
 
 
 def test_save_summary_outputs_uses_unique_temp_names(monkeypatch, tmp_path):

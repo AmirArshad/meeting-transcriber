@@ -15,6 +15,12 @@
  * Fail the build instead, and tell the operator how to override.
  */
 
+const { spawnSync } = require('node:child_process');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const yaml = require('js-yaml');
+
 const AD_HOC_IDENTITY = '-';
 
 const SIGNING_CREDENTIAL_ENV_KEYS = Object.freeze([
@@ -26,33 +32,191 @@ const SIGNING_CREDENTIAL_ENV_KEYS = Object.freeze([
   'APPLE_API_KEY',
 ]);
 
+function isStrictSignedRelease(env = {}) {
+  const raw = String(env.AVANEVIS_REQUIRE_SIGNED_RELEASE || '').trim().toLowerCase();
+  return raw === '1' || raw === 'true';
+}
+
+function nonEmpty(value) {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : '';
+}
+
+function evaluateNotarizationCredentials(env = {}) {
+  const apiValues = [env.APPLE_API_KEY, env.APPLE_API_KEY_ID, env.APPLE_API_ISSUER].map(nonEmpty);
+  const profile = nonEmpty(env.APPLE_KEYCHAIN_PROFILE);
+  // Complete API credentials take precedence, then a preconfigured Keychain profile.
+  // Never pass an Apple ID password to electron-builder: it forwards it on argv.
+  if (apiValues.every(Boolean)) return { ok: true, configured: true, mode: 'api', reason: null };
+  if (profile) return { ok: true, configured: true, mode: 'keychain', reason: null };
+  if (nonEmpty(env.APPLE_ID) || nonEmpty(env.APPLE_APP_SPECIFIC_PASSWORD)) {
+    return { ok: false, configured: false, mode: null,
+      reason: 'Apple ID notarization requires APPLE_KEYCHAIN_PROFILE; raw Apple ID passwords are not accepted.' };
+  }
+  if (apiValues.some(Boolean)) {
+    return { ok: false, configured: false, mode: null,
+      reason: 'Partial App Store Connect API notarization credentials set; require APPLE_API_KEY, APPLE_API_KEY_ID, and APPLE_API_ISSUER.' };
+  }
+  return { ok: true, configured: false, mode: null, reason: null };
+}
+
 /**
  * Pure decision helper (unit-tested).
  *
  * @param {object} params
  * @param {string|undefined} params.identity - build.mac.identity from package.json
  * @param {Record<string, string|undefined>} params.env
- * @returns {{ ok: boolean, reason: string|null, credentials: string[] }}
+ * @param {boolean} [params.allowManagedOverride=false] - true when invoked via build:mac preflight/--run
+ * @returns {{ ok: boolean, reason: string|null, credentials: string[], mode: string, builderArgs: string[] }}
  */
-function evaluateMacSigningIdentity({ identity, env = {} }) {
+function evaluateMacSigningIdentity({ identity, env = {}, allowManagedOverride = false }) {
   const credentials = SIGNING_CREDENTIAL_ENV_KEYS.filter(
     (key) => typeof env[key] === 'string' && env[key].trim() !== '',
   );
+  const requireSigned = isStrictSignedRelease(env);
+  const allowAdhoc = String(env.AVANEVIS_ALLOW_ADHOC_MAC_SIGNING || '') === '1';
+  const hasCertCreds = Boolean(nonEmpty(env.CSC_LINK) || nonEmpty(env.CSC_NAME));
+  const notaryCheck = evaluateNotarizationCredentials(env);
+
+  if (requireSigned && allowAdhoc) {
+    return {
+      ok: false,
+      credentials,
+      mode: 'invalid-adhoc',
+      builderArgs: [],
+      reason: 'AVANEVIS_ALLOW_ADHOC_MAC_SIGNING=1 is forbidden when AVANEVIS_REQUIRE_SIGNED_RELEASE=1.',
+    };
+  }
+
+  if (allowManagedOverride) {
+    if (!notaryCheck.ok) {
+      return {
+        ok: false,
+        credentials,
+        mode: 'partial-notarize',
+        builderArgs: [],
+        reason: notaryCheck.reason,
+      };
+    }
+    if (allowAdhoc) {
+      return {
+        ok: true,
+        reason: null,
+        credentials,
+        mode: 'ad-hoc',
+        builderArgs: [],
+      };
+    }
+
+    if (!hasCertCreds && (credentials.length > 0 || notaryCheck.configured)) {
+      return {
+        ok: false,
+        credentials,
+        mode: 'missing-cert',
+        builderArgs: [],
+        reason:
+          `macOS signing/notarization environment variables are set (${credentials.join(', ') || 'notarization'}), `
+          + 'but neither CSC_LINK nor CSC_NAME is configured for Developer ID signing.',
+      };
+    }
+
+    if (!hasCertCreds) {
+      if (requireSigned) {
+        return {
+          ok: false,
+          credentials,
+          mode: 'missing-credentials',
+          builderArgs: [],
+          reason:
+            'AVANEVIS_REQUIRE_SIGNED_RELEASE=1 requires Developer ID signing credentials '
+            + '(CSC_LINK + CSC_KEY_PASSWORD, or CSC_NAME) and Apple notarization credentials.',
+        };
+      }
+      return {
+        ok: true,
+        reason: null,
+        credentials,
+        mode: 'ad-hoc',
+        builderArgs: [],
+      };
+    }
+
+    if (requireSigned && !notaryCheck.configured) {
+      return {
+        ok: false,
+        credentials,
+        mode: 'missing-notarize',
+        builderArgs: [],
+        reason:
+          'AVANEVIS_REQUIRE_SIGNED_RELEASE=1 requires notarization credentials '
+          + '(APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, '
+          + 'or APPLE_KEYCHAIN_PROFILE).',
+      };
+    }
+
+    const identityOverride = nonEmpty(env.CSC_NAME);
+    const builderArgs = [
+      '-c.forceCodeSigning=true',
+      '-c.mac.gatekeeperAssess=true',
+      `-c.mac.identity=${identityOverride}`,
+      `-c.mac.notarize=${notaryCheck.configured ? 'true' : 'false'}`,
+    ];
+
+    return {
+      ok: true,
+      reason: null,
+      credentials,
+      mode: notaryCheck.configured ? 'developer-id-notarize' : 'developer-id',
+      builderArgs,
+    };
+  }
 
   if (identity !== AD_HOC_IDENTITY) {
-    return { ok: true, reason: null, credentials };
+    if (!notaryCheck.ok) {
+      return {
+        ok: false,
+        credentials,
+        mode: 'partial-notarize',
+        builderArgs: [],
+        reason: notaryCheck.reason,
+      };
+    }
+    if (requireSigned && !notaryCheck.configured) {
+      return {
+        ok: false,
+        credentials,
+        mode: 'missing-notarize',
+        builderArgs: [],
+        reason: 'AVANEVIS_REQUIRE_SIGNED_RELEASE=1 requires Apple notarization credentials.',
+      };
+    }
+    return { ok: true, reason: null, credentials, mode: 'developer-id', builderArgs: [] };
   }
+
   if (credentials.length === 0) {
+    if (requireSigned) {
+      return {
+        ok: false,
+        credentials,
+        mode: 'missing-credentials',
+        builderArgs: [],
+        reason:
+          'AVANEVIS_REQUIRE_SIGNED_RELEASE=1 requires Developer ID signing and notarization credentials '
+          + '(cannot build ad-hoc "-" release).',
+      };
+    }
     // No certificate configured: ad-hoc is the correct, Gate-B-compliant result.
-    return { ok: true, reason: null, credentials };
+    return { ok: true, reason: null, credentials, mode: 'ad-hoc', builderArgs: [] };
   }
-  if (String(env.AVANEVIS_ALLOW_ADHOC_MAC_SIGNING || '') === '1') {
-    return { ok: true, reason: null, credentials };
+
+  if (allowAdhoc) {
+    return { ok: true, reason: null, credentials, mode: 'ad-hoc', builderArgs: [] };
   }
 
   return {
     ok: false,
     credentials,
+    mode: 'ad-hoc-guard',
+    builderArgs: [],
     reason:
       `build.mac.identity is pinned to "${AD_HOC_IDENTITY}" (ad-hoc) but macOS signing credentials are set `
       + `(${credentials.join(', ')}).\n`
@@ -65,23 +229,207 @@ function evaluateMacSigningIdentity({ identity, env = {} }) {
   };
 }
 
+const MAC_SIGNING_AND_NOTARY_ENV_KEYS = Object.freeze([
+  'CSC_LINK',
+  'CSC_KEY_PASSWORD',
+  'CSC_NAME',
+  'CSC_INTERMEDIATE_LINK',
+  'CSC_INTERMEDIATE_KEY_PASSWORD',
+  'APPLE_TEAM_ID',
+  'APPLEID',
+  'APPLE_API_KEY',
+  'APPLE_API_KEY_ID',
+  'APPLE_API_ISSUER',
+  'APPLE_KEYCHAIN_PROFILE',
+  'APPLE_KEYCHAIN',
+]);
+
+function notarizationEnvironment(env) {
+  const selected = evaluateNotarizationCredentials(env);
+  const result = { ...env };
+  delete result.APPLE_ID;
+  delete result.APPLE_APP_SPECIFIC_PASSWORD;
+  if (selected.mode !== 'api') {
+    delete result.APPLE_API_KEY;
+    delete result.APPLE_API_KEY_ID;
+    delete result.APPLE_API_ISSUER;
+  }
+  if (selected.mode !== 'keychain') {
+    delete result.APPLE_KEYCHAIN_PROFILE;
+    delete result.APPLE_KEYCHAIN;
+  }
+  // GitHub Actions exports unset secrets as empty strings; electron-builder
+  // treats CSC_LINK="" as a file path (resolving to CWD) instead of unset.
+  for (const key of MAC_SIGNING_AND_NOTARY_ENV_KEYS) {
+    if (key in result && !nonEmpty(result[key])) {
+      delete result[key];
+    }
+  }
+  return result;
+}
+
+function resolveElectronBuilderBin() {
+  const pkgPath = require.resolve('electron-builder/package.json');
+  const pkg = require(pkgPath);
+  return path.join(path.dirname(pkgPath), pkg.bin['electron-builder']);
+}
+
 function main() {
+  const rawArgs = process.argv.slice(2);
+  const preflightMode = rawArgs.includes('--preflight');
+  const runMode = rawArgs.includes('--run');
+  const dashIndex = rawArgs.indexOf('--');
+  const passthroughArgs = dashIndex >= 0 ? rawArgs.slice(dashIndex + 1) : [];
+
   if (process.platform !== 'darwin') {
     return;
   }
+
   const pkg = require('../package.json');
   const identity = pkg.build && pkg.build.mac ? pkg.build.mac.identity : undefined;
-  const result = evaluateMacSigningIdentity({ identity, env: process.env });
+  const result = evaluateMacSigningIdentity({
+    identity,
+    env: process.env,
+    allowManagedOverride: preflightMode || runMode,
+  });
+
   if (!result.ok) {
     console.error(`\nERROR: ${result.reason}\n`);
     process.exit(1);
   }
-  if (identity === AD_HOC_IDENTITY) {
+
+  if (result.mode === 'ad-hoc') {
     console.log('macOS signing: ad-hoc identity "-" (no Developer ID certificate configured).');
+  } else {
+    console.log(`macOS signing enabled (${result.mode}).`);
   }
+
+  if (!runMode) {
+    return;
+  }
+
+  const builderBin = resolveElectronBuilderBin();
+  const finalArgs = [...passthroughArgs, ...result.builderArgs];
+  const builderEnv = notarizationEnvironment(process.env);
+  const child = spawnSync(process.execPath, [builderBin, ...finalArgs], {
+    stdio: 'inherit',
+    env: builderEnv,
+  });
+  process.exit(child.status === null ? 1 : child.status);
 }
 
-module.exports = { evaluateMacSigningIdentity, AD_HOC_IDENTITY, SIGNING_CREDENTIAL_ENV_KEYS };
+function computeFileSha512Base64(filePath) {
+  const hash = crypto.createHash('sha512');
+  hash.update(fs.readFileSync(filePath));
+  return hash.digest('base64');
+}
+
+/**
+ * Rebuild `<dmgPath>.blockmap` and refresh the DMG entry's sha512 and size in
+ * `latest-mac.yml` after post-build DMG signing and notarization stapling.
+ *
+ * @param {{ dmgPath: string, latestMacYmlPath?: string }} options
+ * @returns {Promise<{ blockmapPath: string, sha512: string, size: number, updatedYml: boolean }>}
+ */
+async function refreshMacDmgUpdateMetadata({ dmgPath, latestMacYmlPath } = {}) {
+  if (!dmgPath || !fs.existsSync(dmgPath)) {
+    throw new Error(`refreshMacDmgUpdateMetadata: DMG not found at ${dmgPath}`);
+  }
+  // eslint-disable-next-line global-require
+  const { buildBlockMap } = require('app-builder-lib/out/targets/blockmap/blockmap');
+  const blockmapPath = `${dmgPath}.blockmap`;
+  const blockmapInfo = await buildBlockMap(dmgPath, 'gzip', blockmapPath);
+  const dmgBasename = path.basename(dmgPath);
+  let updatedYml = false;
+
+  if (latestMacYmlPath && fs.existsSync(latestMacYmlPath)) {
+    const parsed = yaml.load(fs.readFileSync(latestMacYmlPath, 'utf8'));
+    if (parsed && typeof parsed === 'object') {
+      if (Array.isArray(parsed.files)) {
+        for (const entry of parsed.files) {
+          if (entry && path.basename(String(entry.url || '')) === dmgBasename) {
+            entry.sha512 = blockmapInfo.sha512;
+            entry.size = blockmapInfo.size;
+            updatedYml = true;
+          }
+        }
+      }
+      if (parsed.path && path.basename(String(parsed.path)) === dmgBasename) {
+        parsed.sha512 = blockmapInfo.sha512;
+        updatedYml = true;
+      }
+      if (updatedYml) {
+        const serialized = yaml.dump(parsed, { lineWidth: -1, noRefs: true });
+        fs.writeFileSync(latestMacYmlPath, serialized, 'utf8');
+      }
+    }
+  }
+
+  return {
+    blockmapPath,
+    sha512: blockmapInfo.sha512,
+    size: blockmapInfo.size,
+    updatedYml,
+  };
+}
+
+/**
+ * Verify that `latest-mac.yml` and the macOS `.zip`, `.dmg`, and `.blockmap`
+ * artifacts exist and have matching SHA-512 digests and byte sizes.
+ *
+ * @param {{ distDir: string, version: string }} options
+ */
+function verifyMacUpdateMetadata({ distDir, version } = {}) {
+  if (!distDir || !version) {
+    throw new Error('verifyMacUpdateMetadata requires distDir and version');
+  }
+  const zipName = `AvaNevis-Setup-${version}.zip`;
+  const dmgName = `AvaNevis-Setup-${version}.dmg`;
+  const zipPath = path.join(distDir, zipName);
+  const dmgPath = path.join(distDir, dmgName);
+  const zipBlockmapPath = `${zipPath}.blockmap`;
+  const dmgBlockmapPath = `${dmgPath}.blockmap`;
+  const latestMacYmlPath = path.join(distDir, 'latest-mac.yml');
+
+  for (const requiredFile of [zipPath, dmgPath, zipBlockmapPath, dmgBlockmapPath, latestMacYmlPath]) {
+    if (!fs.existsSync(requiredFile) || fs.statSync(requiredFile).size <= 0) {
+      throw new Error(`Missing or empty macOS updater artifact: ${requiredFile}`);
+    }
+  }
+
+  const parsed = yaml.load(fs.readFileSync(latestMacYmlPath, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.files)) {
+    throw new Error(`Invalid latest-mac.yml structure at ${latestMacYmlPath}`);
+  }
+
+  for (const [artifactName, artifactPath] of [[zipName, zipPath], [dmgName, dmgPath]]) {
+    const entry = parsed.files.find((item) => item && path.basename(String(item.url || '')) === artifactName);
+    if (!entry) {
+      throw new Error(`latest-mac.yml is missing files entry for ${artifactName}`);
+    }
+    const actualSha512 = computeFileSha512Base64(artifactPath);
+    const actualSize = fs.statSync(artifactPath).size;
+    if (entry.sha512 !== actualSha512) {
+      throw new Error(`latest-mac.yml sha512 mismatch for ${artifactName}: expected ${actualSha512}, got ${entry.sha512}`);
+    }
+    if (Number(entry.size) !== actualSize) {
+      throw new Error(`latest-mac.yml size mismatch for ${artifactName}: expected ${actualSize}, got ${entry.size}`);
+    }
+  }
+
+  return true;
+}
+
+module.exports = {
+  AD_HOC_IDENTITY,
+  SIGNING_CREDENTIAL_ENV_KEYS,
+  evaluateMacSigningIdentity,
+  evaluateNotarizationCredentials,
+  notarizationEnvironment,
+  isStrictSignedRelease,
+  refreshMacDmgUpdateMetadata,
+  verifyMacUpdateMetadata,
+};
 
 if (require.main === module) {
   main();

@@ -70,12 +70,12 @@ test('short history layouts keep summary actions clickable and the reading area 
   assert.equal(result.summary.disabled, false);
   assert.match(result.summary.className, /\bis-loading\b/);
   assert.match(result.summary.className, /\bsummary-generation-active\b/);
-  assert.equal(result.summary.hoverLabel, 'Cancel Summarisation');
+  assert.equal(result.summary.hoverLabel, 'Cancel summary');
   assert.equal(result.summary.pointerEvents, 'auto');
   assert.notEqual(result.summary.color, 'rgba(0, 0, 0, 0)');
   assert.equal(result.summary.afterContent, 'none');
   assert.equal(result.hit.id, 'generate-summary-btn');
-  assert.match(result.hoverAfter, /Cancel Summarisation/);
+  assert.match(result.hoverAfter, /Cancel summary/);
   assert.equal(result.cancelCalls, 1);
   assert.equal(result.cancelling.pointerEvents, 'none');
   assert.equal(result.cancelCallsAfterBlockedClick, 1);

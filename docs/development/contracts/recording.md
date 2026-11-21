@@ -53,6 +53,17 @@ path and the exact capture-time transcription selection. Startup discovery
 returns unacknowledged handoffs even after the `.capture` directory is gone.
 Recovery scan stages those requests before auto-resume, then acknowledges each
 handoff only after the backend verifies the matching request in meeting metadata.
+The scanner deadline ends once its subprocess has closed and its result is parsed.
+Maintenance admission stays held until handoff staging settles. Success notifications
+and auto-resume require both the scan and the handoff to succeed.
 A lost response or failed staging/ack remains replayable; a matching completed
 attempt is acknowledged without resetting it to pending. Audio and prior outputs
 remain intact on failed recovery or transcription.
+
+When scan/import creates an audio-only meeting for a recovered capture, preserve
+the positive finite duration from its matching durable recovery handoff. Check
+the handoff and audio identities across the unlocked scan and metadata commit;
+malformed, unmatched, or symlink handoffs must not supply a duration. When no
+matching handoff exists (such as a legacy capture manifest without
+`transcriptionSelection` or a promoted `.pcm.tmp` WAV), fall back to probing the
+local `.opus` or `.wav` audio file duration directly outside `meetings.json.lock`.

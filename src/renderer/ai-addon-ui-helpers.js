@@ -98,8 +98,8 @@
         engine: 'speakrs',
         title: 'Speakrs',
         subtitle: platform === 'darwin'
-          ? 'Faster. No Hugging Face account.'
-          : 'No Hugging Face account.',
+          ? 'Faster on Mac. No account needed.'
+          : 'No account needed.',
         recommended: isSpeakrsRecommended({ platform, arch }),
       };
     }
@@ -108,7 +108,7 @@
         engine: 'pyannote',
         title: 'Pyannote',
         subtitle: platform === 'win32'
-          ? 'More accurate and faster here. Needs a Hugging Face account.'
+          ? 'More accurate and faster on Windows. Needs a Hugging Face account.'
           : 'Needs a Hugging Face account.',
         recommended: false,
       };
@@ -174,18 +174,18 @@
 
   function getDiarizationSwitchConfirmMessage({ targetEngine, platform } = {}) {
     if (targetEngine === 'speakrs') {
-      return 'Switch to Speakrs? This removes the current speaker model (about 2–4 GB). Your saved Hugging Face token is kept so you can switch back to Pyannote without pasting it again. Speakrs does not need an account.';
+      return 'Switch to Speakrs? This removes Pyannote (about 2–4 GB). Your saved Hugging Face token is kept in case you switch back. Speakrs does not need an account.';
     }
     if (targetEngine === 'pyannote') {
       const base = 'Switch to Pyannote? This removes Speakrs (about 800 MB). Pyannote needs a Hugging Face account and a larger download.';
-      return platform === 'win32' ? `${base} On this PC it is more accurate and faster.` : base;
+      return platform === 'win32' ? `${base} On Windows it is more accurate and faster.` : base;
     }
     return '';
   }
 
   function getDiarizationRemoveConfirmMessage({ engine } = {}) {
     if (engine === 'pyannote') {
-      return 'Disable and remove Pyannote speaker identification and the saved Hugging Face token?';
+      return 'Disable and remove Pyannote speaker identification and your saved Hugging Face token?';
     }
     if (engine === 'speakrs') {
       return 'Disable and remove Speakrs speaker identification from this device?';

@@ -78,7 +78,7 @@ function buildTrayView(captureState, now = Date.now()) {
 
   return {
     title: '',
-    tooltip: 'AvaNevis - Private meeting recorder and transcriber',
+    tooltip: 'AvaNevis - Local audio recorder and transcriber',
     statusLabel: 'Ready',
     trayImage: 'idle',
   };

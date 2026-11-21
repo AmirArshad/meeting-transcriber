@@ -29,6 +29,7 @@
  * @param {Function} [deps.beforeDeleteMeeting] - cancel/terminate queued transcription before delete
  * @param {Function} [deps.afterDeleteMeeting] - clear delete tombstone after meeting_manager delete settles
  * @param {Function} [deps.afterUpdateMeeting] - sync queue job title after rename
+ * @param {Function} [deps.onMeetingsMutated] - notify derived caches (e.g. search index) on successful mutations
  * @param {number} [deps.recordingsScanTimeoutMs]
  * @param {object} [deps.recordingsMaintenanceGate]
  */
@@ -58,7 +59,16 @@ function createMeetingManagerClient(deps) {
     unrefRecordingsScanTimeout = true,
     recordingsMaintenanceGate = null,
     onScanSucceeded = () => {},
+    onMeetingsMutated = () => {},
   } = deps;
+
+  function notifyMeetingsMutated(detail) {
+    try {
+      onMeetingsMutated(detail);
+    } catch (_error) {
+      // Derived cache notifications must never break primary persistence.
+    }
+  }
 
   function addMeetingToHistory(meetingData) {
     let resolvedAudioPath;
@@ -131,7 +141,9 @@ function createMeetingManagerClient(deps) {
 
         if (code === 0) {
           try {
-            resolve(JSON.parse(processOutput.getStdout()));
+            const addedMeeting = JSON.parse(processOutput.getStdout());
+            notifyMeetingsMutated({ action: 'add', meeting: addedMeeting });
+            resolve(addedMeeting);
           } catch (error) {
             reject(new Error(`Failed to parse saved meeting: ${error.message}`));
           }
@@ -207,8 +219,9 @@ function createMeetingManagerClient(deps) {
 
     recordingsScanInProgress = true;
     try {
-      return await new Promise((resolve, reject) => {
+      const result = await new Promise((resolve, reject) => {
         let settled = false;
+        let timedOut = false;
         let scanTimeout = null;
         const finish = (callback, value) => {
           if (settled) {
@@ -228,7 +241,10 @@ function createMeetingManagerClient(deps) {
 
         const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
-        python.on('close', async (code) => {
+        python.on('close', (code) => {
+          if (settled || timedOut) {
+            return;
+          }
           try {
             processOutput.assertStdoutWithinLimit();
           } catch (error) {
@@ -238,16 +254,7 @@ function createMeetingManagerClient(deps) {
 
           if (code === 0) {
             try {
-              const result = JSON.parse(processOutput.getStdout());
-              if (typeof options.beforeAutoResume === 'function') {
-                await options.beforeAutoResume(result);
-              }
-              try {
-                onScanSucceeded();
-              } catch (_) {
-                // Best-effort recovery banner cleanup.
-              }
-              finish(resolve, result);
+              finish(resolve, JSON.parse(processOutput.getStdout()));
             } catch (e) {
               finish(reject, new Error(`Failed to parse scan result: ${e.message}`));
             }
@@ -257,15 +264,33 @@ function createMeetingManagerClient(deps) {
           }
         });
 
-        python.on('error', (error) => finish(reject, error));
+        python.on('error', (error) => {
+          if (!timedOut) finish(reject, error);
+        });
         scanTimeout = setTimeout(async () => {
-          await terminateProcessBestEffort(python);
+          timedOut = true;
+          try {
+            await terminateProcessBestEffort(python);
+          } catch (_) {
+            // Report the scanner timeout even if termination fails.
+          }
           finish(reject, new Error('Recording recovery scan timed out.'));
         }, recordingsScanTimeoutMs);
         if (unrefRecordingsScanTimeout) {
           scanTimeout.unref?.();
         }
       });
+      // The scanner deadline has ended. Keep admission through durable staging.
+      if (typeof options.beforeAutoResume === 'function') {
+        await options.beforeAutoResume(result);
+      }
+      try {
+        onScanSucceeded();
+      } catch (_) {
+        // Best-effort recovery banner cleanup.
+      }
+      notifyMeetingsMutated({ action: 'scan', result });
+      return result;
     } finally {
       recordingsScanInProgress = false;
       // Caller that transferred recovery→scan owns release of the scan hold.
@@ -309,46 +334,48 @@ function createMeetingManagerClient(deps) {
     });
   }
 
+  function getMeeting(meetingId) {
+    return new Promise((resolve, reject) => {
+      const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+      const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+        '--recordings-dir', recordingsDir,
+        'get',
+        String(meetingId || '').trim(),
+      ]), { cwd: pythonConfig.backendPath });
+
+      const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+      python.on('close', (code) => {
+        try {
+          processOutput.assertStdoutWithinLimit();
+        } catch (error) {
+          reject(error);
+          return;
+        }
+
+        if (code === 0) {
+          try {
+            const meeting = JSON.parse(processOutput.getStdout());
+            resolve(meeting);
+          } catch (e) {
+            reject(new Error(`Failed to parse meeting: ${e.message}`));
+          }
+        } else {
+          const errorMsg = processOutput.getStderr().trim() || 'Meeting not found';
+          reject(new Error(errorMsg));
+        }
+      });
+      python.on('error', reject);
+    });
+  }
+
   function registerIpc(ipcMain) {
     ipcMain.handle('list-meetings', async () => listMeetings());
 
     /**
      * Get a single meeting
      */
-    ipcMain.handle('get-meeting', async (event, meetingId) => {
-      return new Promise((resolve, reject) => {
-        const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-          '--recordings-dir', recordingsDir,
-          'get',
-          meetingId
-        ]), { cwd: pythonConfig.backendPath });
-
-        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-        python.on('close', (code) => {
-          try {
-            processOutput.assertStdoutWithinLimit();
-          } catch (error) {
-            reject(error);
-            return;
-          }
-
-          if (code === 0) {
-            try {
-              const meeting = JSON.parse(processOutput.getStdout());
-              resolve(meeting);
-            } catch (e) {
-              reject(new Error(`Failed to parse meeting: ${e.message}`));
-            }
-          } else {
-            const errorMsg = processOutput.getStderr().trim() || 'Meeting not found';
-            reject(new Error(errorMsg));
-          }
-        });
-        python.on('error', reject);
-      });
-    });
+    ipcMain.handle('get-meeting', async (event, meetingId) => getMeeting(meetingId));
 
     /**
      * Delete a meeting
@@ -387,6 +414,7 @@ function createMeetingManagerClient(deps) {
 
           python.on('close', (code) => {
             if (code === 0) {
+              notifyMeetingsMutated({ action: 'delete', meetingId: id });
               resolve({ success: true });
             } else {
               const errorMsg = errorOutput.trim() || 'Unknown error';
@@ -439,7 +467,7 @@ function createMeetingManagerClient(deps) {
         String(meetingId),
       ];
       if (typeof updates.title === 'string') {
-        args.push('--title', updates.title);
+        args.push(`--title=${updates.title}`);
       }
 
       return enqueueMeetingUpdate(meetingId, () => new Promise((resolve, reject) => {
@@ -469,6 +497,7 @@ function createMeetingManagerClient(deps) {
               } catch (syncError) {
                 console.warn('afterUpdateMeeting failed:', syncError && syncError.message);
               }
+              notifyMeetingsMutated({ action: 'update', meeting: updatedMeeting });
               resolve(updatedMeeting);
             } catch (e) {
               reject(new Error(`Failed to parse updated meeting: ${e.message}`));
@@ -540,7 +569,9 @@ function createMeetingManagerClient(deps) {
 
         if (code === 0) {
           try {
-            resolve(JSON.parse(processOutput.getStdout()));
+            const updatedAiMeeting = JSON.parse(processOutput.getStdout());
+            notifyMeetingsMutated({ action: 'update-ai', meeting: updatedAiMeeting });
+            resolve(updatedAiMeeting);
           } catch (e) {
             reject(new Error(`Failed to parse updated AI meeting metadata: ${e.message}`));
           }
@@ -645,7 +676,10 @@ function createMeetingManagerClient(deps) {
     return runMeetingManagerCommand([
       'exclude-incomplete-transcription',
       String(meetingId),
-    ]);
+    ]).then((result) => {
+      notifyMeetingsMutated({ action: 'exclude-incomplete', meetingId: String(meetingId) });
+      return result;
+    });
   }
 
   function failTranscriptionAttempt(meetingId, attemptId, errorMessage, registerProcess = null) {
@@ -656,7 +690,10 @@ function createMeetingManagerClient(deps) {
       'fail-transcription-attempt', String(meetingId),
       '--attempt-id', String(attemptId),
       '--error', String(errorMessage || 'Transcription failed.').slice(0, 500),
-    ], registerProcess);
+    ], registerProcess).then((result) => {
+      notifyMeetingsMutated({ action: 'fail-transcription', meetingId: String(meetingId) });
+      return result;
+    });
   }
 
   function commitTranscriptionAttempt(meetingId, payload = {}, registerProcess = null) {
@@ -664,7 +701,7 @@ function createMeetingManagerClient(deps) {
     if (!meetingId || !payload.attemptId || !payload.candidatePath || !bounded) {
       return Promise.reject(new Error('commit-transcription-attempt requires a candidate and bounded result'));
     }
-    return runMeetingManagerCommand([
+    const args = [
       'commit-transcription-attempt',
       String(meetingId),
       '--attempt-id', String(payload.attemptId),
@@ -672,7 +709,14 @@ function createMeetingManagerClient(deps) {
       '--result-json', JSON.stringify(bounded),
       '--cancel-generation', String(payload.cancelGeneration || 0),
       '--delete-generation', String(payload.deleteGeneration || 0),
-    ], registerProcess);
+    ];
+    if (payload.captionsCandidatePath) {
+      args.push('--captions-candidate', String(payload.captionsCandidatePath));
+    }
+    return runMeetingManagerCommand(args, registerProcess).then((result) => {
+      notifyMeetingsMutated({ action: 'commit-transcription', meetingId: String(meetingId), meeting: result });
+      return result;
+    });
   }
 
   return {
@@ -687,6 +731,7 @@ function createMeetingManagerClient(deps) {
     isRecordingsScanInProgress,
     scanRecordings,
     listMeetings,
+    getMeeting,
     registerIpc,
   };
 }

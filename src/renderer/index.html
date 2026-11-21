@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' file:; media-src 'self' file:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AvaNevis Meeting Recorder &amp; Transcriber</title>
+    <title>AvaNevis — Audio Recorder &amp; Transcriber</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -20,23 +20,37 @@
     <div id="import-audio-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="import-audio-title" aria-describedby="import-audio-description">
       <div class="modal-content import-audio-content">
         <div class="modal-header"><h2 id="import-audio-title" tabindex="-1">Import audio</h2></div>
-        <form id="import-audio-form" class="modal-body">
-          <p id="import-audio-name" class="import-audio-name"></p>
-          <p id="import-audio-description" class="setting-description">AvaNevis saves a playable copy in History and transcribes it on this device. Your original stays where it is.</p>
-          <div id="import-audio-fields">
-            <div class="ai-addon-field compact"><label for="import-audio-engine">Engine</label><select id="import-audio-engine" class="device-select"><option value="whisper">Whisper</option><option value="parakeet">Parakeet v2</option></select></div>
-            <p id="import-audio-guidance" class="setting-description" aria-live="polite"></p>
-            <div id="import-audio-whisper-fields">
-              <div class="ai-addon-field compact"><label for="import-audio-language">Language</label><select id="import-audio-language" class="device-select"></select></div>
-              <div class="ai-addon-field compact"><label for="import-audio-model">Whisper model</label><select id="import-audio-model" class="device-select"></select></div>
+        <form id="import-audio-form" class="modal-form">
+          <div class="modal-body">
+            <p id="import-audio-name" class="import-audio-name"></p>
+            <p id="import-audio-description" class="setting-description">AvaNevis saves a playable copy in History and transcribes it on this device. Your original file is not changed.</p>
+            <div id="import-audio-fields">
+              <div class="ai-addon-field">
+                <label for="import-audio-engine">Engine</label>
+                <select id="import-audio-engine" class="device-select">
+                  <option value="whisper">Whisper</option>
+                  <option value="parakeet">Parakeet v2</option>
+                </select>
+              </div>
+              <p id="import-audio-guidance" class="setting-description" aria-live="polite"></p>
+              <div id="import-audio-whisper-fields" class="modal-field-grid">
+                <div class="ai-addon-field">
+                  <label for="import-audio-language">Language</label>
+                  <select id="import-audio-language" class="device-select"></select>
+                </div>
+                <div class="ai-addon-field">
+                  <label for="import-audio-model">Whisper model</label>
+                  <select id="import-audio-model" class="device-select"></select>
+                </div>
+              </div>
+              <p id="import-audio-english" class="setting-description" hidden>Language: English only</p>
             </div>
-            <p id="import-audio-english" class="setting-description" hidden>Language: English only</p>
+            <p id="import-audio-status" role="status" aria-live="polite"></p>
           </div>
-          <p id="import-audio-status" role="status" aria-live="polite"></p>
-          <div class="modal-actions import-audio-actions">
+          <div class="modal-actions">
             <button type="button" id="import-audio-cancel" class="btn btn-secondary">Cancel</button>
             <button type="button" id="import-audio-retry" class="btn btn-secondary" hidden>Try again</button>
-            <button type="button" id="import-audio-open" class="btn btn-primary" hidden>Open meeting</button>
+            <button type="button" id="import-audio-open" class="btn btn-primary" hidden>Open recording</button>
             <button type="submit" id="import-audio-submit" class="btn btn-primary">Import and transcribe</button>
           </div>
         </form>
@@ -44,18 +58,54 @@
     </div>
 
     <div id="summary-language-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="summary-language-title" aria-describedby="summary-language-description">
-      <div class="modal-content whisper-retry-modal-content">
+      <div class="modal-content">
         <div class="modal-header"><h2 id="summary-language-title">Confirm transcript language</h2></div>
-        <form id="summary-language-form" class="modal-body">
-          <p id="summary-language-description" class="setting-description">Choose the language actually spoken in this transcript. For mixed content, choose its predominant language. Balanced multilingual meetings are not supported.</p>
-          <div class="ai-addon-field compact">
-            <label for="summary-transcript-language">Transcript language</label>
-            <select id="summary-transcript-language" class="device-select"></select>
+        <form id="summary-language-form" class="modal-form">
+          <div class="modal-body">
+            <p id="summary-language-description" class="setting-description">Choose the main language spoken in this recording. Mixed-language recordings without one main language are not supported.</p>
+            <div class="ai-addon-field">
+              <label for="summary-transcript-language">Transcript language</label>
+              <select id="summary-transcript-language" class="device-select"></select>
+            </div>
+            <p id="summary-language-message" class="setting-description" aria-live="polite"></p>
           </div>
-          <p id="summary-language-message" class="setting-description" aria-live="polite"></p>
-          <div class="modal-actions whisper-retry-actions">
+          <div class="modal-actions">
             <button type="button" id="summary-language-cancel" class="btn btn-secondary">Cancel</button>
             <button type="submit" id="summary-language-confirm" class="btn btn-primary">Generate summary</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="transcript-export-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="transcript-export-title" aria-describedby="transcript-export-description">
+      <div class="modal-content transcript-export-modal-content">
+        <div class="modal-header"><h2 id="transcript-export-title" tabindex="-1">Save transcript as</h2></div>
+        <form id="transcript-export-form" class="modal-form">
+          <div class="modal-body">
+            <p id="transcript-export-description" class="setting-description">Choose a file format for <strong id="transcript-export-meeting-name"></strong>.</p>
+            <fieldset class="transcript-export-formats" aria-labelledby="transcript-export-title">
+              <legend class="sr-only">Transcript export format</legend>
+              <div id="transcript-export-options" class="transcript-export-options" role="radiogroup" aria-label="Export format"></div>
+            </fieldset>
+            <div id="transcript-export-subtitle-prefs" class="transcript-export-subtitle-prefs" hidden>
+              <label class="transcript-export-checkbox">
+                <input type="checkbox" id="transcript-export-include-speakers" checked>
+                <span>Include speaker labels when available</span>
+              </label>
+              <label id="transcript-export-vtt-voice-row" class="transcript-export-checkbox" hidden>
+                <input type="checkbox" id="transcript-export-use-voice-tags">
+                <span>Use WebVTT <code>&lt;v Speaker&gt;</code> voice tags</span>
+              </label>
+            </div>
+            <div id="transcript-export-notice" class="transcript-export-notice" role="status" aria-live="polite" hidden>
+              <p id="transcript-export-notice-text" class="transcript-export-notice-text"></p>
+              <button type="button" id="transcript-export-retranscribe-btn" class="btn btn-secondary btn-small" hidden>Re-transcribe from audio</button>
+            </div>
+            <p id="transcript-export-error" class="whisper-retry-error" role="alert" hidden></p>
+          </div>
+          <div class="modal-actions">
+            <button type="button" id="transcript-export-cancel" class="btn btn-secondary">Cancel</button>
+            <button type="submit" id="transcript-export-confirm" class="btn btn-primary">Save as…</button>
           </div>
         </form>
       </div>
@@ -69,7 +119,7 @@
         </div>
         <div class="modal-body">
           <p class="setting-description">
-            Downloading AI transcription model. This only happens once and takes
+            Downloading the default Whisper transcription model. This runs once and usually takes
             2&ndash;5 minutes.
           </p>
 
@@ -84,19 +134,18 @@
             <h4>Installation Log</h4>
             <div class="log-output" id="ftue-log-output"></div>
           </div>
-
-          <div class="modal-actions" style="margin-top: 1rem">
-            <button type="button" id="ftue-cancel-download-btn" class="btn btn-secondary btn-small cancel-download-btn">
-              Cancel Download
-            </button>
-          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="ftue-cancel-download-btn" class="btn btn-secondary btn-small cancel-download-btn">
+            Cancel download
+          </button>
         </div>
       </div>
     </div>
 
     <!-- Interrupted recording recovery prompt (once per launch when eligible) -->
     <div id="recording-recovery-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="recording-recovery-title" aria-describedby="recording-recovery-body">
-      <div class="modal-content recording-recovery-modal-content">
+      <div class="modal-content">
         <div class="modal-header">
           <h2 id="recording-recovery-title">Finish an interrupted recording?</h2>
         </div>
@@ -105,53 +154,55 @@
           <p id="recording-recovery-detail" class="recording-recovery-detail"></p>
           <ul id="recording-recovery-candidate-list" class="recording-recovery-candidate-list"></ul>
           <p id="recording-recovery-footer" class="recording-recovery-footer"></p>
-          <div class="modal-actions" style="margin-top: 1rem">
-            <button type="button" id="recording-recovery-later-btn" class="btn btn-secondary">Later</button>
-            <button type="button" id="recording-recovery-now-btn" class="btn btn-primary">Recover Now</button>
-          </div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="recording-recovery-later-btn" class="btn btn-secondary">Later</button>
+          <button type="button" id="recording-recovery-now-btn" class="btn btn-primary">Recover Now</button>
         </div>
       </div>
     </div>
 
     <!-- Explicit one-off Whisper retry; it never changes the active engine. -->
     <div id="whisper-retry-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="whisper-retry-title" aria-describedby="whisper-retry-description">
-      <div class="modal-content whisper-retry-modal-content">
+      <div class="modal-content">
         <div class="modal-header">
           <h2 id="whisper-retry-title">Retry with Whisper</h2>
         </div>
-        <form id="whisper-retry-form" class="modal-body">
-          <p id="whisper-retry-description" class="setting-description">
-            This starts a new Whisper attempt with these preferences. It does not change your active transcription engine.
-          </p>
-          <div class="whisper-retry-fields">
-            <div class="ai-addon-field compact">
-              <label for="whisper-retry-language">Language</label>
-              <select id="whisper-retry-language" class="device-select">
-                <option value="">Choose language…</option>
-                <option value="en">English</option>
-                <option value="es">Spanish</option>
-                <option value="fr">French</option>
-                <option value="de">German</option>
-                <option value="zh">Chinese (Mandarin/Cantonese)</option>
-                <option value="ja">Japanese</option>
-                <option value="it">Italian</option>
-                <option value="pa">Panjabi</option>
-                <option value="hi">Hindi</option>
-                <option value="ko">Korean</option>
-                <option value="pt">Portuguese</option>
-              </select>
+        <form id="whisper-retry-form" class="modal-form">
+          <div class="modal-body">
+            <p id="whisper-retry-description" class="setting-description">
+              Runs a one-time Whisper transcription with these settings. Your default transcription engine does not change.
+            </p>
+            <div class="modal-field-grid">
+              <div class="ai-addon-field">
+                <label for="whisper-retry-language">Language</label>
+                <select id="whisper-retry-language" class="device-select">
+                  <option value="">Choose language…</option>
+                  <option value="en">English</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="zh">Chinese (Mandarin/Cantonese)</option>
+                  <option value="ja">Japanese</option>
+                  <option value="it">Italian</option>
+                  <option value="pa">Panjabi</option>
+                  <option value="hi">Hindi</option>
+                  <option value="ko">Korean</option>
+                  <option value="pt">Portuguese</option>
+                </select>
+              </div>
+              <div class="ai-addon-field compact">
+                <label for="whisper-retry-model">Model</label>
+                <select id="whisper-retry-model" class="device-select" title="Large (v3) requires more download space, memory and processing time.">
+                  <option value="small">Small</option>
+                  <option value="medium">Medium</option>
+                  <option value="large-v3">Large (v3)</option>
+                </select>
+              </div>
             </div>
-            <div class="ai-addon-field compact">
-              <label for="whisper-retry-model">Model</label>
-              <select id="whisper-retry-model" class="device-select" title="Large (v3) requires more download space, memory and processing time.">
-                <option value="small">Small</option>
-                <option value="medium">Medium</option>
-                <option value="large-v3">Large (v3)</option>
-              </select>
-            </div>
+            <p id="whisper-retry-error" class="whisper-retry-error" role="alert" hidden></p>
           </div>
-          <p id="whisper-retry-error" class="whisper-retry-error" role="alert" hidden></p>
-          <div class="modal-actions whisper-retry-actions">
+          <div class="modal-actions">
             <button type="button" id="whisper-retry-cancel-btn" class="btn btn-secondary">Cancel</button>
             <button type="submit" id="whisper-retry-submit-btn" class="btn btn-primary">Retry with Whisper</button>
           </div>
@@ -173,13 +224,13 @@
             draggable="false"
           />
         </div>
-        <button type="button" class="rail-btn active" data-tab="record" aria-label="Record page" aria-current="page">
+        <button type="button" class="rail-btn active" data-tab="record" aria-label="Record" aria-current="page">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
             <path d="M5 11a7 7 0 0 0 14 0"/>
             <line x1="12" y1="18" x2="12" y2="22"/>
           </svg>
-          <span class="rail-tooltip">Record page</span>
+          <span class="rail-tooltip">Record</span>
         </button>
 
         <button type="button" class="rail-btn" data-tab="history" aria-label="History">
@@ -191,14 +242,122 @@
           <span class="rail-tooltip">History</span>
         </button>
 
-        <button type="button" class="rail-btn" id="import-audio-rail-button" aria-label="Upload meeting" aria-haspopup="dialog">
+        <button type="button" class="rail-btn" data-tab="chat" aria-label="Chat">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span class="rail-tooltip">Chat</span>
+        </button>
+
+        <button type="button" class="rail-btn" id="import-audio-rail-button" aria-label="Import audio" aria-haspopup="dialog">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M4 16v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4M12 16V3m-5 5 5-5 5 5"/>
           </svg>
-          <span class="rail-tooltip">Upload meeting</span>
+          <span class="rail-tooltip">Import audio</span>
         </button>
 
         <div class="rail-spacer"></div>
+
+        <button
+          type="button"
+          class="rail-btn rail-update-btn"
+          id="rail-update-btn"
+          aria-label="Updates"
+          aria-expanded="false"
+          aria-controls="update-popover"
+          aria-haspopup="dialog"
+          hidden
+        >
+          <svg
+            id="rail-update-ring"
+            class="rail-update-ring"
+            width="36"
+            height="36"
+            viewBox="0 0 36 36"
+            aria-hidden="true"
+            hidden
+          >
+            <circle class="rail-update-ring-track" cx="18" cy="18" r="15" />
+            <circle
+              id="rail-update-ring-fill"
+              class="rail-update-ring-fill"
+              cx="18"
+              cy="18"
+              r="15"
+              stroke-dasharray="94.25"
+              stroke-dashoffset="94.25"
+            />
+          </svg>
+          <svg
+            id="rail-update-icon-arrow"
+            class="rail-update-icon"
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="12" y1="19" x2="12" y2="5" />
+            <polyline points="5 12 12 5 19 12" />
+          </svg>
+          <svg
+            id="rail-update-icon-ready"
+            class="rail-update-icon"
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.1"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+            hidden
+          >
+            <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+            <polyline points="21 3 21 9 15 9" />
+          </svg>
+          <svg
+            id="rail-update-icon-spinner"
+            class="rail-update-icon rail-update-spinner"
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+            hidden
+          >
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          </svg>
+          <svg
+            id="rail-update-icon-alert"
+            class="rail-update-icon"
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+            hidden
+          >
+            <circle cx="12" cy="12" r="9" />
+            <line x1="12" y1="8" x2="12" y2="12" />
+            <line x1="12" y1="16" x2="12.01" y2="16" />
+          </svg>
+          <span id="rail-update-dot" class="rail-update-dot" aria-hidden="true" hidden></span>
+          <span id="rail-update-tooltip" class="rail-tooltip">Updates</span>
+        </button>
 
         <button type="button" class="rail-btn" data-tab="settings" aria-label="Settings">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -215,7 +374,7 @@
         <div class="top-bar">
           <div class="top-bar-title">
             <h1>AvaNevis</h1>
-            <span class="subtitle">Meeting Recorder &amp; Transcriber</span>
+            <span class="subtitle">Audio Recorder &amp; Transcriber</span>
           </div>
           <div class="top-bar-spacer"></div>
           <div id="recording-presence" class="top-bar-status recording-presence" hidden>
@@ -248,28 +407,111 @@
         </div>
       </header>
 
-      <!-- Update Notification Banner -->
-      <div id="update-banner" class="update-banner" style="display: none">
-        <div class="update-content">
-          <span class="update-icon" aria-hidden="true">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-              <polyline points="7 10 12 15 17 10"/>
-              <line x1="12" y1="15" x2="12" y2="3"/>
-            </svg>
-          </span>
-          <div class="update-text">
-            <strong id="update-title">Update Available</strong>
-            <p id="update-description">A new version is ready to download.</p>
+      <!-- Anchored Update Popover (beside left rail) -->
+      <aside
+        id="update-popover"
+        class="update-popover"
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby="update-popover-title"
+        hidden
+      >
+        <div class="update-popover-header">
+          <div class="update-popover-heading">
+            <div class="update-popover-meta-row">
+              <span id="update-status-chip" class="update-status-chip" data-tone="lilac">
+                <span class="update-status-chip-dot" aria-hidden="true"></span>
+                <span id="update-status-chip-label">Update available</span>
+              </span>
+              <span id="update-popover-version" class="update-version-badge" hidden></span>
+            </div>
+            <h2 id="update-popover-title" class="update-popover-title" tabindex="-1">Update available</h2>
           </div>
-          <div class="update-actions">
-            <button id="dismiss-update" class="btn-secondary">Later</button>
-            <button id="download-update" class="btn-primary">
-              Download Update
-            </button>
+          <button
+            type="button"
+            id="update-popover-close"
+            class="update-popover-close"
+            aria-label="Close update details"
+            title="Close"
+          >&times;</button>
+        </div>
+
+        <div id="update-popover-live" class="sr-only" role="status" aria-live="polite"></div>
+
+        <div class="update-popover-body">
+          <div
+            id="update-popover-notes"
+            class="update-release-notes markdown-body"
+            hidden
+          ></div>
+
+          <div id="update-popover-progress" class="update-progress-block" hidden>
+            <div
+              id="update-popover-progress-track"
+              class="update-progress-track"
+              role="progressbar"
+              aria-label="Update download progress"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            >
+              <div id="update-popover-progress-fill" class="update-progress-fill"></div>
+            </div>
+            <div class="update-progress-stats">
+              <span id="update-popover-progress-percent" class="update-progress-percent">0%</span>
+              <span id="update-popover-progress-bytes" class="update-progress-bytes"></span>
+              <span id="update-popover-progress-speed" class="update-progress-speed"></span>
+            </div>
+          </div>
+
+          <div id="update-popover-busy-notice" class="update-notice update-notice-amber" role="status" hidden>
+            <p>Recording in progress — restart once recording stops.</p>
+          </div>
+
+          <div
+            id="update-popover-ai-confirm"
+            class="update-ai-confirm"
+            role="region"
+            aria-label="Confirm restart during local AI work"
+            aria-describedby="update-ai-confirm-text"
+            hidden
+          >
+            <p id="update-ai-confirm-text" class="update-ai-confirm-text">Transcription or AI work is still running. Your recordings are saved and pending work will resume after restart.</p>
+            <div class="update-ai-confirm-actions">
+              <button type="button" id="update-ai-confirm-restart" class="btn btn-update-ready btn-small">Restart anyway</button>
+              <button type="button" id="update-ai-confirm-wait" class="btn btn-secondary btn-small">Wait</button>
+            </div>
+          </div>
+
+          <div id="update-popover-manual" class="update-manual-block" hidden>
+            <p id="update-popover-manual-guidance" class="update-manual-guidance">
+              System package installs update through your package manager.
+            </p>
+            <div class="update-manual-cmd-row">
+              <code id="update-popover-manual-cmd" class="update-manual-cmd"></code>
+              <button type="button" id="update-popover-manual-copy" class="btn btn-secondary btn-small">Copy</button>
+            </div>
+          </div>
+
+          <div id="update-popover-error" class="update-notice update-notice-crimson" role="alert" hidden>
+            <p id="update-popover-error-text"></p>
           </div>
         </div>
-      </div>
+
+        <div class="update-popover-footer">
+          <div class="update-popover-footer-primary">
+            <button type="button" id="update-popover-primary-btn" class="btn btn-primary btn-small" hidden>
+              Download update
+            </button>
+            <button type="button" id="update-popover-secondary-btn" class="btn btn-secondary btn-small" hidden>
+              GitHub
+            </button>
+          </div>
+          <button type="button" id="update-popover-tertiary-btn" class="update-link-btn" hidden>
+            Later
+          </button>
+        </div>
+      </aside>
 
       <!-- Main Content -->
       <main class="app-content">
@@ -366,7 +608,7 @@
               id="gpu-cta"
               class="gpu-cta"
               style="display: none"
-              title="Install CUDA for 4-5x faster transcription on your NVIDIA GPU"
+              title="Install CUDA for faster transcription on your NVIDIA GPU"
               aria-label="Install CUDA for faster transcription"
             >
               <span class="gpu-cta-icon" aria-hidden="true">
@@ -376,7 +618,7 @@
               </span>
               <span class="gpu-cta-text">
                 <strong>Install CUDA for faster transcription</strong>
-                <span class="gpu-cta-sub">NVIDIA GPU detected — enable 4-5x faster transcription</span>
+                <span class="gpu-cta-sub">NVIDIA GPU detected — install CUDA for faster transcription</span>
               </span>
               <span class="gpu-cta-arrow" aria-hidden="true">→</span>
             </button>
@@ -400,7 +642,7 @@
               </span>
               <span class="gpu-cta-text">
                 <strong id="ai-addon-cta-title">Set up local AI add-ons</strong>
-                <span class="gpu-cta-sub" id="ai-addon-cta-sub">Optional local speaker labels and summaries</span>
+                <span class="gpu-cta-sub" id="ai-addon-cta-sub">Optional local speaker labels, summaries, and Chat</span>
               </span>
               <span class="gpu-cta-arrow" aria-hidden="true">→</span>
             </button>
@@ -411,8 +653,8 @@
               style="display: none"
             >
               <div class="diarization-setup-prompt-copy">
-                <h3 id="diarization-setup-prompt-title">Add speaker labels to future transcripts</h3>
-                <p id="diarization-setup-prompt-message">Set up once. Speaker labels will be added automatically after transcription.</p>
+                <h3 id="diarization-setup-prompt-title">Label speakers automatically</h3>
+                <p id="diarization-setup-prompt-message">Set up once. Speaker labels are added automatically to new transcripts.</p>
               </div>
               <div class="diarization-setup-prompt-controls">
                 <div class="diarization-engine-selector" role="radiogroup" aria-label="Speaker engine">
@@ -422,7 +664,7 @@
                       <span>Speakrs</span>
                       <span class="setting-badge diarization-engine-recommended" data-speakrs-recommended hidden>Recommended</span>
                     </span>
-                    <span class="diarization-engine-card-sub" data-engine-sub="speakrs">No Hugging Face account.</span>
+                    <span class="diarization-engine-card-sub" data-engine-sub="speakrs">No account needed.</span>
                   </label>
                   <label class="diarization-engine-card" data-engine="pyannote" data-prompt-engine="pyannote" id="home-diarization-engine-pyannote" hidden>
                     <input type="radio" name="home-diarization-engine" value="pyannote" class="diarization-engine-radio" disabled />
@@ -432,7 +674,7 @@
                     <span class="diarization-engine-card-sub" data-engine-sub="pyannote">Needs a Hugging Face account.</span>
                   </label>
                 </div>
-                <p class="diarization-engine-static" data-speakrs-static hidden><span class="diarization-engine-static-label">Engine:</span> Speakrs</p>
+                <p class="diarization-engine-static" data-speakrs-static hidden><span class="diarization-engine-static-label">Engine:</span> Speakrs <span class="diarization-engine-static-meta">· No account needed</span></p>
                 <div class="ai-addon-field" id="home-diarization-token-field" hidden>
                   <label for="home-diarization-token-input">Hugging Face token</label>
                   <input
@@ -456,13 +698,13 @@
                 <span id="cuda-runtime-warning-sub">GPU runtime libraries are missing. Transcription will automatically fall back to CPU.</span>
               </div>
               <button type="button" id="cuda-runtime-warning-action" class="btn btn-small">
-                Open CUDA Settings
+                Open GPU settings
               </button>
             </div>
 
             <section class="card recording-section">
               <div class="recording-header">
-                <h2>Current Meeting</h2>
+                <h2>Record Audio</h2>
                 <div class="recording-status">
                   <div class="status-indicator" id="status-indicator"></div>
                   <span id="status-text">Ready</span>
@@ -483,8 +725,8 @@
                     </button>
                     <div id="record-mode-menu" class="record-mode-menu" role="menu"
                       aria-labelledby="record-mode-toggle" hidden>
-                      <button type="button" role="menuitem" data-capture-mode="mic-only">Record Mic Only</button>
-                      <button type="button" role="menuitem" data-capture-mode="desktop-only">Record Desktop Only</button>
+                      <button type="button" role="menuitem" data-capture-mode="mic-only">Record mic only</button>
+                      <button type="button" role="menuitem" data-capture-mode="desktop-only">Record desktop only</button>
                     </div>
                   </div>
                   <button
@@ -585,7 +827,7 @@
                 ></div>
                 <div class="activity-list" id="activity-list" role="list">
                   <p class="placeholder" id="activity-empty">
-                    Recordings you finish will appear here while they transcribe.
+                    Finished recordings appear here while they transcribe.
                   </p>
                 </div>
                 <div
@@ -624,13 +866,13 @@
               <!-- Sidebar: Meeting List -->
               <aside class="history-sidebar">
                 <div class="sidebar-header">
-                  <h3>Meetings</h3>
+                  <h3>Recordings</h3>
                   <div class="history-header-actions"><button type="button" id="import-audio-button" class="btn btn-small">Import audio</button>
                   <button
                     id="refresh-history"
                     class="btn-icon-only"
                     title="Refresh"
-                    aria-label="Refresh meetings"
+                    aria-label="Refresh recordings"
                   >
                     <svg
                       width="13"
@@ -659,8 +901,8 @@
                   <input
                     type="search"
                     id="meeting-search"
-                    placeholder="Search meetings..."
-                    aria-label="Search meetings"
+                    placeholder="Search recordings, transcripts, speakers…"
+                    aria-label="Search recordings"
                   />
                 </div>
 
@@ -681,14 +923,14 @@
                 </div>
 
                 <div class="meeting-list" id="meeting-list">
-                  <p class="placeholder">No meetings recorded yet</p>
+                  <p class="placeholder">No recordings yet</p>
                 </div>
               </aside>
 
               <!-- Main Content: Meeting Details -->
               <main class="history-content">
                 <div id="meeting-details-empty" class="empty-state">
-                  <p class="placeholder">Select a meeting to view details</p>
+                  <p class="placeholder">Select a recording to view details</p>
                 </div>
 
                 <div
@@ -700,13 +942,13 @@
                     <div class="meeting-header-layout">
                       <div class="meeting-heading-copy">
                         <div class="meeting-title-row" id="meeting-title-row">
-                          <h2 id="meeting-title">Meeting Details</h2>
+                          <h2 id="meeting-title">Recording Details</h2>
                           <button
                             type="button"
                             id="meeting-title-edit"
                             class="title-edit-btn"
-                            title="Rename meeting"
-                            aria-label="Rename meeting"
+                            title="Rename recording"
+                            aria-label="Rename recording"
                           >
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                               <path d="M12 20h9"/>
@@ -735,11 +977,19 @@
                           <span id="meeting-duration"></span>
                         </div>
                       </div>
-                      <div class="meeting-detail-actions" role="group" aria-label="Meeting actions">
+                      <div class="meeting-detail-actions" role="group" aria-label="Recording actions">
+                        <button
+                          type="button"
+                          id="ask-meeting-in-chat-btn"
+                          class="btn btn-secondary btn-small"
+                          title="Ask questions about this recording in Chat"
+                        >
+                          Ask in Chat
+                        </button>
                         <button
                           id="delete-meeting"
                           class="btn btn-danger btn-small"
-                          title="Delete Meeting"
+                          title="Delete recording"
                         >
                           Delete
                         </button>
@@ -797,7 +1047,7 @@
                     </div>
                   </div>
 
-                  <div class="history-detail-tabs" role="tablist" aria-label="Meeting details">
+                  <div class="history-detail-tabs" role="tablist" aria-label="Recording details">
                     <button
                       type="button"
                       class="history-detail-tab-btn active"
@@ -837,7 +1087,7 @@
                         </p>
                         <div class="transcript-section-actions history-toolbar-actions">
                           <div class="history-toolbar-group history-toolbar-processing">
-                            <button id="retry-transcription-btn" class="btn btn-small btn-secondary" type="button" style="display: none;">Retry Transcription</button>
+                            <button id="retry-transcription-btn" class="btn btn-small btn-secondary" type="button" style="display: none;">Retry transcription</button>
                             <button id="retry-whisper-transcription-btn" class="btn btn-small btn-secondary" type="button" hidden>Retry with Whisper…</button>
                             <button id="generate-summary-btn" class="btn btn-small btn-primary" type="button" disabled>Generate summary</button>
                           </div>
@@ -889,19 +1139,203 @@
             </div>
           </div>
 
+          <!-- Chat Tab -->
+          <section class="tab-pane chat-workspace" id="chat-tab" role="tabpanel" aria-label="Chat">
+            <aside class="chat-sidebar" id="chat-sidebar" aria-label="Chat threads">
+              <div class="chat-sidebar-header">
+                <button
+                  type="button"
+                  id="chat-new-thread-btn"
+                  class="btn btn-primary btn-small chat-new-thread-btn"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="12" y1="5" x2="12" y2="19"/>
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                  </svg>
+                  New chat
+                </button>
+                <button
+                  type="button"
+                  id="chat-sidebar-toggle"
+                  class="btn-icon-only chat-sidebar-toggle"
+                  title="Collapse threads sidebar"
+                  aria-label="Collapse threads sidebar"
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/>
+                    <line x1="9" y1="3" x2="9" y2="21"/>
+                  </svg>
+                </button>
+              </div>
+              <div class="sidebar-search chat-thread-search-wrap">
+                <span class="search-icon" aria-hidden="true">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="7"/>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                  </svg>
+                </span>
+                <input
+                  type="search"
+                  id="chat-thread-search"
+                  placeholder="Filter chats..."
+                  aria-label="Filter chat threads"
+                />
+              </div>
+              <div class="chat-thread-list" id="chat-thread-list" role="list">
+                <p class="placeholder">No conversations yet</p>
+              </div>
+            </aside>
+
+            <div class="chat-main">
+              <header class="chat-header">
+                <div class="chat-header-left">
+                  <button
+                    type="button"
+                    id="chat-sidebar-open-btn"
+                    class="btn-icon-only chat-sidebar-open-btn"
+                    title="Show threads sidebar"
+                    aria-label="Show threads sidebar"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="3" y="3" width="18" height="18" rx="2"/>
+                      <line x1="9" y1="3" x2="9" y2="21"/>
+                    </svg>
+                  </button>
+                  <div class="chat-header-titles">
+                    <h2 id="chat-thread-title">Ask your recordings</h2>
+                    <span class="chat-header-scope" id="chat-header-scope">All recordings</span>
+                  </div>
+                </div>
+                <div class="chat-header-right">
+                  <div class="chat-model-pill" id="chat-model-pill" data-state="unloaded" role="status" aria-live="polite">
+                    <span class="chat-model-dot" aria-hidden="true"></span>
+                    <span class="chat-model-pill-label" id="chat-model-pill-label">Not loaded</span>
+                    <button
+                      type="button"
+                      id="chat-unload-model-btn"
+                      class="chat-unload-model-btn"
+                      hidden
+                      title="Unload local model from memory"
+                    >
+                      Unload
+                    </button>
+                  </div>
+                </div>
+              </header>
+
+              <div class="chat-stream-scroll" id="chat-stream-scroll">
+                <div class="chat-stream">
+                  <section class="chat-onboarding-card" id="chat-onboarding-card" hidden>
+                    <div class="chat-onboarding-copy">
+                      <h3>Chat requires the Summaries &amp; Chat add-on</h3>
+                      <p id="chat-onboarding-reason">
+                        Set up the local Summaries &amp; Chat add-on in Settings to ask questions across your transcripts. Keyword search in History works without any add-ons.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      id="chat-open-ai-settings-btn"
+                      class="btn btn-primary btn-small"
+                    >
+                      Open AI Add-ons in Settings
+                    </button>
+                  </section>
+
+                  <div class="chat-empty-state" id="chat-empty-state">
+                    <p class="chat-empty-kicker">Local only · Linked to timestamps</p>
+                    <h3>Ask about your recordings</h3>
+                    <p class="chat-empty-subtitle">
+                      Answers use only your saved transcripts and link directly to matching timestamps. The local model loads on demand and can be unloaded anytime to free memory.
+                    </p>
+                    <div class="chat-starter-grid" id="chat-starter-prompts"></div>
+                  </div>
+
+                  <div class="chat-messages" id="chat-messages" role="log" aria-live="polite"></div>
+
+                  <div class="chat-progress-banner" id="chat-progress-banner" hidden role="status" aria-live="polite">
+                    <span class="chat-progress-spinner" aria-hidden="true"></span>
+                    <span id="chat-progress-text">Searching your transcripts…</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="chat-composer-shell">
+                <div class="chat-composer-inner">
+                  <div class="chat-scope-popover" id="chat-scope-popover" hidden role="dialog" aria-label="Search scope">
+                    <div class="chat-scope-mode-row">
+                      <button type="button" id="chat-scope-all-btn" class="btn btn-small">All recordings</button>
+                      <button type="button" id="chat-scope-selected-btn" class="btn btn-small">Select recordings…</button>
+                    </div>
+                    <div id="chat-scope-selected-panel" class="chat-scope-selected-panel" hidden>
+                      <input
+                        type="search"
+                        id="chat-scope-meeting-filter"
+                        class="chat-scope-filter-input"
+                        placeholder="Filter recordings…"
+                        aria-label="Filter recordings"
+                      />
+                      <div id="chat-scope-meetings-list" class="chat-scope-meetings-list"></div>
+                    </div>
+                    <div class="chat-scope-dates-row">
+                      <label>
+                        <span>From</span>
+                        <input type="date" id="chat-scope-date-from" />
+                      </label>
+                      <label>
+                        <span>To</span>
+                        <input type="date" id="chat-scope-date-to" />
+                      </label>
+                    </div>
+                    <div class="chat-scope-popover-actions">
+                      <button type="button" id="chat-scope-clear-btn" class="btn btn-small btn-secondary">Reset</button>
+                      <button type="button" id="chat-scope-apply-btn" class="btn btn-small btn-primary">Apply scope</button>
+                    </div>
+                  </div>
+
+                  <div class="chat-composer-dock">
+                    <button
+                      type="button"
+                      id="chat-scope-btn"
+                      class="chat-scope-btn"
+                      aria-expanded="false"
+                      aria-controls="chat-scope-popover"
+                      title="Choose which recordings or dates to search"
+                    >
+                      <span class="chat-scope-dot" aria-hidden="true"></span>
+                      <span id="chat-scope-btn-label">All recordings</span>
+                    </button>
+                    <textarea
+                      id="chat-input"
+                      class="chat-input"
+                      rows="1"
+                      maxlength="2000"
+                      placeholder="Ask a question…"
+                      aria-label="Ask a question about your recordings"
+                      title="Enter to send. Shift+Enter for a new line."
+                    ></textarea>
+                    <button
+                      type="button"
+                      id="chat-send-btn"
+                      class="btn btn-primary btn-small chat-send-btn"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <!-- Settings Tab -->
           <div class="tab-pane" id="settings-tab">
             <section class="card settings-section">
               <h2>Settings</h2>
               <nav class="settings-subnav" aria-label="Settings sections">
                 <a href="#transcription-settings">Transcription</a>
-                <span aria-hidden="true">·</span>
                 <a href="#gpu-settings">GPU Acceleration</a>
-                <span aria-hidden="true">·</span>
                 <a href="#ai-addons-settings">AI Add-ons</a>
-                <span aria-hidden="true">·</span>
                 <a href="#keyboard-shortcuts-settings">Keyboard Shortcuts</a>
-                <span aria-hidden="true">·</span>
+                <a href="#updates-settings" class="settings-subnav-link">Updates</a>
                 <a href="#about-settings">About</a>
               </nav>
 
@@ -913,51 +1347,61 @@
                     <span class="setting-badge enabled" id="transcription-active-engine-badge">Whisper active</span>
                   </div>
                   <p class="setting-description">
-                    Use Whisper for multiple languages, or Parakeet for English. Each recording saves its engine.
+                    Choose which local engine transcribes new recordings. Whisper supports 11 languages; Parakeet v2 is English-only and requires a compatible GPU. Each recording saves its own engine.
                   </p>
 
                   <div class="transcription-engine-settings">
-                    <div class="transcription-engine-row" id="parakeet-engine-row">
-                      <div class="transcription-engine-row-copy">
-                        <div class="transcription-engine-row-heading">
-                          <h4>Parakeet</h4>
-                          <span class="setting-badge" id="parakeet-status-badge">Checking…</span>
+                    <div class="transcription-engine-card is-active" id="whisper-engine-card">
+                      <div class="transcription-engine-row-heading">
+                        <h4>Whisper</h4>
+                        <span class="setting-badge enabled" id="whisper-status-badge">Active</span>
+                      </div>
+                      <p class="transcription-engine-description">Default engine. Supports 11 languages and runs on CPU or GPU.</p>
+                      <div class="transcription-whisper-summary">
+                        <span>Selected on Record page</span>
+                        <span class="transcription-engine-preferences" id="whisper-preferences-summary">English · Small</span>
+                      </div>
+                    </div>
+
+                    <div class="transcription-engine-card" id="parakeet-engine-card">
+                      <div class="transcription-engine-row" id="parakeet-engine-row">
+                        <div class="transcription-engine-row-copy">
+                          <div class="transcription-engine-row-heading">
+                            <h4>Parakeet v2</h4>
+                            <span class="setting-badge" id="parakeet-status-badge">Checking…</span>
+                          </div>
+                          <p class="transcription-engine-description" id="parakeet-engine-description">English only. Requires an NVIDIA CUDA GPU or Apple Silicon.</p>
                         </div>
-                        <p class="transcription-engine-description" id="parakeet-engine-description">Optional local English transcription. English only.</p>
+                        <label class="transcription-engine-toggle" for="use-parakeet-engine-toggle">
+                          <span>Use Parakeet</span>
+                          <input type="checkbox" id="use-parakeet-engine-toggle" role="switch" aria-label="Use Parakeet for future recordings" aria-describedby="parakeet-engine-description parakeet-status-text" disabled />
+                          <span class="transcription-engine-toggle-track" aria-hidden="true"><span></span></span>
+                        </label>
                       </div>
-                      <label class="transcription-engine-toggle" for="use-parakeet-engine-toggle">
-                        <span>Use Parakeet</span>
-                        <input type="checkbox" id="use-parakeet-engine-toggle" role="switch" aria-label="Use Parakeet for future recordings" aria-describedby="parakeet-engine-description parakeet-status-text" disabled />
-                        <span class="transcription-engine-toggle-track" aria-hidden="true"><span></span></span>
-                      </label>
-                    </div>
-                    <p class="transcription-engine-status" id="parakeet-status-text" role="status" aria-live="polite">Checking Parakeet…</p>
-                    <p class="transcription-engine-active-warning" id="parakeet-active-warning" role="status" hidden>
-                      Parakeet is selected but unavailable. Turn it off to use Whisper; saved recordings remain available in History.
-                    </p>
-                    <p class="transcription-engine-operation-error" id="parakeet-operation-error" role="alert" hidden></p>
-                    <div class="transcription-engine-progress" id="parakeet-progress" hidden>
-                      <div class="progress-bar-container" id="parakeet-progress-track" role="progressbar" aria-label="Parakeet setup progress" aria-valuemin="0" aria-valuemax="100">
-                        <div class="progress-bar" id="parakeet-progress-bar"></div>
+                      <p class="transcription-engine-status" id="parakeet-status-text" role="status" aria-live="polite">Checking Parakeet…</p>
+                      <p class="transcription-engine-active-warning" id="parakeet-active-warning" role="status" hidden>
+                        Parakeet is selected but unavailable. Turn off Use Parakeet to switch back to Whisper; saved recordings stay in History.
+                      </p>
+                      <p class="transcription-engine-operation-error" id="parakeet-operation-error" role="alert" hidden></p>
+                      <div class="transcription-engine-progress" id="parakeet-progress" hidden>
+                        <div class="progress-bar-container" id="parakeet-progress-track" role="progressbar" aria-label="Parakeet setup progress" aria-valuemin="0" aria-valuemax="100">
+                          <div class="progress-bar" id="parakeet-progress-bar"></div>
+                        </div>
+                        <p class="progress-text" id="parakeet-progress-text">Starting…</p>
                       </div>
-                      <p class="progress-text" id="parakeet-progress-text">Starting…</p>
-                    </div>
-                    <p class="transcription-engine-download" id="parakeet-download-size" hidden></p>
-                    <div class="transcription-engine-actions">
-                      <button type="button" id="parakeet-setup-btn" class="btn btn-primary btn-small" hidden>Set up Parakeet</button>
-                      <button type="button" id="parakeet-cancel-btn" class="btn btn-secondary btn-small" hidden>Cancel</button>
-                      <button type="button" id="parakeet-recheck-btn" class="btn btn-secondary btn-small" hidden>Recheck</button>
-                      <button type="button" id="parakeet-validate-btn" class="btn btn-secondary btn-small" hidden>Validate</button>
-                      <button type="button" id="parakeet-repair-btn" class="btn btn-secondary btn-small" hidden>Repair</button>
-                      <button type="button" id="parakeet-remove-btn" class="btn btn-danger btn-small" hidden>Remove</button>
-                    </div>
-                    <details class="transcription-engine-evidence">
-                      <summary>Performance notes</summary>
-                      <p>On one CachyOS RTX 4070 test, Parakeet was faster than Whisper Medium but used more GPU memory, with similar measured WER. Windows and Mac performance has not been measured.</p>
-                    </details>
-                    <div class="transcription-whisper-summary">
-                      <span>Whisper when off</span>
-                      <span class="transcription-engine-preferences" id="whisper-preferences-summary">English · Small</span>
+                      <p class="transcription-engine-download" id="parakeet-download-size" hidden></p>
+                      <div class="transcription-engine-actions">
+                        <button type="button" id="parakeet-setup-btn" class="btn btn-primary btn-small" hidden>Set up Parakeet</button>
+                        <button type="button" id="parakeet-cancel-btn" class="btn btn-secondary btn-small" hidden>Cancel</button>
+                        <button type="button" id="parakeet-recheck-btn" class="btn btn-secondary btn-small" hidden>Recheck</button>
+                        <button type="button" id="parakeet-validate-btn" class="btn btn-secondary btn-small" hidden>Check setup</button>
+                        <button type="button" id="parakeet-repair-btn" class="btn btn-secondary btn-small" hidden>Repair</button>
+                        <button type="button" id="parakeet-remove-btn" class="btn btn-danger btn-small" hidden>Remove</button>
+                      </div>
+                      <details class="transcription-engine-evidence">
+                        <summary>About Parakeet</summary>
+                        <p>Parakeet transcribes English faster than Whisper on supported GPUs, but uses more GPU memory. Whisper supports 11 languages and also runs on CPU.</p>
+                      </details>
                     </div>
                   </div>
                 </div>
@@ -1007,14 +1451,14 @@
                       disabled
                       style="display: none"
                     >
-                      Install GPU Acceleration
+                      Install GPU acceleration
                     </button>
                     <button
                       id="uninstall-gpu-btn"
                       class="btn btn-secondary"
                       style="display: none"
                     >
-                      Uninstall GPU Libraries
+                      Uninstall GPU libraries
                     </button>
                   </div>
 
@@ -1047,7 +1491,7 @@
                   </div>
 
                   <p class="setting-description">
-                    Optional local-only features for speaker labels and meeting summaries. Enabling downloads local files to this device; disabling removes them. Models and tokens stay on this device. Enabling summaries does not generate a summary.
+                    Optional features that run locally on this device. Enabling an add-on downloads its model files; removing it deletes them. Models and tokens stay on this device.
                   </p>
                   <div class="ai-addon-actions" id="ai-addon-retry-row" hidden>
                     <button id="retry-ai-addon-status-btn" class="btn btn-small" type="button">Retry</button>
@@ -1058,7 +1502,7 @@
                       <div class="ai-addon-card-header">
                         <div>
                           <h4>Speaker Identification</h4>
-                          <p>Runs after transcription when setup is ready.</p>
+                          <p>Labels different speakers automatically on new recordings once set up.</p>
                         </div>
                         <span class="setting-badge" id="diarization-status-badge">Checking&hellip;</span>
                       </div>
@@ -1070,7 +1514,7 @@
                             <span>Speakrs</span>
                             <span class="setting-badge diarization-engine-recommended" data-speakrs-recommended hidden>Recommended</span>
                           </span>
-                          <span class="diarization-engine-card-sub" id="diarization-engine-speakrs-sub">No Hugging Face account.</span>
+                          <span class="diarization-engine-card-sub" id="diarization-engine-speakrs-sub">No account needed.</span>
                         </label>
                         <label class="diarization-engine-card" data-engine="pyannote" id="diarization-engine-pyannote" hidden>
                           <input type="radio" name="settings-diarization-engine" value="pyannote" class="diarization-engine-radio" disabled />
@@ -1080,7 +1524,7 @@
                           <span class="diarization-engine-card-sub" id="diarization-engine-pyannote-sub">Needs a Hugging Face account.</span>
                         </label>
                       </div>
-                      <p class="diarization-engine-static" data-speakrs-static hidden>Engine: Speakrs</p>
+                      <p class="diarization-engine-static" data-speakrs-static hidden><span class="diarization-engine-static-label">Engine: Speakrs</span><span class="diarization-engine-static-meta">· No account needed · NVIDIA CUDA</span></p>
 
                       <div class="ai-addon-field" id="diarization-token-field" hidden>
                         <label for="diarization-token-input">Hugging Face token</label>
@@ -1093,8 +1537,7 @@
                           disabled
                         />
                         <p class="ai-addon-help">
-                          Create a Hugging Face read token from Settings > Access Tokens, then accept the pyannote model terms before setup.
-                          If a token is already saved, leave this blank to reuse it.
+                          Create a Hugging Face read token and accept the pyannote model terms before setup. Leave blank to reuse a saved token.
                           <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener noreferrer">Create token</a>
                           <a href="https://huggingface.co/pyannote/speaker-diarization-community-1" target="_blank" rel="noopener noreferrer">Open model terms</a>
                         </p>
@@ -1122,7 +1565,7 @@
                       </div>
                       <div class="ai-addon-actions">
                         <button id="setup-diarization-btn" class="btn btn-primary btn-small" disabled>Enable speaker identification</button>
-                        <button id="cancel-diarization-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel Download</button>
+                        <button id="cancel-diarization-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel download</button>
                         <button id="validate-diarization-btn" class="btn btn-small" disabled>Check setup</button>
                         <button id="remove-diarization-btn" class="btn btn-danger btn-small" disabled>Disable and remove…</button>
                       </div>
@@ -1131,14 +1574,14 @@
                     <div class="ai-addon-card" id="summary-addon-card">
                       <div class="ai-addon-card-header">
                         <div>
-                          <h4>Meeting Summaries</h4>
-                          <p>User-triggered summaries from saved transcripts.</p>
+                          <h4>Summaries &amp; Chat</h4>
+                          <p>Generate summaries from transcripts on demand and ask questions in Chat.</p>
                         </div>
                         <span class="setting-badge" id="summary-status-badge">Checking&hellip;</span>
                       </div>
 
                       <div class="ai-addon-field compact">
-                        <label for="summary-profile-select">Profile</label>
+                        <label for="summary-profile-select">Summary style</label>
                         <select id="summary-profile-select" class="device-select" disabled>
                           <option value="concise">Concise</option>
                           <option value="balanced" selected>Balanced</option>
@@ -1157,7 +1600,7 @@
                       </div>
                       <div class="ai-addon-actions">
                         <button id="setup-summary-btn" class="btn btn-primary btn-small" disabled>Enable summaries</button>
-                        <button id="cancel-summary-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel Download</button>
+                        <button id="cancel-summary-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel download</button>
                         <button id="validate-summary-btn" class="btn btn-small" disabled>Check setup</button>
                         <button id="remove-summary-btn" class="btn btn-danger btn-small" disabled>Disable and remove…</button>
                       </div>
@@ -1177,10 +1620,10 @@
                   <div class="setting-header">
                     <h3>Keyboard Shortcuts</h3>
                   </div>
-                  <p class="setting-description" id="keyboard-shortcuts-note">Works while AvaNevis is focused. Start uses Mic + Desktop; use the recording menu for other modes.</p>
+                  <p class="setting-description" id="keyboard-shortcuts-note">Works while AvaNevis is focused. Start Recording captures mic and desktop audio; use its dropdown menu for single-source modes.</p>
                   <div class="gpu-info keyboard-shortcuts-table" role="table" aria-label="Keyboard shortcuts">
                     <div class="info-row" role="row">
-                      <span class="info-label" role="cell">Record page</span>
+                      <span class="info-label" role="cell">Record</span>
                       <span class="info-value" role="cell" data-shortcut-display="goto-record">Ctrl+Shift+1</span>
                     </div>
                     <div class="info-row" role="row">
@@ -1188,8 +1631,12 @@
                       <span class="info-value" role="cell" data-shortcut-display="goto-history">Ctrl+Shift+2</span>
                     </div>
                     <div class="info-row" role="row">
+                      <span class="info-label" role="cell">Chat</span>
+                      <span class="info-value" role="cell" data-shortcut-display="goto-chat">Ctrl+Shift+3</span>
+                    </div>
+                    <div class="info-row" role="row">
                       <span class="info-label" role="cell">Settings</span>
-                      <span class="info-value" role="cell" data-shortcut-display="goto-settings">Ctrl+Shift+3</span>
+                      <span class="info-value" role="cell" data-shortcut-display="goto-settings">Ctrl+Shift+4</span>
                     </div>
                     <div class="info-row" role="row">
                       <span class="info-label" role="cell">Start recording</span>
@@ -1201,6 +1648,83 @@
                     </div>
                   </div>
                 </div>
+
+                <!-- Updates -->
+                <section class="settings-group" id="updates-settings">
+                  <div class="setting-header">
+                    <h3>Updates</h3>
+                    <span class="setting-badge enabled" id="update-settings-badge">Up to date</span>
+                  </div>
+                  <p class="setting-description">
+                    Checks GitHub Releases for new versions. No usage data is sent.
+                  </p>
+                  <div class="gpu-info update-settings-meta">
+                    <div class="info-row">
+                      <span class="info-label">Current version</span>
+                      <span class="info-value" id="update-settings-version">Loading&hellip;</span>
+                    </div>
+                    <div class="info-row">
+                      <span class="info-label">Update method</span>
+                      <span class="info-value" id="update-settings-mode">Automatic in-app</span>
+                    </div>
+                    <div class="info-row">
+                      <span class="info-label">Last checked</span>
+                      <span class="info-value" id="update-settings-last-checked">Never</span>
+                    </div>
+                  </div>
+
+                  <div id="update-settings-progress" class="update-progress-block update-settings-progress" hidden>
+                    <div
+                      id="update-settings-progress-track"
+                      class="update-progress-track"
+                      role="progressbar"
+                      aria-label="Update download progress"
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow="0"
+                    >
+                      <div id="update-settings-progress-fill" class="update-progress-fill"></div>
+                    </div>
+                    <div class="update-progress-stats">
+                      <span id="update-settings-progress-percent" class="update-progress-percent">0%</span>
+                      <span id="update-settings-progress-bytes" class="update-progress-bytes"></span>
+                      <span id="update-settings-progress-speed" class="update-progress-speed"></span>
+                    </div>
+                  </div>
+
+                  <p id="update-settings-busy-notice" class="update-settings-notice update-notice-amber" role="status" hidden>
+                    Recording in progress — restart once recording stops.
+                  </p>
+                  <p id="update-settings-error" class="update-settings-notice update-notice-crimson" role="alert" hidden></p>
+
+                  <div class="update-settings-actions">
+                    <button type="button" id="update-settings-primary-btn" class="btn btn-primary btn-small">
+                      Check for updates
+                    </button>
+                    <button type="button" id="update-settings-github-btn" class="btn btn-secondary btn-small">
+                      View releases on GitHub
+                    </button>
+                  </div>
+
+                  <div class="update-settings-toggle-row">
+                    <div class="update-settings-toggle-copy">
+                      <span class="update-settings-toggle-title">Automatically download updates in the background</span>
+                      <p class="setting-description update-settings-toggle-desc" id="auto-download-updates-hint">
+                        When off, AvaNevis checks for new releases and waits for you to start the download.
+                      </p>
+                    </div>
+                    <label class="transcription-engine-toggle" for="auto-download-updates-toggle">
+                      <input
+                        type="checkbox"
+                        id="auto-download-updates-toggle"
+                        role="switch"
+                        aria-label="Automatically download updates in the background"
+                        aria-describedby="auto-download-updates-hint"
+                      />
+                      <span class="transcription-engine-toggle-track" aria-hidden="true"><span></span></span>
+                    </label>
+                  </div>
+                </section>
 
                 <!-- App Info -->
                 <div class="settings-group" id="about-settings">
@@ -1224,7 +1748,7 @@
                     </div>
                   </div>
                   <p class="about-credits">
-                    Transcription uses OpenAI Whisper (MIT). Optional speaker labels use
+                    Transcription uses OpenAI Whisper (MIT) or optional NVIDIA Parakeet (<code>parakeet-tdt-0.6b-v2</code>, CC BY 4.0). Optional speaker labels use
                     <a
                       href="https://github.com/avencera/speakrs"
                       target="_blank"
@@ -1238,7 +1762,7 @@
                       rel="noopener noreferrer"
                       >pyannote Speaker Diarization Community-1</a
                     >
-                    (CC BY 4.0). Optional summaries use
+                    (CC BY 4.0, Windows and macOS). Optional summaries and Chat use
                     <a
                       href="https://huggingface.co/Qwen/Qwen3.5-9B"
                       target="_blank"
@@ -1252,7 +1776,7 @@
                       rel="noopener noreferrer"
                       >llama.cpp</a
                     >
-                    (MIT); Linux CUDA summaries also use the pinned
+                    (MIT); Linux CUDA also uses the
                     <a
                       href="https://github.com/ai-dock/llama.cpp-cuda"
                       target="_blank"
@@ -1279,8 +1803,15 @@
 
       <!-- Footer -->
       <footer>
-        <p>Powered by Whisper AI &middot; All processing happens locally</p>
+        <p>All recording and transcription runs locally on this device</p>
       </footer>
+      <div
+        id="app-toast"
+        class="app-toast"
+        hidden
+        role="status"
+        aria-live="polite"
+      ></div>
       </div><!-- /.app-pane -->
     </div>
 
@@ -1289,6 +1820,7 @@
     <script src="recovery-ui-helpers.js"></script>
     <script src="update-notification-helpers.js"></script>
     <script src="history-detail-helpers.js"></script>
+    <script src="history-search-helpers.js"></script>
     <script src="formatters.js"></script>
     <script src="summary-ui-helpers.js"></script>
     <script src="summary-language-helpers.js"></script>
@@ -1300,6 +1832,11 @@
     <script src="canvas-helpers.js"></script>
     <script src="keyboard-shortcut-helpers.js"></script>
     <script src="transcription-engine-helpers.js"></script>
+    <script src="subtitle-export-helpers.js"></script>
+    <script src="../../node_modules/marked/lib/marked.umd.js"></script>
+    <script src="../../node_modules/dompurify/dist/purify.min.js"></script>
+    <script src="markdown-render-helpers.js"></script>
+    <script src="chat-helpers.js"></script>
     <script src="../transcription-policy.js"></script>
     <script src="app.js"></script>
   </body>

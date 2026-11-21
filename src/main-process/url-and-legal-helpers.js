@@ -24,6 +24,41 @@ function buildFileUrl(filePath) {
   return pathToFileURL(path.resolve(normalizedPath)).toString();
 }
 
+function hasUnsafeHttpsPath(rawUrl, parsedUrl) {
+  const str = String(rawUrl || '').trim();
+  const schemeMatch = str.match(/^https:\/\/[^/?#]+(\/[^?#]*)?/i);
+  const rawPath = (schemeMatch && schemeMatch[1]) ? schemeMatch[1] : '';
+  const pathname = String((parsedUrl && parsedUrl.pathname) || '');
+
+  if (/%2f|%5c|\\/i.test(rawPath) || /%2f|%5c|\\/i.test(pathname)) {
+    return true;
+  }
+
+  let decodedRawPath;
+  let decodedPathname;
+  try {
+    decodedRawPath = decodeURIComponent(rawPath);
+    decodedPathname = decodeURIComponent(pathname);
+  } catch (_error) {
+    return true;
+  }
+
+  if (
+    decodedRawPath.includes('\\')
+    || decodedRawPath.includes('\0')
+    || decodedPathname.includes('\\')
+    || decodedPathname.includes('\0')
+  ) {
+    return true;
+  }
+
+  if (decodedRawPath.split('/').some((seg) => seg === '.' || seg === '..')) {
+    return true;
+  }
+
+  return decodedPathname.split('/').some((seg) => seg === '.' || seg === '..');
+}
+
 function isTrustedExternalUrl(url) {
   try {
     const parsedUrl = new URL(String(url || ''));
@@ -33,6 +68,14 @@ function isTrustedExternalUrl(url) {
     }
 
     if (parsedUrl.protocol !== 'https:') {
+      return false;
+    }
+
+    if (parsedUrl.username || parsedUrl.password || parsedUrl.port) {
+      return false;
+    }
+
+    if (hasUnsafeHttpsPath(url, parsedUrl)) {
       return false;
     }
 

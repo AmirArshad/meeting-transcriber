@@ -47,13 +47,13 @@ const SUMMARY_PROFILES = Object.freeze([
   {
     id: 'concise',
     label: 'Concise',
-    description: 'Short overview with the most important decisions and next steps.',
+    description: 'Short overview with key points and next steps.',
     outputBudget: 'small',
   },
   {
     id: DEFAULT_SUMMARY_PROFILE,
     label: 'Balanced',
-    description: 'Default meeting notes with topics, decisions, actions, risks, and questions.',
+    description: 'Standard summary with topics, decisions, action items, risks, and open questions.',
     outputBudget: 'medium',
   },
   {
@@ -891,9 +891,9 @@ function getAiAddonPaths(userDataDir) {
   };
 }
 
-const LINUX_DIARIZATION_UNAVAILABLE_REASON = 'Speaker identification on Linux requires the managed CUDA 12 runtime, an NVIDIA GPU, and x86_64. CPU-only speaker identification is not supported.';
-const LINUX_SUMMARY_UNAVAILABLE_REASON = 'Local Qwen summaries on Linux require the managed CUDA 12 runtime, an NVIDIA GPU, verified x86_64 artifacts, and the packaged CUDA-only path. CPU, Vulkan, SYCL, ROCm, and cloud summaries are not supported.';
-const LINUX_PYANNOTE_UNAVAILABLE_REASON = 'Pyannote speaker identification is not available on Linux in this version.';
+const LINUX_DIARIZATION_UNAVAILABLE_REASON = 'Speaker identification on Linux requires an NVIDIA GPU (x86_64) and the CUDA 12 runtime installed in GPU Acceleration. CPU mode is not supported.';
+const LINUX_SUMMARY_UNAVAILABLE_REASON = 'Summaries and Chat on Linux require an NVIDIA GPU (x86_64) and the CUDA 12 runtime installed in GPU Acceleration. CPU and cloud modes are not supported.';
+const LINUX_PYANNOTE_UNAVAILABLE_REASON = 'Pyannote is not available on Linux. Use Speakrs instead.';
 
 function getLinuxSpeakrsUnavailableReason({ arch, cudaStatus } = {}) {
   if (arch !== 'x64') {
@@ -909,7 +909,7 @@ function getLinuxSpeakrsUnavailableReason({ arch, cudaStatus } = {}) {
   if (!detail) {
     return LINUX_DIARIZATION_UNAVAILABLE_REASON;
   }
-  return `Speaker identification on Linux requires the managed CUDA 12 runtime and a working NVIDIA GPU.${detail} CPU-only speaker identification is not supported.`;
+  return `Speaker identification on Linux requires an NVIDIA GPU and the CUDA 12 runtime.${detail} CPU mode is not supported.`;
 }
 
 function getDiarizationAvailability(platform, arch, options = {}) {
@@ -936,7 +936,7 @@ function getDiarizationAvailability(platform, arch, options = {}) {
   if (platform === 'darwin') {
     return {
       supported: false,
-      reason: 'Speaker identification on macOS requires Apple Silicon with PyTorch Metal/MPS acceleration. CPU-only diarization is not supported.',
+      reason: 'Speaker identification on macOS requires Apple Silicon. Intel Macs are not supported.',
       acceleration: 'unsupported',
       runtimeDevice: null,
       automaticAfterTranscription: false,

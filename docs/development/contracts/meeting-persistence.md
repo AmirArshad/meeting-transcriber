@@ -4,7 +4,9 @@
 
 ### Meeting metadata persistence
 
-Changing `backend/meeting_manager.py` must preserve: `FileLock` cross-process locking; atomic temp-file + `os.replace()` writes; transactional add that removes originals only **after** metadata is saved; corrupt-metadata backups named `meetings.corrupt.*.json`; scan/import preservation of suffixed IDs like `meeting_20260107_104555_1`; and recorder-temp recovery before selecting scannable `.opus`/`.wav` files (never import `.pcm.tmp` or legacy `*.temp.wav` as meetings). Delete must tolerate Windows file locking with retry.
+Changing `backend/meeting_manager.py` must preserve: `FileLock` cross-process locking (`meetings.json.lock` for atomic metadata transactions, plus separate `scan_recovery.lock` serialized outside `meetings.json.lock` for slow recorder-temp recovery and filesystem/duration probing so `list_meetings`, `update_meeting`, `add_meeting`, and `delete_meeting` never wait behind recovery scans); atomic temp-file + `os.replace()` writes; transactional add that removes originals only **after** metadata is saved; corrupt-metadata backups named `meetings.corrupt.*.json`; scan/import preservation of suffixed IDs like `meeting_20260107_104555_1`; and recorder-temp recovery before selecting scannable `.opus`/`.wav` files (never import `.pcm.tmp` or legacy `*.temp.wav` as meetings). Delete must tolerate Windows file locking with retry and clean up `{stem}.captions.json` alongside `.md`/audio.
+
+Schema-v1 caption timing sidecars store pre-merge fine-grained millisecond cues (and optional word timings) bound to the committed transcript via LF-normalized `sourceTranscriptHash` (`sha256`). Legacy meetings can read `{audioStem}.captions.json`. Transcription attempts prepare `{audioStem}.transcript-{attemptId}.captions.json` alongside their new Markdown and commit both paths in one atomic metadata write. The previous pair remains readable until that write succeeds. Successful commits clean up superseded files, and meeting deletion removes both referenced and legacy captions. Saved Markdown remains the human-readable source of truth. Stale sidecars are rejected so subtitle exporters never fabricate millisecond timings.
 
 Public methods stay instance methods — the tests monkeypatch them as seams.
 
@@ -23,3 +25,13 @@ retained. If the metadata cannot be trusted, recovery preserves both the files
 and markers. Abandoned staging cleanup must leave these root markers alone. A failed
 cleanup leaves its marker for a later reconciliation; it must not expose a partial
 import as a scanned meeting.
+
+### Derived History Search Index & Chat Thread Persistence (`userData` only)
+
+- **Search cache (`userData/search/history-index.sqlite`):** Disposable SQLite FTS5 cache (`journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`, `unicode61 remove_diacritics 2`) rebuilt atomically via temp file + `os.replace()` whenever missing, stale in schema, or unreadable (`sqlite3.DatabaseError`). `meetings.json`, `.md`, caption timing sidecars, and hash-matched summary sidecars remain the sole source of truth; hard deletes remove corresponding index rows immediately on sync so deleted recordings never surface in search or Q&A.
+- **Chat threads (`userData/chat/threads.json`):** Owned by main-process `src/main/chat-thread-store.js` with serialized mutations, same-directory temp file + `fsync` + atomic rename, and corrupt-file quarantine (`threads.corrupt.<timestamp>.json`). Deleting a recording leaves historical chat messages intact while citation clicks verify live availability and show a non-blocking toast (`"This recording is no longer in History."`) if missing.
+
+### Output & naming boundary
+
+- Default generated titles use `Recording YYYY-MM-DD HH:MM` (renderer helpers recognize both `Recording` and legacy `Meeting` prefixes as default titles); transcript Markdown begins with `# Audio Transcript`, and summary Markdown begins with `# Summary` (localized equivalents in `backend/summaries/language_labels.py`).
+- On-disk storage (`meetings.json`, `meeting_<id>.*`, `meetings.corrupt.*.json`) and `backend/meeting_manager.py` APIs intentionally retain legacy `meeting` naming until a dedicated refactor.

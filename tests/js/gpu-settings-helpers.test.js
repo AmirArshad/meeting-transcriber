@@ -43,7 +43,7 @@ test('resolveGpuSettingsSurface keeps Linux off the Windows CUDA surface', () =>
 test('unsupported GPU settings copy keeps Linux CUDA opt-in until an NVIDIA GPU is present', () => {
   const linux = getUnsupportedGpuSettingsCopy('linux');
   assert.match(linux.description, /No NVIDIA GPU was detected/i);
-  assert.match(linux.description, /CPU faster-whisper/);
+  assert.match(linux.description, /Transcription uses CPU/);
   assert.match(linux.description, /best-effort/i);
   assert.equal(linux.statusLabel, 'CPU transcription');
   assert.match(linux.diagnostics, /opt-in/i);
@@ -62,7 +62,7 @@ test('Linux CUDA settings copy is opt-in and mentions uninstall back to CPU', ()
   assert.match(getLinuxCudaSettingsDescription(), /Tested on CachyOS/i);
   assert.match(getLinuxCudaSettingsDescription(), /returns to CPU if you uninstall/i);
   assert.match(getLinuxCudaBrokenRuntimeCopy(), /uninstall to return to CPU/i);
-  assert.match(getLinuxCudaUninstallConfirmSuffix(), /return to CPU faster-whisper/i);
+  assert.match(getLinuxCudaUninstallConfirmSuffix(), /return to CPU/i);
 });
 
 test('Linux broken managed CUDA keeps Repair and Uninstall together', () => {

@@ -5,19 +5,37 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 
 ## Status
 
-### Mandatory gates before the next release
+### v3.0 release plan · 2026-11-20
 
-All items below must be completed and their evidence recorded before the next
-release is published. The v2.12 acceptance of coverage limits does not waive
-these gates for a later release.
+Phased implementation plan on `release/3.0`: [v3.0.0 release plan](docs/superpowers/plans/2026-11-20-v3.0-release-plan.md) · [v3.0 qualification record](docs/development/V3_0_QUALIFICATION.md).
+
+**Release direction, 2026-11-21 (v3.0.0 ship):** Version bumped from `2.12.0` to `3.0.0` on `release/3.0` with curated [v3.0.0 release notes](docs/releases/v3.0.0.md). Upstream holds rechecked on 2026-11-21: Electron stays on qualified `46.0.0-alpha.11` (stable 46.x still unpublished; `latest: 45.4.1`, `alpha-46-x-y: 46.0.0-alpha.12`), FFmpeg stays on matched `8.1.2` (`shaka-project` still tops at `n8.1.2-2`), and `npm audit --omit=dev` / `npm audit` report `0 vulnerabilities`. Signing and notarization are intentionally optional for v3.0.0 (no Windows/Apple signing accounts yet; `vars.REQUIRE_SIGNED_RELEASE` unset/false, ad-hoc macOS `.dmg` manual updater fallback active). All remaining manual/hardware qualification gates (Windows 10, macOS 15, isolated Keychain migration, permission-prompt variants, gated Pyannote, natural-speech Speakrs separation, and live signed updater verification) are explicitly accepted by the user as documented v3.0.0 limits. Final pre-PR local gates on `release/3.0` (`3.0.0`): `npm run test:all` exit 0 (JS `1,250 passed, 0 failed, 1 skipped`; Python `919 passed, 8 skipped`; syntax clean), `python3 scripts/agents/validate_setup.py` exit 0, and `npm run legal:release-assets` exit 0.
+
+Progress across mandatory post-v2.12 gates and v3.0 feature tracks:
+
+- [x] **Task 1.1 — History metadata lock contention (`75a7c28`):** Slow recorder-temp cleanup & filesystem/duration scans run outside `meetings.json.lock` under dedicated `scan_recovery.lock`; atomic Phase A/C reconciliation and multi-process contention tests pass on Linux.
+- [x] **Task 1.2 — Caption-scale timing sidecars + SRT & WebVTT export (`534007e`):** Schema-v1 `{stem}.captions.json` bound by `sourceTranscriptHash` across faster-whisper, MLX Whisper, Parakeet, and guided transcription; pure SRT/WebVTT/TXT serializers, hash-verified export IPC, and format-picker UI (offline Whisper fixture -> `.captions.json` -> `.srt`/`.vtt` + `CAPTIONS_STALE` + delete verified on CachyOS Linux).
+- [x] **Task 2.1 — Bundled CPython `3.11.18+20261110` on Windows & macOS (`333ceef`):** Live SHA-256s verified (`5ca7e23b...` Windows, `73f1ed14...` macOS); `build/prepare-resources.js` ported to traversal-guarded `.tar.gz` extraction + isolated Windows `python311._pth`. Windows and macOS packaged runtime smokes passed; platform-specific qualification limits remain in the [record](docs/development/V3_0_QUALIFICATION.md).
+- [x] **Task 2.2 — Upstream holds & audit checks (2026-11-20):** Live upstream checks confirm Electron 46 stable is not yet published (latest stable `45.4.1`, `46.0.0-alpha.12` latest alpha -> hold on qualified `46.0.0-alpha.11`), FFmpeg matched > `8.1.2` is not yet available across all 3 OSes (`shaka-project` tops at `n8.1.2-2` which is still `8.1.2` -> hold on `8.1.2`), and both `npm audit --omit=dev` and `npm audit` report `0 vulnerabilities` with `picomatch@4.0.7`.
+- [ ] **Task 5.3 — CachyOS qualification at `363f71b`:** Integrated suite, audits, rebuilt packages, isolated keyring migration, offline CUDA repair/uninstall and fail-closed admissions, two-speaker synthetic CUDA run, packaged updater service tests, Q&A GPU service smoke and recorder loss harness passed. Live AppImage update, interactive citation playback and natural-speech quality remain open; see the [qualification record](docs/development/V3_0_QUALIFICATION.md).
+- [ ] **Task 5.2 — macOS partial qualification:** Integrated suite, ad-hoc DMG/ZIP build, physical capture modes, recorder SIGKILL recovery, app-driven Metal Whisper/Parakeet and Speakrs, renderer exports, History search, Qwen summary and Q&A citation playback passed on macOS 26. A recovered-duration defect was fixed and retested. Signing, notarization, macOS 15, permission variants, Keychain migration, Pyannote and natural-speech gates remain open; see the [qualification record](docs/development/V3_0_QUALIFICATION.md).
+- [ ] **Windows 11 partial qualification at `552dd06`:** Full suite, unsigned NSIS build, packaged Python isolation and CPU/CUDA Whisper, fixture import, search and SRT/WebVTT export, unattended mic-only capture, virtual-device recorder recovery, and synthetic DPAPI migration passed. Windows 10, spoken and physical system capture, full add-on lifecycles, signed installer and update gates remain open; see the [qualification record](docs/development/V3_0_QUALIFICATION.md).
+- [x] **Windows 11 follow-up, 2026-11-21:** Packaged Speakrs 0.7.0 CUDA returned one label on the 14.2245 s Hazel/Zira fixture and two labels with 8/8 correct turn midpoints on a 39.093875 s George/Zira synthetic fixture in both annotation modes. Representative-speech acceptance remains open. Fixed legacy interrupted captures that recovered without a transcription handoff and displayed `0:00`. The previous packaged backend reproduced `0:00` on the same recovered Opus, and the current isolated development renderer showed `0:06` in History and meeting details. Focused Python passed 142 tests, the full gate passed (JS 1,238 passed / 5 skipped, Python 917 passed / 9 skipped), and setup validation passed. See the [qualification record](docs/development/V3_0_QUALIFICATION.md#windows-11-follow-up-at-578d4dd-plus-the-recovery-fix--2026-11-21).
+- [ ] **Task 2.3 — Windows Authenticode & macOS Developer ID signing/notarization wiring:** Repo-side hooks, preflight wrappers, verifier scripts, unit tests, and `.github/workflows/build-release.yml` wiring complete on `release/3.0`; **needs signing secrets and native Windows/macOS runs**.
+- [x] **Modern in-app auto-updater (Phase 3):** Signed differential in-app download (`electron-updater@6.8.11`, `build.publish` GitHub metadata, macOS `zip` + `dmg` targets, `.blockmap` + `latest*.yml` release staging), main-process `updater-service.js` state machine with monotonic `seq`, atomic `userData/updater-preferences.json` (`autoDownload: false` default), cancellable downloads, recording/import/summary-metadata/AI-safe **Restart to Update** gate, Linux `pacman`/`.deb` manual-package detection + copyable install command, and non-intrusive left-rail circular-progress indicator, anchored release-notes popover (`STRICT_DOMPURIFY_CONFIG`), and Settings → Updates card. _(Repo implementation and unit/characterization suites verified on CachyOS Linux; live signed in-place Windows NSIS / macOS Squirrel.Mac / Linux AppImage updates pending Task 2.3 signing credentials and target-host acceptance.)_
+- [x] **Local History search & Q&A with timestamp citations (Phase 4 · `5827ac5`, `23a9aaf`, `bbeba81`, `a9fb129`, `36f243d`):** Disposable local SQLite FTS5 full-text search index across transcripts/summaries (zero AI add-on required) with instant timestamp jump, plus left-rail threaded `Chat` workspace powered by lazy loopback `llama-server` (`llama-cli` fallback), manual & automatic VRAM/memory unloads, bundled `marked@18.2.1` + `dompurify@3.4.18` strict XSS-safe Markdown rendering, and fail-closed clickable citations that seek playback to the exact timestamp. _(Verified on CachyOS Linux including real local Qwen `llama-server` smoke and packaged Linux artifacts; interactive desktop UX pass + Windows/macOS host checks pending.)_
+
+### Mandatory gates (accepted limits for v3.0.0; open for post-v3.0.0)
+
+Unchecked items below represent documented v3.0.0 coverage limits explicitly accepted by the user on 2026-11-21 and deferred for post-v3.0.0 verification.
 
 - [ ] Upgrade and qualify bundled CPython to 3.11.18 or newer on Windows and
-  macOS. Port the Windows isolated runtime layout and verify packaged startup,
-  transcription and add-on closures; qualify macOS startup, native dependencies
-  and Metal. Linux already ships 3.11.18; retain platform qualification.
-- [ ] Fix the History metadata lock contention during long recorder recovery
+  macOS. _(Repo port to Astral `3.11.18+20261110` implemented in `333ceef`;
+  Windows & macOS host `prepare-build`, startup, transcription, Metal, and
+  add-on closure verification pending on target hosts.)_
+- [x] Fix the History metadata lock contention during long recorder recovery
   scans, preserving recovery and atomicity guarantees. Add a regression for a
-  concurrent metadata operation during slow recovery.
+  concurrent metadata operation during slow recovery. _(Committed in `75a7c28`.)_
 - [ ] Complete Windows physical-device recording and end-to-end add-on
   setup/repair acceptance, including gated Pyannote with an authorized test
   token, and qualify Windows 10 as well as Windows 11.
@@ -25,18 +43,36 @@ these gates for a later release.
   permission-prompt variants.
 - [ ] Move from the Electron 46 prerelease to a suitable stable Electron build
   and qualify all platforms. Recheck Linux keyring provider mapping and fixed-key
-  rejection, and token migration on Linux, Windows and macOS.
+  rejection, and token migration on Linux, Windows and macOS. _(Hold on
+  `46.0.0-alpha.11`: npm still has no stable 46.x release as of 2026-11-20;
+  recheck before tagging v3.0.0.)_
 - [ ] Qualify the Linux managed CUDA repair/uninstall escape paths and the
   separate transcription, Speakrs and summary admission gates. Preserve the
   intentional platform-specific recording behavior when desktop audio is lost.
+  _(CachyOS disposable-profile CUDA lifecycle and gate smokes plus the Linux
+  recorder loss harness passed; see qualification record for test limits.)_
 - [ ] Update and qualify FFmpeg on all three platforms with pinned binaries and
   corresponding source; verify import decoding, recording finalization and recovery.
-- [ ] Preserve caption-scale timing tied to committed transcripts, provide a
+  _(Hold on matched `8.1.2`: Shaka binary provider tops at `n8.1.2-2` = `8.1.2`
+  as of 2026-11-20; Linux `8.1.2` legal staging and decode/import/recovery
+  tests pass.)_
+- [x] Preserve caption-scale timing tied to committed transcripts, provide a
   path for older meetings, and ship accurate SRT and WebVTT exports together.
-- [ ] Resolve the development packaging graph's picomatch audit finding with a
+  _(Committed in `534007e` and verified with offline fixture on CachyOS; repeat
+  manual spot-checks on Windows and macOS hosts.)_
+- [x] Resolve the development packaging graph's picomatch audit finding with a
   compatible qualified dependency update and verify production and full audits.
-- [ ] Sign the Windows installer and sign and notarize the macOS build; verify
-  the resulting distribution artifacts.
+  _(Resolved cleanly: `npm audit --omit=dev` and `npm audit` both report `0
+  vulnerabilities` with `picomatch@4.0.7` as of 2026-11-20.)_
+- [ ] **Optional post-account release signing (deferred for v3.0):** Windows
+  Authenticode signing, macOS Developer ID signing/notarization, and macOS
+  Squirrel.Mac in-app updater acceptance are optional for v3.0 while developer
+  accounts are not yet enrolled. Repo wiring (`build/after-pack.js`,
+  `build/mac-sign.js`, `scripts/check-*-signing-*.js`,
+  `scripts/notarize-macos-dmg.sh`, `scripts/verify-*.{ps1,sh}`, and
+  `build-release.yml`) is in place and auto-activates when secrets are added;
+  set `vars.REQUIRE_SIGNED_RELEASE=true` to enforce fail-closed signed tags once
+  credentials are configured.
 - [ ] Test Speakrs multi-speaker separation with representative speech on each
   supported native platform and record the results.
 

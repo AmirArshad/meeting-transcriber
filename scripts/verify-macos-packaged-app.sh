@@ -22,10 +22,31 @@ BACKEND_PATH="$APP_PATH/Contents/Resources/backend"
 echo "Verifying packaged macOS app: $APP_PATH"
 echo ""
 
-# CI has no Apple Developer certificate, so package.json explicitly requests a
-# complete ad-hoc bundle signature. Reject unsigned or partially signed apps;
-# the v2.7.0 release incident passed the old leaf-binary-only checks.
+# Inspect code signature mode and enforce strict release requirements when active.
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+REQUIRE_SIGNED_RAW="$(printf '%s' "${AVANEVIS_REQUIRE_SIGNED_RELEASE:-0}" | tr '[:upper:]' '[:lower:]')"
+CODESIGN_INFO="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 || true)"
+IS_DEV_ID_SIGNED=0
+if printf '%s\n' "$CODESIGN_INFO" | grep -q "Authority=Developer ID Application:"; then
+  IS_DEV_ID_SIGNED=1
+fi
+
+if [[ "$REQUIRE_SIGNED_RAW" == "1" || "$REQUIRE_SIGNED_RAW" == "true" ]]; then
+  if [[ "$IS_DEV_ID_SIGNED" != "1" ]]; then
+    echo "ERROR: AVANEVIS_REQUIRE_SIGNED_RELEASE=1 requires Developer ID Application signature on $APP_PATH" >&2
+    printf '%s\n' "$CODESIGN_INFO" >&2
+    exit 1
+  fi
+  if printf '%s\n' "$CODESIGN_INFO" | grep -q "Signature=adhoc"; then
+    echo "ERROR: Ad-hoc signature rejected under AVANEVIS_REQUIRE_SIGNED_RELEASE=1" >&2
+    exit 1
+  fi
+  if ! printf '%s\n' "$CODESIGN_INFO" | grep -q "Timestamp="; then
+    echo "ERROR: Missing Apple secure timestamp on $APP_PATH" >&2
+    exit 1
+  fi
+fi
+
 test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP_PATH/Contents/Info.plist")" = "15.0"
 
 test -f "$HELPER_PATH"
@@ -108,6 +129,15 @@ test -s "$SMOKE_DIR/smoke.opus"
 
 # Smoke execution must not mutate sealed resources (notably Python bytecode).
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+if [[ "$IS_DEV_ID_SIGNED" == "1" ]]; then
+  if [[ "$REQUIRE_SIGNED_RAW" == "1" || "$REQUIRE_SIGNED_RAW" == "true" ]] \
+    || [[ -n "${APPLE_ID:-}${APPLE_API_KEY:-}${APPLE_KEYCHAIN_PROFILE:-}" ]] \
+    || xcrun stapler validate "$APP_PATH" >/dev/null 2>&1; then
+    xcrun stapler validate "$APP_PATH"
+    spctl --assess --type execute --verbose=4 "$APP_PATH"
+  fi
+fi
 
 echo ""
 echo "Bundle sizes:"

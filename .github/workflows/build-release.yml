@@ -6,6 +6,12 @@ on:
     tags:
       - "v*.*.*" # Triggers on version tags like v1.0.0
   workflow_dispatch: # Allows manual trigger from GitHub UI
+    inputs:
+      require_signed_release:
+        description: "Require signed Windows installer and signed/notarized macOS DMG (keep false for unsigned dry-runs)"
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
@@ -44,6 +50,8 @@ jobs:
     name: Build ${{ matrix.os }} Installer
     runs-on: ${{ matrix.runner }}
     needs: verify-speakrs-release-artifacts
+    env:
+      AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (inputs.require_signed_release == true || (startsWith(github.ref, 'refs/tags/') && (vars.REQUIRE_SIGNED_RELEASE == 'true' || vars.REQUIRE_SIGNED_RELEASE == '1'))) && '1' || '0' }}
     strategy:
       fail-fast: false
       matrix:
@@ -52,13 +60,21 @@ jobs:
             runner: windows-latest
             rust-target: x86_64-pc-windows-msvc
             build-script: npm run build
-            artifact-path: "dist/AvaNevis-Setup-*.exe"
+            artifact-path: |
+              dist/AvaNevis-Setup-*.exe
+              dist/AvaNevis-Setup-*.exe.blockmap
+              dist/latest.yml
             artifact-name: avanevis-installer-windows
           - os: macOS
             runner: macos-15 # Apple Silicon
             rust-target: aarch64-apple-darwin
             build-script: npm run build:mac
-            artifact-path: "dist/AvaNevis-Setup-*.dmg"
+            artifact-path: |
+              dist/AvaNevis-Setup-*.dmg
+              dist/AvaNevis-Setup-*.dmg.blockmap
+              dist/AvaNevis-Setup-*.zip
+              dist/AvaNevis-Setup-*.zip.blockmap
+              dist/latest-mac.yml
             artifact-name: avanevis-installer-macos
           - os: Linux
             runner: ubuntu-24.04 # AppImage 1.0.2 is incompatible with Ubuntu 26.04 host libraries
@@ -68,6 +84,7 @@ jobs:
               dist/AvaNevis-Setup-*.AppImage
               dist/AvaNevis-Setup-*.pkg.tar.zst
               dist/AvaNevis-Setup-*.deb
+              dist/latest-linux.yml
             artifact-name: avanevis-installer-linux
 
     steps:
@@ -160,19 +177,62 @@ jobs:
       # 2. Downloads Python runtime, ffmpeg, and prepares dependencies
       - name: Build installer (Windows)
         if: matrix.os == 'Windows'
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WINDOWS_AZURE_ENDPOINT: ${{ secrets.WINDOWS_AZURE_ENDPOINT }}
+          WINDOWS_AZURE_CODE_SIGNING_ACCOUNT: ${{ secrets.WINDOWS_AZURE_CODE_SIGNING_ACCOUNT }}
+          WINDOWS_AZURE_CERT_PROFILE: ${{ secrets.WINDOWS_AZURE_CERT_PROFILE }}
+          WINDOWS_AZURE_PUBLISHER_NAME: ${{ secrets.WINDOWS_AZURE_PUBLISHER_NAME }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         run: ${{ matrix.build-script }}
         timeout-minutes: 75
 
+      - name: Prepare macOS notarization API key
+        if: matrix.os == 'macOS'
+        env:
+          API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          if [[ -n "$API_KEY_CONTENT" ]]; then
+            umask 077
+            key_path="$RUNNER_TEMP/avanevis-notary-key.p8"
+            printf '%s\n' "$API_KEY_CONTENT" > "$key_path"
+            echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
+          fi
+
       - name: Build installer (macOS)
         if: matrix.os == 'macOS'
-        # Optional Apple Developer signing (omit until enrolled — builds ad-hoc sign today):
-        # CSC_LINK / CSC_KEY_PASSWORD / APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD / APPLE_TEAM_ID
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_NAME: ${{ secrets.CSC_NAME }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_KEYCHAIN_PROFILE: ${{ vars.APPLE_KEYCHAIN_PROFILE }}
+          APPLE_KEYCHAIN: ${{ vars.APPLE_KEYCHAIN }}
         run: |
           echo "Open file limit before: $(ulimit -n)"
           ulimit -n 10240 || true
           echo "Open file limit after: $(ulimit -n)"
           ${{ matrix.build-script }}
         timeout-minutes: 75
+
+      - name: Notarize and staple macOS DMG
+        if: matrix.os == 'macOS'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_NAME: ${{ secrets.CSC_NAME }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_KEYCHAIN_PROFILE: ${{ vars.APPLE_KEYCHAIN_PROFILE }}
+          APPLE_KEYCHAIN: ${{ vars.APPLE_KEYCHAIN }}
+        run: bash scripts/notarize-macos-dmg.sh
+        timeout-minutes: 30
 
       - name: Build installers (Linux)
         if: matrix.os == 'Linux'
@@ -183,9 +243,32 @@ jobs:
         if: matrix.os != 'Linux'
         run: node scripts/verify-speakrs-packaging.js --packaged
 
+      - name: Verify Windows Authenticode signatures
+        if: matrix.os == 'Windows'
+        shell: pwsh
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WINDOWS_AZURE_ENDPOINT: ${{ secrets.WINDOWS_AZURE_ENDPOINT }}
+        run: |
+          if ($env:AVANEVIS_REQUIRE_SIGNED_RELEASE -eq '1' -or -not [string]::IsNullOrWhiteSpace($env:WIN_CSC_LINK) -or -not [string]::IsNullOrWhiteSpace($env:WINDOWS_AZURE_ENDPOINT)) {
+            & ./scripts/verify-windows-installer.ps1 -SignaturesOnly
+          } else {
+            Write-Host "Skipping Windows Authenticode verification (no signing credentials configured)"
+          }
+
       - name: Verify packaged macOS app smoke checks
         if: matrix.os == 'macOS'
+        env:
+          APPLE_KEYCHAIN_PROFILE: ${{ vars.APPLE_KEYCHAIN_PROFILE }}
         run: bash scripts/verify-macos-packaged-app.sh
+
+      - name: Clean up macOS notarization API key
+        if: always() && matrix.os == 'macOS'
+        run: rm -f "$RUNNER_TEMP/avanevis-notary-key.p8"
+
+      - name: Verify packaged macOS installer
+        if: matrix.os == 'macOS'
+        run: bash scripts/verify-macos-installer.sh
 
       - name: Verify packaged Linux artifacts
         if: matrix.os == 'Linux'
@@ -277,7 +360,26 @@ jobs:
           linux_appimage="release-artifacts/avanevis-installer-linux/${installer}.AppImage"
           linux_pacman="release-artifacts/avanevis-installer-linux/${installer}.pkg.tar.zst"
           linux_deb="release-artifacts/avanevis-installer-linux/${installer}.deb"
-          for asset in "$windows_asset" "$macos_asset" "$linux_appimage" "$linux_pacman" "$linux_deb"; do
+          windows_blockmap="release-artifacts/avanevis-installer-windows/${installer}.exe.blockmap"
+          windows_latest="release-artifacts/avanevis-installer-windows/latest.yml"
+          macos_dmg_blockmap="release-artifacts/avanevis-installer-macos/${installer}.dmg.blockmap"
+          macos_zip="release-artifacts/avanevis-installer-macos/${installer}.zip"
+          macos_zip_blockmap="release-artifacts/avanevis-installer-macos/${installer}.zip.blockmap"
+          macos_latest="release-artifacts/avanevis-installer-macos/latest-mac.yml"
+          linux_latest="release-artifacts/avanevis-installer-linux/latest-linux.yml"
+          for asset in \
+            "$windows_asset" \
+            "$macos_asset" \
+            "$linux_appimage" \
+            "$linux_pacman" \
+            "$linux_deb" \
+            "$windows_blockmap" \
+            "$windows_latest" \
+            "$macos_dmg_blockmap" \
+            "$macos_zip" \
+            "$macos_zip_blockmap" \
+            "$macos_latest" \
+            "$linux_latest"; do
             if [ ! -s "$asset" ]; then
               echo "Missing or empty release asset: $asset"
               exit 1
@@ -290,6 +392,13 @@ jobs:
           cp "$linux_appimage" release-upload/
           cp "$linux_pacman" release-upload/
           cp "$linux_deb" release-upload/
+          cp "$windows_blockmap" release-upload/
+          cp "$windows_latest" release-upload/
+          cp "$macos_dmg_blockmap" release-upload/
+          cp "$macos_zip" release-upload/
+          cp "$macos_zip_blockmap" release-upload/
+          cp "$macos_latest" release-upload/
+          cp "$linux_latest" release-upload/
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "windows_name=$(basename "$windows_asset")" >> $GITHUB_OUTPUT

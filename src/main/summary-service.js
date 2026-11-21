@@ -89,6 +89,7 @@ function isSameMeetingSummarySidecar({ filePath, recordingsDir, transcriptBase }
  * @param {Function} [deps.getSummaryArtifactForPlatform]
  * @param {Function} [deps.getSummaryArtifactPath]
  * @param {Function} [deps.getSummaryRuntimeDir]
+ * @param {Function} [deps.onSummaryCommitted]
  */
 function createSummaryService(deps) {
   // Single shared reference — never duplicate this let in main.js.
@@ -124,6 +125,7 @@ function createSummaryService(deps) {
     getSummaryArtifactPath = defaultGetSummaryArtifactPath,
     getSummaryRuntimeDir = defaultGetSummaryRuntimeDir,
     resolveCudaStatusForTranscription = null,
+    onSummaryCommitted = () => {},
   } = deps;
 
   async function removeSummarySidecarFiles(filePaths = []) {
@@ -726,6 +728,12 @@ function createSummaryService(deps) {
               }
             }
             await removeSummarySidecarFiles([...sameMeetingCandidates].filter((filePath) => !keepPaths.has(filePath)));
+
+            try {
+              onSummaryCommitted({ meetingId: normalizedMeetingId, meeting: updatedMeeting });
+            } catch (_error) {
+              // Derived cache notification must never break committed summary settlement.
+            }
 
             finish(resolve, {
               ...result,

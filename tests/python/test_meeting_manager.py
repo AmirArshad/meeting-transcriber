@@ -1,9 +1,13 @@
 import json
 import hashlib
 import os
+import struct
+import wave
 from contextlib import contextmanager
 from datetime import datetime as real_datetime
 from pathlib import Path
+
+import pytest
 
 import backend.meeting_manager as meeting_manager_module
 from backend.meeting_manager import MeetingManager
@@ -467,7 +471,7 @@ def test_scan_and_sync_recordings_preserves_suffixed_meeting_ids(tmp_path):
     assert result == {'scanned': 1, 'added': 1, 'skipped': 0}
     assert meeting is not None
     assert meeting['id'] == '20250101_120000_1'
-    assert meeting['title'] == 'Meeting 2025-01-01 12:00'
+    assert meeting['title'] == 'Recording 2025-01-01 12:00'
     assert meeting['transcriptionStatus'] == 'completed'
 
 
@@ -486,6 +490,36 @@ def test_scan_and_sync_recordings_recovers_audio_only_recordings_with_pending_st
     assert meeting['transcriptionStatus'] == 'pending'
     assert meeting['transcriptionError'] is None
     assert 'Recording Awaiting Transcription' in meeting['transcript']
+
+
+def test_scan_preserves_duration_from_matching_recovery_handoff(tmp_path):
+    from backend.audio.capture_recovery import write_recovery_handoff
+
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings))
+    audio = recordings / 'recording_2025-01-01T12-00-00.wav'
+    import shutil
+    shutil.copyfile(Path(__file__).resolve().parents[1] / 'fixtures' / 'speakrs-two-speaker-16k.wav', audio)
+    write_recovery_handoff(recordings, audio.stem, str(audio), 14.22, {'attemptId': 'synthetic'})
+
+    assert manager.scan_and_sync_recordings()['added'] == 1
+    meeting = manager.get_meeting('20250101_120000')
+    assert meeting['durationSeconds'] == 14.22
+    assert meeting['duration'] == '0:14'
+    assert meeting['transcriptionStatus'] == 'pending'
+
+
+def test_scan_ignores_mismatched_recovery_handoff_duration(tmp_path):
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings))
+    audio = recordings / 'recording_2025-01-01T12-00-00.wav'
+    audio.write_bytes(b'audio')
+    handoff = recordings / f'{audio.stem}.recovery-request.json'
+    handoff.write_text(json.dumps({'audioPath': str(recordings / 'other.wav'), 'duration': 99,
+                                   'transcriptionSelection': {'attemptId': 'synthetic'}}))
+
+    assert manager.scan_and_sync_recordings()['added'] == 1
+    assert manager.get_meeting('20250101_120000')['durationSeconds'] == 0.0
 
 
 def test_list_meetings_omits_inline_transcript_bodies(tmp_path):
@@ -1484,3 +1518,980 @@ def test_scan_waits_for_staged_import_metadata_lock(tmp_path, monkeypatch):
     assert not writer_thread.is_alive() and not scan_thread.is_alive()
     assert scan_results[0]['added'] == 0
     assert len(scanner.list_meetings()) == 1
+
+
+def test_concurrent_metadata_ops_succeed_during_slow_recovery_scan(tmp_path, monkeypatch):
+    import threading
+    from filelock import FileLock
+
+    recordings = tmp_path / 'recordings'
+    seed_manager = MeetingManager(str(recordings))
+
+    existing_audio, existing_md = _create_source_files(recordings, 'existing_seed')
+    existing = seed_manager.add_meeting(str(existing_audio), str(existing_md), 10.0, title='Existing')
+
+    deletable_audio, deletable_md = _create_source_files(recordings, 'deletable_seed')
+    deletable = seed_manager.add_meeting(str(deletable_audio), str(deletable_md), 8.0, title='Deletable')
+
+    # Orphan recorder temp that will be promoted during slow recovery.
+    orphan_pcm = recordings / 'recording_2026-03-01T10-00-00.pcm.tmp'
+    orphan_pcm.write_bytes(b'R' * 64)
+
+    entered = threading.Event()
+    release = threading.Event()
+    original_recover = meeting_manager_module.meeting_scan.recover_or_cleanup_recorder_temps
+
+    def slowed_recover(recordings_dir):
+        entered.set()
+        assert release.wait(5), 'timed out waiting for release signal'
+        return original_recover(recordings_dir)
+
+    monkeypatch.setattr(
+        meeting_manager_module.meeting_scan,
+        'recover_or_cleanup_recorder_temps',
+        slowed_recover,
+    )
+
+    scanner = MeetingManager(str(recordings))
+    scan_results = []
+    scan_errors = []
+
+    def run_scan():
+        try:
+            scan_results.append(scanner.scan_and_sync_recordings())
+        except BaseException as exc:  # pragma: no cover - surfaced by assertion below
+            scan_errors.append(exc)
+
+    scan_thread = threading.Thread(target=run_scan)
+    scan_thread.start()
+    assert entered.wait(5)
+
+    # Use a second MeetingManager with a short metadata lock timeout to prove
+    # meetings.json.lock is NOT held during slow recovery.
+    worker = MeetingManager(str(recordings))
+    worker._metadata_file_lock = FileLock(str(worker.metadata_lock_file), timeout=0.5)
+
+    listed = worker.list_meetings()
+    assert {m['id'] for m in listed} == {existing['id'], deletable['id']}
+
+    renamed = worker.update_meeting(existing['id'], title='Renamed During Slow Scan')
+    assert renamed is not None and renamed['title'] == 'Renamed During Slow Scan'
+
+    new_audio, new_md = _create_source_files(recordings, 'concurrent_add')
+    added_meeting = worker.add_meeting(
+        str(new_audio),
+        str(new_md),
+        12.0,
+        title='Added During Slow Scan',
+    )
+    assert added_meeting['title'] == 'Added During Slow Scan'
+
+    assert worker.delete_meeting(deletable['id']) is True
+
+    release.set()
+    scan_thread.join(5)
+    assert not scan_thread.is_alive()
+    assert not scan_errors
+    assert scan_results == [{'scanned': 3, 'added': 1, 'skipped': 2}]
+
+    final_meetings = worker.list_meetings()
+    ids = [m['id'] for m in final_meetings]
+    assert len(ids) == len(set(ids))
+    assert existing['id'] in ids
+    assert added_meeting['id'] in ids
+    assert deletable['id'] not in ids
+    assert '20260301_100000' in ids
+
+    by_id = {m['id']: m for m in final_meetings}
+    assert by_id[existing['id']]['title'] == 'Renamed During Slow Scan'
+    assert by_id[added_meeting['id']]['title'] == 'Added During Slow Scan'
+    assert Path(by_id[added_meeting['id']]['transcriptPath']).read_text(encoding='utf-8').startswith('# Transcript')
+    assert by_id['20260301_100000']['transcriptionStatus'] == 'pending'
+
+
+def test_multiprocess_metadata_ops_succeed_during_slow_recovery_scan(tmp_path):
+    import subprocess
+    import sys
+    import time
+    from filelock import FileLock
+
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(str(recordings))
+    manager._metadata_file_lock = FileLock(str(manager.metadata_lock_file), timeout=0.75)
+
+    existing_audio, existing_md = _create_source_files(recordings, 'mp_existing')
+    existing = manager.add_meeting(str(existing_audio), str(existing_md), 10.0, title='MP Existing')
+
+    deletable_audio, deletable_md = _create_source_files(recordings, 'mp_deletable')
+    deletable = manager.add_meeting(str(deletable_audio), str(deletable_md), 5.0, title='MP Deletable')
+
+    orphan_pcm = recordings / 'recording_2026-04-01T11-30-00.pcm.tmp'
+    orphan_pcm.write_bytes(b'R' * 64)
+
+    ready_flag = tmp_path / 'scan_paused.flag'
+    go_flag = tmp_path / 'scan_resume.flag'
+
+    script = '''
+import json, sys, time
+from pathlib import Path
+import meeting_manager
+
+recordings_dir, ready_path, go_path = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
+orig_recover = meeting_manager.meeting_scan.recover_or_cleanup_recorder_temps
+
+def paused_recover(rec_dir):
+    ready_path.write_text('paused', encoding='utf-8')
+    deadline = time.monotonic() + 15.0
+    while not go_path.exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError('timed out waiting for go flag')
+        time.sleep(0.02)
+    return orig_recover(rec_dir)
+
+meeting_manager.meeting_scan.recover_or_cleanup_recorder_temps = paused_recover
+mgr = meeting_manager.MeetingManager(recordings_dir)
+result = mgr.scan_and_sync_recordings()
+print(json.dumps(result))
+'''
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[2] / 'backend'))
+    proc = subprocess.Popen(
+        [sys.executable, '-c', script, str(recordings), str(ready_flag), str(go_flag)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 10.0
+        while not ready_flag.exists():
+            assert proc.poll() is None, f'child exited early: {proc.stderr.read()}'
+            assert time.monotonic() < deadline, 'timed out waiting for child scan pause'
+            time.sleep(0.02)
+
+        # All four metadata operations must complete without hitting 0.75s FileLock timeout.
+        assert {m['id'] for m in manager.list_meetings()} == {existing['id'], deletable['id']}
+        renamed = manager.update_meeting(existing['id'], title='MP Renamed During Scan')
+        assert renamed is not None and renamed['title'] == 'MP Renamed During Scan'
+
+        new_audio, new_md = _create_source_files(recordings, 'mp_added')
+        added = manager.add_meeting(str(new_audio), str(new_md), 15.0, title='MP Added During Scan')
+        assert manager.delete_meeting(deletable['id']) is True
+    finally:
+        go_flag.write_text('go', encoding='utf-8')
+
+    stdout, stderr = proc.communicate(timeout=15)
+    assert proc.returncode == 0, f'child failed: {stderr}'
+    scan_result = json.loads(stdout.strip().splitlines()[-1])
+    assert scan_result['added'] == 1
+
+    final_meetings = manager.list_meetings()
+    by_id = {m['id']: m for m in final_meetings}
+    assert len(final_meetings) == 3
+    assert set(by_id.keys()) == {existing['id'], added['id'], '20260401_113000'}
+    assert by_id[existing['id']]['title'] == 'MP Renamed During Scan'
+    assert by_id[added['id']]['title'] == 'MP Added During Scan'
+    assert by_id['20260401_113000']['transcriptionStatus'] == 'pending'
+
+
+def test_scan_handles_staged_import_committed_or_crashed_during_phase_b(tmp_path, monkeypatch):
+    import threading
+
+    recordings = tmp_path / 'recordings'
+    scanner = MeetingManager(str(recordings))
+    writer = MeetingManager(str(recordings))
+
+    # Pre-existing unrecorded audio so Phase B discovers something.
+    orphan_audio = recordings / 'meeting_20260501_080000.opus'
+    orphan_audio.write_bytes(b'orphan')
+
+    entered = threading.Event()
+    release = threading.Event()
+    original_select = scanner._select_scannable_audio_files
+
+    def simulate_concurrent_phase_b_activity(recordings_dir):
+        # Case A: a staged import commits cleanly during Phase B.
+        staged_ok = recordings / '.audio-import-ok'
+        ok_audio, ok_md = _create_source_files(staged_ok, 'audio')
+        ok_md.write_text('**Duration:** 0:09\n\nReal staged transcript', encoding='utf-8')
+        # Add directly via staged import while scan is outside _metadata_guard.
+        committed = writer.add_meeting(str(ok_audio), str(ok_md), 9.0, title='Committed Mid-Scan')
+        assert committed['id']
+
+        # Case B: a crashed staged import leaves marker + partial opus before select runs.
+        crashed_id = '20260501_080005'
+        (recordings / f'.meeting-import-{crashed_id}').mkdir()
+        (recordings / f'meeting_{crashed_id}.opus').write_bytes(b'partial-import')
+
+        entered.set()
+        assert release.wait(5)
+        return original_select(recordings_dir)
+
+    monkeypatch.setattr(scanner, '_select_scannable_audio_files', simulate_concurrent_phase_b_activity)
+
+    results = []
+    scan_thread = threading.Thread(target=lambda: results.append(scanner.scan_and_sync_recordings()))
+    scan_thread.start()
+    assert entered.wait(5)
+    release.set()
+    scan_thread.join(5)
+    assert not scan_thread.is_alive()
+
+    meetings = scanner.list_meetings()
+    by_id = {m['id']: m for m in meetings}
+    assert len(meetings) == 2
+    assert '20260501_080000' in by_id
+    # Committed import kept its real transcript and wasn't duplicated or overwritten.
+    committed_id = next(mid for mid in by_id if mid != '20260501_080000')
+    assert by_id[committed_id]['title'] == 'Committed Mid-Scan'
+    assert 'Real staged transcript' in Path(by_id[committed_id]['transcriptPath']).read_text(encoding='utf-8')
+    # Crashed import partial audio, marker, and placeholder must NOT exist.
+    assert not (recordings / 'meeting_20260501_080005.opus').exists()
+    assert not (recordings / 'meeting_20260501_080005.md').exists()
+    assert not (recordings / '.meeting-import-20260501_080005').exists()
+
+
+def test_concurrent_scans_serialize_on_scan_recovery_lock_without_blocking_metadata(tmp_path, monkeypatch):
+    import threading
+    import time
+    from filelock import FileLock
+
+    recordings = tmp_path / 'recordings'
+    seed = MeetingManager(str(recordings))
+    a1, m1 = _create_source_files(recordings, 'seed_scan')
+    existing = seed.add_meeting(str(a1), str(m1), 4.0, title='Seed')
+
+    (recordings / 'meeting_20260601_100000.opus').write_bytes(b'new-audio')
+
+    entered = threading.Event()
+    release = threading.Event()
+    call_count = 0
+    original_recover = meeting_manager_module.meeting_scan.recover_or_cleanup_recorder_temps
+
+    def guarded_recover(recordings_dir):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            entered.set()
+            assert release.wait(5)
+        return original_recover(recordings_dir)
+
+    monkeypatch.setattr(
+        meeting_manager_module.meeting_scan,
+        'recover_or_cleanup_recorder_temps',
+        guarded_recover,
+    )
+
+    scanner1 = MeetingManager(str(recordings))
+    scanner2 = MeetingManager(str(recordings))
+    res1 = []
+    res2 = []
+
+    t1 = threading.Thread(target=lambda: res1.append(scanner1.scan_and_sync_recordings()))
+    t1.start()
+    assert entered.wait(5)
+
+    t2 = threading.Thread(target=lambda: res2.append(scanner2.scan_and_sync_recordings()))
+    t2.start()
+    time.sleep(0.15)
+    # Scan 2 must be blocked on scan_recovery.lock, not running Phase B concurrently.
+    assert t2.is_alive()
+    assert call_count == 1
+
+    # Third reader/writer still accesses metadata immediately with short lock timeout.
+    reader = MeetingManager(str(recordings))
+    reader._metadata_file_lock = FileLock(str(reader.metadata_lock_file), timeout=0.5)
+    assert len(reader.list_meetings()) == 1
+    assert reader.update_meeting(existing['id'], title='Updated While Two Scans Wait')['title'] == 'Updated While Two Scans Wait'
+
+    release.set()
+    t1.join(5)
+    t2.join(5)
+    assert not t1.is_alive() and not t2.is_alive()
+    assert call_count == 2
+    assert res1[0]['added'] == 1
+    assert res2[0]['added'] == 0
+    final = {m['id']: m for m in reader.list_meetings()}
+    assert set(final.keys()) == {existing['id'], '20260601_100000'}
+    assert final[existing['id']]['title'] == 'Updated While Two Scans Wait'
+
+
+def test_scan_commits_multiple_discovered_meetings_in_single_atomic_save_and_rolls_back_placeholders(tmp_path, monkeypatch):
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(str(recordings))
+
+    stems = [
+        'meeting_20260701_090000',
+        'meeting_20260701_090500',
+        'meeting_20260701_091000',
+    ]
+    for stem in stems:
+        (recordings / f'{stem}.opus').write_bytes(b'audio')
+
+    save_calls = 0
+    original_save = manager._save_meetings_unlocked
+
+    def counting_save(meetings):
+        nonlocal save_calls
+        save_calls += 1
+        return original_save(meetings)
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', counting_save)
+    result = manager.scan_and_sync_recordings()
+
+    assert result == {'scanned': 3, 'added': 3, 'skipped': 0}
+    assert save_calls == 1
+    for stem in stems:
+        assert (recordings / f'{stem}.md').is_file()
+
+    # Now add a pre-existing .md meeting and two audio-only meetings, and force save failure.
+    pre_stem = 'meeting_20260701_092000'
+    (recordings / f'{pre_stem}.opus').write_bytes(b'audio')
+    (recordings / f'{pre_stem}.md').write_text('**Duration:** 0:04\n\nKeep me', encoding='utf-8')
+
+    fail_stems = ['meeting_20260701_092500', 'meeting_20260701_093000']
+    for stem in fail_stems:
+        (recordings / f'{stem}.opus').write_bytes(b'audio')
+
+    def failing_save(_meetings):
+        raise OSError('disk full')
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', failing_save)
+    try:
+        manager.scan_and_sync_recordings()
+    except OSError as exc:
+        assert 'disk full' in str(exc)
+    else:
+        raise AssertionError('Expected OSError from failing atomic save')
+
+    # Newly created placeholders must be rolled back; pre-existing transcript preserved.
+    for stem in fail_stems:
+        assert not (recordings / f'{stem}.md').exists()
+    assert (recordings / f'{pre_stem}.md').read_text(encoding='utf-8') == '**Duration:** 0:04\n\nKeep me'
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', original_save)
+    assert len(manager.list_meetings()) == 3
+
+
+def _write_captions_sidecar(path: Path, transcript_text: str, *, engine: str = 'faster-whisper', precision: str = 'word'):
+    from backend.transcription.captions import (
+        build_captions_payload,
+        hash_transcript_text,
+        write_captions_sidecar_atomic,
+    )
+
+    payload = build_captions_payload(
+        source_transcript_hash=hash_transcript_text(transcript_text),
+        engine=engine,
+        cues=[
+            {'startMs': 0, 'endMs': 1200, 'text': 'First caption cue.'},
+            {'startMs': 1300, 'endMs': 2600, 'text': 'Second caption cue.'},
+        ],
+        timing_precision=precision,
+    )
+    write_captions_sidecar_atomic(path, payload)
+    return payload
+
+
+def test_commit_transcription_attempt_commits_captions_hydrates_ready_and_detects_stale_edit(tmp_path):
+    from backend.transcription.captions import hash_transcript_text
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings, 'initial_cap')
+    manager = MeetingManager(str(recordings))
+
+    attempt_1 = '11111111-1111-4111-8111-111111111111'
+    request_1 = {
+        'schemaVersion': 1,
+        'attemptId': attempt_1,
+        'engine': 'whisper',
+        'language': 'en',
+        'modelSize': 'small',
+        'artifactRevision': None,
+    }
+    meeting = manager.add_meeting(str(audio), str(transcript), 12.0, transcription_request=request_1)
+    audio_path = Path(meeting['audioPath'])
+    candidate_md = recordings / f'{audio_path.stem}.transcript-{attempt_1}.md'
+    candidate_captions = recordings / f'{audio_path.stem}.captions-{attempt_1}.json'
+    candidate_text = '# Meeting Transcription\n\nFirst caption cue. Second caption cue.\n'
+    candidate_md.write_text(candidate_text, encoding='utf-8')
+    _write_captions_sidecar(candidate_captions, candidate_text, engine='faster-whisper', precision='word')
+
+    committed = manager.commit_transcription_attempt(
+        meeting['id'],
+        attempt_id=attempt_1,
+        candidate_path=str(candidate_md),
+        captions_candidate_path=str(candidate_captions),
+        result={
+            'schemaVersion': 1,
+            'attemptId': attempt_1,
+            'engine': 'whisper',
+            'language': 'en',
+            'device': 'cpu',
+            'computeType': 'int8',
+            'modelSize': 'small',
+            'artifactRevision': None,
+            'transcriptHash': hash_transcript_text(candidate_text),
+        },
+        cancel_generation=0,
+        delete_generation=0,
+    )
+
+    committed_captions = candidate_md.with_suffix('.captions.json')
+    assert committed is not None
+    assert committed['captionsPath'] == str(committed_captions.resolve(strict=False))
+    assert committed['captionsSourceTranscriptHash'] == hash_transcript_text(candidate_text)
+    assert committed_captions.is_file()
+    assert not candidate_captions.exists()
+
+    hydrated = manager.get_meeting(meeting['id'])
+    assert hydrated is not None
+    assert hydrated['captionsAvailable'] is True
+    assert hydrated['captionsStatus'] == 'ready'
+    assert hydrated['captionsCueCount'] == 2
+    assert hydrated['captionsTimingPrecision'] == 'word'
+
+    # External edit to the .md file invalidates captions freshness.
+    Path(committed['transcriptPath']).write_text('# Meeting Transcription\n\nEdited externally.\n', encoding='utf-8')
+    stale = manager.get_meeting(meeting['id'])
+    assert stale is not None
+    assert stale['captionsAvailable'] is False
+    assert stale['captionsStatus'] == 'stale'
+
+
+def test_commit_transcription_attempt_rejects_corrupt_sidecar_and_preserves_previous_captions(tmp_path, monkeypatch):
+    import pytest
+    from meetings.normalization import TranscriptionMetadataError
+    from backend.transcription.captions import hash_transcript_text
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings, 'retranscribe_cap')
+    manager = MeetingManager(str(recordings))
+
+    attempt_1 = '11111111-1111-4111-8111-111111111111'
+    request_1 = {
+        'schemaVersion': 1,
+        'attemptId': attempt_1,
+        'engine': 'whisper',
+        'language': 'en',
+        'modelSize': 'small',
+        'artifactRevision': None,
+    }
+    meeting = manager.add_meeting(str(audio), str(transcript), 10.0, transcription_request=request_1)
+    audio_path = Path(meeting['audioPath'])
+    md_1 = recordings / f'{audio_path.stem}.transcript-{attempt_1}.md'
+    committed_cap_1 = md_1.with_suffix('.captions.json')
+    cap_1 = recordings / f'{audio_path.stem}.captions-{attempt_1}.json'
+    text_1 = '# Transcript v1\n\nInitial version.\n'
+    md_1.write_text(text_1, encoding='utf-8')
+    payload_1 = _write_captions_sidecar(cap_1, text_1)
+
+    manager.commit_transcription_attempt(
+        meeting['id'],
+        attempt_id=attempt_1,
+        candidate_path=str(md_1),
+        captions_candidate_path=str(cap_1),
+        result={
+            'schemaVersion': 1,
+            'attemptId': attempt_1,
+            'engine': 'whisper',
+            'language': 'en',
+            'device': 'cpu',
+            'computeType': 'int8',
+            'modelSize': 'small',
+            'artifactRevision': None,
+            'transcriptHash': hash_transcript_text(text_1),
+        },
+        cancel_generation=0,
+        delete_generation=0,
+    )
+    assert committed_cap_1.is_file()
+
+    # Stage attempt 2: corrupt captions candidate must be rejected BEFORE touching prior captions.
+    attempt_2 = '22222222-2222-4222-8222-222222222222'
+    request_2 = {**request_1, 'attemptId': attempt_2}
+    manager.stage_transcription_request(meeting['id'], request_2, cancel_generation=0, delete_generation=0)
+    md_2 = recordings / f'{audio_path.stem}.transcript-{attempt_2}.md'
+    committed_cap_2 = md_2.with_suffix('.captions.json')
+    cap_2 = recordings / f'{audio_path.stem}.captions-{attempt_2}.json'
+    text_2 = '# Transcript v2\n\nUpdated transcript.\n'
+    md_2.write_text(text_2, encoding='utf-8')
+    cap_2.write_text('{corrupt-json', encoding='utf-8')
+
+    with pytest.raises(TranscriptionMetadataError) as exc_info:
+        manager.commit_transcription_attempt(
+            meeting['id'],
+            attempt_id=attempt_2,
+            candidate_path=str(md_2),
+            captions_candidate_path=str(cap_2),
+            result={
+                'schemaVersion': 1,
+                'attemptId': attempt_2,
+                'engine': 'whisper',
+                'language': 'en',
+                'device': 'cpu',
+                'computeType': 'int8',
+                'modelSize': 'small',
+                'artifactRevision': None,
+                'transcriptHash': hash_transcript_text(text_2),
+            },
+            cancel_generation=0,
+            delete_generation=0,
+        )
+    assert exc_info.value.code == 'INVALID_TRANSCRIPTION_RESULT'
+    assert json.loads(committed_cap_1.read_text(encoding='utf-8')) == payload_1
+
+    payload_2 = _write_captions_sidecar(cap_2, text_2, engine='mlx-whisper', precision='segment')
+    original_replace = meeting_manager_module.os.replace
+
+    def fail_caption_promotion(source, destination):
+        if Path(source) == cap_2 and Path(destination) == committed_cap_2:
+            raise OSError('promotion failed')
+        return original_replace(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(meeting_manager_module.os, 'replace', fail_caption_promotion)
+        with pytest.raises(OSError, match='promotion failed'):
+            manager.commit_transcription_attempt(
+                meeting['id'], attempt_id=attempt_2, candidate_path=str(md_2),
+                captions_candidate_path=str(cap_2),
+                result={'schemaVersion': 1, 'attemptId': attempt_2, 'engine': 'whisper',
+                        'language': 'en', 'device': 'cpu', 'computeType': 'int8',
+                        'modelSize': 'small', 'artifactRevision': None,
+                        'transcriptHash': hash_transcript_text(text_2)},
+                cancel_generation=0, delete_generation=0,
+            )
+    assert json.loads(committed_cap_1.read_text(encoding='utf-8')) == payload_1
+    assert json.loads(cap_2.read_text(encoding='utf-8')) == payload_2
+
+    original_save = manager._save_meetings_unlocked
+
+    def failing_save(_meetings):
+        raise OSError('disk full during commit')
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', failing_save)
+    with pytest.raises(OSError, match='disk full during commit'):
+        manager.commit_transcription_attempt(
+            meeting['id'],
+            attempt_id=attempt_2,
+            candidate_path=str(md_2),
+            captions_candidate_path=str(cap_2),
+            result={
+                'schemaVersion': 1,
+                'attemptId': attempt_2,
+                'engine': 'whisper',
+                'language': 'en',
+                'device': 'cpu',
+                'computeType': 'int8',
+                'modelSize': 'small',
+                'artifactRevision': None,
+                'transcriptHash': hash_transcript_text(text_2),
+            },
+            cancel_generation=0,
+            delete_generation=0,
+        )
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', original_save)
+    assert json.loads(committed_cap_1.read_text(encoding='utf-8')) == payload_1
+    assert json.loads(cap_2.read_text(encoding='utf-8')) == payload_2
+    assert not committed_cap_2.exists()
+
+    # Obsolete cleanup must complete before another commit can acquire the lock.
+    original_cleanup = manager._remove_obsolete_captions
+    def assert_cleanup_locked(*args):
+        assert manager._metadata_thread_lock._is_owned()
+        return original_cleanup(*args)
+    monkeypatch.setattr(manager, '_remove_obsolete_captions', assert_cleanup_locked)
+
+    # Committing without captions removes the prior sidecar.
+    committed_2 = manager.commit_transcription_attempt(
+        meeting['id'],
+        attempt_id=attempt_2,
+        candidate_path=str(md_2),
+        captions_candidate_path=None,
+        result={
+            'schemaVersion': 1,
+            'attemptId': attempt_2,
+            'engine': 'whisper',
+            'language': 'en',
+            'device': 'cpu',
+            'computeType': 'int8',
+            'modelSize': 'small',
+            'artifactRevision': None,
+            'transcriptHash': hash_transcript_text(text_2),
+        },
+        cancel_generation=0,
+        delete_generation=0,
+    )
+    assert committed_2 is not None
+    assert 'captionsPath' not in committed_2
+    assert 'captionsSourceTranscriptHash' not in committed_2
+    assert not committed_cap_1.exists()
+    hydrated_2 = manager.get_meeting(meeting['id'])
+    assert hydrated_2 is not None
+    assert hydrated_2['captionsAvailable'] is False
+    assert hydrated_2['captionsStatus'] == 'missing'
+
+
+def test_interrupted_retranscription_preserves_legacy_transcript_and_captions(tmp_path):
+    import subprocess
+    import sys
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings, 'interrupted_retry')
+    manager = MeetingManager(str(recordings))
+    meeting = manager.add_meeting(str(audio), str(transcript), 10.0)
+    audio_path = Path(meeting['audioPath'])
+    old_transcript = Path(meeting['transcriptPath'])
+    old_text = old_transcript.read_text(encoding='utf-8')
+    legacy_captions = audio_path.with_suffix('.captions.json')
+    old_payload = _write_captions_sidecar(legacy_captions, old_text)
+
+    attempt_id = '22222222-2222-4222-8222-222222222222'
+    request = {'schemaVersion': 1, 'attemptId': attempt_id, 'engine': 'whisper',
+               'language': 'en', 'modelSize': 'small', 'artifactRevision': None}
+    manager.stage_transcription_request(meeting['id'], request)
+    candidate = recordings / f'{audio_path.stem}.transcript-{attempt_id}.md'
+    captions_candidate = recordings / f'{audio_path.stem}.captions-{attempt_id}.json'
+    new_text = '# Replacement transcript\n'
+    candidate.write_text(new_text, encoding='utf-8')
+    new_payload = _write_captions_sidecar(captions_candidate, new_text)
+    commit_args = dict(meeting_id=meeting['id'], attempt_id=attempt_id, candidate_path=str(candidate),
+                       captions_candidate_path=str(captions_candidate), cancel_generation=0, delete_generation=0,
+                       result={**request, 'device': 'cpu', 'computeType': 'int8'})
+
+    script = """
+import json
+import os
+import sys
+from meeting_manager import MeetingManager
+
+manager = MeetingManager(sys.argv[1])
+manager._save_meetings_unlocked = lambda meetings: os._exit(73)
+manager.commit_transcription_attempt(**json.load(sys.stdin))
+"""
+    interrupted = subprocess.run(
+        [sys.executable, '-c', script, str(recordings)], cwd=Path(__file__).resolve().parents[2] / 'backend',
+        input=json.dumps(commit_args), text=True, capture_output=True, timeout=15,
+    )
+    assert interrupted.returncode == 73, interrupted.stderr
+    assert not captions_candidate.exists()
+    hydrated = manager.get_meeting(meeting['id'])
+    assert hydrated['transcript'] == old_text
+    assert hydrated['captionsStatus'] == 'ready'
+    assert json.loads(legacy_captions.read_text(encoding='utf-8')) == old_payload
+
+    _write_captions_sidecar(captions_candidate, new_text)
+    committed = manager.commit_transcription_attempt(**commit_args)
+    captions_path = Path(committed['captionsPath'])
+    assert json.loads(captions_path.read_text(encoding='utf-8')) == new_payload
+    assert manager.get_meeting(meeting['id'])['captionsStatus'] == 'ready'
+    assert not old_transcript.exists()
+    assert not legacy_captions.exists()
+    manager.delete_meeting(meeting['id'])
+    assert not captions_path.exists()
+
+
+def test_scan_and_sync_recordings_adopts_valid_sibling_captions_and_ignores_stale(tmp_path):
+    from backend.transcription.captions import hash_transcript_text
+
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(str(recordings))
+
+    # 1. Hash-matched sibling captions sidecar is adopted.
+    valid_audio = recordings / 'meeting_20260801_100000.opus'
+    valid_md = recordings / 'meeting_20260801_100000.md'
+    valid_cap = recordings / 'meeting_20260801_100000.captions.json'
+    valid_text = '**Duration:** 0:08\n\nMatched transcript.\n'
+    valid_audio.write_bytes(b'audio')
+    valid_md.write_text(valid_text, encoding='utf-8')
+    _write_captions_sidecar(valid_cap, valid_text, engine='parakeet', precision='word')
+
+    # 2. Stale sibling captions sidecar is NOT adopted and remains untouched on disk.
+    stale_audio = recordings / 'meeting_20260801_100500.opus'
+    stale_md = recordings / 'meeting_20260801_100500.md'
+    stale_cap = recordings / 'meeting_20260801_100500.captions.json'
+    stale_audio.write_bytes(b'audio')
+    stale_md.write_text('**Duration:** 0:08\n\nCurrent transcript.\n', encoding='utf-8')
+    stale_payload = _write_captions_sidecar(stale_cap, 'Different older transcript')
+
+    scan_result = manager.scan_and_sync_recordings()
+    assert scan_result == {'scanned': 2, 'added': 2, 'skipped': 0}
+
+    saved = {m['id']: m for m in manager.list_meetings()}
+    assert saved['20260801_100000']['captionsPath'] == str(valid_cap.resolve(strict=False))
+    assert saved['20260801_100000']['captionsSourceTranscriptHash'] == hash_transcript_text(valid_text)
+    assert 'captionsPath' not in saved['20260801_100500']
+
+    valid_meeting = manager.get_meeting('20260801_100000')
+    assert valid_meeting is not None
+    assert valid_meeting['captionsAvailable'] is True
+    assert valid_meeting['captionsStatus'] == 'ready'
+    assert valid_meeting['captionsTimingPrecision'] == 'word'
+
+    stale_meeting = manager.get_meeting('20260801_100500')
+    assert stale_meeting is not None
+    assert stale_meeting['captionsAvailable'] is False
+    assert stale_meeting['captionsStatus'] == 'stale'
+    assert json.loads(stale_cap.read_text(encoding='utf-8')) == stale_payload
+
+
+def test_delete_meeting_removes_captions_sidecar_and_rolls_back_on_save_failure(tmp_path, monkeypatch):
+    import pytest
+
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(str(recordings))
+
+    audio_path = recordings / 'meeting_20260802_120000.opus'
+    transcript_path = recordings / 'meeting_20260802_120000.md'
+    captions_path = recordings / 'meeting_20260802_120000.captions.json'
+    transcript_text = 'Transcript for deletion'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text(transcript_text, encoding='utf-8')
+    payload = _write_captions_sidecar(captions_path, transcript_text)
+
+    manager._save_meetings([
+        {
+            'id': '20260802_120000',
+            'title': 'Delete Captions',
+            'date': '2026-08-02T12:00:00',
+            'duration': '0:05',
+            'durationSeconds': 5.0,
+            'audioPath': str(audio_path),
+            'transcriptPath': str(transcript_path),
+            'captionsPath': str(captions_path),
+            'language': 'en',
+            'model': 'small',
+        }
+    ])
+
+    original_save = manager._save_meetings_unlocked
+
+    def failing_save(_meetings):
+        raise OSError('metadata write failed')
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', failing_save)
+    with pytest.raises(OSError, match='metadata write failed'):
+        manager.delete_meeting('20260802_120000')
+
+    assert audio_path.exists()
+    assert transcript_path.exists()
+    assert captions_path.exists()
+    assert json.loads(captions_path.read_text(encoding='utf-8')) == payload
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', original_save)
+    assert manager.delete_meeting('20260802_120000') is True
+    assert not audio_path.exists()
+    assert not transcript_path.exists()
+    assert not captions_path.exists()
+    assert manager.list_meetings() == []
+
+
+def test_commit_transcription_attempt_matches_crlf_transcript_to_lf_normalized_captions(tmp_path):
+    from backend.transcription.captions import hash_transcript_text
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings, 'crlf_cap')
+    manager = MeetingManager(str(recordings))
+
+    attempt_1 = '33333333-3333-4333-8333-333333333333'
+    request_1 = {
+        'schemaVersion': 1,
+        'attemptId': attempt_1,
+        'engine': 'whisper',
+        'language': 'en',
+        'modelSize': 'small',
+        'artifactRevision': None,
+    }
+    meeting = manager.add_meeting(str(audio), str(transcript), 5.0, transcription_request=request_1)
+    audio_path = Path(meeting['audioPath'])
+    candidate_md = recordings / f'{audio_path.stem}.transcript-{attempt_1}.md'
+    candidate_captions = recordings / f'{audio_path.stem}.captions-{attempt_1}.json'
+    crlf_text = '# Meeting Transcription\r\n\r\nLine one.\r\n'
+    candidate_md.write_bytes(crlf_text.encode('utf-8'))
+    _write_captions_sidecar(candidate_captions, crlf_text, engine='faster-whisper', precision='word')
+
+    committed = manager.commit_transcription_attempt(
+        meeting['id'],
+        attempt_id=attempt_1,
+        candidate_path=str(candidate_md),
+        captions_candidate_path=str(candidate_captions),
+        result={
+            'schemaVersion': 1,
+            'attemptId': attempt_1,
+            'engine': 'whisper',
+            'language': 'en',
+            'device': 'cpu',
+            'computeType': 'int8',
+            'modelSize': 'small',
+            'artifactRevision': None,
+        },
+        cancel_generation=0,
+        delete_generation=0,
+    )
+
+    assert committed is not None
+    assert committed['captionsSourceTranscriptHash'] == hash_transcript_text(crlf_text)
+    hydrated = manager.get_meeting(meeting['id'])
+    assert hydrated is not None
+    assert hydrated['captionsAvailable'] is True
+    assert hydrated['captionsStatus'] == 'ready'
+
+
+def test_scan_reads_outside_metadata_lock_and_rejects_changed_transcript(tmp_path, monkeypatch):
+    recordings = tmp_path / 'recordings'
+    manager = MeetingManager(str(recordings))
+    audio, transcript = _create_source_files(recordings, 'meeting_20260803_120000')
+    _write_captions_sidecar(audio.with_suffix('.captions.json'), transcript.read_text())
+    original_read = manager._read_transcript_text
+    original_find = manager._find_valid_sibling_captions
+
+    def read_unlocked(path):
+        assert not manager._metadata_thread_lock._is_owned()
+        return original_read(path)
+
+    def change_after_caption_read(path, text):
+        assert not manager._metadata_thread_lock._is_owned()
+        result = original_find(path, text)
+        transcript.write_text('changed while scanning', encoding='utf-8')
+        return result
+
+    monkeypatch.setattr(manager, '_read_transcript_text', read_unlocked)
+    monkeypatch.setattr(manager, '_find_valid_sibling_captions', change_after_caption_read)
+    assert manager.scan_and_sync_recordings()['added'] == 0
+    assert manager.list_meetings() == []
+
+
+def _build_minimal_ogg_opus_bytes(*, duration_seconds: float, pre_skip: int = 312, serial: int = 0x12345678) -> bytes:
+    def _ogg_page(header_type: int, granule: int, seq: int, payload: bytes) -> bytes:
+        assert len(payload) < 255
+        header = struct.pack(
+            '<4sBBqIIIB',
+            b'OggS',
+            0,
+            header_type,
+            granule,
+            serial,
+            seq,
+            0,
+            1,
+        )
+        return header + bytes([len(payload)]) + payload
+
+    opus_head = struct.pack('<8sBBHIhB', b'OpusHead', 1, 2, pre_skip, 48000, 0, 0)
+    opus_tags = b'OpusTags' + struct.pack('<II', 0, 0)
+    final_granule = pre_skip + int(round(duration_seconds * 48000))
+    return (
+        _ogg_page(0x02, 0, 0, opus_head)
+        + _ogg_page(0x00, 0, 1, opus_tags)
+        + _ogg_page(0x04, final_granule, 2, b'\x00' * 16)
+    )
+
+
+def test_scan_probes_audio_duration_without_recovery_handoff(tmp_path):
+    recordings = tmp_path / 'recordings'
+    recordings.mkdir()
+    manager = MeetingManager(str(recordings))
+
+    opus_path = recordings / 'recording_2026-11-21T01-00-00.opus'
+    opus_path.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=6.826666666666667))
+
+    wav_path = recordings / 'recording_2026-11-21T01-05-00.wav'
+    with wave.open(str(wav_path), 'wb') as wav_file:
+        wav_file.setnchannels(2)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(48000)
+        wav_file.writeframes(b'\x00' * (48000 * 12 * 2 * 2))
+
+    # When a valid matching handoff exists, it remains authoritative.
+    handoff_audio = recordings / 'recording_2026-11-21T01-10-00.opus'
+    handoff_audio.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=5.0))
+    (recordings / 'recording_2026-11-21T01-10-00.recovery-request.json').write_text(
+        json.dumps({
+            'audioPath': str(handoff_audio),
+            'duration': 14.5,
+            'transcriptionSelection': {
+                'schemaVersion': 1,
+                'attemptId': '11111111-1111-4111-8111-111111111111',
+                'engine': 'whisper',
+                'language': 'en',
+                'modelSize': 'small',
+                'artifactRevision': None,
+            },
+        }),
+        encoding='utf-8',
+    )
+
+    result = manager.scan_and_sync_recordings()
+    assert result == {'scanned': 3, 'added': 3, 'skipped': 0}
+
+    by_id = {m['id']: m for m in manager.list_meetings()}
+    assert by_id['20261121_010000']['durationSeconds'] == pytest.approx(6.826666666666667, abs=0.01)
+    assert by_id['20261121_010000']['duration'] == '0:06'
+    assert by_id['20261121_010500']['durationSeconds'] == pytest.approx(12.0, abs=0.01)
+    assert by_id['20261121_010500']['duration'] == '0:12'
+    assert by_id['20261121_011000']['durationSeconds'] == pytest.approx(14.5, abs=0.01)
+    assert by_id['20261121_011000']['duration'] == '0:14'
+
+
+@pytest.mark.parametrize('handoff_type', ['malformed', 'symlink'])
+def test_scan_falls_back_to_audio_for_unusable_handoff(tmp_path, handoff_type):
+    manager = MeetingManager(str(tmp_path))
+    audio = tmp_path / 'recording_2026-11-21T01-00-00.opus'
+    audio.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=8.25))
+    handoff = audio.with_suffix('.recovery-request.json')
+    if handoff_type == 'symlink':
+        target = tmp_path / 'other.json'
+        target.write_text(json.dumps({'audioPath': str(audio), 'duration': 99,
+                                      'transcriptionSelection': {}}), encoding='utf-8')
+        try:
+            handoff.symlink_to(target)
+        except OSError as error:
+            pytest.skip(f'cannot create symlink: {error}')
+    else:
+        handoff.write_text('{invalid JSON', encoding='utf-8')
+
+    assert manager.scan_and_sync_recordings()['added'] == 1
+    assert manager.get_meeting('20261121_010000')['durationSeconds'] == 8.25
+
+
+def test_opus_probe_rejects_truncated_final_page(tmp_path):
+    audio = tmp_path / 'truncated.opus'
+    audio.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=8.25)[:-1])
+    assert meeting_manager_module.meeting_scan.probe_audio_duration_from_file(audio) is None
+
+
+@pytest.mark.parametrize('change_phase', ['probe', 'commit'])
+def test_scan_rejects_audio_changed_after_duration_read(tmp_path, monkeypatch, change_phase):
+    manager = MeetingManager(str(tmp_path))
+    audio = tmp_path / 'recording_2026-11-21T01-00-00.opus'
+    audio.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=8.25))
+    probe = meeting_manager_module.meeting_scan.probe_audio_duration_from_file
+    metadata_guard = manager._metadata_guard
+    probed = False
+
+    def replace_audio():
+        replacement = audio.with_suffix('.replacement')
+        replacement.write_bytes(_build_minimal_ogg_opus_bytes(duration_seconds=12.5))
+        replacement.replace(audio)
+
+    def probe_audio(path):
+        nonlocal probed
+        duration = probe(path)
+        probed = True
+        if change_phase == 'probe':
+            replace_audio()
+        return duration
+
+    @contextmanager
+    def guard_metadata():
+        if probed and change_phase == 'commit':
+            replace_audio()
+        with metadata_guard():
+            yield
+
+    with monkeypatch.context() as patch:
+        patch.setattr(meeting_manager_module.meeting_scan, 'probe_audio_duration_from_file', probe_audio)
+        patch.setattr(manager, '_metadata_guard', guard_metadata)
+        assert manager.scan_and_sync_recordings()['added'] == 0
+    assert not audio.with_suffix('.md').exists()
+    assert manager.scan_and_sync_recordings()['added'] == 1
+    assert manager.get_meeting('20261121_010000')['durationSeconds'] == 12.5

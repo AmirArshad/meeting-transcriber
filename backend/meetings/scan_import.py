@@ -3,14 +3,153 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import shutil
+import struct
 import sys
+import wave
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from filelock import FileLock, Timeout
+
+
+@dataclass(frozen=True)
+class ScanCandidate:
+    audio_file: Path
+    transcript_file: Path
+    meeting_id: str
+    title: str
+    duration: float
+    has_existing_transcript: bool
+    transcript_identity: object = None
+    captions_identity: object = None
+    matched_captions: Optional[Dict] = None
+    handoff_identity: object = None
+    audio_identity: object = None
+
+
+def file_identity(path: Path):
+    """Snapshot a path without following links for inexpensive scan revalidation."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def recovery_handoff_duration(audio_file: Path) -> Optional[float]:
+    """Read the durable recovery duration only for its matching audio file."""
+    handoff = audio_file.with_name(f"{audio_file.stem}.recovery-request.json")
+    if handoff.is_symlink():
+        return None
+    try:
+        payload = json.loads(handoff.read_text(encoding="utf-8"))
+        duration = payload.get("duration")
+        if (not isinstance(payload.get("transcriptionSelection"), dict)
+                or not isinstance(payload.get("audioPath"), str)
+                or Path(payload["audioPath"]).resolve(strict=False) != audio_file.resolve(strict=False)
+                or isinstance(duration, bool) or not isinstance(duration, (int, float))
+                or not math.isfinite(duration) or duration <= 0):
+            return None
+        return float(duration)
+    except (OSError, ValueError, TypeError, AttributeError, OverflowError):
+        return None
+
+
+_OGG_OPUS_RATE = 48000.0
+_OGG_HEAD_READ_BYTES = 4096
+_OGG_MAX_PAGE_BYTES = 27 + 255 + 255 * 255
+
+
+def _probe_ogg_opus_duration(audio_file: Path) -> Optional[float]:
+    """Read duration for the single-stream Ogg Opus format written by FFmpeg."""
+    try:
+        with audio_file.open("rb") as handle:
+            head = handle.read(_OGG_HEAD_READ_BYTES)
+            if len(head) < 28 or head[0:4] != b"OggS" or head[4] != 0:
+                return None
+            if (head[5] & 0x02) == 0:
+                return None
+            page_segments = head[26]
+            header_end = 27 + page_segments
+            if len(head) < header_end + 19:
+                return None
+            payload_len = sum(head[27:header_end])
+            if payload_len < 19 or len(head) < header_end + payload_len:
+                return None
+            if head[header_end : header_end + 8] != b"OpusHead":
+                return None
+            pre_skip = struct.unpack_from("<H", head, header_end + 10)[0]
+            serial = struct.unpack_from("<I", head, 14)[0]
+
+            handle.seek(0, 2)
+            file_size = handle.tell()
+            tail_start = max(0, file_size - _OGG_MAX_PAGE_BYTES)
+            handle.seek(tail_start)
+            tail = handle.read(file_size - tail_start)
+    except (OSError, struct.error, ValueError):
+        return None
+
+    pos = len(tail)
+    while True:
+        idx = tail.rfind(b"OggS", 0, pos)
+        if idx < 0:
+            return None
+        pos = idx
+        if idx + 27 > len(tail) or tail[idx + 4] != 0:
+            continue
+        if not tail[idx + 5] & 0x04 or struct.unpack_from("<I", tail, idx + 14)[0] != serial:
+            continue
+        seg_count = tail[idx + 26]
+        seg_end = idx + 27 + seg_count
+        if seg_end > len(tail):
+            continue
+        body_len = sum(tail[idx + 27 : seg_end])
+        if not body_len or seg_end + body_len != len(tail):
+            continue
+        granule = struct.unpack_from("<q", tail, idx + 6)[0]
+        return (granule - pre_skip) / _OGG_OPUS_RATE if granule > pre_skip else None
+
+
+def _probe_wav_duration(audio_file: Path) -> Optional[float]:
+    """Read RIFF/WAVE PCM duration without spawning external tools."""
+    try:
+        with wave.open(str(audio_file), "rb") as wav_file:
+            frames = wav_file.getnframes()
+            rate = wav_file.getframerate()
+        if frames <= 0 or rate <= 0:
+            return None
+        duration = float(frames) / float(rate)
+        if math.isfinite(duration) and duration > 0:
+            return duration
+    except (OSError, EOFError, wave.Error, ValueError, OverflowError):
+        return None
+    return None
+
+
+def probe_audio_duration_from_file(audio_file: Path) -> Optional[float]:
+    """Probe positive finite audio duration from a local .opus or .wav file."""
+    if audio_file.is_symlink():
+        return None
+    suffix = audio_file.suffix.lower()
+    if suffix == ".opus":
+        return _probe_ogg_opus_duration(audio_file)
+    if suffix == ".wav":
+        return _probe_wav_duration(audio_file)
+    return None
+
+
+@contextmanager
+def scan_recovery_guard(manager):
+    """Serialize slow recorder-temp recovery and filesystem scan preparation."""
+    with manager._scan_recovery_thread_lock:
+        with manager._scan_recovery_file_lock:
+            yield
 
 
 # Legacy recorder temps (pre-.pcm.tmp) plus the current non-scanned extension.
@@ -359,19 +498,19 @@ def parse_scan_meeting_id_and_title(
             parts = meeting_id.split("_")
             base_id = f"{parts[0]}_{parts[1]}" if len(parts) >= 2 else meeting_id
             dt = datetime.strptime(base_id, "%Y%m%d_%H%M%S")
-            title = f"Meeting {dt.strftime('%Y-%m-%d %H:%M')}"
+            title = f"Recording {dt.strftime('%Y-%m-%d %H:%M')}"
         except ValueError:
-            title = f"Meeting {meeting_id}"
+            title = f"Recording {meeting_id}"
         return meeting_id, title
 
     recording_match = re.search(r"(\d{4}-\d{2}-\d{2})T(\d{2}-\d{2}-\d{2})", filename_stem)
     if recording_match:
         date_str, time_str = recording_match.groups()
         meeting_id = date_str.replace("-", "") + "_" + time_str.replace("-", "")
-        title = f"Meeting {date_str} {time_str.replace('-', ':')}"
+        title = f"Recording {date_str} {time_str.replace('-', ':')}"
         return meeting_id, title
 
     stamp = now or datetime.now()
     meeting_id = stamp.strftime("%Y%m%d_%H%M%S")
-    title = f"Meeting {filename_stem}"
+    title = f"Recording {filename_stem}"
     return meeting_id, title

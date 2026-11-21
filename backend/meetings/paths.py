@@ -175,9 +175,13 @@ def iter_ai_file_references(manager, meeting: Dict) -> List[tuple[str, Path]]:
 
 def meeting_file_references(manager, meeting: Dict) -> List[tuple[str, Path]]:
     references: List[tuple[str, Path]] = []
+    audio_path = meeting.get('audioPath')
+    sibling_captions = str(Path(str(audio_path)).with_suffix('.captions.json')) if audio_path else None
     core_file_fields = (
-        ('audio', meeting.get('audioPath'), ('.opus', '.wav', '.m4a', '.mp3', '.flac')),
+        ('audio', audio_path, ('.opus', '.wav', '.m4a', '.mp3', '.flac')),
         ('transcript', meeting.get('transcriptPath'), ('.md',)),
+        ('captions', meeting.get('captionsPath'), ('.json',)),
+        ('captions', sibling_captions, ('.json',)),
     )
 
     for label, raw_path, allowed_suffixes in core_file_fields:

@@ -69,9 +69,19 @@ const {
   shouldSkipMeetingReselect,
 } = window.historyDetailHelpers;
 const {
-  hideUpdateNotificationBanner,
-  replayPendingUpdateNotification,
-  showUpdateNotificationBanner,
+  buildHighlightSegmentsFromParts,
+  fallbackFilterMeetingsByTitle,
+  findClosestTranscriptSegmentIndex,
+  formatJumpTimestamp,
+  mergeSearchResultsWithMeetings,
+  normalizeHistorySearchQuery,
+  parseTimestampStringToSeconds,
+} = window.historySearchHelpers;
+const {
+  buildUpdateViewModel,
+  renderSafeReleaseNotes,
+  shouldAcceptUpdateState,
+  shouldAutoSurfaceUpdatePopover,
 } = window.updateNotificationHelpers;
 const {
   formatAiAddonProgressText,
@@ -128,6 +138,19 @@ const {
   resolveKeyboardShortcutAction,
   shouldSuppressKeyboardShortcut,
 } = window.keyboardShortcutHelpers;
+const {
+  buildExportFormatOptions,
+} = window.subtitleExportHelpers;
+const {
+  renderGroundedMarkdown,
+} = window.markdownRenderHelpers;
+const {
+  buildModelMemoryPillView,
+  buildStarterPrompts,
+  filterChatThreads,
+  formatChatScopeLabel,
+  groupThreadsByRecency,
+} = window.chatHelpers;
 
 // UI Elements
 const micSelect = document.getElementById('mic-select');
@@ -250,6 +273,7 @@ let homePromptContext = { platform: null, arch: null, hasNvidiaGpu: false, cudaI
 let selectedDiarizationEngine = null;
 let startupCudaCheckPromise = null;
 let meetings = [];
+let meetingHistoryRequestEpoch = 0;
 let audioVisualizer = null;
 let isFirstRecording = true; // Track if this is first recording (for longer timeout)
 let isInitializing = true; // Track if app is still initializing
@@ -261,7 +285,11 @@ const checkedMeetingIds = new Set();
 let meetingSearchQuery = '';
 let meetingSearchQueryNormalized = '';
 let meetingSearchDebounceTimer = null;
-const MEETING_SEARCH_DEBOUNCE_MS = 200;
+let meetingSearchResults = null;
+let meetingSearchEpoch = 0;
+let pendingAudioSeekCleanup = null;
+let activeCitationHighlightTimer = null;
+const MEETING_SEARCH_DEBOUNCE_MS = 180;
 const cleanupFns = [];
 let aiAddonStatusRefreshPromise = null;
 let aiAddonStatusSnapshot = null;
@@ -346,22 +374,25 @@ function findMeetingIndexById(meetingId) {
   return meetings.findIndex((meeting) => String(meeting.id) === targetId);
 }
 
-async function restoreCurrentHistorySummary(meetingId) {
+async function restoreCurrentHistorySummary(meetingId, message, { isError = false, showTab = true } = {}) {
   if (!meetingId || !meetingIdsEqual(currentMeetingId, meetingId)) {
-    return false;
+    return;
   }
 
+  let fullMeeting;
   try {
-    const fullMeeting = await window.electronAPI.getMeeting(meetingId);
-    if (fullMeeting && fullMeeting.summary) {
-      renderSummaryMarkdown(fullMeeting.summary, { stale: fullMeeting.summaryStale });
-      return true;
-    }
+    fullMeeting = await window.electronAPI.getMeeting(meetingId);
   } catch (error) {
     console.warn(`Could not restore saved summary: ${error.message}`);
   }
 
-  return false;
+  if (!meetingIdsEqual(currentMeetingId, meetingId)) return;
+  if (fullMeeting?.summary) {
+    renderSummaryMarkdown(fullMeeting.summary, { stale: fullMeeting.summaryStale });
+  } else {
+    showSummaryMessage(message, isError);
+  }
+  if (showTab) activateHistoryDetailTab('summary');
 }
 
 function renderSummaryMarkdown(markdown, options = {}) {
@@ -454,7 +485,7 @@ function createDeleteButton() {
   const button = document.createElement('button');
   button.className = 'delete-btn-list';
   button.title = 'Delete';
-  button.setAttribute('aria-label', 'Delete meeting');
+  button.setAttribute('aria-label', 'Delete recording');
 
   button.appendChild(createDeleteIcon());
 
@@ -467,7 +498,7 @@ function createMeetingCheckbox(meetingId) {
   box.setAttribute('role', 'checkbox');
   box.setAttribute('aria-checked', 'false');
   box.setAttribute('tabindex', '0');
-  box.title = 'Select meeting';
+  box.title = 'Select recording';
   box.dataset.id = meetingId;
 
   const svg = createSvgElement('svg', {
@@ -696,6 +727,9 @@ function createMeetingListItem(meeting) {
   const checkbox = createMeetingCheckbox(meeting.id);
   checkbox.setAttribute('aria-label', `Select ${meeting.title}`);
 
+  const body = document.createElement('div');
+  body.className = 'meeting-item-body';
+
   const info = document.createElement('button');
   info.type = 'button';
   info.className = 'meeting-info';
@@ -727,10 +761,57 @@ function createMeetingListItem(meeting) {
     metaRow.append(date, duration);
   }
   info.append(title, metaRow);
+  body.appendChild(info);
+
+  const bestPassage = meeting && meeting.searchMeta && meeting.searchMeta.bestPassage;
+  if (bestPassage) {
+    const snippetRow = document.createElement('div');
+    snippetRow.className = 'meeting-item-snippet-row';
+
+    const snippetEl = document.createElement('div');
+    snippetEl.className = 'meeting-item-snippet';
+    const parts = buildHighlightSegmentsFromParts(bestPassage.snippetParts);
+    if (parts.length > 0) {
+      for (const part of parts) {
+        if (part.match) {
+          const mark = document.createElement('mark');
+          mark.textContent = part.text;
+          snippetEl.appendChild(mark);
+        } else {
+          snippetEl.appendChild(document.createTextNode(part.text));
+        }
+      }
+    } else if (bestPassage.excerpt || bestPassage.text) {
+      snippetEl.textContent = bestPassage.excerpt || bestPassage.text;
+    }
+
+    if (snippetEl.childNodes.length > 0) {
+      snippetRow.appendChild(snippetEl);
+    }
+
+    const jumpTimeLabel = formatJumpTimestamp(bestPassage.startSec);
+    if (jumpTimeLabel) {
+      const jumpBtn = document.createElement('button');
+      jumpBtn.type = 'button';
+      jumpBtn.className = 'meeting-item-jump-pill';
+      jumpBtn.textContent = jumpTimeLabel;
+      jumpBtn.title = `Jump to ${jumpTimeLabel} in transcript`;
+      jumpBtn.setAttribute('aria-label', `Jump to ${jumpTimeLabel} in ${meeting.title}`);
+      jumpBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void openMeetingAtTimestamp(meeting.id, bestPassage.startSec);
+      });
+      snippetRow.appendChild(jumpBtn);
+    }
+
+    if (snippetRow.childNodes.length > 0) {
+      body.appendChild(snippetRow);
+    }
+  }
 
   const deleteBtn = createDeleteButton();
 
-  item.append(checkbox, info, deleteBtn);
+  item.append(checkbox, body, deleteBtn);
 
   checkbox.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -860,7 +941,7 @@ function renderActivityList() {
       input.className = 'activity-rename-input';
       input.value = activityRenameDraft;
       input.maxLength = 120;
-      input.setAttribute('aria-label', 'Meeting title');
+      input.setAttribute('aria-label', 'Recording title');
       input.disabled = busy;
       input.addEventListener('input', () => {
         activityRenameDraft = input.value;
@@ -1071,16 +1152,16 @@ async function commitActivityRename(meetingId) {
   try {
     const updated = await window.electronAPI.updateMeeting(id, { title: decision.title });
     if (!updated || !updated.title) {
-      throw new Error('Meeting was not found.');
+      throw new Error('Recording was not found.');
     }
     activityRenameMeetingId = null;
     activityRenameDraft = '';
     activityRenameOriginal = '';
     applyMeetingTitleLocally(updated);
-    addLog(`Renamed meeting to "${updated.title}"`);
+    addLog(`Renamed recording to "${updated.title}"`);
   } catch (error) {
-    addLog(`Failed to rename meeting: ${error.message}`, 'error');
-    alert(`Failed to rename meeting: ${error.message}`);
+    addLog(`Could not rename recording: ${error.message}`, 'error');
+    alert(`Could not rename recording: ${error.message}`);
   } finally {
     activityActionBusyMeetingId = null;
     renderActivityList();
@@ -1263,6 +1344,10 @@ async function resumePendingTranscriptionsFromBanner() {
 }
 
 function setMeetingAudioSource(audioPath) {
+  if (typeof pendingAudioSeekCleanup === 'function') {
+    pendingAudioSeekCleanup();
+    pendingAudioSeekCleanup = null;
+  }
   const audioPlayer = document.getElementById('audio-player');
   audioPlayer.src = window.electronAPI.buildFileUrl(audioPath);
   audioPlayer.load();
@@ -1270,6 +1355,49 @@ function setMeetingAudioSource(audioPath) {
   if (typeof window.__resetCustomAudioPlayer === 'function') {
     window.__resetCustomAudioPlayer();
   }
+}
+
+function seekMeetingAudio(targetSeconds) {
+  const numeric = Number(targetSeconds);
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return;
+  }
+  const audioPlayer = document.getElementById('audio-player');
+  if (!audioPlayer || !audioPlayer.getAttribute('src')) {
+    return;
+  }
+
+  if (typeof pendingAudioSeekCleanup === 'function') {
+    pendingAudioSeekCleanup();
+    pendingAudioSeekCleanup = null;
+  }
+
+  const applySeek = () => {
+    const duration = Number.isFinite(audioPlayer.duration) && audioPlayer.duration > 0
+      ? audioPlayer.duration
+      : null;
+    const clamped = duration !== null
+      ? Math.max(0, Math.min(duration, numeric))
+      : Math.max(0, numeric);
+    audioPlayer.currentTime = clamped;
+    if (typeof window.__syncCustomAudioPlayer === 'function') {
+      window.__syncCustomAudioPlayer();
+    }
+  };
+
+  if (audioPlayer.readyState >= 1) {
+    applySeek();
+    return;
+  }
+
+  const onLoadedMetadata = () => {
+    pendingAudioSeekCleanup = null;
+    applySeek();
+  };
+  audioPlayer.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
+  pendingAudioSeekCleanup = () => {
+    audioPlayer.removeEventListener('loadedmetadata', onLoadedMetadata);
+  };
 }
 
 function renderHistoryTranscriptMarkdown(transcriptEl, markdown) {
@@ -1286,11 +1414,25 @@ function renderHistoryTranscriptMarkdown(transcriptEl, markdown) {
   segments.forEach((segment) => {
     const segmentDiv = document.createElement('div');
     segmentDiv.className = 'history-transcript-segment';
+    const startSec = parseTimestampStringToSeconds(segment.start);
+    const endSec = parseTimestampStringToSeconds(segment.end);
+    if (startSec !== null) {
+      segmentDiv.dataset.startSec = String(startSec);
+    }
+    if (endSec !== null) {
+      segmentDiv.dataset.endSec = String(endSec);
+    }
 
     const meta = document.createElement('div');
     meta.className = 'history-transcript-meta';
 
-    const timestamp = document.createElement('span');
+    const timestamp = document.createElement(startSec !== null ? 'button' : 'span');
+    if (startSec !== null) {
+      timestamp.type = 'button';
+      timestamp.title = `Jump audio to ${segment.start}`;
+      timestamp.setAttribute('aria-label', `Jump audio to ${segment.start}`);
+      timestamp.addEventListener('click', () => seekMeetingAudio(startSec));
+    }
     timestamp.className = 'history-transcript-timestamp';
     timestamp.textContent = `[${segment.start} - ${segment.end}]`;
     meta.appendChild(timestamp);
@@ -1543,6 +1685,9 @@ function activateTab(targetTab) {
   if (targetTab === 'settings') {
     initSettingsTab().catch((error) => console.error('Failed to initialize settings tab:', error));
   }
+  if (targetTab === 'chat' && typeof initChatTab === 'function') {
+    initChatTab().catch((error) => console.error('Failed to initialize chat tab:', error));
+  }
 }
 
 function getPreferredScrollBehavior() {
@@ -1557,6 +1702,116 @@ function openSettingsAtAiAddons() {
   if (section) {
     section.scrollIntoView({ block: 'start', behavior: getPreferredScrollBehavior() });
   }
+}
+
+function showAppToast(message, variant = 'info', durationMs = 4000) {
+  const text = String(message || '').trim();
+  if (!text) {
+    return;
+  }
+  const toastEl = document.getElementById('app-toast');
+  if (!toastEl) {
+    return;
+  }
+  toastEl.textContent = text;
+  toastEl.classList.remove('is-warning', 'is-error', 'is-success');
+  if (variant === 'warning' || variant === 'error' || variant === 'success') {
+    toastEl.classList.add(`is-${variant}`);
+  }
+  toastEl.hidden = false;
+  toastEl.classList.add('is-visible');
+  clearTimeout(showAppToast._timer);
+  showAppToast._timer = setTimeout(() => {
+    toastEl.classList.remove('is-visible');
+    toastEl.hidden = true;
+  }, durationMs);
+}
+
+function highlightTranscriptSegmentAtTime(startSec) {
+  const transcriptEl = document.getElementById('meeting-transcript');
+  if (!transcriptEl) {
+    return;
+  }
+  transcriptEl.querySelectorAll('.history-transcript-segment.is-citation-highlight').forEach((el) => {
+    el.classList.remove('is-citation-highlight');
+  });
+  if (activeCitationHighlightTimer) {
+    clearTimeout(activeCitationHighlightTimer);
+    activeCitationHighlightTimer = null;
+  }
+
+  const segmentNodes = [...transcriptEl.querySelectorAll('.history-transcript-segment')];
+  if (!segmentNodes.length) {
+    return;
+  }
+
+  const descriptors = segmentNodes.map((node) => ({
+    startSec: node.dataset.startSec !== undefined && node.dataset.startSec !== ''
+      ? Number(node.dataset.startSec)
+      : null,
+    endSec: node.dataset.endSec !== undefined && node.dataset.endSec !== ''
+      ? Number(node.dataset.endSec)
+      : null,
+    node,
+  }));
+
+  const matchIdx = findClosestTranscriptSegmentIndex(descriptors, startSec);
+  if (matchIdx === -1 || !descriptors[matchIdx]) {
+    return;
+  }
+
+  const matchedNode = descriptors[matchIdx].node;
+  matchedNode.classList.add('is-citation-highlight');
+  matchedNode.scrollIntoView({ behavior: getPreferredScrollBehavior(), block: 'center' });
+  activeCitationHighlightTimer = setTimeout(() => {
+    matchedNode.classList.remove('is-citation-highlight');
+    activeCitationHighlightTimer = null;
+  }, 3600);
+}
+
+async function openMeetingAtTimestamp(meetingId, startSec = null) {
+  const targetId = String(meetingId || '').trim();
+  if (!targetId) {
+    return false;
+  }
+
+  let meeting = meetings.find((item) => String(item.id) === targetId);
+  if (!meeting) {
+    await loadMeetingHistory();
+    meeting = meetings.find((item) => String(item.id) === targetId);
+  }
+  if (!meeting) {
+    showAppToast('This recording is no longer in History.', 'warning');
+    return false;
+  }
+
+  activateTab('history');
+  activateHistoryDetailTab('transcript');
+
+  if (String(currentMeetingId || '') !== targetId) {
+    await selectMeeting(targetId);
+  } else {
+    const transcriptEl = document.getElementById('meeting-transcript');
+    if (transcriptEl && !transcriptEl.querySelector('.history-transcript-segment')) {
+      await refreshMeetingDetails(targetId);
+    }
+  }
+
+  if (String(currentMeetingId || '') !== targetId) {
+    return false;
+  }
+
+  meetingList.querySelector(`.meeting-item[data-id="${CSS.escape(targetId)}"]`)
+    ?.scrollIntoView({ block: 'nearest', behavior: getPreferredScrollBehavior() });
+
+  const numericStart = startSec !== null && startSec !== undefined && startSec !== ''
+    ? Number(startSec)
+    : null;
+  if (numericStart !== null && Number.isFinite(numericStart) && numericStart >= 0) {
+    highlightTranscriptSegmentAtTime(numericStart);
+    seekMeetingAudio(numericStart);
+  }
+  return true;
 }
 
 function focusTabHeading(targetTab) {
@@ -1635,9 +1890,16 @@ function handleKeyboardShortcut(event) {
   })) {
     return;
   }
-  if (action === 'goto-record' || action === 'goto-history' || action === 'goto-settings') {
+  if (action === 'goto-record' || action === 'goto-history' || action === 'goto-chat' || action === 'goto-settings') {
     event.preventDefault();
-    activateTabAndFocusHeading(action === 'goto-record' ? 'record' : action === 'goto-history' ? 'history' : 'settings');
+    const targetTab = action === 'goto-record'
+      ? 'record'
+      : action === 'goto-history'
+        ? 'history'
+        : action === 'goto-chat'
+          ? 'chat'
+          : 'settings';
+    activateTabAndFocusHeading(targetTab);
     return;
   }
   if (action === 'start-recording' || action === 'stop-recording') {
@@ -1658,6 +1920,7 @@ function applyKeyboardShortcutDiscovery() {
   const displays = {
     'goto-record': getKeyboardShortcutDisplay('goto-record', { platform }),
     'goto-history': getKeyboardShortcutDisplay('goto-history', { platform }),
+    'goto-chat': getKeyboardShortcutDisplay('goto-chat', { platform }),
     'goto-settings': getKeyboardShortcutDisplay('goto-settings', { platform }),
     'start-recording': getKeyboardShortcutDisplay('start-recording', { platform }),
     'stop-recording': getKeyboardShortcutDisplay('stop-recording', { platform }),
@@ -1671,6 +1934,11 @@ function applyKeyboardShortcutDiscovery() {
   if (railHistory) {
     railHistory.setAttribute('aria-keyshortcuts', getKeyboardShortcutAria('goto-history', { platform }));
     railHistory.title = `History (${displays['goto-history']})`;
+  }
+  const railChat = document.querySelector('.rail-btn[data-tab="chat"]');
+  if (railChat) {
+    railChat.setAttribute('aria-keyshortcuts', getKeyboardShortcutAria('goto-chat', { platform }));
+    railChat.title = `Chat (${displays['goto-chat']})`;
   }
   const railSettings = document.querySelector('.rail-btn[data-tab="settings"]');
   if (railSettings) {
@@ -1691,7 +1959,7 @@ function applyKeyboardShortcutDiscovery() {
   });
   const note = document.getElementById('keyboard-shortcuts-note');
   if (note) {
-    note.textContent = 'Works while AvaNevis is focused. Start uses Mic + Desktop; use the recording menu for other modes.';
+    note.textContent = 'Works while AvaNevis is focused. Start Recording captures mic and desktop audio; use its dropdown menu for single-source modes.';
   }
 }
 
@@ -2254,7 +2522,7 @@ async function showFirstTimeSetup(modelSize) {
   if (!modal) return;
 
   modal.classList.remove('hidden');
-  progressText.textContent = 'Downloading Whisper AI model...';
+  progressText.textContent = 'Downloading Whisper model…';
 
   const cancelBtn = document.getElementById('ftue-cancel-download-btn');
   let downloadCanceled = false;
@@ -2263,7 +2531,7 @@ async function showFirstTimeSetup(modelSize) {
     if (cancelBtn) {
       cancelBtn.disabled = true;
     }
-    progressText.textContent = 'Canceling download...';
+    progressText.textContent = 'Cancelling download…';
     try {
       await window.electronAPI.cancelDownloadModel();
     } catch (_error) {
@@ -2282,11 +2550,11 @@ async function showFirstTimeSetup(modelSize) {
 
     // Update progress text with meaningful messages
     if (data.includes('Loading')) {
-      progressText.textContent = 'Loading model configuration...';
+      progressText.textContent = 'Loading model configuration…';
     } else if (data.includes('Downloading')) {
-      progressText.textContent = 'Downloading model files (this may take a few minutes)...';
+      progressText.textContent = 'Downloading model files (this may take a few minutes)…';
     } else if (data.includes('Model loaded') || data.includes('successfully')) {
-      progressText.textContent = 'Model ready!';
+      progressText.textContent = 'Model ready.';
     }
   }));
 
@@ -2306,9 +2574,9 @@ async function showFirstTimeSetup(modelSize) {
     // Complete
     clearInterval(progressInterval);
     progressBar.style.width = '100%';
-    progressText.textContent = 'Setup complete!';
+    progressText.textContent = 'Setup complete.';
 
-    addLog('AI model downloaded successfully!');
+    addLog('Whisper model downloaded.');
 
     // Wait a moment then remove overlay
     await new Promise(resolve => setTimeout(resolve, 1500));
@@ -2320,12 +2588,12 @@ async function showFirstTimeSetup(modelSize) {
     clearInterval(progressInterval);
     const canceled = downloadCanceled
       || /canceled|cancelled/i.test(String(error && error.message ? error.message : error));
-    progressText.textContent = canceled ? 'Download canceled' : 'Setup failed!';
+    progressText.textContent = canceled ? 'Download cancelled' : 'Setup failed.';
     logOutput.textContent += `\nERROR: ${error.message}`;
 
     addLog(
       canceled
-        ? 'Model download was canceled. You can download it later from Settings.'
+        ? 'Model download was cancelled. You can download it later from Settings.'
         : 'Model download failed. You can try again from Settings.',
       canceled ? 'warning' : 'error',
     );
@@ -2390,43 +2658,91 @@ async function loadAudioDevices() {
 
 // Load meeting history
 async function loadMeetingHistory({ scan = false } = {}) {
-  try {
-    if (scan) {
-      try {
-        const scanResult = await window.electronAPI.scanRecordings();
-        if (scanResult.added > 0) {
-          addLog(`Found ${scanResult.added} recording(s) not in database`);
-        }
-      } catch (scanError) {
-        console.warn('Scan failed:', scanError);
+  if (scan) {
+    try {
+      const scanResult = await window.electronAPI.scanRecordings();
+      if (scanResult.added > 0) {
+        addLog(`Found ${scanResult.added} recording(s) not in database`);
       }
+    } catch (scanError) {
+      console.warn('Scan failed:', scanError);
     }
+  }
 
-    // Load the meeting list
-    meetings = await window.electronAPI.listMeetings();
-    renderMeetingList();
+  const requestEpoch = ++meetingHistoryRequestEpoch;
+  try {
+    const loadedMeetings = await window.electronAPI.listMeetings();
+    if (requestEpoch !== meetingHistoryRequestEpoch) return;
+    meetings = loadedMeetings;
+    if (meetingSearchQueryNormalized) {
+      void runHistorySearch(meetingSearchQuery);
+    } else {
+      renderMeetingList();
+    }
     renderActivityList();
     const emptyDetail = document.getElementById('meeting-details-empty');
     if (!currentMeetingId && emptyDetail) emptyDetail.style.display = meetings.length ? 'flex' : 'none';
   } catch (error) {
+    if (requestEpoch !== meetingHistoryRequestEpoch) return;
     console.error('Failed to load meeting history:', error);
-    setPlaceholder(meetingList, 'Could not load meetings. Refresh to try again.');
+    setPlaceholder(meetingList, 'Could not load recordings. Refresh to try again.');
     renderActivityList();
     return;
   }
 }
 
+async function runHistorySearch(rawQuery) {
+  const normalized = normalizeHistorySearchQuery(rawQuery);
+  meetingSearchQuery = rawQuery || '';
+  meetingSearchQueryNormalized = normalized.toLowerCase();
+  const epoch = ++meetingSearchEpoch;
+
+  if (!normalized) {
+    meetingSearchResults = null;
+    renderMeetingList();
+    return;
+  }
+
+  try {
+    if (window.electronAPI && typeof window.electronAPI.searchHistory === 'function') {
+      const response = await window.electronAPI.searchHistory({
+        query: normalized,
+        limit: 50,
+        maxMatches: 3,
+      });
+      if (epoch !== meetingSearchEpoch) {
+        return;
+      }
+      meetingSearchResults = Array.isArray(response && response.meetings)
+        ? response.meetings
+        : [];
+      renderMeetingList();
+      return;
+    }
+  } catch (error) {
+    console.warn('History search failed, falling back to title filter:', error);
+  }
+
+  if (epoch !== meetingSearchEpoch) {
+    return;
+  }
+  meetingSearchResults = null;
+  renderMeetingList();
+}
+
 // Render meeting list
 function renderMeetingList() {
   const query = meetingSearchQueryNormalized;
-  const filtered = query
-    ? meetings.filter((m) => (m.title || '').toLowerCase().includes(query))
-    : meetings;
+  const filtered = !query
+    ? meetings
+    : (Array.isArray(meetingSearchResults)
+      ? mergeSearchResultsWithMeetings(meetings, { meetings: meetingSearchResults })
+      : fallbackFilterMeetingsByTitle(meetings, query));
 
   if (filtered.length === 0) {
     setPlaceholder(
       meetingList,
-      meetings.length === 0 ? 'No meetings yet. Record a meeting or import an audio file.' : 'No matches for your search',
+      meetings.length === 0 ? 'No recordings yet. Record audio or import a file.' : 'No matching recordings',
     );
     updateSelectionToolbar();
     restoreInlineTitleEditorFocus();
@@ -2516,8 +2832,8 @@ async function deleteCheckedMeetings() {
 
   const ids = [...checkedMeetingIds];
   const confirmMsg = ids.length === 1
-    ? 'Delete the selected meeting? This cannot be undone.'
-    : `Delete ${ids.length} selected meetings? This cannot be undone.`;
+    ? 'Delete the selected recording? This cannot be undone.'
+    : `Delete ${ids.length} selected recordings? This cannot be undone.`;
   if (!confirm(confirmMsg)) return;
 
   // Release audio player file lock if a checked meeting is currently playing
@@ -2556,13 +2872,13 @@ async function deleteCheckedMeetings() {
   await loadMeetingHistory();
 
   if (failures.length === 0) {
-    addLog(`Deleted ${ids.length} meeting${ids.length === 1 ? '' : 's'}.`);
+    addLog(`Deleted ${ids.length} recording${ids.length === 1 ? '' : 's'}.`);
   } else {
     addLog(
-      `Deleted ${ids.length - failures.length} of ${ids.length} meetings (${failures.length} failed).`,
+      `Deleted ${ids.length - failures.length} of ${ids.length} recordings (${failures.length} failed).`,
       'error',
     );
-    alert(`Some meetings could not be deleted:\n\n${failures.map((f) => `- ${f.id}: ${f.message}`).join('\n')}`);
+    alert(`Some recordings could not be deleted:\n\n${failures.map((f) => `- ${f.id}: ${f.message}`).join('\n')}`);
   }
 }
 
@@ -2620,7 +2936,7 @@ async function selectMeeting(meetingId) {
   if (retryBtn) {
     retryBtn.style.display = isMeetingTranscriptionRetryable(meeting) ? 'inline-flex' : 'none';
     retryBtn.disabled = false;
-    retryBtn.textContent = 'Retry Transcription';
+    retryBtn.textContent = 'Retry transcription';
   }
   if (retryWhisperBtn) {
     retryWhisperBtn.hidden = !isMeetingTranscriptionRetryable(meeting);
@@ -2649,7 +2965,7 @@ async function refreshMeetingDetails(targetId) {
     if (retryBtn) {
       retryBtn.style.display = isMeetingTranscriptionRetryable(fullMeeting) ? 'inline-flex' : 'none';
       retryBtn.disabled = false;
-      retryBtn.textContent = 'Retry Transcription';
+      retryBtn.textContent = 'Retry transcription';
     }
     if (retryWhisperBtn) {
       retryWhisperBtn.hidden = !isMeetingTranscriptionRetryable(fullMeeting);
@@ -2700,7 +3016,7 @@ async function refreshMeetingDetails(targetId) {
     if (fullMeeting.summary) {
       renderSummaryMarkdown(fullMeeting.summary, { stale: fullMeeting.summaryStale });
     } else {
-      showSummaryMessage('No summary yet. Generate one locally when the summary model is installed.');
+      showSummaryMessage('No summary yet. Click Generate summary once Summaries & Chat is set up in Settings.');
     }
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
@@ -2711,7 +3027,7 @@ async function refreshMeetingDetails(targetId) {
       err.className = 'placeholder error';
       err.textContent = 'Failed to load transcript. The saved recording is still available above.';
       transcriptEl.appendChild(err);
-      showSummaryMessage('Summary unavailable because the meeting details could not be loaded.', true);
+      showSummaryMessage('Summary unavailable because this recording could not be loaded.', true);
     }
   } finally {
     restoreInlineTitleEditorFocus();
@@ -2814,7 +3130,7 @@ function wireInlineTitleEditor({
     try {
       const updated = await window.electronAPI.updateMeeting(meeting.id, { title: newTitle });
       if (!updated || !updated.title) {
-        throw new Error('Meeting was not found.');
+        throw new Error('Recording was not found.');
       }
 
       const activeMeeting = getMeeting();
@@ -2822,11 +3138,11 @@ function wireInlineTitleEditor({
         heading.textContent = updated.title;
       }
       if (typeof onSaved === 'function') onSaved(updated);
-      addLog(`Renamed meeting to "${updated.title}"`);
+      addLog(`Renamed recording to "${updated.title}"`);
     } catch (err) {
       console.error('Rename failed:', err);
-      addLog(`Failed to rename meeting: ${err.message}`, 'error');
-      alert(`Failed to rename meeting: ${err.message}`);
+      addLog(`Could not rename recording: ${err.message}`, 'error');
+      alert(`Could not rename recording: ${err.message}`);
     } finally {
       commitInFlight = false;
       const activeMeeting = getMeeting();
@@ -2995,6 +3311,7 @@ function setupEventListeners() {
     retryTranscriptionBtn.addEventListener('click', retryMeetingTranscription);
   }
   setupWhisperRetryDialog();
+  setupTranscriptExportDialog();
 
   const generateSummaryBtn = document.getElementById('generate-summary-btn');
   if (generateSummaryBtn) {
@@ -3022,14 +3339,23 @@ function setupEventListeners() {
   const searchInput = document.getElementById('meeting-search');
   if (searchInput) {
     searchInput.addEventListener('input', () => {
-      meetingSearchQuery = searchInput.value || '';
+      const rawValue = searchInput.value || '';
+      const normalized = normalizeHistorySearchQuery(rawValue);
+      meetingSearchQuery = rawValue;
       if (meetingSearchDebounceTimer) {
         clearTimeout(meetingSearchDebounceTimer);
+        meetingSearchDebounceTimer = null;
+      }
+      if (!normalized) {
+        meetingSearchEpoch += 1;
+        meetingSearchQueryNormalized = '';
+        meetingSearchResults = null;
+        renderMeetingList();
+        return;
       }
       meetingSearchDebounceTimer = setTimeout(() => {
         meetingSearchDebounceTimer = null;
-        meetingSearchQueryNormalized = meetingSearchQuery.trim().toLowerCase();
-        renderMeetingList();
+        void runHistorySearch(rawValue);
       }, MEETING_SEARCH_DEBOUNCE_MS);
     });
   }
@@ -3256,16 +3582,7 @@ function setupEventListeners() {
     setRecordingState('idle');
   }));
 
-  registerCleanup(window.electronAPI.onUpdateAvailable((updateInfo) => {
-    showUpdateNotification(updateInfo);
-  }));
-
-  if (typeof window.electronAPI.getPendingUpdateInfo === 'function') {
-    replayPendingUpdateNotification({
-      getPendingUpdateInfo: window.electronAPI.getPendingUpdateInfo,
-      showUpdateNotification,
-    }).catch((error) => console.warn('Could not replay pending update notification:', error));
-  }
+  initUpdateUi();
 
   // Check if user has recorded before (for timeout settings)
   const settings = loadSettings();
@@ -3319,6 +3636,9 @@ function setRecordingState(state) {
   updateButtonUI();
   updateControlsState();
   updateRecordingPresenceUI();
+  if (typeof renderUpdateUi === 'function') {
+    renderUpdateUi();
+  }
 
   // Capture returned to idle: re-query so a deferred once-per-launch prompt can claim.
   if (shouldRequeryRecoveryAfterCaptureIdle(previousState, state)) {
@@ -4370,7 +4690,7 @@ function writeTranscriptMarkdown({ meeting, transcriptionResult, diarizationResu
     ? diarizationResult.segments
     : (transcriptionResult.segments || []);
   const lines = [
-    '# Meeting Transcription',
+    '# Audio Transcript',
     '',
     `**File:** ${meeting && meeting.audioPath ? meeting.audioPath.split(/[\\/]/).pop() : 'recording'}`,
     `**Date:** ${new Date().toISOString().replace('T', ' ').slice(0, 19)}`,
@@ -4408,7 +4728,7 @@ function renderMeetingDiarizationStatus(meeting, container) {
 
   const message = document.createElement('p');
   message.className = 'placeholder error';
-  message.textContent = `Speaker identification failed for this recording. ${diarization.error || 'The transcript was saved without speaker-guided chunks.'}`;
+  message.textContent = `Speaker identification failed for this recording. ${diarization.error || 'The transcript was saved without speaker labels.'}`;
   container.appendChild(message);
 }
 
@@ -4499,7 +4819,7 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = n
     const name = policy.names?.[select.value];
     const available = policy.languages.includes(select.value);
     submit.disabled = !available;
-    message.textContent = !name ? 'Confirm the predominant transcript language.'
+    message.textContent = !name ? 'Choose the main language spoken in this recording.'
       : available ? `Summary will use ${name}.`
         : `Summaries are not available for ${name} with this model.`;
   };
@@ -4579,13 +4899,7 @@ async function generateSummaryForMeeting(meetingId) {
     cancelling: summaryGenerationCancelling,
   })) {
     addLog('Summary generation cancelled. Transcript is unchanged.', 'warning');
-    if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
-      const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
-      if (!restored) {
-        showSummaryMessage('Summary generation cancelled. Transcript is unchanged.');
-      }
-      activateHistoryDetailTab('summary');
-    }
+    await restoreCurrentHistorySummary(normalizedMeetingId, 'Summary generation cancelled. Transcript is unchanged.');
     summaryGenerationMeetingId = null;
     summaryGenerationCancelling = false;
     updateSummaryGenerationButtons();
@@ -4596,13 +4910,7 @@ async function generateSummaryForMeeting(meetingId) {
   if (!summaryStatus || !summaryStatus.setupComplete || summaryStatus.status !== 'ready') {
     const message = getSummarySetupMessage(summaryStatus);
     addLog(message, summaryStatus && summaryStatus.status === 'unsupported' ? 'error' : 'warning');
-    if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
-      const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
-      if (!restored) {
-        showSummaryMessage(message, summaryStatus && summaryStatus.status === 'error');
-      }
-      activateHistoryDetailTab('summary');
-    }
+    await restoreCurrentHistorySummary(normalizedMeetingId, message, { isError: summaryStatus?.status === 'error' });
     openSettingsAtAiAddons();
     summaryGenerationMeetingId = null;
     summaryGenerationCancelling = false;
@@ -4619,10 +4927,7 @@ async function generateSummaryForMeeting(meetingId) {
     const preferredLanguage = window.summaryLanguageHelpers.reusableSummaryLanguage(meeting, sourceTranscriptHash, policy);
     const transcriptLanguage = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage);
     if (!transcriptLanguage || summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) {
-      if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
-        const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
-        if (!restored) showSummaryMessage('Summary generation cancelled. Transcript is unchanged.');
-      }
+      await restoreCurrentHistorySummary(normalizedMeetingId, 'Summary generation cancelled. Transcript is unchanged.', { showTab: false });
       return;
     }
     if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) showSummaryMessage(`Generating local summary in ${policy.names[transcriptLanguage]}…`);
@@ -4637,15 +4942,17 @@ async function generateSummaryForMeeting(meetingId) {
 
     if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
       const fullMeeting = await window.electronAPI.getMeeting(normalizedMeetingId);
-      updateSummaryLanguageCaptions(fullMeeting);
-      renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '', { stale: fullMeeting && fullMeeting.summaryStale });
       syncMeetingInList((result && result.meeting) || fullMeeting);
-      activateHistoryDetailTab('summary');
+      if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
+        updateSummaryLanguageCaptions(fullMeeting);
+        renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '', { stale: fullMeeting && fullMeeting.summaryStale });
+        activateHistoryDetailTab('summary');
+      }
     } else if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, normalizedMeetingId)) {
       syncMeetingInList(result && result.meeting);
       activateTab('history');
       await selectMeeting(normalizedMeetingId);
-      activateHistoryDetailTab('summary');
+      if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) activateHistoryDetailTab('summary');
     } else {
       syncMeetingInList(result && result.meeting);
     }
@@ -4656,25 +4963,13 @@ async function generateSummaryForMeeting(meetingId) {
     const wasCancelled = error && (error.code === 'AI_ADDON_SETUP_CANCELLED' || error.name === 'AbortError' || /cancell?ed/i.test(error.message || ''));
     if (wasCancelled) {
       addLog('Summary generation cancelled. Transcript is unchanged.', 'warning');
-      if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
-        const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
-        if (!restored) {
-          showSummaryMessage('Summary generation cancelled. Transcript is unchanged.');
-        }
-        activateHistoryDetailTab('summary');
-      }
+      await restoreCurrentHistorySummary(normalizedMeetingId, 'Summary generation cancelled. Transcript is unchanged.');
       return;
     }
 
     const message = `Summary generation failed. Transcript is unchanged. ${error.message}`;
     addLog(message, 'error');
-    if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
-      const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
-      if (!restored) {
-        showSummaryMessage(message, true);
-      }
-      activateHistoryDetailTab('summary');
-    }
+    await restoreCurrentHistorySummary(normalizedMeetingId, message, { isError: true });
   } finally {
     summaryGenerationMeetingId = null;
     summaryGenerationCancelling = false;
@@ -4726,7 +5021,7 @@ async function transcribeAudio(options = {}) {
     });
 
     if (result && result.success === false) {
-      throw Object.assign(new Error(result.error || 'Could not save pending meeting.'), {
+      throw Object.assign(new Error(result.error || 'Could not save recording.'), {
         code: result.code || 'TRANSCRIPTION_FAILED',
         meeting: result.meeting || result.pendingMeeting || null,
       });
@@ -4805,7 +5100,7 @@ async function transcribeAudio(options = {}) {
 
 async function retryMeetingTranscription() {
   if (!currentMeetingId) {
-    addLog('Select a meeting first.', 'warning');
+    addLog('Select a recording first.', 'warning');
     return;
   }
 
@@ -4841,7 +5136,7 @@ async function retryMeetingTranscription() {
   } finally {
     if (retryBtn) {
       retryBtn.disabled = false;
-      retryBtn.textContent = 'Retry Transcription';
+      retryBtn.textContent = 'Retry transcription';
     }
   }
 }
@@ -5012,7 +5307,7 @@ function setupWhisperRetryDialog() {
 
 // Copy transcript to clipboard (legacy Home panel removed)
 function copyTranscript() {
-  addLog('Open the meeting in History to copy its transcript.', 'warning');
+  addLog('Open the recording in History to copy its transcript.', 'warning');
 }
 
 // Copy meeting transcript to clipboard
@@ -5063,26 +5358,22 @@ function copyMeetingSummary() {
 }
 
 async function saveMeetingSummaryToFile() {
-  if (!currentMeetingId) {
-    addLog('No meeting selected to save.', 'warning');
+  const meetingId = currentMeetingId;
+  if (!meetingId) {
+    addLog('Select a recording first.', 'warning');
     return;
   }
 
-  const meeting = findMeetingById(currentMeetingId);
-  const suggestedName = `${(meeting && meeting.title) || 'Summary'} Summary`;
-  let content = getCurrentSummaryMarkdown();
-
-  if (!content) {
-    try {
-      const fullMeeting = await window.electronAPI.getMeeting(currentMeetingId);
-      content = (fullMeeting && fullMeeting.summary) || '';
-    } catch (err) {
-      console.error('Failed to load summary for save:', err);
-      addLog(`Failed to load summary: ${err.message}`, 'error');
-      return;
-    }
+  let meeting;
+  try {
+    meeting = await window.electronAPI.getMeeting(meetingId);
+  } catch (err) {
+    console.error('Failed to load summary for save:', err);
+    addLog(`Failed to load summary: ${err.message}`, 'error');
+    return;
   }
 
+  const content = meeting?.summary || '';
   if (!content.trim()) {
     addLog('No summary available to save.', 'warning');
     return;
@@ -5090,7 +5381,7 @@ async function saveMeetingSummaryToFile() {
 
   try {
     const result = await window.electronAPI.saveTranscriptAs({
-      suggestedName,
+      suggestedName: `${meeting.title || 'Summary'} Summary`,
       content,
       title: 'Save Summary',
     });
@@ -5104,25 +5395,372 @@ async function saveMeetingSummaryToFile() {
   }
 }
 
+let activeTranscriptExportContext = null;
+let transcriptExportTriggerElement = null;
+let transcriptExportBusy = false;
+
+function updateTranscriptExportSubtitleControls() {
+  const form = document.getElementById('transcript-export-form');
+  const prefsEl = document.getElementById('transcript-export-subtitle-prefs');
+  const vttVoiceRow = document.getElementById('transcript-export-vtt-voice-row');
+  if (!form || !prefsEl) return;
+  const selected = form.querySelector('input[name="transcript-export-format"]:checked');
+  const format = selected ? selected.value : 'md';
+  const isSubtitle = format === 'srt' || format === 'vtt';
+  prefsEl.hidden = !isSubtitle;
+  if (vttVoiceRow) {
+    vttVoiceRow.hidden = format !== 'vtt';
+  }
+}
+
+function renderTranscriptExportFormatOptions(config, selectedFormat = 'md') {
+  const optionsContainer = document.getElementById('transcript-export-options');
+  const noticeEl = document.getElementById('transcript-export-notice');
+  const noticeTextEl = document.getElementById('transcript-export-notice-text');
+  const retranscribeBtn = document.getElementById('transcript-export-retranscribe-btn');
+  if (!optionsContainer) return;
+
+  clearElement(optionsContainer);
+  const availableFormats = new Set(
+    config.options.filter((opt) => opt.available).map((opt) => opt.format),
+  );
+  const chosenFormat = availableFormats.has(selectedFormat) ? selectedFormat : config.defaultFormat;
+
+  for (const option of config.options) {
+    const label = document.createElement('label');
+    label.className = 'transcript-export-option';
+    if (!option.available) label.classList.add('is-disabled');
+    if (option.format === chosenFormat) label.classList.add('is-selected');
+
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'transcript-export-format';
+    input.value = option.format;
+    input.disabled = !option.available;
+    input.checked = option.format === chosenFormat;
+    if (!option.available && option.disabledReason) {
+      input.title = option.disabledReason;
+    }
+
+    const body = document.createElement('span');
+    body.className = 'transcript-export-option-body';
+
+    const header = document.createElement('span');
+    header.className = 'transcript-export-option-header';
+
+    const nameEl = document.createElement('span');
+    nameEl.className = 'transcript-export-option-label';
+    nameEl.textContent = option.label;
+    header.appendChild(nameEl);
+
+    const extEl = document.createElement('span');
+    extEl.className = 'transcript-export-option-ext';
+    extEl.textContent = option.extLabel;
+    header.appendChild(extEl);
+
+    if (!option.available) {
+      const badgeEl = document.createElement('span');
+      badgeEl.className = 'transcript-export-option-badge';
+      badgeEl.textContent = 'Unavailable';
+      header.appendChild(badgeEl);
+    }
+
+    const descEl = document.createElement('span');
+    descEl.className = 'transcript-export-option-desc';
+    descEl.textContent = option.description;
+
+    body.appendChild(header);
+    body.appendChild(descEl);
+    label.appendChild(input);
+    label.appendChild(body);
+    optionsContainer.appendChild(label);
+  }
+
+  if (noticeEl && noticeTextEl) {
+    const noticeText = config.captionsUnavailableNotice || '';
+    noticeTextEl.textContent = noticeText;
+    noticeEl.hidden = !noticeText;
+  }
+  if (retranscribeBtn) {
+    retranscribeBtn.hidden = !config.canRetranscribe;
+    retranscribeBtn.disabled = false;
+  }
+  updateTranscriptExportSubtitleControls();
+}
+
+function closeTranscriptExportDialog({ restoreFocus = true } = {}) {
+  const modal = document.getElementById('transcript-export-modal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  activeTranscriptExportContext = null;
+  transcriptExportBusy = false;
+  const trigger = transcriptExportTriggerElement;
+  transcriptExportTriggerElement = null;
+  if (restoreFocus && trigger && typeof trigger.focus === 'function' && !trigger.disabled) {
+    trigger.focus();
+  }
+}
+
+function openTranscriptExportDialog({ suggestedName, content, meeting = null, triggerElement = null }) {
+  const modal = document.getElementById('transcript-export-modal');
+  const form = document.getElementById('transcript-export-form');
+  const nameEl = document.getElementById('transcript-export-meeting-name');
+  const errorEl = document.getElementById('transcript-export-error');
+  const includeSpeakersEl = document.getElementById('transcript-export-include-speakers');
+  const useVoiceTagsEl = document.getElementById('transcript-export-use-voice-tags');
+  const confirmBtn = document.getElementById('transcript-export-confirm');
+  if (!modal || !form) return false;
+
+  const meetingId = meeting && meeting.id ? String(meeting.id).trim() : '';
+  const config = buildExportFormatOptions({
+    captionsAvailable: Boolean(meeting && meeting.captionsAvailable),
+    captionsStatus: (meeting && meeting.captionsStatus) || 'missing',
+    hasAudio: Boolean(meetingId && meeting && meeting.audioPath),
+  });
+
+  activeTranscriptExportContext = {
+    suggestedName,
+    content,
+    meetingId,
+    config,
+  };
+  transcriptExportTriggerElement = triggerElement || document.activeElement;
+  transcriptExportBusy = false;
+
+  if (nameEl) nameEl.textContent = suggestedName || 'Transcript';
+  if (includeSpeakersEl) includeSpeakersEl.checked = true;
+  if (useVoiceTagsEl) useVoiceTagsEl.checked = false;
+  if (errorEl) {
+    errorEl.textContent = '';
+    errorEl.hidden = true;
+  }
+  if (confirmBtn) {
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Save as…';
+  }
+
+  renderTranscriptExportFormatOptions(config, config.defaultFormat);
+  modal.classList.remove('hidden');
+
+  const checkedRadio = form.querySelector('input[name="transcript-export-format"]:checked');
+  if (checkedRadio) {
+    checkedRadio.focus();
+  }
+  return true;
+}
+
+async function retranscribeMeetingForCaptions(meetingId) {
+  const id = String(meetingId || '').trim();
+  if (!id || transcriptExportBusy) return;
+  const retranscribeBtn = document.getElementById('transcript-export-retranscribe-btn');
+  const errorEl = document.getElementById('transcript-export-error');
+  transcriptExportBusy = true;
+  if (retranscribeBtn) {
+    retranscribeBtn.disabled = true;
+    retranscribeBtn.textContent = 'Re-transcribing…';
+  }
+  if (errorEl) {
+    errorEl.textContent = '';
+    errorEl.hidden = true;
+  }
+  addLog(`Re-transcribing recording ${id} to generate subtitle timings...`);
+  try {
+    const result = await window.electronAPI.retryTranscription(buildOrdinaryRetryOptions(id));
+    if (result && result.meeting) {
+      syncMeetingInList(result.meeting);
+    }
+    await loadMeetingHistory();
+    if (String(currentMeetingId || '') === id) {
+      await selectMeeting(id);
+    }
+    const refreshed = await window.electronAPI.getMeeting(id).catch(() => null);
+    if (activeTranscriptExportContext && activeTranscriptExportContext.meetingId === id && refreshed) {
+      activeTranscriptExportContext.content = refreshed.transcript || activeTranscriptExportContext.content;
+      activeTranscriptExportContext.suggestedName = refreshed.title || activeTranscriptExportContext.suggestedName;
+      activeTranscriptExportContext.config = buildExportFormatOptions({
+        captionsAvailable: Boolean(refreshed.captionsAvailable),
+        captionsStatus: refreshed.captionsStatus || 'missing',
+        hasAudio: Boolean(refreshed.audioPath),
+      });
+      renderTranscriptExportFormatOptions(
+        activeTranscriptExportContext.config,
+        refreshed.captionsAvailable ? 'srt' : 'md',
+      );
+    }
+    addLog('Re-transcription completed.');
+  } catch (error) {
+    if (errorEl) {
+      errorEl.textContent = `Re-transcription failed: ${error && error.message ? error.message : error}`;
+      errorEl.hidden = false;
+    }
+    addLog(`Re-transcription failed: ${error && error.message ? error.message : error}`, 'error');
+  } finally {
+    transcriptExportBusy = false;
+    if (retranscribeBtn) {
+      retranscribeBtn.disabled = false;
+      retranscribeBtn.textContent = 'Re-transcribe from audio';
+    }
+  }
+}
+
+function setupTranscriptExportDialog() {
+  const modal = document.getElementById('transcript-export-modal');
+  const form = document.getElementById('transcript-export-form');
+  const optionsEl = document.getElementById('transcript-export-options');
+  const cancelBtn = document.getElementById('transcript-export-cancel');
+  const retranscribeBtn = document.getElementById('transcript-export-retranscribe-btn');
+  const confirmBtn = document.getElementById('transcript-export-confirm');
+  const errorEl = document.getElementById('transcript-export-error');
+  if (!modal || !form || modal.dataset.bound === 'true') return;
+  modal.dataset.bound = 'true';
+
+  optionsEl?.addEventListener('change', () => {
+    for (const label of optionsEl.querySelectorAll('.transcript-export-option')) {
+      const radio = label.querySelector('input[type="radio"]');
+      label.classList.toggle('is-selected', Boolean(radio && radio.checked));
+    }
+    if (errorEl) {
+      errorEl.textContent = '';
+      errorEl.hidden = true;
+    }
+    updateTranscriptExportSubtitleControls();
+  });
+
+  cancelBtn?.addEventListener('click', () => {
+    closeTranscriptExportDialog();
+  });
+
+  retranscribeBtn?.addEventListener('click', () => {
+    if (activeTranscriptExportContext && activeTranscriptExportContext.meetingId) {
+      void retranscribeMeetingForCaptions(activeTranscriptExportContext.meetingId);
+    }
+  });
+
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) {
+      closeTranscriptExportDialog({ restoreFocus: false });
+    }
+  });
+
+  modal.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeTranscriptExportDialog();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusables = [...modal.querySelectorAll('input:not(:disabled), button:not(:disabled)')]
+      .filter((element) => !element.hidden && element.offsetParent !== null);
+    if (focusables.length === 0) return;
+    const activeIndex = focusables.indexOf(document.activeElement);
+    if (event.shiftKey && activeIndex <= 0) {
+      event.preventDefault();
+      focusables[focusables.length - 1].focus();
+    } else if (!event.shiftKey && activeIndex === focusables.length - 1) {
+      event.preventDefault();
+      focusables[0].focus();
+    }
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!activeTranscriptExportContext || transcriptExportBusy) return;
+    const selectedRadio = form.querySelector('input[name="transcript-export-format"]:checked');
+    const format = selectedRadio ? selectedRadio.value : 'md';
+    const includeSpeakers = Boolean(document.getElementById('transcript-export-include-speakers')?.checked ?? true);
+    const useVoiceTags = Boolean(document.getElementById('transcript-export-use-voice-tags')?.checked);
+
+    transcriptExportBusy = true;
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Saving…';
+    }
+    if (errorEl) {
+      errorEl.textContent = '';
+      errorEl.hidden = true;
+    }
+
+    try {
+      const result = await window.electronAPI.saveTranscriptAs({
+        suggestedName: activeTranscriptExportContext.suggestedName,
+        content: activeTranscriptExportContext.content,
+        format,
+        meetingId: activeTranscriptExportContext.meetingId || undefined,
+        includeSpeakers,
+        useVoiceTags,
+      });
+
+      if (result && result.ok === false) {
+        const message = result.error || 'Subtitle timing data is unavailable for this recording.';
+        if (errorEl) {
+          errorEl.textContent = message;
+          errorEl.hidden = false;
+        }
+        addLog(message, 'warning');
+        if (activeTranscriptExportContext.config) {
+          renderTranscriptExportFormatOptions({
+            ...activeTranscriptExportContext.config,
+            captionsUnavailableNotice: message,
+            canRetranscribe: Boolean(activeTranscriptExportContext.meetingId),
+            options: activeTranscriptExportContext.config.options.map((opt) => (
+              opt.format === 'srt' || opt.format === 'vtt'
+                ? { ...opt, available: false, disabledReason: message }
+                : opt
+            )),
+          }, 'md');
+        }
+        return;
+      }
+
+      if (result && !result.canceled && result.filePath) {
+        addLog(`Transcript saved to ${result.filePath}`);
+        closeTranscriptExportDialog();
+      } else if (result && result.canceled) {
+        transcriptExportBusy = false;
+      }
+    } catch (err) {
+      console.error('Save failed:', err);
+      if (errorEl) {
+        errorEl.textContent = `Failed to save transcript: ${err.message}`;
+        errorEl.hidden = false;
+      }
+      addLog(`Failed to save transcript: ${err.message}`, 'error');
+    } finally {
+      transcriptExportBusy = false;
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Save as…';
+      }
+    }
+  });
+}
+
 // Save the currently selected history meeting's transcript via native dialog.
 // Defaults the filename to the meeting's display label so renamed meetings
 // save with the user-friendly name they chose.
 async function saveMeetingTranscriptToFile() {
   if (!currentMeetingId) {
-    addLog('No meeting selected to save.', 'warning');
+    addLog('Select a recording first.', 'warning');
     return;
   }
 
   const meeting = findMeetingById(currentMeetingId);
-  const suggestedName = (meeting && meeting.title) || 'Transcript';
+  let fullMeeting = meeting || null;
+  let suggestedName = (meeting && meeting.title) || 'Transcript';
   const transcriptEl = document.getElementById('meeting-transcript');
   let content = (transcriptEl && transcriptEl.dataset.markdown) || '';
 
-  if (!content) {
-    try {
-      const fullMeeting = await window.electronAPI.getMeeting(currentMeetingId);
-      content = (fullMeeting && fullMeeting.transcript) || '';
-    } catch (err) {
+  try {
+    const loaded = await window.electronAPI.getMeeting(currentMeetingId);
+    if (loaded) {
+      fullMeeting = loaded;
+      suggestedName = loaded.title || suggestedName;
+      if (!content && loaded.transcript) {
+        content = loaded.transcript;
+      }
+    }
+  } catch (err) {
+    if (!content) {
       console.error('Failed to load transcript for save:', err);
       addLog(`Failed to load transcript: ${err.message}`, 'error');
       return;
@@ -5134,16 +5772,12 @@ async function saveMeetingTranscriptToFile() {
     return;
   }
 
-  try {
-    const result = await window.electronAPI.saveTranscriptAs({ suggestedName, content });
-    if (result && !result.canceled && result.filePath) {
-      addLog(`Transcript saved to ${result.filePath}`);
-    }
-  } catch (err) {
-    console.error('Save failed:', err);
-    addLog(`Failed to save transcript: ${err.message}`, 'error');
-    alert(`Failed to save transcript: ${err.message}`);
-  }
+  openTranscriptExportDialog({
+    suggestedName,
+    content,
+    meeting: fullMeeting,
+    triggerElement: document.getElementById('save-meeting-transcript-btn'),
+  });
 }
 
 function getRenderedTranscriptFallbackText() {
@@ -5159,17 +5793,22 @@ async function saveTranscript() {
   // available, falling back to whatever is currently in the transcript pane.
   let content = currentRecordingTranscriptMarkdown || '';
   let suggestedName = 'Transcript';
+  let fullMeeting = currentRecordingMeeting || null;
 
   if (currentRecordingMeeting && currentRecordingMeeting.id) {
     suggestedName = currentRecordingMeeting.title || suggestedName;
-    if (!content) {
-      try {
-        const fullMeeting = await window.electronAPI.getMeeting(currentRecordingMeeting.id);
-        if (fullMeeting && fullMeeting.transcript) {
-          content = fullMeeting.transcript;
-          currentRecordingTranscriptMarkdown = fullMeeting.transcript;
+    try {
+      const loaded = await window.electronAPI.getMeeting(currentRecordingMeeting.id);
+      if (loaded) {
+        fullMeeting = loaded;
+        suggestedName = loaded.title || suggestedName;
+        if (!content && loaded.transcript) {
+          content = loaded.transcript;
+          currentRecordingTranscriptMarkdown = loaded.transcript;
         }
-      } catch (err) {
+      }
+    } catch (err) {
+      if (!content) {
         console.warn('Failed to load saved transcript markdown, falling back to rendered text:', err);
       }
     }
@@ -5185,19 +5824,11 @@ async function saveTranscript() {
     return;
   }
 
-  try {
-    const result = await window.electronAPI.saveTranscriptAs({
-      suggestedName,
-      content,
-    });
-    if (result && !result.canceled && result.filePath) {
-      addLog(`Transcript saved to ${result.filePath}`);
-    }
-  } catch (err) {
-    console.error('Save failed:', err);
-    addLog(`Failed to save transcript: ${err.message}`, 'error');
-    alert(`Failed to save transcript: ${err.message}`);
-  }
+  openTranscriptExportDialog({
+    suggestedName,
+    content,
+    meeting: fullMeeting,
+  });
 }
 
 // Delete meeting
@@ -5211,7 +5842,7 @@ async function deleteMeetingHandler(meetingId, fallbackTitle = '') {
   const meeting = findMeetingById(idToDelete);
   const displayTitle = (meeting && meeting.title) || String(fallbackTitle || '').trim() || idToDelete;
 
-  if (confirm(`Are you sure you want to delete "${displayTitle}"?`)) {
+  if (confirm(`Delete "${displayTitle}"? This cannot be undone.`)) {
     try {
       // Release audio player file lock before deleting (Windows issue)
       const audioPlayer = document.getElementById('audio-player');
@@ -5221,7 +5852,7 @@ async function deleteMeetingHandler(meetingId, fallbackTitle = '') {
         audioPlayer.load();
       }
 
-      addLog(`Deleting meeting: ${displayTitle}...`);
+      addLog(`Deleting recording: ${displayTitle}...`);
 
       // Small delay to ensure OS releases the file handle
       await new Promise(resolve => setTimeout(resolve, 300));
@@ -5240,11 +5871,11 @@ async function deleteMeetingHandler(meetingId, fallbackTitle = '') {
       renderMeetingList();
       await loadMeetingHistory();
 
-      addLog('Meeting deleted successfully!');
+      addLog('Recording deleted.');
     } catch (error) {
       console.error('Delete failed:', error);
       addLog(`Error: ${error.message}`, 'error');
-      alert('Failed to delete meeting: ' + error.message);
+      alert('Could not delete recording: ' + error.message);
     }
   }
 }
@@ -5635,22 +6266,22 @@ function updateDiarizationFootprint(diarization) {
   const engine = resolveSelectedDiarizationEngine(diarization);
   const runtimeLabel = engine === 'speakrs'
     ? (diarization && diarization.availability && diarization.availability.acceleration === 'mps'
-      ? 'Apple Silicon (CoreML), isolated under user data'
-      : 'Speakrs CUDA, isolated under user data')
+      ? 'Apple Silicon (CoreML)'
+      : 'NVIDIA GPU (CUDA)')
     : (diarization && diarization.availability && diarization.availability.acceleration === 'mps'
-      ? 'PyTorch Metal/MPS, isolated under user data'
-      : 'PyTorch CUDA, isolated under user data');
+      ? 'Apple Silicon (Metal)'
+      : 'NVIDIA GPU (CUDA)');
   const downloadFallback = engine === 'speakrs'
-    ? 'model pack download'
+    ? 'about 800 MB'
     : (diarization && diarization.availability && diarization.availability.acceleration === 'mps'
-      ? 'depends on PyTorch MPS wheels'
-      : 'depends on PyTorch CUDA wheels');
+      ? 'about 2 GB'
+      : 'about 4 GB');
   const downloadState = aiAddonDownloadState.diarization;
   renderFootprintRows(document.getElementById('diarization-footprint'), [
     { label: 'Download', value: estimatedDownload ? `up to ${formatBytes(estimatedDownload)}` : downloadFallback },
     { label: 'Progress', value: downloadState.active ? `${Math.round(downloadState.percent || 0)}%` : null },
-    { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'not installed') },
-    { label: 'Runtime', value: runtimeLabel },
+    { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'Not installed') },
+    { label: 'Hardware', value: runtimeLabel },
   ]);
 }
 
@@ -5667,16 +6298,16 @@ function updateSummaryFootprint(summary) {
   const installed = storage && storage.installedBytes;
   const estimatedInstalled = storage && storage.estimatedInstalledBytes;
   const runtimeLabel = summary && summary.artifact && summary.artifact.acceleration === 'metal'
-    ? 'llama.cpp Metal'
-    : 'llama.cpp CUDA';
+    ? 'Apple Silicon (Metal)'
+    : 'NVIDIA GPU (CUDA)';
   const downloadState = aiAddonDownloadState.summary;
   renderFootprintRows(document.getElementById('summary-footprint'), [
     { label: 'Model', value: summary && summary.artifact && summary.artifact.label },
     { label: 'Model download', value: estimatedModel ? formatBytes(estimatedModel) : null },
     { label: 'Runtime download', value: estimatedRuntime ? formatBytes(estimatedRuntime) : null },
     { label: 'Progress', value: downloadState.active ? `${Math.round(downloadState.percent || 0)}%` : null },
-    { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'not installed') },
-    { label: 'Runtime', value: runtimeLabel },
+    { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'Not installed') },
+    { label: 'Hardware', value: runtimeLabel },
   ]);
 }
 
@@ -6287,7 +6918,7 @@ function setupAiAddonSettingsListeners() {
       if (!canRunControlAction('summary', 'remove')) {
         return;
       }
-      if (!confirm('Disable and remove the local summary model from this device?')) {
+      if (!confirm('Disable and remove the Summaries & Chat model from this device? Summaries and Chat will stay off until you enable them again. Your recordings and transcripts are not affected.')) {
         return;
       }
       withAiAddonAction(removeSummaryBtn, 'Removing...', async () => {
@@ -6320,6 +6951,9 @@ function setupAiAddonSettingsListeners() {
 // ============================================================================
 
 function renderTranscriptionEngineSettings() {
+  const whisperCard = document.getElementById('whisper-engine-card');
+  const whisperBadge = document.getElementById('whisper-status-badge');
+  const parakeetCard = document.getElementById('parakeet-engine-card');
   const parakeetRow = document.getElementById('parakeet-engine-row');
   const parakeetToggle = document.getElementById('use-parakeet-engine-toggle');
   const parakeetBadge = document.getElementById('parakeet-status-badge');
@@ -6347,6 +6981,13 @@ function renderTranscriptionEngineSettings() {
     formatBytes,
   });
 
+  if (whisperCard) whisperCard.classList.toggle('is-active', activeEngine === 'whisper');
+  if (whisperBadge) {
+    whisperBadge.textContent = activeEngine === 'whisper' ? 'Active' : 'Standby';
+    whisperBadge.classList.remove('enabled', 'disabled', 'installing');
+    whisperBadge.classList.add(activeEngine === 'whisper' ? 'enabled' : 'disabled');
+  }
+  if (parakeetCard) parakeetCard.classList.toggle('is-active', activeEngine === 'parakeet');
   parakeetRow.classList.toggle('is-active', activeEngine === 'parakeet');
   parakeetToggle.checked = activeEngine === 'parakeet';
   const canSwitchAway = activeEngine === 'parakeet' && view.actions.includes('use-whisper');
@@ -6569,7 +7210,7 @@ async function validateParakeetEngine() {
 async function removeParakeetEngine() {
   if (parakeetEngineSettingsBusy) return;
   const confirmed = confirm(
-    'Remove the Parakeet model and GPU runtime from this device? Existing recordings and Whisper models will be kept. If Parakeet is active, it stays selected until you turn off Use Parakeet.',
+    'Remove Parakeet and its GPU runtime from this device? Your recordings and Whisper models will be kept. If Parakeet is active, turn off Use Parakeet to switch back to Whisper.',
   );
   if (!confirmed) return;
 
@@ -6684,6 +7325,10 @@ async function initSettingsTabOnce() {
   setupAiAddonSettingsListeners();
   await refreshAiAddonSettings();
 
+  if (typeof renderUpdateUi === 'function') {
+    renderUpdateUi();
+  }
+
   const openLegalNoticesBtn = document.getElementById('open-legal-notices-btn');
   if (openLegalNoticesBtn) {
     openLegalNoticesBtn.addEventListener('click', async () => {
@@ -6717,14 +7362,14 @@ async function checkGPUStatus() {
   const gpuActions = document.getElementById('gpu-actions');
   const ctaState = { platform: null, gpuInfo: null, cudaInfo: null };
   const resetInstallButton = () => {
-    installBtn.textContent = 'Install GPU Acceleration';
+    installBtn.textContent = 'Install GPU acceleration';
     installBtn.dataset.mode = 'install';
-    installBtn.title = 'Install AvaNevis-compatible CUDA runtime libraries';
+    installBtn.title = 'Install CUDA libraries needed by AvaNevis';
   };
   const setRepairInstallButton = () => {
-    installBtn.textContent = 'Repair GPU Runtime (Recommended)';
+    installBtn.textContent = 'Repair GPU runtime';
     installBtn.dataset.mode = 'repair';
-    installBtn.title = 'Reinstall AvaNevis-compatible CUDA runtime libraries';
+    installBtn.title = 'Reinstall CUDA libraries needed by AvaNevis';
   };
   resetInstallButton();
 
@@ -6738,7 +7383,7 @@ async function checkGPUStatus() {
 
     if (platform === 'darwin') {
       // ============ macOS: Show Metal/MLX Status ============
-      gpuDescription.textContent = 'GPU acceleration using Apple\'s Metal framework for Apple Silicon Macs. Provides 3-5x faster transcription.';
+      gpuDescription.textContent = 'Uses Apple Silicon GPU acceleration (Metal) automatically for faster transcription.';
       
       // Check if Apple Silicon
       const arch = await window.electronAPI.getArch();
@@ -6747,7 +7392,7 @@ async function checkGPUStatus() {
       if (isAppleSilicon) {
         // Apple Silicon - Metal always available
         gpuLabel1.textContent = 'GPU:';
-        gpuValue1.textContent = 'Apple Silicon (Metal GPU)';
+        gpuValue1.textContent = 'Apple Silicon (Metal)';
         gpuValue1.className = 'info-value success';
 
         gpuLabel2.textContent = 'Framework:';
@@ -6759,7 +7404,7 @@ async function checkGPUStatus() {
         gpuValue3.className = 'info-value success';
         if (gpuLabel4) gpuLabel4.textContent = 'Diagnostics:';
         if (gpuValue4) {
-          gpuValue4.textContent = 'No CUDA runtime required on Apple Silicon (MLX/Metal).';
+          gpuValue4.textContent = 'Built in on Apple Silicon. No extra setup needed.';
           gpuValue4.className = 'info-value';
         }
         if (gpuRow4) gpuRow4.style.display = 'flex';
@@ -6781,7 +7426,7 @@ async function checkGPUStatus() {
         gpuValue3.className = 'info-value';
         if (gpuLabel4) gpuLabel4.textContent = 'Diagnostics:';
         if (gpuValue4) {
-          gpuValue4.textContent = 'CUDA diagnostics are not applicable on Intel macOS.';
+          gpuValue4.textContent = 'GPU acceleration requires Apple Silicon on macOS.';
           gpuValue4.className = 'info-value';
         }
         if (gpuRow4) gpuRow4.style.display = 'flex';
@@ -6825,7 +7470,7 @@ async function checkGPUStatus() {
       } else {
         gpuDescription.textContent = platform === 'linux'
           ? getLinuxCudaSettingsDescription()
-          : 'Enable faster-whisper GPU acceleration for 4-5x faster transcription. Installs only the CUDA runtime libraries needed by CTranslate2.';
+          : 'Use your NVIDIA GPU for faster transcription. Downloads only the CUDA libraries AvaNevis needs; other apps are unaffected.';
         gpuLabel1.textContent = 'GPU Detected:';
         gpuLabel2.textContent = 'CUDA Libraries:';
         gpuLabel3.textContent = 'Download Size:';
@@ -6861,11 +7506,11 @@ async function checkGPUStatus() {
         ctaState.cudaInfo = cudaInfo;
 
         if (cudaInfo.installed) {
-          gpuValue2.textContent = 'Installed and loadable';
+          gpuValue2.textContent = 'Installed and ready';
           gpuValue2.classList.add('success');
-          gpuValue3.textContent = 'Already installed';
+          gpuValue3.textContent = 'Installed';
           if (gpuValue4) {
-            gpuValue4.textContent = 'CUDA runtime libraries are healthy and loadable.';
+            gpuValue4.textContent = 'CUDA libraries installed and ready.';
             gpuValue4.className = 'info-value success';
           }
           if (gpuRow4) gpuRow4.style.display = 'flex';
@@ -6882,7 +7527,7 @@ async function checkGPUStatus() {
             resetInstallButton();
           }
           if (cudaInfo.repairRecommendedAfterQuit) {
-            gpuValue2.textContent = 'Repair recommended (previous quit interrupted GPU setup)';
+            gpuValue2.textContent = 'Repair recommended (previous setup was interrupted)';
           } else if (statusCode === 'unsupportedRuntimeMajor') {
             const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
               ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
@@ -6891,16 +7536,16 @@ async function checkGPUStatus() {
               ? `Unsupported runtime detected (${unsupportedProfiles.join(', ')})`
               : 'Unsupported CUDA runtime detected';
           } else if (statusCode === 'runtimeIntegrityFailed') {
-            gpuValue2.textContent = 'Managed CUDA runtime failed integrity checks';
+            gpuValue2.textContent = 'CUDA runtime failed verification';
           } else if (cudaInfo.deviceAvailable && cudaInfo.runtimeLoadable === false) {
             const missing = Array.isArray(cudaInfo.missingLibraries) && cudaInfo.missingLibraries.length
               ? `Missing: ${cudaInfo.missingLibraries.join(', ')}`
-              : 'CUDA runtime libraries are not loadable';
+              : 'CUDA libraries could not be loaded';
             gpuValue2.textContent = missing;
           } else if (cudaInfo.deviceAvailable) {
-            gpuValue2.textContent = 'CUDA runtime not ready';
+            gpuValue2.textContent = 'CUDA runtime not installed';
           } else {
-            gpuValue2.textContent = 'No CUDA device available';
+            gpuValue2.textContent = 'No CUDA GPU available';
           }
           gpuValue2.classList.add('warning');
           gpuValue3.textContent = cudaInfo.pythonSupportedForInstall === false && cudaInfo.pythonVersion
@@ -6910,7 +7555,7 @@ async function checkGPUStatus() {
             const diagnostics = [];
             if (cudaInfo.repairRecommendedAfterQuit) {
               diagnostics.push(cudaInfo.repairRecommendedReason
-                || 'GPU runtime setup was interrupted by a previous quit. Repair before relying on CUDA.');
+                || 'Repair interrupted GPU setup before using CUDA.');
             }
             if (statusCode === 'unsupportedRuntimeMajor') {
               const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
@@ -6918,29 +7563,29 @@ async function checkGPUStatus() {
                 : [];
               diagnostics.push(
                 unsupportedProfiles.length
-                  ? `Detected newer CUDA runtime (${unsupportedProfiles.join(', ')}), but packaged transcription currently supports ${Array.isArray(cudaInfo.supportedProfiles) ? cudaInfo.supportedProfiles.join(', ') : 'cuda12'}.`
-                  : 'Detected CUDA runtime is newer than the packaged transcription stack currently supports.',
+                  ? `Detected ${unsupportedProfiles.join(', ')}, but AvaNevis requires ${Array.isArray(cudaInfo.supportedProfiles) ? cudaInfo.supportedProfiles.join(', ') : 'cuda12'}.`
+                  : 'Detected CUDA version is newer than AvaNevis supports.',
               );
             }
             if (cudaInfo.deviceAvailable === false) {
-              diagnostics.push('CUDA device not available to CTranslate2.');
+              diagnostics.push('NVIDIA GPU was not available for GPU transcription.');
             }
             if (Array.isArray(cudaInfo.missingLibraries) && cudaInfo.missingLibraries.length > 0) {
               diagnostics.push(
                 platform === 'linux'
-                  ? `Missing runtime libraries: ${cudaInfo.missingLibraries.join(', ')}`
-                  : `Missing runtime DLLs: ${cudaInfo.missingLibraries.join(', ')}`,
+                  ? `Missing libraries: ${cudaInfo.missingLibraries.join(', ')}`
+                  : `Missing DLLs: ${cudaInfo.missingLibraries.join(', ')}`,
               );
             }
             if (cudaInfo.error) {
-              diagnostics.push(`Probe error: ${String(cudaInfo.error).replace(/\s+/g, ' ').trim().slice(0, 180)}`);
+              diagnostics.push(`Error: ${String(cudaInfo.error).replace(/\s+/g, ' ').trim().slice(0, 180)}`);
             }
             if (platform === 'linux' && shouldShowGpuUninstallButton(platform, cudaInfo)) {
               diagnostics.push('Uninstall this runtime to return transcription to CPU.');
             }
             gpuValue4.textContent = diagnostics.length
               ? diagnostics.join(' ')
-              : 'CUDA runtime is not ready. Reinstall CUDA libraries from this page.';
+              : 'CUDA runtime is not ready. Install or repair CUDA libraries below.';
             gpuValue4.className = 'info-value warning';
           }
           if (gpuRow4) gpuRow4.style.display = 'flex';
@@ -6951,7 +7596,7 @@ async function checkGPUStatus() {
           uninstallBtn.style.display = shouldShowGpuUninstallButton(platform, cudaInfo) ? 'block' : 'none';
         }
 
-        gpuActions.style.display = 'block';
+        gpuActions.style.display = 'flex';
       }
     }
   } catch (error) {
@@ -7009,7 +7654,7 @@ function updateGPUCTA({ platform, gpuInfo, cudaInfo }) {
     title.textContent = 'Install CUDA for faster transcription';
   }
   if (sub && gpuInfo.gpuName) {
-    sub.textContent = `${gpuInfo.gpuName} detected - enable 4-5x faster transcription`;
+    sub.textContent = `${gpuInfo.gpuName} detected — install CUDA for faster transcription`;
   }
   cta.style.display = 'flex';
 }
@@ -7092,12 +7737,9 @@ async function installGPUAcceleration() {
   const isRepairFlow = installBtn.dataset.mode === 'repair';
   const confirmed = confirm(
     (isRepairFlow
-      ? 'This will repair AvaNevis GPU compatibility by adding the app-supported CUDA runtime libraries (about 1GB).\n\n'
-      : 'This will download and install about 1GB of CUDA runtime libraries for faster transcription.\n\n') +
-    'This does not remove newer CUDA runtime libraries used by other applications.\n\n' +
-    'Speaker identification uses its own managed PyTorch CUDA setup only if you explicitly enable it.\n\n' +
-    'The download may take 10-30 minutes depending on your internet speed.\n\n' +
-    'Continue?'
+      ? 'Repair AvaNevis CUDA libraries (about 1 GB)?\n\n'
+      : 'Download and install CUDA libraries (about 1 GB) for faster transcription on your NVIDIA GPU?\n\n') +
+    'Other CUDA versions on this computer will not be modified. This may take several minutes depending on your connection.'
   );
 
   if (!confirmed) return;
@@ -7191,11 +7833,10 @@ async function installGPUAcceleration() {
 async function uninstallGPUAcceleration() {
   const platform = await window.electronAPI.getPlatform().catch(() => null);
   const confirmed = confirm(
-    'This will remove AvaNevis-installed GPU runtime libraries used for transcription acceleration.\n\n' +
-    'It does not remove newer system CUDA runtimes used by other applications.\n\n' +
+    'Remove AvaNevis CUDA libraries? Other CUDA versions on this computer will not be modified.\n\n' +
     (platform === 'linux'
       ? getLinuxCudaUninstallConfirmSuffix()
-      : 'AvaNevis transcription will fall back to CPU mode.\n\n') +
+      : 'Transcription will return to CPU.\n\n') +
     'Continue?'
   );
 
@@ -7233,46 +7874,623 @@ function appendGPULog(text) {
 }
 
 // ============================================================================
-// Update Notification
+// Phase 3: Non-Intrusive In-App Auto-Updater UX
 // ============================================================================
 
-let currentUpdateInfo = null;
+let updateUiState = null;
+let updateStateSeq = -1;
+let updatePopoverOpen = false;
+let dismissedUpdateVersion = null;
+let updateAiConfirmPending = false;
+let lastRenderedReleaseNotesKey = null;
+let lastAnnouncedUpdateStatus = null;
+let updateManualCopyTimer = null;
+let updateUiWired = false;
 
-function showUpdateNotification(updateInfo) {
-  currentUpdateInfo = showUpdateNotificationBanner({
-    banner: document.getElementById('update-banner'),
-    title: document.getElementById('update-title'),
-    description: document.getElementById('update-description'),
-    downloadBtn: document.getElementById('download-update'),
-    dismissBtn: document.getElementById('dismiss-update'),
-    updateInfo,
-    onDownload: handleDownloadUpdate,
-    onDismiss: handleDismissUpdate,
-    addLog,
-  });
+function isRecordingActiveForUpdate() {
+  return recordingState !== 'idle' && recordingState !== 'transcribing';
 }
 
-async function handleDownloadUpdate() {
-  if (!currentUpdateInfo) return;
+function initUpdateUi() {
+  if (!updateUiWired) {
+    updateUiWired = true;
 
-  try {
-    addLog('Opening download page...');
-    await window.electronAPI.downloadUpdate();
-    addLog('Download started in your browser. Install when ready!');
+    const railBtn = document.getElementById('rail-update-btn');
+    const popoverCloseBtn = document.getElementById('update-popover-close');
+    const popoverPrimaryBtn = document.getElementById('update-popover-primary-btn');
+    const popoverSecondaryBtn = document.getElementById('update-popover-secondary-btn');
+    const popoverTertiaryBtn = document.getElementById('update-popover-tertiary-btn');
+    const aiConfirmRestartBtn = document.getElementById('update-ai-confirm-restart');
+    const aiConfirmWaitBtn = document.getElementById('update-ai-confirm-wait');
+    const manualCopyBtn = document.getElementById('update-popover-manual-copy');
+    const settingsPrimaryBtn = document.getElementById('update-settings-primary-btn');
+    const settingsGithubBtn = document.getElementById('update-settings-github-btn');
+    const autoDownloadToggle = document.getElementById('auto-download-updates-toggle');
 
-    // Keep banner visible so user remembers to install
-  } catch (error) {
-    console.error('Failed to open download:', error);
-    addLog('Failed to open download page', 'error');
+    if (railBtn) {
+      railBtn.addEventListener('click', () => {
+        if (updatePopoverOpen) {
+          closeUpdatePopover({ returnFocus: false });
+        } else {
+          openUpdatePopover({ focus: true });
+        }
+      });
+    }
+
+    if (popoverCloseBtn) {
+      popoverCloseBtn.addEventListener('click', () => {
+        closeUpdatePopover({ returnFocus: true });
+      });
+    }
+
+    if (popoverPrimaryBtn) {
+      popoverPrimaryBtn.addEventListener('click', () => {
+        void handleUpdateAction(popoverPrimaryBtn.dataset.action || '');
+      });
+    }
+
+    if (popoverSecondaryBtn) {
+      popoverSecondaryBtn.addEventListener('click', () => {
+        void handleUpdateAction(popoverSecondaryBtn.dataset.action || '');
+      });
+    }
+
+    if (popoverTertiaryBtn) {
+      popoverTertiaryBtn.addEventListener('click', () => {
+        void handleUpdateAction(popoverTertiaryBtn.dataset.action || '');
+      });
+    }
+
+    if (aiConfirmRestartBtn) {
+      aiConfirmRestartBtn.addEventListener('click', () => {
+        void handleInstallUpdateNow({ confirmAiInterrupt: true });
+      });
+    }
+
+    if (aiConfirmWaitBtn) {
+      aiConfirmWaitBtn.addEventListener('click', () => {
+        updateAiConfirmPending = false;
+        renderUpdateUi();
+      });
+    }
+
+    if (manualCopyBtn) {
+      manualCopyBtn.addEventListener('click', () => {
+        void handleCopyManualInstallCommand();
+      });
+    }
+
+    if (settingsPrimaryBtn) {
+      settingsPrimaryBtn.addEventListener('click', () => {
+        void handleUpdateAction(settingsPrimaryBtn.dataset.action || '');
+      });
+    }
+
+    if (settingsGithubBtn) {
+      settingsGithubBtn.addEventListener('click', () => {
+        void handleUpdateAction('github');
+      });
+    }
+
+    if (autoDownloadToggle) {
+      autoDownloadToggle.addEventListener('change', (event) => {
+        void handleAutoDownloadToggleChange(event);
+      });
+    }
+
+    const handleGlobalKeydown = (event) => {
+      if (event.key === 'Escape' && updatePopoverOpen) {
+        event.preventDefault();
+        closeUpdatePopover({ returnFocus: true });
+      }
+    };
+    document.addEventListener('keydown', handleGlobalKeydown);
+    registerCleanup(() => document.removeEventListener('keydown', handleGlobalKeydown));
+
+    const handleGlobalPointerDown = (event) => {
+      if (!updatePopoverOpen) {
+        return;
+      }
+      const popover = document.getElementById('update-popover');
+      const railButton = document.getElementById('rail-update-btn');
+      if (popover && popover.contains(event.target)) {
+        return;
+      }
+      if (railButton && railButton.contains(event.target)) {
+        return;
+      }
+      closeUpdatePopover({ returnFocus: false });
+    };
+    document.addEventListener('mousedown', handleGlobalPointerDown);
+    registerCleanup(() => document.removeEventListener('mousedown', handleGlobalPointerDown));
+    registerCleanup(() => {
+      if (updateManualCopyTimer) {
+        clearTimeout(updateManualCopyTimer);
+        updateManualCopyTimer = null;
+      }
+    });
+  }
+
+  if (typeof window.electronAPI?.onUpdateStateChanged === 'function') {
+    registerCleanup(window.electronAPI.onUpdateStateChanged((nextState) => {
+      applyIncomingUpdateState(nextState, { isHydration: false });
+    }));
+  }
+
+  if (typeof window.electronAPI?.getUpdateState === 'function') {
+    window.electronAPI.getUpdateState()
+      .then((initialState) => {
+        applyIncomingUpdateState(initialState, { isHydration: true });
+      })
+      .catch((error) => {
+        console.warn('Could not hydrate update state:', error);
+      });
+  }
+
+  renderUpdateUi();
+}
+
+function applyIncomingUpdateState(nextState, { isHydration = false } = {}) {
+  if (!shouldAcceptUpdateState(updateStateSeq, nextState)) {
+    return;
+  }
+
+  const prevState = updateUiState;
+  updateStateSeq = Number(nextState.seq);
+  updateUiState = nextState;
+
+  if (nextState.status !== 'ready-to-install') {
+    updateAiConfirmPending = false;
+  }
+
+  if (!isHydration && nextState.status === 'ready-to-install') {
+    dismissedUpdateVersion = null;
+  }
+
+  if (
+    !isHydration
+    && shouldAutoSurfaceUpdatePopover(prevState, nextState, {
+      isRecordingActive: isRecordingActiveForUpdate(),
+      dismissedVersion: dismissedUpdateVersion,
+    })
+  ) {
+    openUpdatePopover({ focus: false });
+  }
+
+  renderUpdateUi();
+}
+
+function openUpdatePopover({ focus = true } = {}) {
+  const popover = document.getElementById('update-popover');
+  const railBtn = document.getElementById('rail-update-btn');
+  if (!popover) {
+    return;
+  }
+  updatePopoverOpen = true;
+  popover.hidden = false;
+  if (railBtn) {
+    railBtn.setAttribute('aria-expanded', 'true');
+  }
+  renderUpdateUi();
+  if (focus) {
+    const titleEl = document.getElementById('update-popover-title');
+    if (titleEl && typeof titleEl.focus === 'function') {
+      titleEl.focus();
+    }
   }
 }
 
-function handleDismissUpdate() {
-  hideUpdateNotificationBanner({
-    banner: document.getElementById('update-banner'),
-    addLog,
+function focusFallbackAfterUpdateSurfaceClose() {
+  const settingsTab = document.getElementById('settings-tab');
+  const settingsPrimaryBtn = document.getElementById('update-settings-primary-btn');
+  if (
+    settingsTab
+    && settingsTab.classList.contains('active')
+    && settingsPrimaryBtn
+    && !settingsPrimaryBtn.disabled
+    && typeof settingsPrimaryBtn.focus === 'function'
+  ) {
+    settingsPrimaryBtn.focus();
+    return;
+  }
+  const settingsRailBtn = document.querySelector('.rail-btn[data-tab="settings"]');
+  if (settingsRailBtn && typeof settingsRailBtn.focus === 'function') {
+    settingsRailBtn.focus();
+  }
+}
+
+function closeUpdatePopover({ returnFocus = false, markDismissed = false } = {}) {
+  const popover = document.getElementById('update-popover');
+  const railBtn = document.getElementById('rail-update-btn');
+  updatePopoverOpen = false;
+  if (popover) {
+    popover.hidden = true;
+  }
+  if (railBtn) {
+    railBtn.setAttribute('aria-expanded', 'false');
+  }
+  if (markDismissed && updateUiState && updateUiState.availableVersion) {
+    dismissedUpdateVersion = String(updateUiState.availableVersion);
+  }
+  renderUpdateUi();
+  if (returnFocus) {
+    if (railBtn && !railBtn.hidden && typeof railBtn.focus === 'function') {
+      railBtn.focus();
+    } else {
+      focusFallbackAfterUpdateSurfaceClose();
+    }
+  }
+}
+
+function applyUpdateButtonVariant(button, variant) {
+  if (!button) {
+    return;
+  }
+  button.classList.remove('btn-primary', 'btn-secondary', 'btn-update-ready');
+  if (variant === 'ready') {
+    button.classList.add('btn-update-ready');
+  } else if (variant === 'secondary') {
+    button.classList.add('btn-secondary');
+  } else {
+    button.classList.add('btn-primary');
+  }
+}
+
+function renderUpdateUi() {
+  const vm = buildUpdateViewModel(updateUiState || {}, {
+    isRecordingActive: isRecordingActiveForUpdate(),
+    dismissedVersion: dismissedUpdateVersion,
+    aiConfirmPending: updateAiConfirmPending,
   });
-  currentUpdateInfo = null;
+
+  // Surface 1: Left-rail indicator
+  const railBtn = document.getElementById('rail-update-btn');
+  if (railBtn) {
+    const shouldShowRailBtn = Boolean(vm.rail.visible || updatePopoverOpen);
+    if (
+      !shouldShowRailBtn
+      && !railBtn.hidden
+      && (document.activeElement === railBtn || (typeof railBtn.contains === 'function' && railBtn.contains(document.activeElement)))
+    ) {
+      focusFallbackAfterUpdateSurfaceClose();
+    }
+    railBtn.hidden = !shouldShowRailBtn;
+    railBtn.dataset.tone = vm.rail.tone;
+    railBtn.setAttribute('aria-label', vm.rail.ariaLabel);
+    railBtn.setAttribute('aria-expanded', updatePopoverOpen ? 'true' : 'false');
+
+    const tooltip = document.getElementById('rail-update-tooltip');
+    if (tooltip) {
+      tooltip.textContent = vm.rail.tooltip;
+    }
+
+    const dot = document.getElementById('rail-update-dot');
+    if (dot) {
+      dot.hidden = !vm.rail.showDot;
+    }
+
+    const ring = document.getElementById('rail-update-ring');
+    const ringFill = document.getElementById('rail-update-ring-fill');
+    if (ring) {
+      ring.hidden = !vm.rail.showRing;
+    }
+    if (ringFill) {
+      ringFill.setAttribute('stroke-dasharray', String(vm.progress.ringDashArray));
+      ringFill.setAttribute('stroke-dashoffset', String(vm.progress.ringDashOffset));
+    }
+
+    const iconArrow = document.getElementById('rail-update-icon-arrow');
+    const iconReady = document.getElementById('rail-update-icon-ready');
+    const iconSpinner = document.getElementById('rail-update-icon-spinner');
+    const iconAlert = document.getElementById('rail-update-icon-alert');
+    if (iconArrow) iconArrow.hidden = vm.rail.iconKind !== 'arrow-up';
+    if (iconReady) iconReady.hidden = vm.rail.iconKind !== 'check-restart';
+    if (iconSpinner) iconSpinner.hidden = vm.rail.iconKind !== 'spinner';
+    if (iconAlert) iconAlert.hidden = vm.rail.iconKind !== 'alert';
+  }
+
+  // Surface 2: Anchored popover
+  const chip = document.getElementById('update-status-chip');
+  const chipLabel = document.getElementById('update-status-chip-label');
+  const titleEl = document.getElementById('update-popover-title');
+  const versionBadge = document.getElementById('update-popover-version');
+  const notesEl = document.getElementById('update-popover-notes');
+  const progressBlock = document.getElementById('update-popover-progress');
+  const progressTrack = document.getElementById('update-popover-progress-track');
+  const progressFill = document.getElementById('update-popover-progress-fill');
+  const progressPercent = document.getElementById('update-popover-progress-percent');
+  const progressBytes = document.getElementById('update-popover-progress-bytes');
+  const progressSpeed = document.getElementById('update-popover-progress-speed');
+  const busyNotice = document.getElementById('update-popover-busy-notice');
+  const aiConfirm = document.getElementById('update-popover-ai-confirm');
+  const manualBlock = document.getElementById('update-popover-manual');
+  const manualGuidance = document.getElementById('update-popover-manual-guidance');
+  const manualCmd = document.getElementById('update-popover-manual-cmd');
+  const errorBlock = document.getElementById('update-popover-error');
+  const errorText = document.getElementById('update-popover-error-text');
+  const primaryBtn = document.getElementById('update-popover-primary-btn');
+  const secondaryBtn = document.getElementById('update-popover-secondary-btn');
+  const tertiaryBtn = document.getElementById('update-popover-tertiary-btn');
+  const liveRegion = document.getElementById('update-popover-live');
+
+  if (chip) chip.dataset.tone = vm.popover.tone;
+  if (chipLabel) chipLabel.textContent = vm.popover.chipLabel;
+  if (titleEl) titleEl.textContent = vm.popover.title;
+  if (versionBadge) {
+    versionBadge.textContent = vm.popover.versionDelta;
+    versionBadge.hidden = !vm.popover.versionDelta;
+  }
+
+  if (notesEl) {
+    const rawNotes = updateUiState && updateUiState.releaseNotes ? String(updateUiState.releaseNotes) : '';
+    const notesKey = `${vm.availableVersion || ''}:${rawNotes}`;
+    if (vm.popover.hasReleaseNotes) {
+      if (notesKey !== lastRenderedReleaseNotesKey) {
+        renderSafeReleaseNotes(notesEl, rawNotes, {
+          markdownRenderHelpers: window.markdownRenderHelpers,
+        });
+        lastRenderedReleaseNotesKey = notesKey;
+      }
+      notesEl.hidden = false;
+    } else {
+      notesEl.hidden = true;
+    }
+  }
+
+  if (progressBlock) {
+    progressBlock.hidden = !vm.popover.showProgress;
+  }
+  if (progressTrack) {
+    progressTrack.setAttribute('aria-valuenow', String(Math.round(vm.progress.percent)));
+  }
+  if (progressFill) {
+    progressFill.style.width = `${vm.progress.percent}%`;
+  }
+  if (progressPercent) progressPercent.textContent = vm.progress.percentText;
+  if (progressBytes) progressBytes.textContent = vm.progress.transferredText;
+  if (progressSpeed) progressSpeed.textContent = vm.progress.speedText;
+
+  if (busyNotice) {
+    busyNotice.hidden = !vm.popover.showRecordingNotice;
+  }
+  if (aiConfirm) {
+    aiConfirm.hidden = !vm.popover.showAiConfirm;
+  }
+  if (manualBlock) {
+    manualBlock.hidden = !vm.popover.showManualPackage;
+    if (manualGuidance) manualGuidance.textContent = vm.popover.manualGuidance;
+    if (manualCmd) manualCmd.textContent = vm.popover.manualInstallCommand;
+  }
+  if (errorBlock) {
+    errorBlock.hidden = !vm.popover.showError;
+    if (errorText) errorText.textContent = vm.popover.errorMessage;
+  }
+
+  if (primaryBtn) {
+    primaryBtn.hidden = !vm.popover.primaryAction.visible;
+    primaryBtn.textContent = vm.popover.primaryAction.label;
+    primaryBtn.disabled = Boolean(vm.popover.primaryAction.disabled);
+    primaryBtn.dataset.action = vm.popover.primaryAction.action || '';
+    applyUpdateButtonVariant(primaryBtn, vm.popover.primaryAction.variant);
+  }
+  if (secondaryBtn) {
+    secondaryBtn.hidden = !vm.popover.secondaryAction.visible;
+    secondaryBtn.textContent = vm.popover.secondaryAction.label;
+    secondaryBtn.disabled = Boolean(vm.popover.secondaryAction.disabled);
+    secondaryBtn.dataset.action = vm.popover.secondaryAction.action || '';
+  }
+  if (tertiaryBtn) {
+    tertiaryBtn.hidden = !vm.popover.tertiaryAction.visible;
+    tertiaryBtn.textContent = vm.popover.tertiaryAction.label;
+    tertiaryBtn.dataset.action = vm.popover.tertiaryAction.action || '';
+  }
+
+  if (liveRegion && vm.status !== lastAnnouncedUpdateStatus) {
+    lastAnnouncedUpdateStatus = vm.status;
+    if (vm.status !== 'idle' && vm.status !== 'downloading') {
+      liveRegion.textContent = vm.popover.versionDelta
+        ? `${vm.popover.title} (${vm.popover.versionDelta})`
+        : vm.popover.title;
+    }
+  }
+
+  // Surface 3: Settings -> Updates card
+  const settingsBadge = document.getElementById('update-settings-badge');
+  const settingsVersion = document.getElementById('update-settings-version');
+  const settingsMode = document.getElementById('update-settings-mode');
+  const settingsLastChecked = document.getElementById('update-settings-last-checked');
+  const settingsProgress = document.getElementById('update-settings-progress');
+  const settingsProgressTrack = document.getElementById('update-settings-progress-track');
+  const settingsProgressFill = document.getElementById('update-settings-progress-fill');
+  const settingsProgressPercent = document.getElementById('update-settings-progress-percent');
+  const settingsProgressBytes = document.getElementById('update-settings-progress-bytes');
+  const settingsProgressSpeed = document.getElementById('update-settings-progress-speed');
+  const settingsBusyNotice = document.getElementById('update-settings-busy-notice');
+  const settingsError = document.getElementById('update-settings-error');
+  const settingsPrimaryBtn = document.getElementById('update-settings-primary-btn');
+  const autoDownloadToggle = document.getElementById('auto-download-updates-toggle');
+  const autoDownloadHint = document.getElementById('auto-download-updates-hint');
+
+  if (settingsBadge) {
+    settingsBadge.textContent = vm.settings.badgeText;
+    settingsBadge.className = `setting-badge ${vm.settings.badgeTone}`;
+  }
+  if (settingsVersion) {
+    settingsVersion.textContent = vm.settings.versionText;
+  }
+  if (settingsMode) {
+    settingsMode.textContent = vm.settings.modeText;
+  }
+  if (settingsLastChecked) {
+    settingsLastChecked.textContent = vm.settings.lastCheckedText;
+  }
+  if (settingsProgress) {
+    settingsProgress.hidden = !vm.settings.showProgress;
+  }
+  if (settingsProgressTrack) {
+    settingsProgressTrack.setAttribute('aria-valuenow', String(Math.round(vm.progress.percent)));
+  }
+  if (settingsProgressFill) {
+    settingsProgressFill.style.width = `${vm.progress.percent}%`;
+  }
+  if (settingsProgressPercent) settingsProgressPercent.textContent = vm.progress.percentText;
+  if (settingsProgressBytes) settingsProgressBytes.textContent = vm.progress.transferredText;
+  if (settingsProgressSpeed) settingsProgressSpeed.textContent = vm.progress.speedText;
+
+  if (settingsBusyNotice) {
+    settingsBusyNotice.hidden = !vm.settings.showRecordingNotice;
+  }
+  if (settingsError) {
+    settingsError.hidden = !vm.settings.showError;
+    settingsError.textContent = vm.settings.errorMessage;
+  }
+  if (settingsPrimaryBtn) {
+    settingsPrimaryBtn.textContent = vm.settings.primaryAction.label;
+    settingsPrimaryBtn.disabled = Boolean(vm.settings.primaryAction.disabled);
+    settingsPrimaryBtn.dataset.action = vm.settings.primaryAction.action || '';
+    applyUpdateButtonVariant(settingsPrimaryBtn, vm.settings.primaryAction.variant);
+  }
+  if (autoDownloadToggle) {
+    autoDownloadToggle.checked = vm.settings.autoDownload.checked;
+    autoDownloadToggle.disabled = vm.settings.autoDownload.disabled;
+  }
+  if (autoDownloadHint) {
+    autoDownloadHint.textContent = vm.settings.autoDownload.hint;
+  }
+}
+
+async function handleUpdateAction(action) {
+  try {
+    switch (action) {
+      case 'check':
+      case 'retry': {
+        if (typeof window.electronAPI?.checkForUpdates === 'function') {
+          const nextState = await window.electronAPI.checkForUpdates();
+          applyIncomingUpdateState(nextState, { isHydration: false });
+        }
+        break;
+      }
+      case 'download': {
+        if (typeof window.electronAPI?.downloadUpdate === 'function') {
+          const result = await window.electronAPI.downloadUpdate();
+          if (result && result.state) {
+            applyIncomingUpdateState(result.state, { isHydration: false });
+          }
+        }
+        break;
+      }
+      case 'cancel': {
+        if (typeof window.electronAPI?.cancelUpdateDownload === 'function') {
+          const result = await window.electronAPI.cancelUpdateDownload();
+          if (result && result.state) {
+            applyIncomingUpdateState(result.state, { isHydration: false });
+          }
+        }
+        break;
+      }
+      case 'install': {
+        await handleInstallUpdateNow({ confirmAiInterrupt: false });
+        break;
+      }
+      case 'github': {
+        if (typeof window.electronAPI?.openUpdateReleasePage === 'function') {
+          await window.electronAPI.openUpdateReleasePage();
+        }
+        break;
+      }
+      case 'later': {
+        closeUpdatePopover({ returnFocus: true, markDismissed: true });
+        break;
+      }
+      default:
+        break;
+    }
+  } catch (error) {
+    console.error(`Update action "${action}" failed:`, error);
+    addLog(`Update action failed: ${error.message || error}`, 'error');
+  }
+}
+
+async function handleInstallUpdateNow({ confirmAiInterrupt = false } = {}) {
+  if (isRecordingActiveForUpdate()) {
+    renderUpdateUi();
+    return;
+  }
+  if (typeof window.electronAPI?.installUpdateNow !== 'function') {
+    return;
+  }
+  try {
+    const result = await window.electronAPI.installUpdateNow({ confirmAiInterrupt });
+    if (result && result.state) {
+      applyIncomingUpdateState(result.state, { isHydration: false });
+    }
+    if (result && !result.ok) {
+      if (result.code === 'UPDATE_CONFIRM_AI_INTERRUPT') {
+        updateAiConfirmPending = true;
+        if (!updatePopoverOpen) {
+          openUpdatePopover({ focus: false });
+        } else {
+          renderUpdateUi();
+        }
+        const aiConfirmRestartBtn = document.getElementById('update-ai-confirm-restart');
+        if (aiConfirmRestartBtn && typeof aiConfirmRestartBtn.focus === 'function') {
+          aiConfirmRestartBtn.focus();
+        }
+        return;
+      }
+      if (result.message) {
+        addLog(result.message, 'warning');
+      }
+    }
+  } catch (error) {
+    console.error('Failed to install update:', error);
+    addLog(`Failed to install update: ${error.message || error}`, 'error');
+  }
+}
+
+async function handleAutoDownloadToggleChange(event) {
+  const toggle = event && event.target ? event.target : null;
+  if (!toggle || typeof window.electronAPI?.setAutoDownloadUpdates !== 'function') {
+    return;
+  }
+  const desired = Boolean(toggle.checked);
+  toggle.disabled = true;
+  try {
+    const result = await window.electronAPI.setAutoDownloadUpdates(desired);
+    if (result && result.state) {
+      applyIncomingUpdateState(result.state, { isHydration: false });
+    }
+  } catch (error) {
+    console.error('Failed to update auto-download preference:', error);
+    toggle.checked = !desired;
+  } finally {
+    renderUpdateUi();
+  }
+}
+
+async function handleCopyManualInstallCommand() {
+  const copyBtn = document.getElementById('update-popover-manual-copy');
+  const cmd = updateUiState && updateUiState.manualInstallCommand
+    ? String(updateUiState.manualInstallCommand)
+    : '';
+  if (!cmd || !copyBtn) {
+    return;
+  }
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(cmd);
+    }
+    copyBtn.textContent = 'Copied';
+    if (updateManualCopyTimer) {
+      clearTimeout(updateManualCopyTimer);
+    }
+    updateManualCopyTimer = setTimeout(() => {
+      copyBtn.textContent = 'Copy';
+      updateManualCopyTimer = null;
+    }, 2000);
+  } catch (error) {
+    console.warn('Could not copy manual install command:', error);
+  }
 }
 
 // ============================================================================
@@ -7773,7 +8991,12 @@ function setupCustomAudioPlayer() {
     });
   }
 
-  // Reset hook used by setMeetingAudioSource()
+  // Sync & reset hooks used by audio seeking / setMeetingAudioSource()
+  window.__syncCustomAudioPlayer = () => {
+    updateDuration();
+    updateProgress();
+  };
+
   window.__resetCustomAudioPlayer = () => {
     setIcon(PLAY_PATH);
     fill.style.width = '0%';
@@ -7936,9 +9159,10 @@ function setupAudioImport() {
   async function openImportedMeeting(id) {
     id = String(id);
     const meeting = meetings.find((item) => String(item.id) === id);
-    if (meeting && meetingSearchQueryNormalized && !meeting.title.toLowerCase().includes(meetingSearchQueryNormalized)) {
+    if (meeting && meetingSearchQueryNormalized) {
       const search = document.getElementById('meeting-search'); search.value = '';
-      clearTimeout(meetingSearchDebounceTimer); meetingSearchQuery = ''; meetingSearchQueryNormalized = ''; renderMeetingList();
+      clearTimeout(meetingSearchDebounceTimer); meetingSearchDebounceTimer = null;
+      meetingSearchEpoch += 1; meetingSearchQuery = ''; meetingSearchQueryNormalized = ''; meetingSearchResults = null; renderMeetingList();
     }
     activateHistoryDetailTab('transcript'); await selectMeeting(id);
     meetingList.querySelector(`.meeting-item[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' });
@@ -8006,3 +9230,891 @@ setupTitleEditors();
 setupGPUCTA();
 setupHomeAiAddonCTA();
 setupAudioImport();
+
+// ============================================================================
+// Left-Rail Grounded Chat Workspace
+// ============================================================================
+
+const chatState = {
+  listenersBound: false,
+  threads: [],
+  activeThread: null,
+  pendingScope: { type: 'all', meetingIds: [], dateFrom: null, dateTo: null },
+  eligibility: null,
+  modelState: { status: 'unloaded', modelId: null, modelName: null },
+  sending: false,
+  optimisticQuestion: null,
+  progress: null,
+  editingThreadId: null,
+  threadFilter: '',
+  scopeFilter: '',
+  scopeDraft: null,
+  popoverOpen: false,
+  navigation: 0,
+  listRequest: 0,
+  draftKey: 'new:0',
+  nextDraft: 0,
+  newDraftKey: 'new:0',
+  drafts: new Map(),
+  sendingKey: null,
+};
+
+function saveChatDraft() {
+  const input = document.getElementById('chat-input');
+  if (input) chatState.drafts.set(chatState.draftKey, input.value);
+}
+
+function switchChatDraft(key) {
+  saveChatDraft();
+  chatState.draftKey = key;
+  const input = document.getElementById('chat-input');
+  if (input) input.value = chatState.drafts.get(key) || '';
+  autoResizeChatInput();
+}
+
+function chatThreadDetailPending() {
+  return chatState.draftKey.startsWith('thread:')
+    && chatState.draftKey !== `thread:${chatState.activeThread?.id}`;
+}
+
+function chatSendVisible() {
+  return chatState.sending && chatState.sendingKey === chatState.draftKey;
+}
+
+function getCurrentChatScope() {
+  return (chatState.activeThread && chatState.activeThread.scope)
+    || chatState.pendingScope
+    || { type: 'all', meetingIds: [], dateFrom: null, dateTo: null };
+}
+
+function getMeetingsMapById() {
+  const map = new Map();
+  for (const m of Array.isArray(meetings) ? meetings : []) {
+    if (m && m.id != null) {
+      map.set(String(m.id), m);
+    }
+  }
+  return map;
+}
+
+function autoResizeChatInput() {
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(160, Math.max(24, input.scrollHeight))}px`;
+}
+
+function renderChatModelPill() {
+  const pill = document.getElementById('chat-model-pill');
+  const label = document.getElementById('chat-model-pill-label');
+  const unloadBtn = document.getElementById('chat-unload-model-btn');
+  if (!pill || !label || !unloadBtn) return;
+
+  const view = buildModelMemoryPillView(chatState.modelState);
+  pill.dataset.state = view.status;
+  label.textContent = view.label;
+  unloadBtn.hidden = !view.showUnload;
+  unloadBtn.disabled = view.busy;
+}
+
+function renderChatOnboardingAndComposer() {
+  const onboarding = document.getElementById('chat-onboarding-card');
+  const reasonEl = document.getElementById('chat-onboarding-reason');
+  const sendBtn = document.getElementById('chat-send-btn');
+  const input = document.getElementById('chat-input');
+  const headerTitle = document.getElementById('chat-thread-title');
+  const headerScope = document.getElementById('chat-header-scope');
+  const scopeLabel = document.getElementById('chat-scope-btn-label');
+
+  const eligible = !chatState.eligibility || chatState.eligibility.eligible !== false;
+  if (onboarding) {
+    onboarding.hidden = eligible;
+  }
+  if (reasonEl && chatState.eligibility && chatState.eligibility.reason) {
+    reasonEl.textContent = `${chatState.eligibility.reason} Keyword search in History still works anytime.`;
+  }
+
+  const scopeText = formatChatScopeLabel(getCurrentChatScope(), getMeetingsMapById());
+  if (headerTitle) {
+    headerTitle.textContent = chatState.activeThread ? chatState.activeThread.title : 'Ask your recordings';
+  }
+  if (headerScope) {
+    headerScope.textContent = scopeText;
+  }
+  if (scopeLabel) {
+    scopeLabel.textContent = scopeText;
+  }
+
+  if (sendBtn) {
+    if (chatState.sending) {
+      sendBtn.textContent = 'Stop';
+      sendBtn.classList.remove('btn-primary');
+      sendBtn.classList.add('btn-danger');
+      sendBtn.disabled = false;
+    } else {
+      sendBtn.textContent = 'Send';
+      sendBtn.classList.remove('btn-danger');
+      sendBtn.classList.add('btn-primary');
+      sendBtn.disabled = !eligible || chatThreadDetailPending();
+    }
+  }
+  if (input) {
+    input.disabled = false;
+  }
+}
+
+function renderChatThreadSidebar() {
+  const container = document.getElementById('chat-thread-list');
+  if (!container) return;
+  clearElement(container);
+
+  const filtered = filterChatThreads(chatState.threads, chatState.threadFilter);
+  if (filtered.length === 0) {
+    setPlaceholder(
+      container,
+      chatState.threads.length === 0 ? 'No conversations yet' : 'No matching conversations',
+    );
+    return;
+  }
+
+  const meetingsById = getMeetingsMapById();
+  const groups = groupThreadsByRecency(filtered);
+  for (const group of groups) {
+    const groupEl = document.createElement('div');
+    groupEl.className = 'chat-thread-group';
+
+    const labelEl = document.createElement('div');
+    labelEl.className = 'chat-thread-group-label';
+    labelEl.textContent = group.label;
+    groupEl.appendChild(labelEl);
+
+    const itemsWrap = document.createElement('div');
+    itemsWrap.className = 'chat-thread-group-items';
+
+    for (const thread of group.threads) {
+      const row = document.createElement('div');
+      row.className = 'chat-thread-item';
+      row.setAttribute('role', 'listitem');
+      if (chatState.activeThread && chatState.activeThread.id === thread.id) {
+        row.classList.add('is-active');
+      }
+
+      if (chatState.editingThreadId === thread.id) {
+        const form = document.createElement('form');
+        form.className = 'chat-thread-rename-form';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'chat-thread-rename-input';
+        input.maxLength = 120;
+        input.value = thread.title || '';
+        input.setAttribute('aria-label', 'Rename chat thread');
+
+        let cancelled = false;
+        let submitted = false;
+        const commitRename = async () => {
+          if (cancelled || submitted) return;
+          const nextTitle = input.value.trim();
+          chatState.editingThreadId = null;
+          if (!nextTitle || nextTitle === thread.title) {
+            renderChatThreadSidebar();
+            return;
+          }
+          submitted = true;
+          try {
+            const navigation = chatState.navigation;
+            await window.electronAPI.renameChatThread(thread.id, nextTitle);
+            await refreshChatThreadList({ selectThreadId: navigation === chatState.navigation && chatState.activeThread?.id === thread.id ? thread.id : null });
+          } catch (error) {
+            showAppToast(`Could not rename chat: ${error.message}`, 'error');
+            renderChatThreadSidebar();
+          }
+        };
+
+        form.addEventListener('submit', (e) => {
+          e.preventDefault();
+          void commitRename();
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelled = true;
+            chatState.editingThreadId = null;
+            renderChatThreadSidebar();
+          }
+        });
+        input.addEventListener('blur', () => {
+          void commitRename();
+        });
+
+        form.appendChild(input);
+        row.appendChild(form);
+        itemsWrap.appendChild(row);
+        requestAnimationFrame(() => {
+          input.focus();
+          input.select();
+        });
+        continue;
+      }
+
+      const selectBtn = document.createElement('button');
+      selectBtn.type = 'button';
+      selectBtn.className = 'chat-thread-select-btn';
+      selectBtn.addEventListener('click', () => {
+        void selectChatThread(thread.id);
+      });
+
+      const titleEl = document.createElement('span');
+      titleEl.className = 'chat-thread-item-title';
+      titleEl.textContent = thread.title || 'New chat';
+
+      const scopeEl = document.createElement('span');
+      scopeEl.className = 'chat-thread-item-scope';
+      scopeEl.textContent = formatChatScopeLabel(thread.scope, meetingsById);
+
+      selectBtn.append(titleEl, scopeEl);
+
+      const actions = document.createElement('div');
+      actions.className = 'chat-thread-item-actions';
+
+      const renameBtn = document.createElement('button');
+      renameBtn.type = 'button';
+      renameBtn.className = 'chat-thread-action-btn';
+      renameBtn.title = 'Rename chat';
+      renameBtn.setAttribute('aria-label', `Rename ${thread.title || 'chat'}`);
+      renameBtn.textContent = '✎';
+      renameBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        chatState.editingThreadId = thread.id;
+        renderChatThreadSidebar();
+      });
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'chat-thread-action-btn is-danger';
+      delBtn.title = 'Delete chat';
+      delBtn.setAttribute('aria-label', `Delete ${thread.title || 'chat'}`);
+      delBtn.textContent = '✕';
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        void deleteChatThreadWithConfirm(thread.id, thread.title);
+      });
+
+      actions.append(renameBtn, delBtn);
+      row.append(selectBtn, actions);
+      itemsWrap.appendChild(row);
+    }
+
+    groupEl.appendChild(itemsWrap);
+    container.appendChild(groupEl);
+  }
+}
+
+function handleChatCitationClick(citation) {
+  if (!citation || !citation.meetingId) {
+    return;
+  }
+  void openMeetingAtTimestamp(citation.meetingId, citation.startSec);
+}
+
+function renderChatStream() {
+  const emptyState = document.getElementById('chat-empty-state');
+  const starterGrid = document.getElementById('chat-starter-prompts');
+  const messagesEl = document.getElementById('chat-messages');
+  const progressBanner = document.getElementById('chat-progress-banner');
+  const progressText = document.getElementById('chat-progress-text');
+  const scrollContainer = document.getElementById('chat-stream-scroll');
+  if (!messagesEl) return;
+
+  clearElement(messagesEl);
+
+  const threadMessages = chatState.activeThread && Array.isArray(chatState.activeThread.messages)
+    ? chatState.activeThread.messages
+    : [];
+  const hasMessages = threadMessages.length > 0 || Boolean(chatSendVisible() && chatState.optimisticQuestion);
+
+  if (emptyState) {
+    emptyState.hidden = hasMessages;
+  }
+
+  if (!hasMessages && starterGrid) {
+    clearElement(starterGrid);
+    const eligible = !chatState.eligibility || chatState.eligibility.eligible !== false;
+    const prompts = buildStarterPrompts(meetings, getCurrentChatScope());
+    for (const promptText of prompts) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chat-starter-btn';
+      btn.textContent = promptText;
+      btn.disabled = !eligible || meetings.length === 0 || chatThreadDetailPending();
+      btn.addEventListener('click', () => {
+        const input = document.getElementById('chat-input');
+        if (!input) return;
+        input.value = promptText;
+        autoResizeChatInput();
+        void sendCurrentChatQuestion();
+      });
+      starterGrid.appendChild(btn);
+    }
+  }
+
+  const renderUserTurn = (text) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-turn-user';
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-user-bubble';
+    bubble.textContent = text;
+    wrap.appendChild(bubble);
+    messagesEl.appendChild(wrap);
+  };
+
+  for (const msg of threadMessages) {
+    if (msg.role === 'user') {
+      renderUserTurn(msg.content);
+      continue;
+    }
+
+    const wrap = document.createElement('article');
+    wrap.className = 'chat-turn-assistant';
+
+    if (msg.status === 'insufficient_evidence') {
+      const callout = document.createElement('div');
+      callout.className = 'chat-insufficient-callout';
+      callout.textContent = msg.content || 'Not enough matching transcript text in the selected recordings to answer that.';
+      wrap.appendChild(callout);
+    } else {
+      const prose = document.createElement('div');
+      prose.className = 'chat-markdown';
+      renderGroundedMarkdown(prose, msg.content || '', msg.citations || [], {
+        markedLib: window.marked,
+        domPurifyLib: window.DOMPurify,
+        documentObj: document,
+        onCitationClick: handleChatCitationClick,
+      });
+      wrap.appendChild(prose);
+    }
+
+    const citations = Array.isArray(msg.citations) ? msg.citations : [];
+    if (citations.length > 0) {
+      const details = document.createElement('details');
+      details.className = 'chat-sources-drawer';
+
+      const summary = document.createElement('summary');
+      summary.textContent = `Sources (${citations.length})`;
+      details.appendChild(summary);
+
+      const list = document.createElement('div');
+      list.className = 'chat-sources-list';
+      for (const citation of citations) {
+        const item = document.createElement('div');
+        item.className = 'chat-source-item';
+
+        const head = document.createElement('div');
+        head.className = 'chat-source-item-head';
+
+        const jumpPill = document.createElement('button');
+        jumpPill.type = 'button';
+        jumpPill.className = 'chat-citation-pill';
+        const tsLabel = formatJumpTimestamp(citation.startSec);
+        jumpPill.textContent = tsLabel
+          ? `${citation.meetingTitle || 'Recording'} · ${tsLabel}`
+          : (citation.meetingTitle || 'Recording');
+        jumpPill.addEventListener('click', () => handleChatCitationClick(citation));
+        head.appendChild(jumpPill);
+
+        const metaSpan = document.createElement('span');
+        metaSpan.className = 'chat-turn-meta-row';
+        const parts = [];
+        if (citation.speaker) parts.push(citation.speaker);
+        if (citation.meetingDate) parts.push(formatDate(citation.meetingDate));
+        metaSpan.textContent = parts.join(' · ');
+        head.appendChild(metaSpan);
+
+        const excerpt = document.createElement('p');
+        excerpt.className = 'chat-source-excerpt';
+        excerpt.textContent = citation.excerpt || '';
+
+        item.append(head, excerpt);
+        list.appendChild(item);
+      }
+      details.appendChild(list);
+      wrap.appendChild(details);
+    }
+
+    if (Number.isFinite(msg.searchedMeetingCount) && msg.searchedMeetingCount > 0) {
+      const meta = document.createElement('div');
+      meta.className = 'chat-turn-meta-row';
+      meta.textContent = `Searched ${msg.searchedMeetingCount} recording${msg.searchedMeetingCount === 1 ? '' : 's'} · ${msg.evidenceCount || 0} matching excerpt${(msg.evidenceCount || 0) === 1 ? '' : 's'}`;
+      wrap.appendChild(meta);
+    }
+
+    messagesEl.appendChild(wrap);
+  }
+
+  if (chatSendVisible() && chatState.optimisticQuestion) {
+    renderUserTurn(chatState.optimisticQuestion);
+  }
+
+  if (progressBanner && progressText) {
+    progressBanner.hidden = !chatSendVisible();
+    if (chatSendVisible()) {
+      progressText.textContent = (chatState.progress && chatState.progress.message)
+        || 'Searching your transcripts…';
+    }
+  }
+
+  if (scrollContainer && hasMessages) {
+    requestAnimationFrame(() => {
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    });
+  }
+}
+
+async function refreshChatThreadList({ selectThreadId = null } = {}) {
+  if (!window.electronAPI || typeof window.electronAPI.listChatThreads !== 'function') return;
+  const navigation = chatState.navigation;
+  const request = ++chatState.listRequest;
+  const res = await window.electronAPI.listChatThreads();
+  if (request !== chatState.listRequest) return;
+  chatState.threads = Array.isArray(res && res.threads) ? res.threads : [];
+  renderChatThreadSidebar();
+  if (navigation !== chatState.navigation) return;
+  const targetId = selectThreadId || chatState.activeThread?.id;
+  if (targetId && chatState.threads.some((t) => t.id === targetId)) {
+    const detail = await window.electronAPI.getChatThread(targetId);
+    if (navigation !== chatState.navigation || request !== chatState.listRequest) return;
+    chatState.activeThread = detail && detail.thread ? detail.thread : null;
+  } else if (chatState.activeThread && !chatState.threads.some((t) => t.id === chatState.activeThread.id)) {
+    chatState.activeThread = null;
+  }
+  renderChatThreadSidebar();
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+}
+
+async function selectChatThread(threadId) {
+  const navigation = ++chatState.navigation;
+  switchChatDraft(threadId ? `thread:${threadId}` : `new:${++chatState.nextDraft}`);
+  chatState.activeThread = null;
+  renderChatThreadSidebar();
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+  if (!threadId) return;
+  try {
+    const res = await window.electronAPI.getChatThread(threadId);
+    if (navigation !== chatState.navigation) return;
+    chatState.activeThread = res && res.thread ? res.thread : null;
+    closeChatMobileSidebar();
+    renderChatThreadSidebar();
+    renderChatOnboardingAndComposer();
+    renderChatStream();
+  } catch (error) {
+    if (navigation === chatState.navigation) showAppToast(`Could not load chat: ${error.message}`, 'error');
+  }
+}
+
+async function startNewChatThread(scope = null) {
+  ++chatState.navigation;
+  const wasNew = chatState.draftKey.startsWith('new:');
+  if (wasNew) chatState.newDraftKey = `new:${++chatState.nextDraft}`;
+  switchChatDraft(chatState.newDraftKey);
+  chatState.activeThread = null;
+  if (scope && typeof scope === 'object') {
+    chatState.pendingScope = {
+      type: scope.type === 'selected_meetings' ? 'selected_meetings' : 'all',
+      meetingIds: Array.isArray(scope.meetingIds) ? [...scope.meetingIds] : [],
+      dateFrom: scope.dateFrom || null,
+      dateTo: scope.dateTo || null,
+    };
+  }
+  closeChatMobileSidebar();
+  renderChatThreadSidebar();
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+  document.getElementById('chat-input')?.focus();
+}
+
+async function deleteChatThreadWithConfirm(threadId, title) {
+  if (!confirm(`Delete "${title || 'New chat'}"? This cannot be undone.`)) return;
+  try {
+    await window.electronAPI.deleteChatThread(threadId);
+    if (chatState.draftKey === `thread:${threadId}`) {
+      await startNewChatThread();
+    }
+    chatState.drafts.delete(`thread:${threadId}`);
+    await refreshChatThreadList();
+  } catch (error) {
+    showAppToast(`Could not delete chat: ${error.message}`, 'error');
+  }
+}
+
+function renderScopePopover() {
+  const allBtn = document.getElementById('chat-scope-all-btn');
+  const selBtn = document.getElementById('chat-scope-selected-btn');
+  const selPanel = document.getElementById('chat-scope-selected-panel');
+  const listEl = document.getElementById('chat-scope-meetings-list');
+  const fromEl = document.getElementById('chat-scope-date-from');
+  const toEl = document.getElementById('chat-scope-date-to');
+  const draft = chatState.scopeDraft || getCurrentChatScope();
+
+  if (allBtn) allBtn.classList.toggle('is-selected', draft.type !== 'selected_meetings');
+  if (selBtn) selBtn.classList.toggle('is-selected', draft.type === 'selected_meetings');
+  if (selPanel) selPanel.hidden = draft.type !== 'selected_meetings';
+  if (fromEl) fromEl.value = draft.dateFrom ? String(draft.dateFrom).slice(0, 10) : '';
+  if (toEl) toEl.value = draft.dateTo ? String(draft.dateTo).slice(0, 10) : '';
+
+  if (listEl) {
+    clearElement(listEl);
+    const filterTerm = chatState.scopeFilter.trim().toLowerCase();
+    const visible = filterTerm
+      ? meetings.filter((m) => String(m.title || '').toLowerCase().includes(filterTerm))
+      : meetings;
+    if (!visible.length) {
+      setPlaceholder(listEl, 'No matching recordings');
+    } else {
+      const selectedSet = new Set(Array.isArray(draft.meetingIds) ? draft.meetingIds.map(String) : []);
+      for (const m of visible) {
+        const label = document.createElement('label');
+        label.className = 'chat-scope-meeting-option';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = selectedSet.has(String(m.id));
+        cb.addEventListener('change', () => {
+          const nextIds = new Set(Array.isArray(chatState.scopeDraft.meetingIds) ? chatState.scopeDraft.meetingIds : []);
+          if (cb.checked) nextIds.add(String(m.id));
+          else nextIds.delete(String(m.id));
+          chatState.scopeDraft.meetingIds = [...nextIds];
+        });
+        const span = document.createElement('span');
+        span.className = 'chat-scope-meeting-title';
+        span.textContent = m.title || 'Untitled recording';
+        label.append(cb, span);
+        listEl.appendChild(label);
+      }
+    }
+  }
+}
+
+function toggleChatScopePopover(forceOpen = null) {
+  const popover = document.getElementById('chat-scope-popover');
+  const btn = document.getElementById('chat-scope-btn');
+  if (!popover || !btn) return;
+  const open = forceOpen !== null ? forceOpen : !chatState.popoverOpen;
+  chatState.popoverOpen = open;
+  popover.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+  if (open) {
+    const cur = getCurrentChatScope();
+    chatState.scopeDraft = {
+      type: cur.type === 'selected_meetings' ? 'selected_meetings' : 'all',
+      meetingIds: Array.isArray(cur.meetingIds) ? [...cur.meetingIds] : [],
+      dateFrom: cur.dateFrom || null,
+      dateTo: cur.dateTo || null,
+    };
+    renderScopePopover();
+  }
+}
+
+function closeChatMobileSidebar() {
+  document.getElementById('chat-tab')?.classList.remove('is-sidebar-drawer-open');
+}
+
+async function sendCurrentChatQuestion() {
+  if (chatState.sending) {
+    try {
+      await window.electronAPI.cancelHistoryQa();
+    } catch (_error) {
+      // Ignore cancel errors.
+    }
+    return;
+  }
+
+  if (chatThreadDetailPending()) return;
+  const input = document.getElementById('chat-input');
+  if (!input) return;
+  const question = input.value.replace(/\s+/g, ' ').trim();
+  if (!question) {
+    return;
+  }
+
+  if (chatState.eligibility && chatState.eligibility.eligible === false) {
+    openSettingsAtAiAddons();
+    return;
+  }
+
+  const navigation = chatState.navigation;
+  const originKey = chatState.draftKey;
+  const originThreadId = chatState.activeThread?.id || null;
+  const scope = getCurrentChatScope();
+  input.value = '';
+  chatState.drafts.set(originKey, '');
+  autoResizeChatInput();
+  chatState.sending = true;
+  chatState.sendingKey = originKey;
+  chatState.optimisticQuestion = question;
+  chatState.progress = { phase: 'retrieving', message: 'Searching your transcripts…' };
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+
+  try {
+    const res = await window.electronAPI.askHistory({ threadId: originThreadId, question, scope });
+    if (res && res.thread) {
+      const threadKey = `thread:${res.thread.id}`;
+      if (originKey !== threadKey) {
+        const draft = chatState.draftKey === originKey ? input.value : chatState.drafts.get(originKey);
+        if (draft) chatState.drafts.set(threadKey, draft);
+        if (chatState.draftKey === originKey) chatState.draftKey = threadKey;
+        if (chatState.newDraftKey === originKey) chatState.newDraftKey = `new:${++chatState.nextDraft}`;
+      }
+      if (navigation === chatState.navigation) chatState.activeThread = res.thread;
+    }
+    chatState.optimisticQuestion = null;
+    try {
+      await refreshChatThreadList();
+    } catch (error) {
+      showAppToast(`Could not refresh chats: ${error.message}`, 'error');
+    }
+  } catch (error) {
+    chatState.optimisticQuestion = null;
+    const currentDraft = chatState.draftKey === originKey ? input.value : (chatState.drafts.get(originKey) || '');
+    const restored = currentDraft ? `${question}\n${currentDraft}` : question;
+    chatState.drafts.set(originKey, restored);
+    if (chatState.draftKey === originKey) {
+      input.value = restored;
+      autoResizeChatInput();
+    }
+    const isCancelled = error && (error.code === 'HISTORY_QA_CANCELLED' || /stopped|canceled/i.test(error.message || ''));
+    showAppToast(isCancelled ? 'Response generation stopped.' : (error?.message || 'Could not generate local answer.'), isCancelled ? 'info' : 'error');
+  } finally {
+    chatState.sending = false;
+    chatState.sendingKey = null;
+    chatState.progress = null;
+    renderChatOnboardingAndComposer();
+    renderChatStream();
+    if (navigation === chatState.navigation) input.focus();
+  }
+}
+
+async function openHistoryMeetingInChat(meetingId) {
+  const targetId = String(meetingId || '').trim();
+  if (!targetId) return;
+  const meeting = meetings.find((m) => String(m.id) === targetId);
+  const scope = { type: 'selected_meetings', meetingIds: [targetId], dateFrom: null, dateTo: null };
+
+  activateTab('chat');
+  const navigation = ++chatState.navigation;
+  await initChatTab();
+  if (navigation !== chatState.navigation) return;
+
+  // Reuse an empty thread already scoped solely to this meeting if present, else create one.
+  const reusable = chatState.threads.find((t) => (
+    t.messageCount === 0
+    && t.scope?.type === 'selected_meetings'
+    && Array.isArray(t.scope.meetingIds)
+    && t.scope.meetingIds.length === 1
+    && String(t.scope.meetingIds[0]) === targetId
+  ));
+
+  if (reusable) {
+    await selectChatThread(reusable.id);
+  } else if (window.electronAPI && typeof window.electronAPI.createChatThread === 'function') {
+    const title = meeting?.title ? `Ask: ${meeting.title.slice(0, 60)}` : 'New chat';
+    const created = await window.electronAPI.createChatThread({ title, scope });
+    if (navigation !== chatState.navigation) { void refreshChatThreadList(); return; }
+    if (created && created.thread) {
+      switchChatDraft(`thread:${created.thread.id}`);
+      chatState.activeThread = created.thread;
+      await refreshChatThreadList({ selectThreadId: created.thread.id });
+    }
+  } else {
+    await startNewChatThread(scope);
+  }
+  document.getElementById('chat-input')?.focus();
+}
+
+async function initChatTab() {
+  if (!window.electronAPI || typeof window.electronAPI.getHistoryQaEligibility !== 'function') {
+    return;
+  }
+  try {
+    const [elig, mState] = await Promise.all([
+      window.electronAPI.getHistoryQaEligibility(),
+      window.electronAPI.getHistoryQaModelState(),
+    ]);
+    chatState.eligibility = elig;
+    if (mState) {
+      chatState.modelState = mState;
+    }
+  } catch (error) {
+    console.warn('Could not refresh Chat eligibility/model state:', error);
+  }
+  renderChatModelPill();
+  await refreshChatThreadList({
+    selectThreadId: chatState.activeThread ? chatState.activeThread.id : undefined,
+  });
+}
+
+function setupChatWorkspace() {
+  if (chatState.listenersBound) {
+    return;
+  }
+  chatState.listenersBound = true;
+
+  if (window.electronAPI && typeof window.electronAPI.onHistoryQaModelState === 'function') {
+    registerCleanup(window.electronAPI.onHistoryQaModelState((state) => {
+      if (state) {
+        chatState.modelState = state;
+        renderChatModelPill();
+      }
+    }));
+  }
+
+  if (window.electronAPI && typeof window.electronAPI.onHistoryQaProgress === 'function') {
+    registerCleanup(window.electronAPI.onHistoryQaProgress((progress) => {
+      if (progress) {
+        chatState.progress = progress;
+        const textEl = document.getElementById('chat-progress-text');
+        if (textEl && chatState.sending && progress.message) {
+          textEl.textContent = progress.message;
+        }
+      }
+    }));
+  }
+
+  document.getElementById('chat-new-thread-btn')?.addEventListener('click', () => {
+    void startNewChatThread({ type: 'all', meetingIds: [], dateFrom: null, dateTo: null });
+  });
+
+  document.getElementById('chat-sidebar-toggle')?.addEventListener('click', () => {
+    const tab = document.getElementById('chat-tab');
+    if (!tab) return;
+    if (window.innerWidth <= 900) {
+      tab.classList.remove('is-sidebar-drawer-open');
+    } else {
+      tab.classList.toggle('is-sidebar-collapsed', true);
+    }
+  });
+
+  document.getElementById('chat-sidebar-open-btn')?.addEventListener('click', () => {
+    const tab = document.getElementById('chat-tab');
+    if (!tab) return;
+    if (window.innerWidth <= 900) {
+      tab.classList.toggle('is-sidebar-drawer-open');
+    } else {
+      tab.classList.remove('is-sidebar-collapsed');
+    }
+  });
+
+  document.getElementById('chat-thread-search')?.addEventListener('input', (e) => {
+    chatState.threadFilter = e.target.value || '';
+    renderChatThreadSidebar();
+  });
+
+  document.getElementById('chat-unload-model-btn')?.addEventListener('click', async () => {
+    try {
+      const res = await window.electronAPI.unloadHistoryQaModel();
+      if (res && res.modelState) {
+        chatState.modelState = res.modelState;
+      }
+      renderChatModelPill();
+      showAppToast('Local model unloaded from memory.', 'success');
+    } catch (error) {
+      showAppToast(`Could not unload model: ${error.message}`, 'error');
+    }
+  });
+
+  document.getElementById('chat-open-ai-settings-btn')?.addEventListener('click', () => {
+    openSettingsAtAiAddons();
+  });
+
+  document.getElementById('ask-meeting-in-chat-btn')?.addEventListener('click', () => {
+    if (currentMeetingId) {
+      void openHistoryMeetingInChat(currentMeetingId);
+    }
+  });
+
+  const chatInput = document.getElementById('chat-input');
+  if (chatInput) {
+    chatInput.addEventListener('input', autoResizeChatInput);
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+        e.preventDefault();
+        void sendCurrentChatQuestion();
+      }
+    });
+  }
+
+  document.getElementById('chat-send-btn')?.addEventListener('click', () => {
+    void sendCurrentChatQuestion();
+  });
+
+  document.getElementById('chat-scope-btn')?.addEventListener('click', () => {
+    toggleChatScopePopover();
+  });
+
+  document.getElementById('chat-scope-all-btn')?.addEventListener('click', () => {
+    if (!chatState.scopeDraft) return;
+    chatState.scopeDraft.type = 'all';
+    chatState.scopeDraft.meetingIds = [];
+    renderScopePopover();
+  });
+
+  document.getElementById('chat-scope-selected-btn')?.addEventListener('click', () => {
+    if (!chatState.scopeDraft) return;
+    chatState.scopeDraft.type = 'selected_meetings';
+    renderScopePopover();
+  });
+
+  document.getElementById('chat-scope-meeting-filter')?.addEventListener('input', (e) => {
+    chatState.scopeFilter = e.target.value || '';
+    renderScopePopover();
+  });
+
+  document.getElementById('chat-scope-clear-btn')?.addEventListener('click', () => {
+    chatState.scopeDraft = { type: 'all', meetingIds: [], dateFrom: null, dateTo: null };
+    chatState.scopeFilter = '';
+    const filterEl = document.getElementById('chat-scope-meeting-filter');
+    if (filterEl) filterEl.value = '';
+    renderScopePopover();
+  });
+
+  document.getElementById('chat-scope-apply-btn')?.addEventListener('click', async () => {
+    const fromVal = document.getElementById('chat-scope-date-from')?.value || null;
+    const toVal = document.getElementById('chat-scope-date-to')?.value || null;
+    const nextScope = {
+      type: chatState.scopeDraft?.type === 'selected_meetings' ? 'selected_meetings' : 'all',
+      meetingIds: Array.isArray(chatState.scopeDraft?.meetingIds) ? [...chatState.scopeDraft.meetingIds] : [],
+      dateFrom: fromVal || null,
+      dateTo: toVal || null,
+    };
+    if (chatState.activeThread && window.electronAPI?.updateChatThreadScope) {
+      try {
+        const navigation = chatState.navigation;
+        const res = await window.electronAPI.updateChatThreadScope(chatState.activeThread.id, nextScope);
+        if (navigation !== chatState.navigation) { void refreshChatThreadList(); return; }
+        if (res && res.thread) {
+          chatState.activeThread = res.thread;
+        }
+        await refreshChatThreadList({ selectThreadId: chatState.activeThread?.id || null });
+      } catch (error) {
+        showAppToast(`Could not update scope: ${error.message}`, 'error');
+      }
+    } else {
+      chatState.pendingScope = nextScope;
+      renderChatOnboardingAndComposer();
+      renderChatStream();
+    }
+    toggleChatScopePopover(false);
+  });
+
+  document.addEventListener('pointerdown', (e) => {
+    if (!chatState.popoverOpen) return;
+    const popover = document.getElementById('chat-scope-popover');
+    const btn = document.getElementById('chat-scope-btn');
+    if (popover?.contains(e.target) || btn?.contains(e.target)) {
+      return;
+    }
+    toggleChatScopePopover(false);
+  });
+}
+
+setupChatWorkspace();

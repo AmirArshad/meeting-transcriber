@@ -12,11 +12,11 @@ test('recording presence resources preserve app identity', () => {
   assert.equal(pkg.build.productName, 'AvaNevis');
   assert.equal(pkg.build.appId, 'com.avanevis.app');
   // Start/Spotlight search labels may be descriptive; storage/installer identity stays AvaNevis.
-  assert.equal(pkg.build.nsis.shortcutName, 'AvaNevis Meeting Recorder & Transcriber');
-  assert.match(pkg.description, /meeting recorder.*transcriber/i);
+  assert.equal(pkg.build.nsis.shortcutName, 'AvaNevis Audio Recorder & Transcriber');
+  assert.match(pkg.description, /audio recorder.*transcriber/i);
   assert.match(
     pkg.build.mac.extendInfo.CFBundleDisplayName,
-    /AvaNevis.*Meeting.*Recorder.*Transcriber/i,
+    /AvaNevis.*Audio.*Recorder.*Transcriber/i,
   );
   assert.ok(pkg.build.extraResources.some((entry) => entry.to === 'recording-overlay.png'));
   for (const name of ['iconRecording.png', 'iconRecording@2x.png']) {

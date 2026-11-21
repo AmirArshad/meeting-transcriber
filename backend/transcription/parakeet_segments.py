@@ -145,3 +145,30 @@ def assemble(words: list[dict], duration: float) -> list[dict]:
     if current:
         result.append(current)
     return result
+
+
+def build_caption_words(
+    words: list[dict],
+    *,
+    speaker_names: dict[str, str] | None = None,
+) -> list[dict]:
+    """Return normalized word-level entries for caption cue assembly."""
+    normalized: list[dict] = []
+    for word in words:
+        if not isinstance(word, dict):
+            continue
+        text = str(word.get('text') or '').strip()
+        if not text:
+            continue
+        entry: dict = {
+            'start': float(word['start']),
+            'end': float(word['end']),
+            'text': text,
+        }
+        raw_speaker = word.get('speaker')
+        if raw_speaker:
+            mapped = speaker_names.get(str(raw_speaker), str(raw_speaker)) if speaker_names else str(raw_speaker)
+            if mapped:
+                entry['speaker'] = mapped
+        normalized.append(entry)
+    return normalized

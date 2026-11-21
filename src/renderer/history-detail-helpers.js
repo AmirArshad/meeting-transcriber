@@ -162,16 +162,16 @@
       return reason || feature.cliMissingMessage;
     }
     if (status === 'ready' && feature && feature.setupComplete) {
-      return 'Speaker labels will run automatically after transcription.';
+      return 'Speaker labels are added automatically to new transcripts.';
     }
     if (status === 'unsupported') {
       return reason || 'Speaker identification is not supported on this platform.';
     }
     if (status === 'needsAccount') {
-      return 'Use your own Hugging Face token and accept the pyannote model terms before enabling local speaker labels.';
+      return 'Enter your Hugging Face token and accept the pyannote model terms before enabling Pyannote.';
     }
     if (status === 'validating') {
-      return 'Validating local speaker identification setup.';
+      return 'Checking speaker identification setup…';
     }
     if (status === 'error') {
       const hint = getDiarizationErrorRecoveryHint(reason);
@@ -188,24 +188,24 @@
     const status = feature && feature.status;
     const reason = featureReason(feature);
     if (status === 'ready' && feature && feature.setupComplete) {
-      return 'Generate summaries from a saved transcript when you choose.';
+      return 'Ready. Generate summaries from any transcript or ask questions in Chat.';
     }
     if (status === 'unsupported') {
       return reason || 'Local summaries are not supported on this platform.';
     }
     if (status === 'downloading') {
-      return 'The local summary model is still downloading. Wait for setup to finish before generating a summary.';
+      return 'Downloading the local summary model. Wait for setup to finish before using Summaries or Chat.';
     }
     if (status === 'validating') {
-      return reason || 'The local summary model is being validated. Try again after validation finishes.';
+      return reason || 'Checking the local summary model. Try again once finished.';
     }
     if (status === 'error') {
-      return `${reason || 'Summary model setup failed.'} Try Enable summaries again, Check setup, or Disable and remove then enable the local model again.`;
+      return `${reason || 'Summary model setup failed.'} Try Enable summaries again, Check setup, or Disable and remove to start fresh.`;
     }
     if (status === 'ready') {
-      return reason || 'Summary setup is incomplete. Check setup for the local model and llama.cpp runtime in Settings.';
+      return reason || 'Setup is incomplete. Run Check setup in Settings.';
     }
-    return reason || 'Enable the local summary model in Settings before generating summaries.';
+    return reason || 'Enable Summaries & Chat in Settings first.';
   }
 
   function hasPositiveSize(value) {
@@ -346,9 +346,9 @@
 
     return {
       active: true,
-      label: cancelling ? 'Cancelling...' : 'Summarising...',
-      hoverLabel: cancelling ? 'Cancelling...' : 'Cancel Summarisation',
-      title: cancelling ? 'Cancelling summary generation...' : 'Click to cancel summary generation',
+      label: cancelling ? 'Cancelling…' : 'Summarizing…',
+      hoverLabel: cancelling ? 'Cancelling…' : 'Cancel summary',
+      title: cancelling ? 'Cancelling summary…' : 'Click to cancel summary',
       ariaBusy: true,
     };
   }
@@ -389,17 +389,17 @@
       return {
         feature: 'diarization',
         engine,
-        title: 'Add speaker labels to future transcripts',
+        title: 'Label speakers automatically',
         message: missingCliMessage
-          || 'Set up once. Local speaker labels are added automatically after each transcript.',
+          || 'Set up once. Speaker labels are added automatically to new transcripts.',
       };
     }
 
     if (shouldShowSummarySetupPrompt(summary)) {
       return {
         feature: 'summary',
-        title: 'Generate local meeting summaries',
-        message: 'Set up the local summary model to create decisions, action items, risks, and open questions on demand.',
+        title: 'Summarize recordings & use Chat',
+        message: 'Set up the local summary model to generate summaries on demand and ask questions in Chat.',
       };
     }
 

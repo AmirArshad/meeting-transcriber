@@ -109,6 +109,7 @@ function createAiAddonIpc(deps) {
     resourcesPath = process.resourcesPath,
     getCachedCudaStatus = () => null,
     resolveCudaStatusForTranscription = null,
+    beforeSummaryAddonMutation = async () => {},
   } = deps;
 
   // Single shared cache reference — never copy this let into a stale local.
@@ -752,20 +753,23 @@ function createAiAddonIpc(deps) {
 
     ipcMain.handle('setup-summary-model', async (event, options = {}) => {
       assertTrustedRendererSender(event);
-      return runCancellableAiAddonSetup('summary', async (cancelSignal) => setupSummaryModel(getAiAddonRuntimeOptions({
-        modelId: options.modelId,
-        profile: options.profile,
-        pythonExe: pythonConfig.pythonExe,
-        backendPath: pythonConfig.backendPath,
-        runtimeValidator: validateSummaryRuntimeSmoke,
-        cancelSignal,
-        cudaStatus: await runWallClockComputeAction({
-          timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
-          label: 'Linux CUDA summary admission',
-          terminateProcess: terminateProcessBestEffort,
-          action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal }),
-        }),
-      })));
+      return runCancellableAiAddonSetup('summary', async (cancelSignal) => {
+        await beforeSummaryAddonMutation();
+        return setupSummaryModel(getAiAddonRuntimeOptions({
+          modelId: options.modelId,
+          profile: options.profile,
+          pythonExe: pythonConfig.pythonExe,
+          backendPath: pythonConfig.backendPath,
+          runtimeValidator: validateSummaryRuntimeSmoke,
+          cancelSignal,
+          cudaStatus: await runWallClockComputeAction({
+            timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+            label: 'Linux CUDA summary admission',
+            terminateProcess: terminateProcessBestEffort,
+            action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal }),
+          }),
+        }));
+      });
     });
 
     ipcMain.handle('cancel-summary-model-setup', async (event) => {
@@ -779,17 +783,20 @@ function createAiAddonIpc(deps) {
         throw new Error('Summary model setup is already running. Cancel it or wait for it to finish before validating.');
       }
 
-      return enqueueAiAddonAction(async () => validateSummaryModel(getAiAddonRuntimeOptions({
-        modelId: options.modelId,
-        profile: options.profile,
-        runtimeValidator: validateSummaryRuntimeSmoke,
-        cudaStatus: await runWallClockComputeAction({
-          timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
-          label: 'Linux CUDA summary validation',
-          terminateProcess: terminateProcessBestEffort,
-          action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess }),
-        }),
-      })));
+      return enqueueAiAddonAction(async () => {
+        await beforeSummaryAddonMutation();
+        return validateSummaryModel(getAiAddonRuntimeOptions({
+          modelId: options.modelId,
+          profile: options.profile,
+          runtimeValidator: validateSummaryRuntimeSmoke,
+          cudaStatus: await runWallClockComputeAction({
+            timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+            label: 'Linux CUDA summary validation',
+            terminateProcess: terminateProcessBestEffort,
+            action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess }),
+          }),
+        }));
+      });
     });
 
     ipcMain.handle('remove-summary-model', async (event, options = {}) => {
@@ -801,9 +808,12 @@ function createAiAddonIpc(deps) {
 
       return enqueueAiAddonAction(() => {
         assertRemovalCanRun('summary');
-        return enqueueGpuExclusiveRemovalAction(() => removeSummaryModel(getAiAddonRuntimeOptions({
-          modelId: options.modelId,
-        })));
+        return enqueueGpuExclusiveRemovalAction(async () => {
+          await beforeSummaryAddonMutation();
+          return removeSummaryModel(getAiAddonRuntimeOptions({
+            modelId: options.modelId,
+          }));
+        });
       });
     });
   }

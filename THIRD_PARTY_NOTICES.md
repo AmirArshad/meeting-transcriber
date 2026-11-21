@@ -18,6 +18,8 @@ These components are included when you build installers via
 | Component | Role | License (summary) | Notes |
 |-----------|------|-------------------|--------|
 | [Electron](https://www.electronjs.org/) | Desktop shell | MIT | |
+| [marked](https://marked.js.org/) (`18.2.1`) | Offline Markdown parsing for Chat responses | MIT | Bundled inside `app.asar` |
+| [DOMPurify](https://github.com/cure53/DOMPurify) (`3.4.18`) | HTML sanitization for rendered Markdown | Apache-2.0 (or MPL-2.0) | Bundled inside `app.asar` |
 | [Python](https://www.python.org/) | Embedded / standalone runtime in installer | PSF License | See python.org license page |
 | [ffmpeg](https://ffmpeg.org/) | Opus compression after recording | **GPLv3** (typical third-party builds) | See [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt) and [legal/FFMPEG-COMPLIANCE.json](legal/FFMPEG-COMPLIANCE.json). Windows: gyan.dev essentials build. macOS: shaka-project/static-ffmpeg-binaries arm64 static build. Linux (when packaged): shaka-project `ffmpeg-linux-x64` static build. Windows builds may include `legal/ffmpeg-upstream-*` copied from the gyan.dev archive. |
 | Python packages in `requirements-*-build.txt` | Recording, transcription, HF downloads | Mostly MIT / BSD / Apache-2.0 | Non-exhaustive list below |
@@ -54,6 +56,18 @@ Users download these artifacts on first use or during explicit setup in Settings
 
 **Trademark:** “Whisper” is associated with OpenAI. AvaNevis is not affiliated with or endorsed by OpenAI.
 
+### Optional transcription — NVIDIA Parakeet
+
+| Item | License | Source |
+|------|---------|--------|
+| NVIDIA Parakeet (`parakeet-tdt-0.6b-v2`) | **CC BY 4.0** | [nvidia/parakeet-tdt-0.6b-v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) |
+| Windows / Linux CUDA ONNX weights | **CC BY 4.0** (converted weights) | [`istupakov/parakeet-tdt-0.6b-v2-onnx`](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx) via `onnx-asr` |
+| macOS Apple Silicon MLX weights | **CC BY 4.0** (converted weights) | [`mlx-community/parakeet-tdt-0.6b-v2`](https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v2) via `parakeet-mlx` |
+| Silero VAD ONNX | MIT | [`istupakov/silero-vad-onnx`](https://huggingface.co/istupakov/silero-vad-onnx) |
+
+**Attribution (CC BY 4.0):** When using Parakeet transcription, credit the model, for example:  
+*Transcription uses NVIDIA Parakeet ([nvidia/parakeet-tdt-0.6b-v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2), CC BY 4.0).*
+
 ### Optional speaker diarization — pyannote
 
 | Item | License | Terms |
@@ -86,7 +100,7 @@ same source notices are installed under
 **Attribution (CC BY 4.0):** When using Speakrs speaker identification, credit the CC BY pack components, for example:  
 *Speaker identification uses [Speakrs](https://github.com/avencera/speakrs) (Apache-2.0) with WeSpeaker embeddings and pyannote PLDA/VBx parameters (CC BY 4.0).*
 
-### Optional meeting summaries — Qwen + llama.cpp
+### Optional summaries and Chat — Qwen + llama.cpp
 
 | Item | License (typical) | Source |
 |------|-------------------|--------|
@@ -107,7 +121,7 @@ same source notices are installed under
 
 ## 4. Trademarks
 
-Names such as **Whisper**, **Qwen**, **pyannote**, **Speakrs**, **Hugging Face**, **Electron**, **NVIDIA**, and **CUDA** are trademarks of their respective owners. AvaNevis uses them only to describe compatible components and does not claim endorsement.
+Names such as **Whisper**, **Parakeet**, **Qwen**, **pyannote**, **Speakrs**, **Hugging Face**, **Electron**, **NVIDIA**, and **CUDA** are trademarks of their respective owners. AvaNevis uses them only to describe compatible components and does not claim endorsement.
 
 ---
 
