@@ -229,6 +229,21 @@ function evaluateMacSigningIdentity({ identity, env = {}, allowManagedOverride =
   };
 }
 
+const MAC_SIGNING_AND_NOTARY_ENV_KEYS = Object.freeze([
+  'CSC_LINK',
+  'CSC_KEY_PASSWORD',
+  'CSC_NAME',
+  'CSC_INTERMEDIATE_LINK',
+  'CSC_INTERMEDIATE_KEY_PASSWORD',
+  'APPLE_TEAM_ID',
+  'APPLEID',
+  'APPLE_API_KEY',
+  'APPLE_API_KEY_ID',
+  'APPLE_API_ISSUER',
+  'APPLE_KEYCHAIN_PROFILE',
+  'APPLE_KEYCHAIN',
+]);
+
 function notarizationEnvironment(env) {
   const selected = evaluateNotarizationCredentials(env);
   const result = { ...env };
@@ -242,6 +257,13 @@ function notarizationEnvironment(env) {
   if (selected.mode !== 'keychain') {
     delete result.APPLE_KEYCHAIN_PROFILE;
     delete result.APPLE_KEYCHAIN;
+  }
+  // GitHub Actions exports unset secrets as empty strings; electron-builder
+  // treats CSC_LINK="" as a file path (resolving to CWD) instead of unset.
+  for (const key of MAC_SIGNING_AND_NOTARY_ENV_KEYS) {
+    if (key in result && !nonEmpty(result[key])) {
+      delete result[key];
+    }
   }
   return result;
 }

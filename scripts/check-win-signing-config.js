@@ -206,6 +206,39 @@ function evaluateWindowsSigningConfig({ env = process.env } = {}) {
   };
 }
 
+const WIN_SIGNING_ENV_KEYS = Object.freeze([
+  'WIN_CSC_LINK',
+  'WIN_CSC_KEY_PASSWORD',
+  'CSC_LINK',
+  'CSC_KEY_PASSWORD',
+  'WINDOWS_AZURE_ENDPOINT',
+  'AZURE_SIGN_ENDPOINT',
+  'WINDOWS_AZURE_CODE_SIGNING_ACCOUNT',
+  'AZURE_SIGN_ACCOUNT_NAME',
+  'WINDOWS_AZURE_CERT_PROFILE',
+  'AZURE_SIGN_CERT_PROFILE',
+  'WINDOWS_AZURE_PUBLISHER_NAME',
+  'AZURE_SIGN_PUBLISHER_NAME',
+  'AZURE_TENANT_ID',
+  'AZURE_CLIENT_ID',
+  'AZURE_CLIENT_SECRET',
+  'AZURE_FEDERATED_TOKEN_FILE',
+  'WINDOWS_SIGN_CERT_SUBJECT_NAME',
+  'WINDOWS_SIGN_CERT_SHA1',
+]);
+
+function windowsSigningEnvironment(env = process.env) {
+  const result = { ...env };
+  // GitHub Actions exports unset secrets as empty strings; strip them so
+  // electron-builder never treats an empty CSC_LINK/WIN_CSC_LINK as a path.
+  for (const key of WIN_SIGNING_ENV_KEYS) {
+    if (key in result && (typeof result[key] !== 'string' || result[key].trim() === '')) {
+      delete result[key];
+    }
+  }
+  return result;
+}
+
 function resolveElectronBuilderBin() {
   const pkgPath = require.resolve('electron-builder/package.json');
   const pkg = require(pkgPath);
@@ -238,7 +271,7 @@ function main() {
   const finalArgs = [...passthroughArgs, ...result.builderArgs];
   const child = spawnSync(process.execPath, [builderBin, ...finalArgs], {
     stdio: 'inherit',
-    env: process.env,
+    env: windowsSigningEnvironment(process.env),
   });
   process.exit(child.status === null ? 1 : child.status);
 }
@@ -252,4 +285,5 @@ module.exports = {
   detectPfxSigning,
   evaluateWindowsSigningConfig,
   isStrictSignedRelease,
+  windowsSigningEnvironment,
 };

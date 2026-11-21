@@ -15,6 +15,7 @@ const {
 } = require('../../build/mac-sign');
 const {
   evaluateWindowsSigningConfig,
+  windowsSigningEnvironment,
 } = require('../../scripts/check-win-signing-config');
 const {
   AD_HOC_IDENTITY,
@@ -370,4 +371,50 @@ test('notarization selects complete credentials and strips raw Apple passwords f
   const profileEnv = notarizationEnvironment({ APPLE_KEYCHAIN_PROFILE: 'profile', APPLE_API_KEY: 'partial' });
   assert.equal(profileEnv.APPLE_API_KEY, undefined);
   assert.equal(profileEnv.APPLE_KEYCHAIN_PROFILE, 'profile');
+});
+
+test('signing environment helpers strip empty-string GitHub Actions secrets while preserving non-empty values', () => {
+  const macStripped = notarizationEnvironment({
+    CSC_LINK: '',
+    CSC_KEY_PASSWORD: '   ',
+    CSC_NAME: '',
+    APPLE_TEAM_ID: '',
+    APPLE_KEYCHAIN_PROFILE: '  ',
+    OTHER_VAR: '',
+  });
+  for (const key of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'CSC_NAME', 'APPLE_TEAM_ID', 'APPLE_KEYCHAIN_PROFILE']) {
+    assert.equal(key in macStripped, false, `expected ${key} to be deleted`);
+  }
+  assert.equal(macStripped.OTHER_VAR, '');
+
+  const macPreserved = notarizationEnvironment({
+    CSC_LINK: 'base64-p12',
+    CSC_KEY_PASSWORD: 'secret',
+    APPLE_API_KEY: '/tmp/key.p8',
+    APPLE_API_KEY_ID: 'KEY',
+    APPLE_API_ISSUER: 'ISSUER',
+  });
+  assert.equal(macPreserved.CSC_LINK, 'base64-p12');
+  assert.equal(macPreserved.CSC_KEY_PASSWORD, 'secret');
+  assert.equal(macPreserved.APPLE_API_KEY, '/tmp/key.p8');
+
+  const winStripped = windowsSigningEnvironment({
+    WIN_CSC_LINK: '',
+    WIN_CSC_KEY_PASSWORD: '  ',
+    CSC_LINK: '',
+    WINDOWS_AZURE_ENDPOINT: '',
+    AZURE_CLIENT_SECRET: ' ',
+    OTHER_VAR: '',
+  });
+  for (const key of ['WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD', 'CSC_LINK', 'WINDOWS_AZURE_ENDPOINT', 'AZURE_CLIENT_SECRET']) {
+    assert.equal(key in winStripped, false, `expected ${key} to be deleted`);
+  }
+  assert.equal(winStripped.OTHER_VAR, '');
+
+  const winPreserved = windowsSigningEnvironment({
+    WIN_CSC_LINK: 'base64-pfx',
+    WIN_CSC_KEY_PASSWORD: 'secret',
+  });
+  assert.equal(winPreserved.WIN_CSC_LINK, 'base64-pfx');
+  assert.equal(winPreserved.WIN_CSC_KEY_PASSWORD, 'secret');
 });
