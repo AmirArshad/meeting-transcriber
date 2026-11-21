@@ -424,6 +424,7 @@ function createHistoryQaService(deps) {
   } = {}) {
     const status = await checkAiAddonSetupStatus(
       getAiAddonRuntimeOptions({
+        verifySelectedSummaryOnly: true,
         verifyChecksums,
         verifyChecksumsIfChanged,
         ...(summaryModelId ? { summaryModelId } : {}),
@@ -535,6 +536,7 @@ function createHistoryQaService(deps) {
       for (const candidate of candidates) {
         const candidateStatus = await checkAiAddonSetupStatus(
           getAiAddonRuntimeOptions({
+            verifySelectedSummaryOnly: true,
             verifyChecksums,
             verifyChecksumsIfChanged,
             summaryModelId: candidate.modelId,

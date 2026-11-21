@@ -664,6 +664,8 @@ test('Linux add-on status uses cached CUDA status instead of waiting behind GPU 
     missingLibraries: [],
     matchedProfile: 'cuda12',
   };
+  const memoryReads = [];
+  let trustedChecks = 0;
   let observedCudaStatus = null;
   let liveProbeCount = 0;
   let resourceAdmissions = 0;
@@ -677,6 +679,8 @@ test('Linux add-on status uses cached CUDA status instead of waiting behind GPU 
       observedCudaStatus = options.cudaStatus;
       return { features: { summary: { status: 'unsupported' } } };
     },
+    assertTrustedRendererSender() { trustedChecks++; },
+    getSummaryDeviceMemory: async ({ live }) => { memoryReads.push(live); return null; },
     getCachedCudaStatus: () => readyCuda,
     resolveCudaStatusForTranscription: async () => {
       liveProbeCount += 1;
@@ -694,11 +698,18 @@ test('Linux add-on status uses cached CUDA status instead of waiting behind GPU 
     await withProcessRuntimeAsync({ platform: 'linux', arch: 'x64' }, () => (
       handlers['get-ai-addon-status']({ sender: {} }, { verifyChecksumsIfChanged: true })
     ));
+    assert.equal(liveProbeCount, 0);
+    assert.equal(resourceAdmissions, 0);
+    await withProcessRuntimeAsync({ platform: 'linux', arch: 'x64' }, () => (
+      handlers['get-ai-addon-status']({ sender: {} }, { checkDevice: true })
+    ));
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
-  assert.equal(liveProbeCount, 0);
-  assert.equal(resourceAdmissions, 0);
+  assert.equal(liveProbeCount, 1);
+  assert.equal(resourceAdmissions, 1);
+  assert.equal(trustedChecks, 1);
+  assert.deepEqual(memoryReads, [false, true]);
   assert.equal(observedCudaStatus, readyCuda);
 });
 
@@ -799,4 +810,60 @@ test('opaque Pulse device IDs round-trip as strings (Phase 2)', () => {
   assert.equal(toOpaqueDeviceId('pulse-source:alsa_input.usb-mic'), 'pulse-source:alsa_input.usb-mic');
   assert.equal(Number.isNaN(parseInt(toOpaqueDeviceId('pulse-source:alsa_input.usb-mic'), 10)), true);
   assert.equal(decorateDesktopDevices([], 'linux')[0].id, 'none');
+});
+
+test('Linux summary smoke validation honors passed cudaStatus when cached TTL expired', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-smoke-cuda-'));
+  const readyCuda = {
+    statusCode: 'ready',
+    installed: true,
+    deviceAvailable: true,
+    runtimeLoadable: true,
+    missingLibraries: [],
+    matchedProfile: 'cuda12',
+  };
+  let observedModelArgs = null;
+  const service = createAiAddonIpc({
+    app: { getPath: () => userDataDir },
+    path,
+    fs,
+    pythonConfig: { backendPath: userDataDir, pythonExe: 'python3' },
+    sendToRenderer() {},
+    assertTrustedRendererSender() {},
+    getCachedCudaStatus: () => null,
+    getSummaryDeviceMemory: async () => ({ totalBytes: 16 * 1024 ** 3, availableBytes: 16 * 1024 ** 3 }),
+    buildSummaryRuntimeEnv: () => ({}),
+    buildSummaryArgs: (args) => {
+      observedModelArgs = args;
+      return ['-m', 'summaries.summary_runner'];
+    },
+    appendSpawnLogBuffer: (buf, data) => buf + data.toString(),
+    summarizeSummaryValidationError: (err) => err,
+    createAbortableComputeAction: ({ action }) => action(),
+    terminateProcessBestEffort: () => {},
+    spawnSummaryPython: () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      setImmediate(() => {
+        proc.stdout.emit('data', Buffer.from('{"ok":true}'));
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+  });
+  try {
+    const result = await withProcessRuntimeAsync({ platform: 'linux', arch: 'x64' }, () => (
+      service.validateSummaryRuntimeSmoke({
+        modelId: 'qwen3.5-9b-q4-k-m',
+        cudaStatus: readyCuda,
+        runtimeDir: userDataDir,
+        runtimeArtifact: { id: 'llama-cpp-v0.3.0-linux-x64-cuda-12.8' },
+      })
+    ));
+    assert.deepEqual(result, { ok: true });
+    assert.equal(observedModelArgs.modelId, 'qwen3.5-9b-q4-k-m');
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
 });

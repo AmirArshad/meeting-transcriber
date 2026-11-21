@@ -7188,6 +7188,10 @@ button.history-transcript-timestamp:focus-visible {
   line-height: 1.4;
 }
 
+#summary-check-device {
+  margin: 4px 0 6px;
+}
+
 .summary-library-section-title {
   margin: 16px 0 8px;
   font-size: 11px;
@@ -7295,6 +7299,13 @@ button.history-transcript-timestamp:focus-visible {
 .summary-library-model-fit {
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.summary-library-model-device {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
 }
 
 .summary-library-card-error {

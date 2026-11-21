@@ -99,7 +99,7 @@ const {
 } = require('./ai-addon/manifest-store');
 const { createPythonRuntime } = require('./main/python-runtime');
 const { createSummaryProcessSlot } = require('./main/summary-process-slot');
-const { parseNvidiaMemory } = require('./ai-addon/summary-device-fit');
+const { parseNvidiaMemory, classifyWindowsGpuAdapters } = require('./ai-addon/summary-device-fit');
 const { registerMeetingManagerClient } = require('./main/meeting-manager-client');
 const { registerDeviceIpc } = require('./main/device-ipc');
 const { registerFileExportIpc } = require('./main/file-export-ipc');
@@ -258,13 +258,33 @@ const summaryProcessSlot = createSummaryProcessSlot({
 let summaryDeviceMemoryProbe = null;
 let summaryDeviceMemorySnapshot = null;
 let summaryDeviceMemoryReadAt = 0;
+let summaryWindowsGpuCompatibility = null;
 
 async function getSummaryDeviceMemory({ live = false } = {}) {
+  const systemTotalBytes = os.totalmem();
+  // Free memory is a transient, conservative reading (it may exclude reclaimable cache).
+  const systemAvailableBytes = live ? os.freemem() : null;
+  const withSystemMemory = async (snapshot) => {
+    let gpuCompatibility = null;
+    if (snapshot) {
+      summaryWindowsGpuCompatibility = null;
+      gpuCompatibility = 'unknown';
+    } else if (process.platform === 'win32') {
+      if (live) {
+        try {
+          const gpuInfo = await app.getGPUInfo('basic');
+          summaryWindowsGpuCompatibility = classifyWindowsGpuAdapters(gpuInfo?.gpuDevice);
+        } catch { /* An unavailable probe is not evidence of incompatible hardware. */ }
+      }
+      gpuCompatibility = summaryWindowsGpuCompatibility;
+    }
+    return { ...(snapshot || {}), systemTotalBytes, systemAvailableBytes, gpuCompatibility };
+  };
   if (process.platform === 'darwin') {
-    return { totalBytes: os.totalmem(), availableBytes: null };
+    return withSystemMemory({ totalBytes: systemTotalBytes, availableBytes: null });
   }
   if (!live && Date.now() - summaryDeviceMemoryReadAt < 30000) {
-    return summaryDeviceMemorySnapshot && { totalBytes: summaryDeviceMemorySnapshot.totalBytes };
+    return withSystemMemory(summaryDeviceMemorySnapshot && { totalBytes: summaryDeviceMemorySnapshot.totalBytes });
   }
   if (!summaryDeviceMemoryProbe) {
     const candidates = process.platform === 'win32'
@@ -274,7 +294,11 @@ async function getSummaryDeviceMemory({ live = false } = {}) {
       ]
       : ['/usr/bin/nvidia-smi'];
     const executable = candidates.find((candidate) => candidate && fs.existsSync(candidate));
-    if (!executable) return null;
+    if (!executable) {
+      summaryDeviceMemorySnapshot = null;
+      summaryDeviceMemoryReadAt = Date.now();
+      return withSystemMemory(null);
+    }
     summaryDeviceMemoryProbe = new Promise((resolve) => {
       execFile(executable, ['--query-gpu=index,uuid,memory.total,memory.free', '--format=csv,noheader,nounits'], {
         timeout: 3000, windowsHide: true,
@@ -286,7 +310,7 @@ async function getSummaryDeviceMemory({ live = false } = {}) {
     }).finally(() => { summaryDeviceMemoryProbe = null; });
   }
   const snapshot = await summaryDeviceMemoryProbe;
-  return live ? snapshot : snapshot && { totalBytes: snapshot.totalBytes };
+  return withSystemMemory(live ? snapshot : snapshot && { totalBytes: snapshot.totalBytes });
 }
 
 function spawnSummaryPython(args, options) {
@@ -885,7 +909,7 @@ aiAddonIpc = createAiAddonIpc({
   summarizeSummaryValidationError,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   hasPendingGpuResourceWork: () => gpuResourceActionQueue.hasPendingWork(),
-  enqueueGpuResourceAction: enqueueGpuResourceActionWithUnload,
+  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
   enqueueGpuExclusiveRemovalAction,
   isQuitCommitted,
 });

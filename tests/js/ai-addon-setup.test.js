@@ -3550,8 +3550,59 @@ test('native Speakrs repair validates staged files and preserves the old manifes
   assert.equal(repeated.features.diarization.setupComplete, true);
 });
 
+test('submission hashes the default weights without reading unrelated model weights', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact();
+  catalog.summary.models.push({ ...catalog.summary.models[0], id: 'other' });
+  const userDataDir = '/tmp/AvaNevis';
+  const paths = catalog.summary.models.map(({ id }) => getSummaryArtifactPath(userDataDir,
+    getSummaryArtifactForPlatform(id, 'win32', 'x64', catalog)));
+  for (const target of paths) fsModule.writeFileSync(target, 'checksum target\n');
+  const reads = [];
+  const readStream = fsModule.createReadStream.bind(fsModule);
+  fsModule.createReadStream = (target) => { reads.push(target); return readStream(target); };
+  const options = { userDataDir, platform: 'win32', arch: 'x64', fsModule, catalog, verifyChecksums: true };
+  const selected = await checkAiAddonSetupStatus({ ...options, verifySelectedSummaryOnly: true });
+  assert.equal(selected.features.summary.cache.checksumStatus, 'match');
+  assert.deepEqual(reads.filter((target) => paths.includes(target)), [paths[0]]);
+  await checkAiAddonSetupStatus(options);
+  assert.ok(reads.includes(paths[1]));
+});
+
+test('validateSummaryModel does not read unrelated library model weights', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  catalog.summary.models.push({ ...catalog.summary.models[0], id: 'other' });
+  const userDataDir = '/tmp/AvaNevis';
+  const primaryArtifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const otherArtifact = getSummaryArtifactForPlatform('other', 'win32', 'x64', catalog);
+  const primaryPath = getSummaryArtifactPath(userDataDir, primaryArtifact);
+  const otherPath = getSummaryArtifactPath(userDataDir, otherArtifact);
+  fsModule.writeFileSync(primaryPath, 'checksum target\n');
+  fsModule.writeFileSync(otherPath, 'checksum target\n');
+  const runtimeExecutable = getSummaryRuntimeExecutablePath(userDataDir, primaryArtifact, catalog.summary.runtimeArtifacts['win32-x64']);
+  fsModule.mkdirSync(path.dirname(runtimeExecutable));
+  fsModule.writeFileSync(runtimeExecutable, 'bin');
+  const reads = [];
+  const readStream = fsModule.createReadStream.bind(fsModule);
+  fsModule.createReadStream = (target) => { reads.push(target); return readStream(target); };
+  const status = await validateSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+  });
+  assert.equal(status.features.summary.status, 'ready');
+  assert.ok(reads.includes(primaryPath));
+  assert.equal(reads.includes(otherPath), false);
+});
+
 test('summary setup blocks insufficient peak disk space before downloading', async () => {
   const fsModule = createMemoryFs();
+  fsModule.mkdirSync('/tmp/AvaNevis');
   fsModule.statfsSync = () => ({ bavail: 1, bsize: 1 });
   const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
   let downloads = 0;

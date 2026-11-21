@@ -198,6 +198,22 @@ def sanitize_runtime_error_line(line: str, runtime: Optional[Dict[str, Any]] = N
 
 def summarize_llama_failure(result: subprocess.CompletedProcess[str], runtime: Optional[Dict[str, Any]] = None) -> str:
     combined = f"{decode_process_output(result.stderr)}\n{decode_process_output(result.stdout)}"
+    # Native loaders often follow an actionable allocation error with a generic
+    # "failed to load model". Only classify explicit allocator diagnostics.
+    diagnostic = decode_process_output(result.stderr).lower()
+    if re.search(
+        r"cuda error: out of memory|cuda_error_out_of_memory|cudamalloc[^\n]*out of memory"
+        r"|cublas_status_alloc_failed|failed to allocate metal buffer"
+        r"|ggml_(?:backend_)?metal[^\n]*failed to allocate|metal[^\n]*out of memory",
+        diagnostic,
+    ):
+        return "The model ran out of GPU memory. Free GPU memory or choose a smaller model."
+    if re.search(
+        r"cannot allocate memory|std::bad_alloc|the paging file is too small"
+        r"|failed to allocate buffer|ggml_gallocr[^\n]*failed to allocate",
+        diagnostic,
+    ):
+        return "The runtime could not allocate memory. Close other apps or choose a smaller model."
     lines = [line.strip() for line in combined.splitlines() if line.strip()]
     for line in reversed(lines):
         lower = line.lower()

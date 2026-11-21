@@ -125,6 +125,6 @@ was outside the harness.
 
 ## Integrated automated checks
 
-`npm run test:all` exited 0 on macOS arm64. JavaScript reported 1,320 passed
-and 3 skipped. Python reported 976 passed and 10 skipped. Both syntax checks
+`npm run test:all` exited 0 on macOS arm64. JavaScript reported 1,349 passed
+and 3 skipped. Python reported 983 passed and 10 skipped. Both syntax checks
 passed. `git diff --check` exited 0.

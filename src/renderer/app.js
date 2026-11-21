@@ -5790,10 +5790,7 @@ async function generateSummaryForMeeting(meetingId) {
   addLog('Checking summary availability…');
   let aiStatus;
   try {
-    aiStatus = await window.electronAPI.getAiAddonStatus({
-      verifyChecksums: true,
-      verifyChecksumsIfChanged: true,
-    });
+    aiStatus = await window.electronAPI.getAiAddonStatus();
   } catch (error) {
     addLog(`Summary setup status unavailable: ${error.message}`, 'error');
     summaryGenerationMeetingId = null;
@@ -7405,21 +7402,27 @@ function summaryModelHasFiles(model) {
   return Boolean(model.installed || model.removalPending || model.installedBytes > 0 || /removal is incomplete/i.test(model.error || ''));
 }
 
+let summaryDeviceCheckSnapshot = null;
+let summaryDeviceCheckPending = false;
+
 function summaryFitLabel(status) {
   return ({ fits: 'Fits this device', needs_more_memory: 'May need more memory', runtime_needed: 'Runtime setup needed', unavailable: 'Unavailable on this device', unknown: 'Couldn’t check memory' })[status] || 'Compatibility not checked';
 }
 
 function summaryDownloadConfirmation(model, library) {
   const size = (value) => value == null ? 'unknown' : formatBytes(value);
-  const shortfall = library.availableBytes != null && model.peakFreeBytes != null
-    ? Math.max(0, model.peakFreeBytes - library.availableBytes) : null;
+  const required = model.storageFit ? model.storageFit.requiredBytes : model.peakFreeBytes;
+  const available = model.storageFit
+    ? (model.storageFit.availableBytes ?? (required === 0 ? library.availableBytes : null))
+    : library.availableBytes;
+  const shortfall = available != null && required != null ? Math.max(0, required - available) : null;
   return [
     `Download ${model.modelName}?`,
     '',
     `Model download: ${size(model.downloadBytes)}`,
     `Runtime download: ${size(model.runtimeDownloadBytes)}`,
     `Total additional download: ${size(model.additionalDownloadBytes)}`,
-    `Peak free space needed: ${size(model.peakFreeBytes)} (Available: ${size(library.availableBytes)})`,
+    `Peak free space needed: ${size(required)} (Available: ${size(available)})`,
     shortfall ? `Free another ${formatBytes(shortfall)} before setup.` : '',
   ].filter((line, index, arr) => line !== '' || index === 1 || (index < arr.length - 1 && arr[index + 1] !== '')).join('\n');
 }
@@ -7597,6 +7600,34 @@ function renderSummaryModelLibrary(library) {
   total.className = 'summary-library-storage-bar';
   total.textContent = `${formatBytes(library.installedBytes || 0)} used by models · ${formatBytes(library.sharedRuntimeBytes || 0)} shared runtime · ${library.availableBytes == null ? 'Free space unknown' : `${formatBytes(library.availableBytes)} free`}`;
   container.appendChild(total);
+  const checkDevice = document.createElement('button');
+  checkDevice.type = 'button';
+  checkDevice.id = 'summary-check-device';
+  checkDevice.disabled = summaryDeviceCheckPending;
+  checkDevice.className = 'btn btn-small btn-secondary';
+  checkDevice.textContent = summaryDeviceCheckPending ? 'Checking device…' : 'Check this device';
+  checkDevice.addEventListener('click', async () => {
+    if (summaryDeviceCheckPending) return;
+    summaryDeviceCheckPending = true;
+    checkDevice.disabled = true;
+    checkDevice.textContent = 'Checking device…';
+    try {
+      const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false, checkDevice: true });
+      summaryDeviceCheckSnapshot = new Map((status?.summaryLibrary?.models || []).map((model) => [model.modelId, { fit: model.fit, storageFit: model.storageFit }]));
+      aiAddonStatusSnapshot = status;
+      summaryDeviceCheckPending = false;
+      updateAiAddonSettings(status);
+      updateHomeAiAddonCTA(status);
+    } catch (error) {
+      showAppToast(error.message || 'Could not check this device. Try again.', 'error');
+    } finally {
+      summaryDeviceCheckPending = false;
+      const currentButton = document.getElementById('summary-check-device') || checkDevice;
+      currentButton.disabled = false;
+      currentButton.textContent = 'Check this device';
+    }
+  });
+  container.appendChild(checkDevice);
   for (const [heading, installed] of [['Installed', true], ['Available to download', false]]) {
     const models = (library.models || []).filter((model) => summaryModelHasFiles(model) === installed);
     if (!models.length) continue;
@@ -7663,11 +7694,39 @@ function renderSummaryModelLibrary(library) {
       storageP.textContent = storageParts.join(' · ');
       card.appendChild(storageP);
 
+      const checked = summaryDeviceCheckSnapshot?.get(model.modelId);
+      const activeStorageFit = checked ? (model.storageFit || checked.storageFit) : null;
+      if (checked) {
+        const fit = checked.fit || {};
+        const storageFit = activeStorageFit || {};
+        const measured = (value) => value == null ? 'unknown' : formatBytes(value);
+        const recommendation = (value) => value == null ? '' : `, ${formatBytes(value)} recommended`;
+        const unified = fit.memoryType === 'unified memory';
+        const memory = `${unified ? 'Unified memory' : 'Graphics memory'} — ${measured(fit.totalMemoryBytes)} total, ${measured(unified ? fit.systemAvailableBytes : fit.availableMemoryBytes)} free${recommendation(fit.workingMemoryBytes)}`;
+        const system = unified ? null : `System RAM — ${measured(fit.systemTotalBytes)} total, ${measured(fit.systemAvailableBytes)} free${fit.systemRecommendedBytes == null ? ', minimum unverified' : recommendation(fit.systemRecommendedBytes)}`;
+        let storage = null;
+        if (activeStorageFit) {
+          storage = storageFit.requiredBytes === 0
+            ? 'Setup needs no additional disk space'
+            : `Storage — ${measured(storageFit.availableBytes)} available, ${measured(storageFit.requiredBytes)} needed for setup`;
+        }
+        const deviceDetails = document.createElement('p');
+        deviceDetails.className = 'setting-description summary-library-model-device';
+        deviceDetails.textContent = ['Last device check', memory, system, storage, fit.reason, storageFit.reason].filter(Boolean).join(' · ');
+        card.appendChild(deviceDetails);
+      }
+      if (model.storageFit?.blocked && model.storageFit.reason && model.storageFit.reason !== activeStorageFit?.reason) {
+        const storageNote = document.createElement('p');
+        storageNote.className = 'setting-description summary-library-card-error';
+        storageNote.textContent = model.storageFit.reason;
+        card.appendChild(storageNote);
+      }
+
       const fitStatus = model.fit?.status;
       const showFitNote = Boolean(
-        model.fit?.reason
+        model.fit?.reason && model.fit.reason !== checked?.fit?.reason
         && (
-          ['needs_more_memory', 'runtime_needed', 'unavailable'].includes(fitStatus)
+          model.fit?.blocked === true || ['needs_more_memory', 'runtime_needed', 'unavailable'].includes(fitStatus)
           || (!installed && fitStatus === 'unknown')
         ),
       );
@@ -7692,7 +7751,7 @@ function renderSummaryModelLibrary(library) {
         errorP.textContent = model.error;
         card.appendChild(errorP);
       }
-      if (!installed && library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes) {
+      if (!installed && !model.storageFit && library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes) {
         const warning = document.createElement('p');
         warning.className = 'setting-description summary-library-card-error';
         warning.textContent = `Free ${formatBytes(model.peakFreeBytes - library.availableBytes)} to download this model. Remove an installed model above to free space.`;
@@ -7729,7 +7788,7 @@ function renderSummaryModelLibrary(library) {
           throw error;
         }
       };
-      const setupBlocked = model.fit?.blocked === true || (library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes);
+      const setupBlocked = model.fit?.blocked === true || model.storageFit?.blocked === true || (!model.storageFit && library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes);
       if (!installed) {
         addAction(model.status === 'error' ? 'Retry download' : 'Download', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
       } else {

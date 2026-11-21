@@ -49,6 +49,22 @@ Archive expansion uses measured pin metadata where available. Unqualified workin
 memory estimates are advisory. An unknown reading permits an explicit setup test
 on a supported runtime.
 
+**Check this device** reads the local machine before download. It probes current
+free GPU memory where the NVIDIA device can be identified and reports host RAM
+separately on discrete GPUs. CUDA memory estimates use model weights and context
+headroom. Apple Silicon reports one unified pool and uses its measured model
+footprint where available. OS free RAM
+is a snapshot. Discrete-GPU host RAM has no qualified per-model minimum. An
+inconclusive hardware reading leaves explicit setup available. Linux refreshes
+its managed CUDA status on the resource queue for this check. Setup compares
+space on the weights and runtime destination volumes. Installed models need no
+additional download space. **Check setup** runs the installed runtime with a
+short prompt at the selected model's configured context size.
+
+Opening the summary chooser reads library status. Submission and compute
+admission verify the selected weights and runtime, including when using the
+default. Unrelated library weights and speaker models are outside that hash scope.
+
 **Token handling (hard constraint).** Diarization uses `pyannote/speaker-diarization-community-1` with the **user's own** Hugging Face token only — never embed, proxy, log, or persist a maintainer token. Tokens stay in Electron `safeStorage` and must never reach manifests, meeting metadata, transcripts, summaries, progress events, or logs. Setup validation passes the token by stdin (`--token-stdin`) and clears `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, the deprecated `HUGGING_FACE_HUB_TOKEN`, and `HF_TOKEN_PATH` from the child env via `buildClearedHuggingFaceTokenEnv()`.
 
 **Speakrs is a user-selectable exclusive engine.** New users default to Speakrs. Pyannote remains selected for existing installations until the user switches. Explicit Speakrs setup stages and hashes the immutable 0.7 model leaves, validates native inference on staged paths, and activates the revision with an atomic manifest write. Cancellation or failure preserves the previous active manifest and files. After a successful switch, cleanup owns the old Pyannote cache and dependencies and retains the token. Pyannote removal deletes its token. Speakrs removal owns its model root and legacy private `runtimes/speakrs-ort` tree. Linux uses the shared managed CUDA 12 admission and native CUDA kernels. macOS targets native CoreML on arm64. Windows Speakrs uses native CUDA and restricts its Rust process DLL search to System32 before inference; failure to establish that policy fails closed. Native qualification remains bounded to the tested GPU and driver. Transcription and Parakeet retain their separate runtime ownership.

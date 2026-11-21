@@ -37,7 +37,7 @@ const {
   getSharedSummaryRuntimeDir,
   getLegacySummaryRuntimeDir,
   hasOtherActiveSummaryRuntimeReference,
-  getSummaryRuntimePeakBytes,
+  getSummaryStorageFit,
   getSummaryRuntimeExecutablePath,
   bindFsMethod,
   updateManifestFeature,
@@ -418,6 +418,7 @@ async function validateSummaryModel({
         runtimeArtifact: runtimeCache.runtimeArtifact,
         runtimeDir: runtimeCache.runtimeDir,
         cancelSignal,
+        cudaStatus,
       });
     } catch (runtimeError) {
       if (isAiAddonCancelError(runtimeError)) {
@@ -478,6 +479,7 @@ async function validateSummaryModel({
     fsModule,
     catalog,
     verifyChecksums: true,
+    verifySelectedSummaryOnly: true,
     cudaStatus,
     summaryModelId: getSummaryStatusTargetModelId({ userDataDir, selectedModelId, fsModule, catalog }),
     deviceMemory,
@@ -614,17 +616,10 @@ async function setupSummaryModel({
     catalog,
     verifyChecksum: true,
   });
-  const modelDownloadBytes = Number(artifact?.estimatedSizeBytes) || 0;
-  // Reserve room for temporary downloads plus extraction; unknown space is reported by status.
-  const peakFreeBytes = (cache.valid ? 0 : modelDownloadBytes * 2) + (runtimeCache.valid ? 0 : getSummaryRuntimePeakBytes(runtimeArtifact));
-  if (peakFreeBytes && typeof fsModule.statfsSync === 'function') {
-    const cacheRoot = path.join(userDataDir, 'ai-addons');
-    fsModule.mkdirSync(cacheRoot, { recursive: true });
-    const volume = fsModule.statfsSync(cacheRoot);
-    const shortfall = peakFreeBytes - Number(volume.bavail) * Number(volume.bsize);
-    if (shortfall > 0) {
-      throw new Error(`Not enough free disk space for the summary model download and setup. Free ${(shortfall / 1e9).toFixed(2)} GB and retry.`);
-    }
+  const storageFit = getSummaryStorageFit({ userDataDir, artifact, runtimeArtifact, cache, runtimeCache, fsModule, catalog });
+  if (storageFit?.blocked) {
+    const shortfall = storageFit.requiredBytes - storageFit.availableBytes;
+    throw new Error(`Not enough free disk space for the summary model download and setup. Free ${(shortfall / 1e9).toFixed(2)} GB and retry.`);
   }
   const hadValidModelBeforeSetup = cache.valid;
   const hadValidRuntimeBeforeSetup = runtimeCache.valid;

@@ -251,9 +251,20 @@ function createAiAddonIpc(deps) {
     return options;
   }
 
-  async function resolveLiveCudaStatusForAddonStatus() {
+  async function resolveCudaStatusForAddonStatus(checkDevice) {
+    if (checkDevice && process.platform === 'linux' && process.arch === 'x64') {
+      return enqueueGpuResourceAction(() => {
+        if (isQuitCommitted()) throw new Error('Cannot check this device while AvaNevis is quitting.');
+        return runWallClockComputeAction({
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+          label: 'Summaries & Chat device check',
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess, { signal }) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal: signal }),
+        });
+      });
+    }
     // Passive status (Settings refresh, Generate Summary preflight) must not
-    // wait behind transcription. Live hashing/probes belong to compute start.
+    // wait behind transcription. Use the last runtime reading until an explicit check or compute admission.
     if (typeof getCachedCudaStatus === 'function') {
       return getCachedCudaStatus({ allowStale: true }) || getCachedCudaStatus();
     }
@@ -522,7 +533,7 @@ function createAiAddonIpc(deps) {
     });
   }
 
-  function validateSummaryRuntimeSmoke({ modelId, cache, runtimeArtifact, runtimeDir: resolvedRuntimeDir, cancelSignal }) {
+  function validateSummaryRuntimeSmoke({ modelId, cache, runtimeArtifact, runtimeDir: resolvedRuntimeDir, cancelSignal, cudaStatus }) {
     const artifact = getSummaryArtifactForPlatform(modelId, process.platform, process.arch);
     if (!artifact) {
       return Promise.reject(new Error('No summary model artifact is available for this platform.'));
@@ -537,9 +548,14 @@ function createAiAddonIpc(deps) {
       action: async () => {
         const platform = process.platform;
         const deviceMemory = await getSummaryDeviceMemory({ live: true });
+        const effectiveCudaStatus = cudaStatus !== undefined
+          ? cudaStatus
+          : (typeof getCachedCudaStatus === 'function'
+            ? (getCachedCudaStatus({ allowStale: true }) || getCachedCudaStatus())
+            : null);
         const fit = getSummaryModelFit({
           model: getModelById('summary', modelId), artifact, runtimeArtifact, deviceMemory, platform,
-          availability: getSummaryAvailability(platform, process.arch, { cudaStatus: getCachedCudaStatus() }),
+          availability: getSummaryAvailability(platform, process.arch, { cudaStatus: effectiveCudaStatus }),
         });
         if (deviceMemory && fit.blocked) throw new Error(fit.reason);
         return runWallClockComputeAction({
@@ -633,17 +649,22 @@ function createAiAddonIpc(deps) {
   }
 
   function registerIpc(ipcMain) {
-    ipcMain.handle('get-ai-addon-status', async (event, options = {}) => checkAiAddonSetupStatus({
-      userDataDir: app.getPath('userData'),
-      platform: process.platform,
-      arch: process.arch,
-      includeStorageSizes: Boolean(options && options.includeStorageSizes),
-      verifyChecksums: Boolean(options && options.verifyChecksums),
-      verifyChecksumsIfChanged: Boolean(options && options.verifyChecksumsIfChanged),
-      checkTokenEncryption: false,
-      cudaStatus: await resolveLiveCudaStatusForAddonStatus(),
-      deviceMemory: await getSummaryDeviceMemory(),
-    }));
+    ipcMain.handle('get-ai-addon-status', async (event, options = {}) => {
+      const checkDevice = options?.checkDevice === true;
+      if (checkDevice) assertTrustedRendererSender(event);
+      const cudaStatus = await resolveCudaStatusForAddonStatus(checkDevice);
+      return checkAiAddonSetupStatus({
+        userDataDir: app.getPath('userData'),
+        platform: process.platform,
+        arch: process.arch,
+        includeStorageSizes: Boolean(options?.includeStorageSizes),
+        verifyChecksums: Boolean(options?.verifyChecksums),
+        verifyChecksumsIfChanged: Boolean(options?.verifyChecksumsIfChanged),
+        checkTokenEncryption: false,
+        cudaStatus,
+        deviceMemory: await getSummaryDeviceMemory({ live: checkDevice }),
+      });
+    });
 
     ipcMain.handle('store-diarization-token', async (event, token) => {
       assertTrustedRendererSender(event);

@@ -10,7 +10,9 @@ function getSummaryModelFit({ model, artifact, availability, runtimeArtifact, de
   const memoryType = unified ? 'unified memory' : 'graphics memory';
   const workingMemoryBytes = model?.memoryGuidance?.[unified ? 'unified' : 'gpu'] * GiB || null;
   const weightBytes = Number(artifact?.estimatedSizeBytes) || 0;
-  const measuredFloor = Number(model?.memoryGuidance?.minRuntimeBytes) || 0;
+  // The catalog's runtime samples are Apple Silicon process RSS readings.
+  // Discrete CUDA devices use the independent weights and context estimate.
+  const measuredFloor = unified ? Number(model?.memoryGuidance?.minRuntimeBytes) || 0 : 0;
   const contextTokens = artifact?.inference?.contextTokens || null;
   const estimatedReserve = weightBytes
     ? Math.max(768 * MiB, Math.round(weightBytes * (contextTokens && contextTokens >= 32768 ? 0.16 : 0.12)))
@@ -20,12 +22,21 @@ function getSummaryModelFit({ model, artifact, availability, runtimeArtifact, de
     : (weightBytes ? weightBytes + estimatedReserve : null);
   const total = deviceMemory?.totalBytes || null;
   const available = deviceMemory?.availableBytes ?? null;
+  const systemTotalBytes = deviceMemory?.systemTotalBytes || (unified ? total : null);
+  const systemAvailableBytes = deviceMemory?.systemAvailableBytes ?? null;
+  // No host-RAM recommendation is available for discrete GPUs without
+  // model-specific measurements. Unified guidance applies to the whole system.
+  const systemRecommendedBytes = unified ? workingMemoryBytes : null;
   const readings = {
     workingMemoryBytes,
     minimumRuntimeBytes,
     contextTokens,
     totalMemoryBytes: total,
     availableMemoryBytes: available,
+    systemTotalBytes,
+    systemAvailableBytes,
+    systemRecommendedBytes,
+    gpuCompatibility: deviceMemory?.gpuCompatibility ?? null,
     memoryType,
   };
   const result = (status, reason, blocked = false) => ({ status, reason, blocked, ...readings });
@@ -35,6 +46,9 @@ function getSummaryModelFit({ model, artifact, availability, runtimeArtifact, de
   }
   if (!artifact || !runtimeArtifact) return result('unavailable', 'No verified local runtime is available for this platform.', true);
   if (!availability?.supported) return result('runtime_needed', availability?.reason || 'Set up the required local runtime in Settings first.', true);
+  if (platform === 'win32' && deviceMemory?.gpuCompatibility === 'incompatible') {
+    return result('unavailable', 'An NVIDIA GPU is required for this local model.', true);
+  }
   if (!total) return result('unknown', `Could not read this device’s ${memoryType}. Use Check setup after downloading to test it.`);
   if (unified) {
     const macSafeLimit = Math.min(total * MACOS_MAX_UNIFIED_RATIO, total - MACOS_OS_HEADROOM_BYTES);
@@ -63,6 +77,14 @@ function getSummaryModelFit({ model, artifact, availability, runtimeArtifact, de
   return result('unknown', `Enough ${memoryType} detected for the model files. Use Check setup to verify full context.`);
 }
 
+function classifyWindowsGpuAdapters(adapters) {
+  // Incomplete, NVIDIA, virtual, and unrecognized devices are inconclusive.
+  if (Array.isArray(adapters) && adapters.length > 0
+      && adapters.every((adapter) => [0x1002, 0x8086].includes(adapter?.vendorId)
+        && Number.isInteger(adapter.deviceId) && adapter.deviceId > 0)) return 'incompatible';
+  return 'unknown';
+}
+
 function parseNvidiaMemory(output, visibleDevices) {
   const devices = String(output).trim().split(/\r?\n/).map((row) => row.split(',').map((part) => part.trim()));
   // A multi-GPU context can be split differently by the runtime. A single
@@ -79,4 +101,4 @@ function parseNvidiaMemory(output, visibleDevices) {
   return { totalBytes: totalMiB * 1024 ** 2, availableBytes: freeMiB * 1024 ** 2 };
 }
 
-module.exports = { getSummaryModelFit, parseNvidiaMemory };
+module.exports = { getSummaryModelFit, parseNvidiaMemory, classifyWindowsGpuAdapters };

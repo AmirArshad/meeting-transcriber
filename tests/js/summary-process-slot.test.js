@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const test = require('node:test');
 const { createSummaryProcessSlot } = require('../../src/main/summary-process-slot');
-const { getSummaryModelFit, parseNvidiaMemory } = require('../../src/ai-addon/summary-device-fit');
+const { getSummaryModelFit, parseNvidiaMemory, classifyWindowsGpuAdapters } = require('../../src/ai-addon/summary-device-fit');
 
 test('a closed launcher does not release the slot while its POSIX group is alive', async () => {
   let groupPresent = true;
@@ -85,9 +85,40 @@ test('device fit enforces 32k runtime memory floor and macOS unified headroom', 
     deviceMemory: { totalBytes: totalMiB * 1024 ** 2, availableBytes: freeMiB * 1024 ** 2 },
     platform: 'win32',
   });
+  assert.notEqual(gpuFit('gemma-4-12b', 16384, 16384).minimumRuntimeBytes, gemma12On8G.minimumRuntimeBytes);
   assert.equal(gpuFit('gemma-4-e4b', 4800, 4800).blocked, true);
   assert.equal(gpuFit('gemma-4-e4b', 8192, 4800).blocked, true);
   assert.equal(gpuFit('gemma-4-e4b', 8192, 6000).blocked, false);
+});
+
+test('Windows GPU evidence rejects only known non-NVIDIA adapters', () => {
+  const intel = { vendorId: 0x8086, deviceId: 0x1234 };
+  assert.equal(classifyWindowsGpuAdapters([intel, { vendorId: 0x1002, deviceId: 1 }]), 'incompatible');
+  assert.equal(classifyWindowsGpuAdapters([intel, { vendorId: 0x10de, deviceId: 1 }]), 'unknown');
+  assert.equal(classifyWindowsGpuAdapters([intel, { vendorId: 0x1414, deviceId: 1 }]), 'unknown');
+  assert.equal(classifyWindowsGpuAdapters([{ vendorId: 0x8086 }]), 'unknown');
+  assert.equal(classifyWindowsGpuAdapters([]), 'unknown');
+});
+
+test('host readings preserve unknown guidance and incompatible GPU evidence blocks Windows', () => {
+  const GiB = 1024 ** 3;
+  const inputs = {
+    model: { memoryGuidance: { gpu: 8 } }, artifact: { estimatedSizeBytes: 4 * GiB },
+    availability: { supported: true }, runtimeArtifact: {}, platform: 'win32',
+    deviceMemory: { totalBytes: 16 * GiB, availableBytes: 16 * GiB, systemTotalBytes: 8 * GiB, systemAvailableBytes: 2 * GiB },
+  };
+  const fit = getSummaryModelFit(inputs);
+  assert.equal(fit.systemRecommendedBytes, null);
+  assert.equal(fit.systemTotalBytes, 8 * GiB);
+  assert.equal(fit.systemAvailableBytes, 2 * GiB);
+  assert.equal(fit.blocked, false);
+  const incompatible = getSummaryModelFit({ ...inputs, deviceMemory: { ...inputs.deviceMemory, gpuCompatibility: 'incompatible' } });
+  assert.equal(incompatible.status, 'unavailable');
+  assert.equal(incompatible.blocked, true);
+  const unknown = getSummaryModelFit({ ...inputs, deviceMemory: { systemTotalBytes: 8 * GiB } });
+  assert.equal(unknown.status, 'unknown');
+  const unavailable = getSummaryModelFit({ ...inputs, availability: { supported: false } });
+  assert.equal(unavailable.blocked, true);
 });
 
 test('hasActiveNonClosedProcess reflects open vs closed process state', () => {

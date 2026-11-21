@@ -324,6 +324,7 @@ function createSummaryService(deps) {
         // Skip full GGUF re-hash on every generate; setup/validate already pin checksums.
         // Re-verify only when the artifact mtime/size changed since the last match.
         const statusOptions = getAiAddonRuntimeOptions({
+          verifySelectedSummaryOnly: true,
           verifyChecksums: true,
           verifyChecksumsIfChanged: true,
           ...(modelId ? { summaryModelId: modelId } : {}),
@@ -433,6 +434,7 @@ function createSummaryService(deps) {
         const deviceMemory = await getSummaryDeviceMemory({ live: true });
         if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
         const admittedStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+          verifySelectedSummaryOnly: true,
           verifyChecksums: true, verifyChecksumsIfChanged: true, summaryModelId: selectedModelId, deviceMemory,
         }));
         if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');

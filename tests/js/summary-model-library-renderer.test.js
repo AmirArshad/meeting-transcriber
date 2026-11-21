@@ -369,3 +369,84 @@ test('renderChatModelChoice implements 0/1/2+ usable model UX without duplicate 
     ['Gemma 4 E4B', 'b'],
   ]);
 });
+
+test('device check refreshes all model measurements and remains separate from setup validation', async () => {
+  const elements = [];
+  const makeElement = (tag) => ({ tag, children: [], dataset: {}, textContent: '', appendChild(child) { this.children.push(child); }, replaceChildren() { this.children = []; }, setAttribute() {}, addEventListener(type, fn) { this[type] = fn; } });
+  const container = makeElement('div');
+  const document = { createElement: (tag) => { const el = makeElement(tag); elements.push(el); return el; }, getElementById: (id) => id === 'summary-model-library' ? container : null };
+  const model = { modelId: 'a', modelName: 'A', fit: { memoryType: 'graphics memory', totalMemoryBytes: 8, availableMemoryBytes: 4, workingMemoryBytes: 6, systemTotalBytes: 32, systemAvailableBytes: 20, systemRecommendedBytes: 16, reason: 'Not enough free graphics memory.' }, storageFit: { availableBytes: 10, requiredBytes: 12, blocked: true, reason: 'Free 2 bytes and check again.' } };
+  const status = { summaryLibrary: { models: [model] } };
+  let options;
+  let updated;
+  const ctx = vm.createContext({ document, aiAddonDownloadState: { summary: { active: false } }, chatState: { modelState: {} }, formatBytes: (n) => `${n} B`, window: { electronAPI: { getAiAddonStatus: async (value) => { options = value; return status; } } }, updateAiAddonSettings: (value) => { updated = value; }, updateHomeAiAddonCTA() {}, showAppToast() {} });
+  vm.runInContext(source.slice(source.indexOf('function summaryModelHasFiles('), source.indexOf('function chooseSummaryReplacement(')), ctx);
+  ctx.renderSummaryModelLibrary(status.summaryLibrary);
+  assert.equal(elements.some((el) => /System RAM —/.test(el.textContent)), false);
+  assert.ok(elements.some((el) => el.textContent === 'Free 2 bytes and check again.'));
+  assert.equal(elements.find((el) => el.textContent === 'Download').disabled, true);
+  await elements.find((el) => el.textContent === 'Check this device').click();
+  ctx.renderSummaryModelLibrary(status.summaryLibrary);
+  assert.ok(elements.some((el) => /Last device check ·.*Not enough free graphics memory/.test(el.textContent)));
+  assert.ok(elements.some((el) => /Graphics memory — 8 B total, 4 B free, 6 B recommended/.test(el.textContent)));
+  assert.ok(elements.some((el) => /System RAM — 32 B total, 20 B free, 16 B recommended/.test(el.textContent)));
+  assert.ok(elements.some((el) => /Storage — 10 B available, 12 B needed/.test(el.textContent)));
+  assert.equal(options.checkDevice, true);
+  assert.equal(options.includeStorageSizes, false);
+  assert.equal(updated, status);
+});
+
+test('device check survives a passive rerender and uses model-specific storage', async () => {
+  const elements = [];
+  const makeElement = (tag) => ({ tag, children: [], dataset: {}, textContent: '', appendChild(child) { this.children.push(child); }, replaceChildren() { this.children = []; }, setAttribute() {}, addEventListener(type, fn) { this[type] = fn; } });
+  const container = makeElement('div');
+  const document = { createElement: (tag) => { const el = makeElement(tag); elements.push(el); return el; }, getElementById: (id) => id === 'summary-model-library' ? container : id === 'summary-check-device' ? container.children.find((el) => el.id === id) : null };
+  let resolveCheck;
+  let calls = 0;
+  const model = { modelId: 'mac', modelName: 'Mac', peakFreeBytes: 20, fit: { memoryType: 'unified memory', totalMemoryBytes: 32, systemAvailableBytes: 12, reason: 'Device check explanation.' }, storageFit: { availableBytes: 30, requiredBytes: 20, blocked: false } };
+  const library = { availableBytes: 1, models: [model] };
+  const ctx = vm.createContext({ document, aiAddonDownloadState: { summary: { active: false } }, chatState: { modelState: {} }, formatBytes: (n) => `${n} B`, window: { electronAPI: { getAiAddonStatus: () => { calls++; return new Promise((resolve) => { resolveCheck = resolve; }); } } }, updateAiAddonSettings: (status) => ctx.renderSummaryModelLibrary(status.summaryLibrary), updateHomeAiAddonCTA() {}, showAppToast() {} });
+  vm.runInContext(source.slice(source.indexOf('function summaryModelHasFiles('), source.indexOf('function chooseSummaryReplacement(')), ctx);
+  ctx.renderSummaryModelLibrary(library);
+  assert.equal(elements.find((el) => el.textContent === 'Download').disabled, false);
+  const pending = document.getElementById('summary-check-device').click();
+  ctx.renderSummaryModelLibrary(library);
+  const current = document.getElementById('summary-check-device');
+  assert.equal(current.disabled, true);
+  await current.click();
+  assert.equal(calls, 1);
+  resolveCheck({ summaryLibrary: library });
+  await pending;
+  assert.equal(document.getElementById('summary-check-device').disabled, false);
+  assert.ok(elements.some((el) => /Last device check · Unified memory — 32 B total, 12 B free.*Device check explanation/.test(el.textContent)));
+  assert.equal(elements.some((el) => /Last device check ·.*System RAM —/.test(el.textContent)), false);
+});
+
+test('rerender after device check reflects live storageFit and confirmation falls back when requiredBytes is 0', async () => {
+  const elements = [];
+  const makeElement = (tag) => ({ tag, children: [], dataset: {}, textContent: '', appendChild(child) { this.children.push(child); }, replaceChildren() { this.children = []; }, setAttribute() {}, addEventListener(type, fn) { this[type] = fn; } });
+  const container = makeElement('div');
+  const document = { createElement: (tag) => { const el = makeElement(tag); elements.push(el); return el; }, getElementById: (id) => id === 'summary-model-library' ? container : null };
+  const initialModel = { modelId: 'a', modelName: 'A', fit: { memoryType: 'unified memory', totalMemoryBytes: 32, systemAvailableBytes: 16 }, storageFit: { availableBytes: 10, requiredBytes: 20, blocked: true, reason: 'Free 10 B.' } };
+  const installedModel = { modelId: 'a', modelName: 'A', installed: true, setupComplete: true, status: 'ready', fit: initialModel.fit, storageFit: { availableBytes: null, requiredBytes: 0, blocked: false, reason: null } };
+  const ctx = vm.createContext({
+    document,
+    aiAddonDownloadState: { summary: { active: false } },
+    chatState: { modelState: {} },
+    formatBytes: (n) => `${n} B`,
+    usableSummaryModels: (lib) => (lib?.models || []).filter((item) => item.installed && item.setupComplete),
+    window: { electronAPI: { getAiAddonStatus: async () => ({ summaryLibrary: { availableBytes: 50, models: [initialModel] } }) } },
+    updateAiAddonSettings: (status) => ctx.renderSummaryModelLibrary(status.summaryLibrary),
+    updateHomeAiAddonCTA() {},
+    showAppToast() {},
+  });
+  vm.runInContext(source.slice(source.indexOf('function summaryModelHasFiles('), source.indexOf('function chooseSummaryReplacement(')), ctx);
+  ctx.renderSummaryModelLibrary({ availableBytes: 50, models: [initialModel] });
+  await elements.find((el) => el.textContent === 'Check this device').click();
+  elements.length = 0;
+  ctx.renderSummaryModelLibrary({ availableBytes: 50, models: [installedModel] });
+  assert.ok(elements.some((el) => /Last device check ·.*Setup needs no additional disk space/.test(el.textContent)));
+  assert.equal(elements.some((el) => /Free 10 B\./.test(el.textContent)), false);
+  const confirmText = ctx.summaryDownloadConfirmation(installedModel, { availableBytes: 50 });
+  assert.match(confirmText, /Peak free space needed: 0 B \(Available: 50 B\)/);
+});

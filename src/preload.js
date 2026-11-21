@@ -169,7 +169,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openUpdateReleasePage: () => ipcRenderer.invoke('open-update-release-page'),
 
   // Local AI add-ons
-  getAiAddonStatus: (options) => ipcRenderer.invoke('get-ai-addon-status', options),
+  // Pass { checkDevice: true } for an explicit live Summaries & Chat device check.
+  getAiAddonStatus: (options = {}) => ipcRenderer.invoke('get-ai-addon-status', options),
   storeDiarizationToken: (token) => ipcRenderer.invoke('store-diarization-token', token),
   getDiarizationTokenStatus: () => ipcRenderer.invoke('get-diarization-token-status'),
   deleteDiarizationToken: () => ipcRenderer.invoke('delete-diarization-token'),

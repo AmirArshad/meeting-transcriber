@@ -392,6 +392,21 @@ def test_smoke_test_llama_runtime_rejects_failed_help(monkeypatch, tmp_path):
         smoke_test_llama_runtime({'executable': str(tmp_path / 'llama-cli'), 'modelPath': str(model_path)})
 
 
+@pytest.mark.parametrize(("diagnostic", "reason"), [
+    ("cudaMalloc failed: out of memory", "GPU memory"),
+    ("ggml_backend_metal_buffer_type_alloc_buffer: failed to allocate buffer", "GPU memory"),
+    ("ggml_gallocr_reserve_n: failed to allocate buffer", "could not allocate memory"),
+    ("mmap failed: Cannot allocate memory", "could not allocate memory"),
+    ("The paging file is too small for this operation to complete", "could not allocate memory"),
+])
+def test_model_load_reports_allocation_failure_before_generic_error(diagnostic, reason):
+    import subprocess
+    from backend.summaries.llama_runtime import summarize_llama_failure
+
+    result = subprocess.CompletedProcess([], 1, stdout="", stderr=f"{diagnostic}\nerror: failed to load model")
+    assert reason in summarize_llama_failure(result)
+
+
 def test_smoke_test_llama_runtime_reports_timeout_without_command(monkeypatch, tmp_path):
     def fake_timeout(args, **kwargs):
         import subprocess

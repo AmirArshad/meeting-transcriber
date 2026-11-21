@@ -661,6 +661,81 @@ function getSummaryRuntimePeakBytes(runtimeArtifact) {
   }, 0);
 }
 
+// Count only allocated regular-file blocks that removing the temporary tree will
+// actually free. Do not follow symlinks, cross mounts, or count hard links.
+function getReclaimableAllocatedBytes(target, device, fsModule = fs) {
+  try {
+    const stats = fsModule.lstatSync(target);
+    if (stats.dev !== device || stats.isSymbolicLink()) return 0;
+    if (stats.isDirectory()) {
+      return fsModule.readdirSync(target).reduce((sum, name) =>
+        sum + getReclaimableAllocatedBytes(path.join(target, name), device, fsModule), 0);
+    }
+    if (!stats.isFile() || stats.nlink !== 1 || !Number.isFinite(stats.blocks)) return 0;
+    return Math.min(Number(stats.size) || 0, Math.max(0, stats.blocks * 512));
+  } catch (_) {
+    return 0;
+  }
+}
+
+// Setup removes runtime staging before creating it again. Direct downloads
+// truncate their temporary file; HF downloads keep it until the new file has
+// been fetched and verified, so it cannot pay for that download.
+function getSummaryStorageFit({ userDataDir, artifact, runtimeArtifact, cache, runtimeCache, fsModule = fs, catalog = AI_MODEL_CATALOG }) {
+  if (!artifact || !runtimeArtifact) return null;
+  const modelPath = getSummaryArtifactPath(userDataDir, artifact);
+  const runtimeDir = getSharedSummaryRuntimeDir(userDataDir, artifact, catalog);
+  if (!modelPath || !runtimeDir) return null;
+  const modelBytes = Number(artifact.estimatedSizeBytes) || 0;
+  const parts = [
+    { target: path.dirname(modelPath), required: cache?.valid ? 0 : modelBytes,
+      reclaim: artifact.source?.provider === 'huggingface' || !runtimeCache?.valid ? null : `${modelPath}.download` },
+    { target: path.dirname(runtimeDir), required: runtimeCache?.valid ? 0 : getSummaryRuntimePeakBytes(runtimeArtifact),
+      reclaim: `${runtimeDir}.staging` },
+  ];
+  const volumes = new Map();
+  let unknownRequired = 0;
+  for (const part of parts.filter((item) => item.required > 0)) {
+    try {
+      let existing = part.target;
+      while (!fsModule.existsSync(existing)) {
+        const parent = path.dirname(existing);
+        if (parent === existing) throw new Error('Destination volume unavailable');
+        existing = parent;
+      }
+      const volume = fsModule.statfsSync(existing);
+      const available = Number(volume.bavail) * Number(volume.bsize);
+      if (!Number.isFinite(available) || available < 0) throw new Error('Invalid free space');
+      let device = null;
+      try {
+        device = fsModule.statSync(existing).dev ?? null;
+      } catch (_) {
+        device = null;
+      }
+      const reclaimable = part.reclaim && device != null
+        ? getReclaimableAllocatedBytes(part.reclaim, device, fsModule) : 0;
+      const required = Math.max(0, part.required - reclaimable);
+      const key = device == null ? existing : device;
+      const group = volumes.get(key) || { requiredBytes: 0, availableBytes: available };
+      group.requiredBytes += required;
+      group.availableBytes = Math.min(group.availableBytes, available);
+      volumes.set(key, group);
+    } catch (_) {
+      unknownRequired += part.required;
+    }
+  }
+  const groups = [...volumes.values()];
+  const blockedGroups = groups.filter((group) => group.requiredBytes > group.availableBytes);
+  if (blockedGroups.length) {
+    const worst = blockedGroups.reduce((a, b) => (b.requiredBytes - b.availableBytes > a.requiredBytes - a.availableBytes ? b : a));
+    return { ...worst, blocked: true, reason: 'Not enough free disk space for the summary model download and setup.' };
+  }
+  if (unknownRequired) return { requiredBytes: unknownRequired + groups.reduce((sum, group) => sum + group.requiredBytes, 0), availableBytes: null, blocked: false, reason: null };
+  if (!groups.length) return { requiredBytes: 0, availableBytes: null, blocked: false, reason: null };
+  const limiting = groups.reduce((a, b) => (b.requiredBytes - b.availableBytes > a.requiredBytes - a.availableBytes ? b : a));
+  return { ...limiting, blocked: false, reason: null };
+}
+
 function getSharedSummaryRuntimeDir(userDataDir, artifact, catalog = AI_MODEL_CATALOG) {
   if (!artifact) {
     return null;
@@ -2427,6 +2502,7 @@ async function checkAiAddonSetupStatus({
   verifyChecksums = false,
   verifyChecksumsIfChanged = false,
   computeAdmission = false,
+  verifySelectedSummaryOnly = false,
   includeStorageSizes = false,
   checkTokenEncryption = false,
   env = process.env,
@@ -2482,7 +2558,7 @@ async function checkAiAddonSetupStatus({
     arch,
     fsModule,
     catalog,
-    verifyChecksum: verifyChecksums || computeAdmissionEngine === 'speakrs',
+    verifyChecksum: (verifyChecksums && !verifySelectedSummaryOnly) || computeAdmissionEngine === 'speakrs',
     verifyChecksumIfChanged: computeAdmissionEngine === 'speakrs',
   });
   const speakrsRuntimeCache = await checkSpeakrsRuntimeCache({
@@ -2491,7 +2567,7 @@ async function checkAiAddonSetupStatus({
     arch,
     fsModule,
     catalog,
-    verifyChecksum: verifyChecksums || computeAdmissionEngine === 'speakrs',
+    verifyChecksum: (verifyChecksums && !verifySelectedSummaryOnly) || computeAdmissionEngine === 'speakrs',
     verifyChecksumIfChanged: computeAdmissionEngine === 'speakrs',
   });
   const packagedSpeakrsLayout = env?.AVANEVIS_PACKAGED === '1'
@@ -2595,7 +2671,7 @@ async function checkAiAddonSetupStatus({
     includeSizes: includeStorageSizes,
   });
 
-  const verifyLibraryChecksums = Boolean(verifyChecksums && !summaryModelId);
+  const verifyLibraryChecksums = Boolean(verifyChecksums && !summaryModelId && !verifySelectedSummaryOnly);
   const sharedRuntimeTreeSizeCache = new Map();
   const getSharedRuntimeTreeSizeBytes = (sharedDir) => {
     if (!sharedDir) return 0;
@@ -2628,7 +2704,8 @@ async function checkAiAddonSetupStatus({
     const artifact = getSummaryArtifactForPlatform(model.id, platform, arch, catalog);
     const estimatedInstalledBytes = Number(artifact?.estimatedSizeBytes || model.artifact?.estimatedSizeBytes) || null;
     const runtimeDownloadBytes = (runtime.runtimeArtifact?.artifacts || []).reduce((sum, item) => sum + (Number(item.sizeBytes) || 0), 0);
-    const peakFreeBytes = (cache.valid ? 0 : (estimatedInstalledBytes || 0) * 2) + (runtime.valid ? 0 : getSummaryRuntimePeakBytes(runtime.runtimeArtifact));
+    const storageFit = getSummaryStorageFit({ userDataDir, artifact, runtimeArtifact: runtime.runtimeArtifact, cache, runtimeCache: runtime, fsModule, catalog });
+    const peakFreeBytes = storageFit?.requiredBytes ?? null;
     const fit = getSummaryModelFit({ model, artifact, availability: entry.availability, runtimeArtifact: runtime.runtimeArtifact, deviceMemory, platform });
     const runtimeId = runtime.runtimeArtifact?.id;
     const otherReference = hasOtherActiveSummaryRuntimeReference({
@@ -2658,6 +2735,7 @@ async function checkAiAddonSetupStatus({
       status: derived.status,
       error: derived.error || null,
       fit,
+      storageFit,
       downloadBytes: estimatedInstalledBytes,
       runtimeDownloadBytes,
       additionalDownloadBytes: (cache.valid ? 0 : (estimatedInstalledBytes || 0)) + (runtime.valid ? 0 : runtimeDownloadBytes),
@@ -2852,6 +2930,7 @@ module.exports = {
   getLegacySummaryRuntimeDir,
   hasOtherActiveSummaryRuntimeReference,
   getSummaryRuntimePeakBytes,
+  getSummaryStorageFit,
   getSummaryRuntimeExecutablePath,
   // Private helpers used by setup flows / other ai-addon modules
   bindFsMethod,
