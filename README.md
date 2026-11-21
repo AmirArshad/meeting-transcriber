@@ -1,6 +1,6 @@
 # AvaNevis
 
-> Local desktop app for recording microphone and desktop audio, importing audio files, and transcribing on your device.
+> Private, local desktop app for recording microphone and desktop audio, importing audio files, and transcribing on your device.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6.svg)](https://www.microsoft.com/windows)
@@ -15,7 +15,7 @@ AvaNevis (formerly Meeting Transcriber) is a local audio recorder and transcribe
 
 ## Why
 
-Most transcription tools either upload your audio to a remote server, charge per minute, or only record your microphone and miss whatever is playing on your computer. AvaNevis works for calls, interviews, lectures, voice notes, podcasts, or any desktop audio: it records mic and system streams locally, runs transcription on your own hardware, and keeps everything stored in your user folder.
+Most transcription tools either upload your audio to a remote server, charge per minute, or only record your microphone and miss whatever is playing on your computer. AvaNevis works for meetings, calls, interviews, lectures, podcasts, voice notes, or any desktop audio: it records mic and system streams locally, runs transcription on your own hardware, and keeps sensitive recordings private in your user folder.
 
 ## Highlights
 
@@ -37,10 +37,10 @@ Most transcription tools either upload your audio to a remote server, charge per
 ## Privacy
 
 - 100% local processing — no cloud transcription, no API calls.
-- Optional speaker diarization and summaries are local-only after explicit setup.
+- Optional speaker identification, summaries, and Chat run locally after explicit setup.
 - Zero telemetry or analytics.
 - No account, login, or signup.
-- Speaker diarization with **Pyannote** requires your own Hugging Face token for the gated pyannote model; AvaNevis does not ship, proxy, or log a maintainer-owned token. **Speakrs** setup is token-free. Tokens and other secrets are redacted from progress output and from persisted meeting AI error fields.
+- Speaker identification with **Pyannote** requires your own Hugging Face token for the gated pyannote model; AvaNevis does not ship, proxy, or log a maintainer-owned token. **Speakrs** setup is token-free. Tokens and other secrets are redacted from progress output and persisted error fields.
 - Summary models/runtimes download only after you explicitly start setup from Settings.
 - Open source — audit the code yourself.
 - Third-party licenses and attributions: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
@@ -185,7 +185,7 @@ Codex, Claude Code, OpenCode and Cursor share root AGENTS.md and canonical on-de
 - 48 kHz target sample rate end-to-end on Windows, macOS, and Linux.
 - soxr VHQ resampling via shared `backend/audio/processor.py` (Windows and Linux capture rates, and shared spool finalization); macOS capture remains separate mix/align paths in `macos_recorder.py`.
 - Gentle mic enhancement (DC-offset removal, light normalization) — no aggressive denoising or compression. Desktop audio is left untouched.
-- Stereo output, Opus-compressed (≈ 95% size reduction vs WAV — a 40-minute recording is roughly 23 MB).
+- Stereo output, Opus-compressed (≈ 95% size reduction vs WAV — a 40-minute meeting or interview is roughly 23 MB).
 
 ## Languages
 
