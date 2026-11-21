@@ -21,8 +21,9 @@ For cross-process invariants (recorder stdout JSON, compute queue, AI add-ons, p
 - `backend/diarization/diarization_pipeline.py` — engine dispatch (`--engine speakrs|pyannote`), pyannote runner, and speaker merge.
 - `backend/diarization/speakrs_runner.py` — token-free Speakrs CLI wrapper (Windows CUDA, macOS CoreML, Linux CUDA).
 - `backend/summaries/summary_runner.py` — local summary generation and sidecar output (Summaries & Chat add-on).
-- `backend/search/history_index.py` — disposable SQLite FTS5 search index over local recordings, transcripts, and summaries.
-- `backend/history_qa/qa_runner.py` — local Chat Q&A runner with citation verification.
+- `backend/search/history_index.py` & `backend/search/cli.py` — disposable SQLite FTS5 search index over local recordings, transcripts, speaker names, tags, and summaries.
+- `backend/history_qa/qa_runner.py` — local Chat Q&A runner (`llama-server` SSE streaming with `llama-cli` fallback) with retrieval (`retrieval.py`) and fail-closed citation verification (`citation_verifier.py`).
+- `backend/summary_process_tree.py` — POSIX process-group / Windows Job Object exit verification for the single-slot model runner.
 
 ### Shared / extracted helpers (post-refactor)
 
@@ -30,7 +31,7 @@ For cross-process invariants (recorder stdout JSON, compute queue, AI add-ons, p
 |------|---------|
 | Devices | `backend/device_helpers.py` — blocklist, record shaping, dedupe, sort, macOS virtual loopback |
 | Common | `backend/common/sensitive_text.py`, `backend/common/hf_runtime.py` |
-| Meetings | `backend/meetings/normalization.py`, `scan_import.py`, `paths.py`, `store.py`, `delete_tx.py` |
+| Meetings | `backend/meetings/normalization.py`, `speaker_names.py`, `scan_import.py`, `paths.py`, `store.py`, `delete_tx.py` |
 | Recorder stdout | `backend/audio/recorder_stdout.py` — structured `send_*` emitters; platform recorders keep thin wrappers |
 | Recorder temps | `backend/audio/recorder_temp_paths.py` — non-scanned `.pcm.tmp` paths |
 | Durable capture | `backend/audio/capture_manifest.py`, `track_spool.py`, `capture_spool_runtime.py`, `capture_alignment.py`, `streaming_post_processor.py`, `capture_recovery.py` — on-disk spools, shared start-alignment pads, bounded finalize, interrupted-session recovery |
@@ -38,7 +39,8 @@ For cross-process invariants (recorder stdout JSON, compute queue, AI add-ons, p
 | macOS capture | `backend/audio/swift_audio_capture.py`, `macos_stereo_repair.py`, `macos_desktop_diagnostics.py`, `macos_stream_alignment.py`, `swift_pcm_alignment.py`, `swift_helper_status.py` |
 | Transcription | `backend/transcription/formatting.py` — shared timestamp/segment-merge/Markdown helpers |
 | Diarization | `backend/diarization/audio_prep.py` — ffmpeg 16 kHz mono prep (re-exported by pipeline) |
-| Summaries | `backend/summaries/sidecar_io.py`, `summary_pipeline.py`, `llama_runtime.py`, `hf_model_downloader.py` |
+| Summaries | `backend/summaries/sidecar_io.py`, `summary_pipeline.py`, `summary_language.py`, `language_labels.py`, `templates.py`, `llama_runtime.py`, `hf_model_downloader.py` |
+| Search & Chat | `backend/search/history_index.py`, `backend/search/cli.py`, `backend/history_qa/retrieval.py`, `backend/history_qa/citation_verifier.py` |
 
 ## Setup
 

@@ -1,6 +1,6 @@
 ---
 description: Build packaging — prepared resources, manifests, updater names
-globs: build/**,package.json,src/updater.js,.github/workflows/build-release.yml,.github/workflows/ci.yml
+globs: build/**,package.json,src/updater.js,src/main/updater-service.js,.github/workflows/build-release.yml,.github/workflows/ci.yml
 alwaysApply: false
 ---
 

@@ -148,3 +148,12 @@ ambient `LD_LIBRARY_PATH` behavior.
 - [ ] Untrusted summary/runtime download host keeps setup out of Ready.
 - [ ] Unsafe ZIP entries that escape the extraction directory are rejected before extraction.
 - [ ] Summary generation failure leaves transcript files unchanged.
+
+## v3.1 Summaries & Chat Model Library, Tags, Speaker Naming & Streaming Chat
+
+- [ ] **Model library (Settings → AI Add-ons → Summaries & Chat):** Download Qwen3.5 9B and a second model (e.g., Qwen3.5 4B or Gemma 4 E4B on Apple Silicon), confirm shared runtime reuse, switch **Default** with **Set as default**, and confirm **Inkling 2 Mini** stays gated (`Unavailable`).
+- [ ] **Memory fit & single-slot switching:** Verify memory fit guidance displays cleanly, switch models between Chat threads and **Prepare summary**, confirm the prior model process releases memory before the next loads, and confirm **Free memory** / Chat **Unload** release the resident server.
+- [ ] **Model removal:** Remove a non-default model and then the default model (choosing a replacement when 2+ remain); confirm saved summaries and Chat conversations remain readable and disk space is reclaimed.
+- [ ] **Recording tags & templates:** Assign tags from Record, Import, Activity, History, and Prepare summary; filter History and Chat by tag; generate a summary and verify the tag-specific sections and non-blocking tag-mismatch **Regenerate** banner after changing tags.
+- [ ] **Speaker naming:** Use **Name speakers** from Activity/toast or the History **Speakers** bar with timestamped voice previews; verify names propagate to History, FTS5 search, Chat citations, summaries, and `.md`/`.txt`/`.srt`/`.vtt` exports without modifying the raw `.md` transcript on disk.
+- [ ] **Streaming Chat & honest recovery:** Ask a question with live streaming (`Stop` cancels cleanly), verify clickable `[Title · MM:SS]` citations seek playback, and verify date-filter / `no_matching_excerpts` / `insufficient_evidence` notices offer actionable recovery buttons (**Search all recordings**, **Reset filters**, **Retry**).

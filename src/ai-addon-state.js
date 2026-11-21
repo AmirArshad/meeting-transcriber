@@ -615,7 +615,7 @@ const AI_MODEL_CATALOG = deepFreeze({
     models: [
       {
         id: DEFAULT_SUMMARY_MODEL_ID,
-        label: 'Qwen3.5 9B 4-bit GGUF',
+        label: 'Qwen3.5 9B',
         description: 'Balanced choice for everyday questions and summaries.',
         memoryGuidance: { gpu: 8, unified: 16 },
         family: 'Qwen3.5',
@@ -641,7 +641,7 @@ const AI_MODEL_CATALOG = deepFreeze({
       },
       {
         id: 'qwen3.5-4b-q4-k-m',
-        label: 'Qwen3.5 4B 4-bit GGUF',
+        label: 'Qwen3.5 4B',
         description: 'Uses less memory for quick recaps and simple questions.',
         memoryGuidance: { gpu: 6, unified: 8 },
         family: 'Qwen3.5',
@@ -675,9 +675,9 @@ const AI_MODEL_CATALOG = deepFreeze({
         inference: { contextTokens: 32768 },
         artifact: buildSummaryArtifact({ modelId: 'inkling-2-mini', label: 'Inkling 2 Mini', runtimeArchitecture: 'inkling2_loop' }),
         supportedPlatforms: {
-          win32: { status: 'gated', reason: 'Inkling needs a Windows CUDA build with the loop-layer fix and native validation.' },
-          darwin: { status: 'gated', reason: 'Inkling needs a published Apple Silicon runtime with the loop-layer fix.' },
-          linux: { status: 'gated', reason: 'Inkling needs a verified build for the managed Linux CUDA 12 runtime and native validation.' },
+          win32: { status: 'gated', reason: 'Not available on Windows yet — waiting for a compatible local runtime.' },
+          darwin: { status: 'gated', reason: 'Not available on macOS yet — waiting for a compatible local runtime.' },
+          linux: { status: 'gated', reason: 'Not available on Linux yet — waiting for a compatible local runtime.' },
         },
       },
     ],

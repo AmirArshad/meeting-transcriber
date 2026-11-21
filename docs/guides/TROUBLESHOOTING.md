@@ -174,15 +174,28 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 ---
 
-### Slow Or Cancelled Summary Model Download
+### Slow Or Cancelled Summaries & Chat Model Download
 
-**Symptom:** Summary setup is slow while downloading the Qwen GGUF model, or Cancel Download appears to hang briefly.
+**Symptom:** Setting up a model in **Settings → AI Add-ons → Summaries & Chat** is slow while downloading, or **Cancel setup** appears to wait briefly.
 
-**Cause:** The default summary model is about 5.7 GB and comes from Hugging Face. AvaNevis uses the bundled Python `huggingface_hub`/`hf_xet` downloader for Hugging Face-hosted summary models on Windows and macOS, but throughput still depends on the user's network route, disk speed, and Hugging Face availability.
+**Cause:** Local summary/Chat models range from ~2.7 GB (**Qwen3.5 4B**) to ~7.2 GB (**Gemma 4 12B**) plus platform `llama.cpp` runtime archives. AvaNevis uses the bundled Python `huggingface_hub` HTTP downloader with native Xet acceleration disabled (`HF_HUB_DISABLE_XET=1`) for Hugging Face-hosted models, so download speed depends on your connection, disk speed, and Hugging Face availability.
 
-**Expected behavior:** No Hugging Face token is required for public summary models, and AvaNevis does not reuse the speaker-identification token. Cancel Download terminates the downloader subprocess, waits briefly for it to exit, and removes partial setup files before returning to a non-ready state unless an older valid model/runtime was already installed.
+**Expected behavior:** No Hugging Face token is required for public Summaries & Chat models, and AvaNevis does not reuse the speaker-identification token. **Cancel setup** stops the download subprocess, waits briefly for cleanup, and removes partial files while preserving any older ready models and runtimes.
 
-**What to do:** If cancellation takes a few seconds, wait for cleanup to finish. If setup remains stuck after relaunch, use Settings > AI Add-ons > Remove Model, then start summary setup again on a stable connection.
+**What to do:** If cancellation takes a few seconds, wait for cleanup to finish. If a partial download or incomplete removal remains after relaunch, use **Remove model** (or **Retry removal**) on that model card in **Settings → AI Add-ons → Summaries & Chat**, then start **Download** again on a stable connection.
+
+---
+
+### Model Memory & Switching In Summaries & Chat
+
+**Symptom:** A model card shows **Needs more memory**, **May need more memory**, **Chat only on this device**, or switching models pauses briefly before answering.
+
+**Cause:** AvaNevis keeps one local Summaries & Chat model loaded in memory at a time across Chat and summary generation. Before loading another model (or validating setup), it waits for the previous model process to exit and release memory. Some models may also be Chat-only for certain languages or platforms until summary language checks pass.
+
+**What to do:**
+- Click **Unload** in the Chat header (or **Free memory** on the model card in Settings) if you want to release memory right away.
+- Choose a smaller installed model (such as **Qwen3.5 4B**) if your GPU or unified memory is tight.
+- If a model is **Chat only on this device**, pick another installed model (such as **Qwen3.5 9B**) in **Prepare summary** to generate summaries.
 
 ---
 
@@ -448,4 +461,4 @@ Use **Desktop Mode** and the AppImage from home storage. Do not disable the read
 
 ---
 
-**Last Updated:** August 2026
+**Last Updated:** November 2026

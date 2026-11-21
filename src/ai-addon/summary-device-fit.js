@@ -31,17 +31,17 @@ function getSummaryModelFit({ model, artifact, availability, runtimeArtifact, de
   const result = (status, reason, blocked = false) => ({ status, reason, blocked, ...readings });
   const platformSupport = model?.supportedPlatforms?.[platform];
   if (platformSupport && platformSupport.status !== 'enabled') {
-    return result('unavailable', platformSupport.reason || 'A compatible local runtime has not been verified on this platform.', true);
+    return result('unavailable', platformSupport.reason || 'Not available on this platform yet.', true);
   }
-  if (!artifact || !runtimeArtifact) return result('unavailable', 'This model has no verified runtime for this platform.', true);
-  if (!availability?.supported) return result('runtime_needed', availability?.reason || 'Set up the required local runtime first.', true);
-  if (!total) return result('unknown', `AvaNevis could not read this device’s ${memoryType}. Check setup to test the model.`);
+  if (!artifact || !runtimeArtifact) return result('unavailable', 'No verified local runtime is available for this platform.', true);
+  if (!availability?.supported) return result('runtime_needed', availability?.reason || 'Set up the required local runtime in Settings first.', true);
+  if (!total) return result('unknown', `Could not read this device’s ${memoryType}. Use Check setup after downloading to test it.`);
   if (unified) {
     const macSafeLimit = Math.min(total * MACOS_MAX_UNIFIED_RATIO, total - MACOS_OS_HEADROOM_BYTES);
     if (minimumRuntimeBytes && (macSafeLimit <= 0 || minimumRuntimeBytes > macSafeLimit)) {
       return result(
         'needs_more_memory',
-        'Running this model at a 32,768-token context would not leave enough unified memory for macOS and AvaNevis. Choose a smaller model.',
+        'Needs more unified memory than this Mac can spare. Choose a smaller model.',
         true,
       );
     }
@@ -49,18 +49,18 @@ function getSummaryModelFit({ model, artifact, availability, runtimeArtifact, de
     return result(
       'needs_more_memory',
       total < minimumRuntimeBytes
-        ? 'This model needs more graphics memory for its weights and context buffer than this GPU has.'
-        : 'There is not enough free graphics memory to load this model and its context buffer. Free memory or choose a smaller model.',
+        ? 'Needs more graphics memory than this GPU has. Choose a smaller model.'
+        : 'Not enough free graphics memory right now. Close other GPU apps, click Free memory, or choose a smaller model.',
       true,
     );
   }
   if (workingMemoryBytes && total < workingMemoryBytes) {
-    return result('needs_more_memory', `The detected ${memoryType} is below the estimate for this context. Check setup to test it.`);
+    return result('needs_more_memory', `Below the recommended ${memoryType} for this model. Use Check setup to test it.`);
   }
   if (workingMemoryBytes && model?.memoryGuidance?.qualified === true) {
-    return result('fits', `The detected ${memoryType} meets the measured requirement for this context.`);
+    return result('fits', `Meets the recommended ${memoryType} for this model.`);
   }
-  return result('unknown', `AvaNevis detected enough ${memoryType} for the weights. Check setup to verify the full context.`);
+  return result('unknown', `Enough ${memoryType} detected for the model files. Use Check setup to verify full context.`);
 }
 
 function parseNvidiaMemory(output, visibleDevices) {

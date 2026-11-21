@@ -6007,7 +6007,8 @@ button.history-transcript-timestamp:focus-visible {
   box-shadow: 0 0 8px var(--emerald-glow);
 }
 
-.chat-model-pill[data-state="unloading"] .chat-model-dot {
+.chat-model-pill[data-state="unloading"] .chat-model-dot,
+.chat-model-pill[data-state="release_error"] .chat-model-dot {
   background: var(--amber);
 }
 
@@ -7175,10 +7176,50 @@ button.history-transcript-timestamp:focus-visible {
   }
 }
 
-.summary-library-model {
-  padding: 12px 0;
-  border-top: 1px solid var(--hairline);
+.summary-library-storage-bar {
+  margin: 10px 0 4px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--hairline-soft);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
 }
+
+.summary-library-section-title {
+  margin: 16px 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.summary-library-model {
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--hairline);
+  background: var(--surface-3);
+  transition: border-color 0.15s var(--ease-out), background-color 0.15s var(--ease-out);
+}
+
+.summary-library-model:last-child {
+  margin-bottom: 0;
+}
+
+.summary-library-model.is-default {
+  border-color: rgba(var(--accent-rgb), 0.55);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.14);
+}
+
+.summary-library-model.is-unavailable {
+  opacity: 0.74;
+  background: var(--surface-1);
+}
+
 .summary-library-model-header {
   display: flex;
   align-items: center;
@@ -7186,68 +7227,134 @@ button.history-transcript-timestamp:focus-visible {
   flex-wrap: wrap;
   gap: 8px;
 }
+
 .summary-library-model-name {
   font-size: 13.5px;
   font-weight: 600;
   color: var(--text-primary);
 }
+
 .summary-library-badges {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
 }
+
 .summary-library-badge {
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
   border-radius: var(--r-pill);
   border: 1px solid var(--hairline);
-  background: var(--surface-3);
+  background: var(--surface-2);
   color: var(--text-secondary);
   font-size: 11px;
   font-weight: 500;
 }
+
 .summary-library-badge.is-ready {
   color: var(--emerald);
   border-color: rgba(101, 173, 138, 0.35);
 }
+
 .summary-library-badge.is-default {
   color: var(--accent-strong);
   border-color: rgba(184, 168, 201, 0.4);
 }
+
 .summary-library-badge.is-error {
   color: var(--amber);
   border-color: rgba(210, 168, 92, 0.4);
 }
-.summary-library-model p {
-  margin: 4px 0;
+
+.summary-library-badge.is-working {
+  color: var(--sky);
+  border-color: rgba(168, 176, 200, 0.35);
 }
+
+.summary-library-badge.is-muted {
+  color: var(--text-tertiary);
+  background: var(--surface-1);
+}
+
+.summary-library-model p {
+  margin: 5px 0 0;
+}
+
+.summary-library-model-desc {
+  color: var(--text-secondary);
+}
+
+.summary-library-model-storage {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-library-model-fit {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .summary-library-card-error {
+  font-size: 12px;
   color: var(--amber);
 }
+
 .summary-library-card-progress {
-  margin-top: 8px;
+  margin-top: 10px;
 }
+
 .summary-library-card-progress[hidden] {
   display: none;
 }
+
 .summary-library-model .ai-addon-actions {
-  margin-top: 8px;
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
-#summary-model-library h4 {
-  margin: 16px 0 8px;
+
+.summary-library-remove-btn {
+  margin-inline-start: auto;
 }
+
+#summary-model-field {
+  margin-bottom: var(--space-3);
+}
+
 .summary-model-field-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
+
 #summary-manage-models {
   width: auto;
   flex-shrink: 0;
+  padding: 2px 4px;
+  min-height: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 500;
 }
+
+#summary-manage-models:hover {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+#summary-manage-models:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
 .summary-model-static-label {
   display: inline-flex;
   align-items: center;
@@ -7259,12 +7366,14 @@ button.history-transcript-timestamp:focus-visible {
   color: var(--text-primary);
   font-size: 13px;
 }
+
 .summary-model-static-label[hidden],
 #summary-model-select[hidden] {
   display: none;
 }
+
 #chat-model-select,
-.chat-model-pill,
+.chat-composer-model-label,
 #chat-manage-models {
   width: auto;
   flex-shrink: 0;
@@ -7275,10 +7384,25 @@ button.history-transcript-timestamp:focus-visible {
   font-size: 11.5px;
   line-height: 1.2;
 }
+
 #chat-model-select {
   max-width: 220px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-3);
+  color: var(--text-secondary);
 }
-.chat-model-pill {
+
+#chat-model-select:hover:not(:disabled) {
+  border-color: var(--hairline-strong);
+  color: var(--text-primary);
+}
+
+#chat-model-select:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.chat-composer-model-label {
   display: inline-flex;
   align-items: center;
   border: 1px solid var(--hairline);
@@ -7290,14 +7414,43 @@ button.history-transcript-timestamp:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+#chat-manage-models {
+  margin-inline-start: auto;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+#chat-manage-models:hover:not(:disabled) {
+  border-color: var(--hairline);
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+
 #chat-model-select[hidden],
-.chat-model-pill[hidden],
+.chat-composer-model-label[hidden],
 #chat-manage-models[hidden] {
   display: none;
 }
+
 @media (max-width: 900px) {
   #chat-model-select,
-  .chat-model-pill {
+  .chat-composer-model-label {
     max-width: 100%;
+  }
+
+  #chat-manage-models {
+    margin-inline-start: 0;
+  }
+
+  .summary-library-remove-btn {
+    margin-inline-start: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .summary-library-model {
+    transition: none;
   }
 }

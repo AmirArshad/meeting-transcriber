@@ -71,8 +71,49 @@ test('model controls are present once and summary model precedes language', () =
     assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1, id);
   }
   assert.ok(html.indexOf('id="summary-model-select"') < html.indexOf('id="summary-transcript-language"'));
+  assert.match(html, /id="chat-model-label" class="chat-composer-model-label"/);
+  assert.doesNotMatch(html, /id="chat-model-label" class="chat-model-pill"/);
   assert.match(html, /Gemma 4/);
   assert.match(html, /Inkling 2 Mini/);
+});
+
+test('available library cards show plain fit badges and button hierarchy without raw enum strings', () => {
+  const elements = [];
+  const makeElement = (tag) => ({
+    tag, className: '', children: [], hidden: false, textContent: '', dataset: {},
+    appendChild(child) { this.children.push(child); }, replaceChildren() { this.children = []; },
+    setAttribute() {}, addEventListener() {},
+  });
+  const container = makeElement('div');
+  const document = {
+    createElement: (tag) => { const e = makeElement(tag); elements.push(e); return e; },
+    getElementById: (id) => id === 'summary-model-library' ? container : null,
+  };
+  const ctx = vm.createContext({
+    document,
+    aiAddonDownloadState: { summary: { active: false } },
+    chatState: { modelState: {} },
+    formatBytes: (n) => `${n} B`,
+    usableSummaryModels: (lib) => (lib?.models || []).filter((m) => m.installed && m.setupComplete && m.status === 'ready'),
+  });
+  vm.runInContext(source.slice(source.indexOf('function summaryModelHasFiles('), source.indexOf('function chooseSummaryReplacement(')), ctx);
+  ctx.renderSummaryModelLibrary({
+    defaultModelId: 'a',
+    models: [
+      { modelId: 'a', modelName: 'Installed Model', installed: true, setupComplete: true, status: 'ready', installedBytes: 10, fit: { status: 'fits' } },
+      { modelId: 'b', modelName: 'Available Fit', installed: false, setupComplete: false, status: 'notConfigured', downloadBytes: 20, fit: { status: 'fits' } },
+      { modelId: 'c', modelName: 'Gated Model', installed: false, setupComplete: false, status: 'unsupported', downloadBytes: 30, fit: { status: 'unavailable', blocked: true, reason: 'Not available on macOS yet.' } },
+    ],
+  });
+  const texts = elements.map((el) => el.textContent);
+  assert.ok(texts.includes('Fits this device'));
+  assert.ok(texts.includes('Unavailable'));
+  assert.equal(texts.includes('notConfigured'), false);
+  assert.equal(texts.includes('unsupported'), false);
+  const downloadBtn = elements.find((el) => el.tag === 'button' && el.textContent === 'Download');
+  const removeBtn = elements.find((el) => el.tag === 'button' && el.textContent === 'Remove model');
+  assert.match(downloadBtn.className, /\bbtn-primary\b/);
+  assert.match(removeBtn.className, /\bbtn-danger\b/);
 });
 
 

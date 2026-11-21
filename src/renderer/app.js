@@ -5609,7 +5609,7 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
   speakerRows.replaceChildren();
   speakerFieldset.hidden = !showSpeakers;
   tagField.hidden = Boolean(normalizeTag(meeting.tag));
-  tagSelect.replaceChildren(new Option('Choose recording type', ''));
+  tagSelect.replaceChildren(new Option('None (use general format)', ''));
   for (const tag of RECORDING_TAGS) tagSelect.add(new Option(tag.label, tag.slug));
   const updateFormat = () => {
     const tag = getTagMeta(tagSelect.value || 'other');
@@ -5651,7 +5651,7 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
     const available = languages.includes(select.value) && (!library || Boolean(model));
     submit.disabled = saving || !available;
     message.textContent = library && !model ? 'The default model is unavailable. Choose an installed model.'
-      : !languages.length ? 'This model has no checked summary languages. Choose another model.'
+      : !languages.length ? 'This model is Chat-only on this device. Choose another model for summaries.'
       : !name ? 'Choose the main language spoken in this recording.'
       : available
         ? (chatOnlyDefaultName && model?.modelId === autoSelectedModelId
@@ -7413,7 +7413,15 @@ function summaryDownloadConfirmation(model, library) {
   const size = (value) => value == null ? 'unknown' : formatBytes(value);
   const shortfall = library.availableBytes != null && model.peakFreeBytes != null
     ? Math.max(0, model.peakFreeBytes - library.availableBytes) : null;
-  return `Download ${model.modelName}?\nModel download: ${size(model.downloadBytes)} · Runtime download: ${size(model.runtimeDownloadBytes)} · Total additional download: ${size(model.additionalDownloadBytes)}.\nPeak free space needed: ${size(model.peakFreeBytes)} · Available: ${size(library.availableBytes)}.${shortfall ? ` Free another ${formatBytes(shortfall)} before setup.` : ''}`;
+  return [
+    `Download ${model.modelName}?`,
+    '',
+    `Model download: ${size(model.downloadBytes)}`,
+    `Runtime download: ${size(model.runtimeDownloadBytes)}`,
+    `Total additional download: ${size(model.additionalDownloadBytes)}`,
+    `Peak free space needed: ${size(model.peakFreeBytes)} (Available: ${size(library.availableBytes)})`,
+    shortfall ? `Free another ${formatBytes(shortfall)} before setup.` : '',
+  ].filter((line, index, arr) => line !== '' || index === 1 || (index < arr.length - 1 && arr[index + 1] !== '')).join('\n');
 }
 
 function formatSummaryModelCapabilities(model) {
@@ -7424,13 +7432,41 @@ function formatSummaryModelCapabilities(model) {
       ? model.languagePolicy.languages
       : null;
   if (!languages) return null;
-  if (languages.length === 0) return 'Chat only on this platform';
+  if (languages.length === 0) return 'Chat only on this device';
   if (languages.length === 1) {
     const code = languages[0];
     const name = model.languagePolicy?.names?.[code] || code;
     return `${name} summaries & Chat`;
   }
   return `Summaries (${languages.length} languages) & Chat`;
+}
+
+function formatSummaryModelStateBadge(model, { activeModel, progress, removalIncomplete, installed }) {
+  if (activeModel) {
+    if (progress.cancelling) return { text: 'Cancelling…', tone: 'working' };
+    if (progress.terminal && /ready/i.test(progress.message || '')) return { text: 'Ready', tone: 'ready' };
+    if (/validat|check/i.test(progress.message || '')) return { text: 'Checking setup…', tone: 'working' };
+    if (/extract/i.test(progress.message || '')) return { text: 'Installing…', tone: 'working' };
+    if (/download/i.test(progress.message || '')) return { text: 'Downloading…', tone: 'working' };
+    return { text: 'Setting up…', tone: 'working' };
+  }
+  if (removalIncomplete) return { text: 'Removal incomplete', tone: 'error' };
+  if (installed) {
+    if (model.status === 'ready') return { text: 'Ready', tone: 'ready' };
+    if (model.status === 'error') return { text: 'Needs attention', tone: 'error' };
+    if (model.status === 'validating') return { text: 'Checking setup', tone: 'working' };
+    if (model.status === 'downloading') return { text: 'Downloading', tone: 'working' };
+    if (model.status === 'unsupported') return { text: 'Unavailable', tone: 'muted' };
+    return { text: 'Installed', tone: '' };
+  }
+  if (model.status === 'error') return { text: 'Download failed', tone: 'error' };
+  const fitStatus = model.fit?.status;
+  if (fitStatus === 'fits') return { text: 'Fits this device', tone: 'ready' };
+  if (fitStatus === 'needs_more_memory') return { text: model.fit?.blocked ? 'Needs more memory' : 'May need more memory', tone: 'error' };
+  if (fitStatus === 'runtime_needed') return { text: 'Runtime setup needed', tone: 'error' };
+  if (fitStatus === 'unavailable') return { text: 'Unavailable', tone: 'muted' };
+  if (fitStatus === 'unknown') return { text: 'Couldn’t check memory', tone: '' };
+  return { text: 'Available', tone: '' };
 }
 
 function createSummaryCardCancelButton() {
@@ -7485,14 +7521,16 @@ function updateSummaryModelLibraryProgressInPlace(library) {
     const modelId = card.dataset?.modelId;
     const model = (library.models || []).find((item) => item.modelId === modelId);
     if (!model) continue;
+    const installed = summaryModelHasFiles(model);
     const removalIncomplete = Boolean(model.removalPending || /removal is incomplete/i.test(model.error || ''));
     const activeModel = Boolean(progress.active && progress.modelId === model.modelId);
-    const stateText = activeModel
-      ? (progress.cancelling ? 'Cancelling…' : (progress.message || 'Preparing setup…'))
-      : removalIncomplete ? 'Removal incomplete' : model.status === 'ready' ? 'Ready' : model.status === 'error' ? 'Needs attention' : model.status;
+    const stateBadgeInfo = typeof formatSummaryModelStateBadge === 'function'
+      ? formatSummaryModelStateBadge(model, { activeModel, progress, removalIncomplete, installed })
+      : { text: activeModel ? (progress.cancelling ? 'Cancelling…' : (progress.message || 'Preparing setup…')) : removalIncomplete ? 'Removal incomplete' : model.status === 'ready' ? 'Ready' : model.status === 'error' ? 'Needs attention' : 'Available', tone: '' };
     const stateBadge = card.querySelector('.summary-library-state-badge');
     if (stateBadge) {
-      stateBadge.textContent = stateText;
+      stateBadge.textContent = stateBadgeInfo.text;
+      stateBadge.className = `summary-library-badge summary-library-state-badge${stateBadgeInfo.tone ? ` is-${stateBadgeInfo.tone}` : ''}`;
     }
     const actions = card.querySelector('.ai-addon-actions');
     let progressBox = card.querySelector('.summary-library-card-progress');
@@ -7556,15 +7594,18 @@ function renderSummaryModelLibrary(library) {
   }
   if (!library) return;
   const total = document.createElement('p');
-  total.className = 'setting-description';
-  total.textContent = `${formatBytes(library.installedBytes || 0)} managed storage · ${formatBytes(library.sharedRuntimeBytes || 0)} shared files · ${library.availableBytes == null ? 'Free space unknown' : `${formatBytes(library.availableBytes)} free`}`;
+  total.className = 'summary-library-storage-bar';
+  total.textContent = `${formatBytes(library.installedBytes || 0)} used by models · ${formatBytes(library.sharedRuntimeBytes || 0)} shared runtime · ${library.availableBytes == null ? 'Free space unknown' : `${formatBytes(library.availableBytes)} free`}`;
   container.appendChild(total);
   for (const [heading, installed] of [['Installed', true], ['Available to download', false]]) {
     const models = (library.models || []).filter((model) => summaryModelHasFiles(model) === installed);
     if (!models.length) continue;
-    const title = document.createElement('h4'); title.textContent = heading; container.appendChild(title);
+    const title = document.createElement('h4'); title.className = 'summary-library-section-title'; title.textContent = heading; container.appendChild(title);
     for (const model of models) {
-      const card = document.createElement('div'); card.className = 'summary-library-model';
+      const card = document.createElement('div');
+      const isDefault = model.modelId === library.defaultModelId;
+      const isUnavailable = !installed && model.fit?.blocked === true;
+      card.className = `summary-library-model${isDefault ? ' is-default' : ''}${isUnavailable ? ' is-unavailable' : ''}`;
       if (card.dataset) card.dataset.modelId = model.modelId;
       const header = document.createElement('div'); header.className = 'summary-library-model-header';
       const name = document.createElement('strong'); name.className = 'summary-library-model-name';
@@ -7572,15 +7613,15 @@ function renderSummaryModelLibrary(library) {
       const removalIncomplete = Boolean(model.removalPending || /removal is incomplete/i.test(model.error || ''));
       const progress = aiAddonDownloadState.summary;
       const activeModel = Boolean(progress.active && progress.modelId === model.modelId);
-      const state = activeModel
-        ? (progress.cancelling ? 'Cancelling…' : (progress.message || 'Preparing setup…'))
-        : removalIncomplete ? 'Removal incomplete' : model.status === 'ready' ? 'Ready' : model.status === 'error' ? 'Needs attention' : model.status;
+      const stateBadgeInfo = typeof formatSummaryModelStateBadge === 'function'
+        ? formatSummaryModelStateBadge(model, { activeModel, progress, removalIncomplete, installed })
+        : { text: activeModel ? (progress.cancelling ? 'Cancelling…' : (progress.message || 'Preparing setup…')) : removalIncomplete ? 'Removal incomplete' : model.status === 'ready' ? 'Ready' : model.status === 'error' ? 'Needs attention' : 'Available', tone: '' };
       const badges = document.createElement('span'); badges.className = 'summary-library-badges';
       const stateBadge = document.createElement('span');
-      stateBadge.className = `summary-library-badge summary-library-state-badge${model.status === 'ready' && !activeModel ? ' is-ready' : (model.status === 'error' || removalIncomplete) ? ' is-error' : ''}`;
-      stateBadge.textContent = state;
+      stateBadge.className = `summary-library-badge summary-library-state-badge${stateBadgeInfo.tone ? ` is-${stateBadgeInfo.tone}` : ''}`;
+      stateBadge.textContent = stateBadgeInfo.text;
       badges.appendChild(stateBadge);
-      if (model.modelId === library.defaultModelId) {
+      if (isDefault) {
         const defaultBadge = document.createElement('span');
         defaultBadge.className = 'summary-library-badge is-default';
         defaultBadge.textContent = 'Default';
@@ -7604,27 +7645,41 @@ function renderSummaryModelLibrary(library) {
         card.appendChild(descP);
       }
 
-      const memoryReading = model.fit?.totalMemoryBytes != null
-        ? `${formatBytes(model.fit.totalMemoryBytes)} ${model.fit.memoryType || 'device memory'}${model.fit.availableMemoryBytes != null ? ` (${formatBytes(model.fit.availableMemoryBytes)} available)` : ''}`
-        : 'Device memory reading unavailable';
-      const fitParts = [
-        `${summaryFitLabel(model.fit?.status)}${model.fit?.reason ? ` · ${model.fit.reason}` : ''}`,
-        memoryReading,
-        model.fit?.contextTokens != null ? `${Number(model.fit.contextTokens).toLocaleString()} token context` : null,
-        model.fit?.workingMemoryBytes != null ? `${formatBytes(model.fit.workingMemoryBytes)} est. working memory` : null,
-      ].filter(Boolean);
-      const fitP = document.createElement('p');
-      fitP.className = 'setting-description summary-library-model-fit';
-      fitP.textContent = fitParts.join(' · ');
-      card.appendChild(fitP);
-
-      const storageLine = installed
-        ? `${formatBytes(removalIncomplete ? (model.residualBytes ?? model.installedBytes ?? 0) : (model.installedBytes || 0))} ${removalIncomplete ? 'remaining after removal' : 'on disk'}`
-        : `${model.downloadBytes == null ? 'Download size unknown' : `${formatBytes(model.downloadBytes)} download`} · ${model.estimatedInstalledBytes == null ? 'Installed size unknown' : `${formatBytes(model.estimatedInstalledBytes)} installed`}`;
+      const memorySpec = model.fit?.workingMemoryBytes != null
+        ? `${formatBytes(model.fit.workingMemoryBytes)} ${model.fit.memoryType || 'memory'} recommended`
+        : null;
+      const storageParts = installed
+        ? [
+          `${formatBytes(removalIncomplete ? (model.residualBytes ?? model.installedBytes ?? 0) : (model.installedBytes || 0))} ${removalIncomplete ? 'remaining after removal' : 'on disk'}`,
+          !removalIncomplete ? memorySpec : null,
+        ].filter(Boolean)
+        : [
+          model.downloadBytes == null ? 'Download size unknown' : `${formatBytes(model.downloadBytes)} download`,
+          model.estimatedInstalledBytes != null && model.estimatedInstalledBytes !== model.downloadBytes ? `${formatBytes(model.estimatedInstalledBytes)} installed` : null,
+          memorySpec,
+        ].filter(Boolean);
       const storageP = document.createElement('p');
       storageP.className = 'setting-description summary-library-model-storage';
-      storageP.textContent = storageLine;
+      storageP.textContent = storageParts.join(' · ');
       card.appendChild(storageP);
+
+      const fitStatus = model.fit?.status;
+      const showFitNote = Boolean(
+        model.fit?.reason
+        && (
+          ['needs_more_memory', 'runtime_needed', 'unavailable'].includes(fitStatus)
+          || (!installed && fitStatus === 'unknown')
+        ),
+      );
+      if (showFitNote) {
+        const deviceMemoryNote = fitStatus === 'needs_more_memory' && model.fit?.totalMemoryBytes != null
+          ? `Your device: ${formatBytes(model.fit.totalMemoryBytes)} ${model.fit.memoryType || 'memory'}${model.fit.availableMemoryBytes != null ? ` (${formatBytes(model.fit.availableMemoryBytes)} free)` : ''}.`
+          : null;
+        const fitP = document.createElement('p');
+        fitP.className = 'setting-description summary-library-model-fit';
+        fitP.textContent = [model.fit.reason, deviceMemoryNote].filter(Boolean).join(' ');
+        card.appendChild(fitP);
+      }
 
       const showError = Boolean(
         model.error
@@ -7640,7 +7695,7 @@ function renderSummaryModelLibrary(library) {
       if (!installed && library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes) {
         const warning = document.createElement('p');
         warning.className = 'setting-description summary-library-card-error';
-        warning.textContent = `Free ${formatBytes(model.peakFreeBytes - library.availableBytes)} to download this model. Manage installed models above.`;
+        warning.textContent = `Free ${formatBytes(model.peakFreeBytes - library.availableBytes)} to download this model. Remove an installed model above to free space.`;
         card.appendChild(warning);
       }
       if (activeModel) {
@@ -7650,8 +7705,10 @@ function renderSummaryModelLibrary(library) {
       if (activeModel && !progress.cancelling && !progress.terminal) {
         actions.appendChild(createSummaryCardCancelButton());
       }
-      const addAction = (label, action, disabled = false) => {
-        const button = document.createElement('button'); button.type = 'button'; button.className = 'btn btn-small'; button.textContent = label;
+      const addAction = (label, action, disabled = false, variant = 'secondary') => {
+        const button = document.createElement('button'); button.type = 'button';
+        button.className = `btn btn-small btn-${variant}${variant === 'danger' ? ' summary-library-remove-btn' : ''}`;
+        button.textContent = label;
         if (button.dataset) button.dataset.baseDisabled = disabled ? 'true' : 'false';
         button.disabled = disabled || aiAddonDownloadState.summary.active;
         button.addEventListener('click', async () => {
@@ -7674,14 +7731,14 @@ function renderSummaryModelLibrary(library) {
       };
       const setupBlocked = model.fit?.blocked === true || (library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes);
       if (!installed) {
-        addAction(model.status === 'error' ? 'Retry download' : 'Download', confirmSetup, setupBlocked);
+        addAction(model.status === 'error' ? 'Retry download' : 'Download', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
       } else {
         if (!removalIncomplete) {
-          if (model.modelId !== library.defaultModelId) addAction('Set as default', () => window.electronAPI.setDefaultSummaryModel({ modelId: model.modelId }), !usableSummaryModels(library).includes(model));
-          addAction('Check setup', () => window.electronAPI.validateSummaryModel({ modelId: model.modelId }));
-          if (!model.setupComplete && model.status === 'error') addAction('Repair', confirmSetup, setupBlocked);
+          if (model.modelId !== library.defaultModelId) addAction('Set as default', () => window.electronAPI.setDefaultSummaryModel({ modelId: model.modelId }), !usableSummaryModels(library).includes(model), 'secondary');
+          addAction('Check setup', () => window.electronAPI.validateSummaryModel({ modelId: model.modelId }), false, 'secondary');
+          if (!model.setupComplete && model.status === 'error') addAction('Repair', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
         }
-        if (chatState.modelState.modelId === model.modelId && ['loaded', 'release_error'].includes(chatState.modelState.status)) addAction('Free memory', () => window.electronAPI.unloadHistoryQaModel());
+        if (chatState.modelState.modelId === model.modelId && ['loaded', 'release_error'].includes(chatState.modelState.status)) addAction('Free memory', () => window.electronAPI.unloadHistoryQaModel(), false, 'secondary');
         addAction(removalIncomplete ? 'Retry removal' : 'Remove model', async () => {
           const others = usableSummaryModels(library).filter((item) => item.modelId !== model.modelId);
           let replacementModelId = null;
@@ -7694,7 +7751,7 @@ function renderSummaryModelLibrary(library) {
             if (!window.confirm(`Remove ${model.modelName}? About ${formatBytes(model.reclaimableBytes || 0)} can be freed. Saved summaries and conversations stay available.${replacement}`)) return;
           }
           await window.electronAPI.removeSummaryModel({ modelId: model.modelId, replacementModelId });
-        });
+        }, false, 'danger');
       }
       card.appendChild(actions); container.appendChild(card);
     }
@@ -11140,10 +11197,6 @@ function renderChatStream() {
       wrap.appendChild(prose);
     }
 
-    if (msg.modelId || msg.modelName) {
-      const provenance = document.createElement('p'); provenance.className = 'setting-description';
-      provenance.textContent = `Model: ${msg.modelName || summaryModelName(msg.modelId)}`; wrap.appendChild(provenance);
-    }
     const citations = Array.isArray(msg.citations) ? msg.citations : [];
     const inspectedSources = citations.length === 0
       && notice?.showInspectedSources
@@ -11211,10 +11264,18 @@ function renderChatStream() {
       wrap.appendChild(details);
     }
 
+    const metaParts = [];
+    if (msg.modelId || msg.modelName) {
+      metaParts.push(msg.modelName || summaryModelName(msg.modelId));
+    }
     if (Number.isFinite(msg.searchedMeetingCount) && msg.searchedMeetingCount > 0) {
+      metaParts.push(`Searched ${msg.searchedMeetingCount} recording${msg.searchedMeetingCount === 1 ? '' : 's'}`);
+      metaParts.push(`${msg.evidenceCount || 0} matching excerpt${(msg.evidenceCount || 0) === 1 ? '' : 's'}`);
+    }
+    if (metaParts.length > 0) {
       const meta = document.createElement('div');
       meta.className = 'chat-turn-meta-row';
-      meta.textContent = `Searched ${msg.searchedMeetingCount} recording${msg.searchedMeetingCount === 1 ? '' : 's'} · ${msg.evidenceCount || 0} matching excerpt${(msg.evidenceCount || 0) === 1 ? '' : 's'}`;
+      meta.textContent = metaParts.join(' · ');
       wrap.appendChild(meta);
     }
 
