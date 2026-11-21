@@ -123,11 +123,11 @@ def build_qa_messages(
 ) -> List[Dict[str, str]]:
     system_prompt = "\n".join(
         [
-            "You are AvaNevis, a private local meeting history assistant running 100% offline.",
+            "You are AvaNevis, a private local audio transcript assistant running 100% offline.",
             "Answer the user's question ONLY using facts explicitly stated in the numbered evidence passages [E1]..[En] below.",
             "CRITICAL RULES:",
             "1. Cite supporting passages inline using exact square-bracket markers like [E1] or [E2] immediately after each claim.",
-            "2. NEVER invent facts, decisions, numbers, quotes, meeting names, speakers, or timestamps not present in the evidence.",
+            "2. NEVER invent facts, decisions, numbers, quotes, recording names, speakers, or timestamps not present in the evidence.",
             "3. If the evidence does not clearly answer the question, set insufficientEvidence to true.",
             "4. Respond ONLY with a valid JSON object matching this exact schema (no prose outside JSON, no markdown code fences):",
             '{"answerMarkdown": "<Markdown answer with inline [Ek] citations>", "citedEvidenceIds": ["E1"], "insufficientEvidence": false}',
@@ -137,17 +137,17 @@ def build_qa_messages(
     evidence_lines: List[str] = []
     for item in evidence:
         eid = str(item.get("evidenceId") or "")
-        title = str(item.get("meetingTitle") or "Untitled Meeting")
+        title = str(item.get("meetingTitle") or "Untitled recording")
         date = str(item.get("meetingDate") or "")[:10]
         ts = _format_evidence_timestamp(item)
         speaker = str(item.get("speaker") or "").strip()
         speaker_label = f" | Speaker: {speaker}" if speaker else ""
-        header = f"[{eid}] Meeting: {title} ({date}, {ts}{speaker_label})"
+        header = f"[{eid}] Recording: {title} ({date}, {ts}{speaker_label})"
         evidence_lines.append(f"{header}\n{item.get('text') or ''}")
 
     user_content = "\n\n".join(
         [
-            "Evidence passages from local meeting history:",
+            "Evidence passages from local recording history:",
             "\n\n".join(evidence_lines),
             f"User question:\n{str(question or '').strip()}",
         ]
@@ -239,7 +239,7 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
         index_path = payload.get("indexPath")
         if not recordings_dir or not index_path:
             raise ValueError("QA runner requires pre-retrieved evidence or recordingsDir/indexPath.")
-        emit_progress("retrieving", "Searching local meeting history…", percent=15)
+        emit_progress("retrieving", "Searching your transcripts…", percent=15)
         retrieval = retrieve_evidence(
             recordings_dir,
             index_path,
@@ -290,14 +290,14 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
                 timeout_seconds=DEFAULT_HTTP_TIMEOUT_SECONDS,
             )
 
-    emit_progress("generating", "Synthesizing grounded answer locally…", percent=55)
+    emit_progress("generating", "Writing answer locally…", percent=55)
     raw_output = complete(messages)
 
-    emit_progress("verifying", "Verifying citations against local evidence…", percent=88)
+    emit_progress("verifying", "Checking citations against transcripts…", percent=88)
     verified = verify_grounded_response(raw_output, evidence)
 
     if verified.get("needsRepair") and MAX_REPAIR_ATTEMPTS > 0:
-        emit_progress("json-repair", "Formatting grounded answer…", percent=92)
+        emit_progress("json-repair", "Formatting answer…", percent=92)
         repair_messages = [
             *messages,
             {"role": "assistant", "content": str(raw_output or "")[:2000]},

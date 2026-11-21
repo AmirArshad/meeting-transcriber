@@ -416,7 +416,7 @@ function createHistoryQaService(deps) {
     if (!summaryStatus) {
       return {
         eligible: false,
-        reason: 'Local Q&A uses the local Summary AI add-on, which is not configured.',
+        reason: 'Chat uses the Summaries & Chat add-on, which is not set up.',
         setupTarget: 'ai-addons',
         modelId: null,
         modelName: null,
@@ -435,7 +435,7 @@ function createHistoryQaService(deps) {
       if (!fs.existsSync(managedRuntimePath)) {
         return {
           eligible: false,
-          reason: 'Local Q&A on Linux requires the local Summary AI add-on and managed CUDA 12 runtime.',
+          reason: 'Chat on Linux requires the CUDA 12 runtime and the Summaries & Chat add-on.',
           setupTarget: 'ai-addons',
           modelId,
           modelName,
@@ -446,7 +446,7 @@ function createHistoryQaService(deps) {
       if (!cacheReady || !artifact || !runtimeArtifact) {
         return {
           eligible: false,
-          reason: 'Install or repair the local Summary AI model in Settings before using Chat.',
+          reason: 'Install or repair the Summaries & Chat add-on in Settings before using Chat.',
           setupTarget: 'ai-addons',
           modelId,
           modelName,
@@ -470,7 +470,7 @@ function createHistoryQaService(deps) {
         eligible: false,
         reason: (summaryStatus.availability && summaryStatus.availability.reason)
           || summaryStatus.error
-          || 'Local Q&A is not supported on this platform.',
+          || 'Chat is not supported on this platform.',
         setupTarget: 'ai-addons',
         modelId,
         modelName,
@@ -481,7 +481,7 @@ function createHistoryQaService(deps) {
     if (summaryStatus.status !== 'ready' || !summaryStatus.setupComplete || !artifact) {
       return {
         eligible: false,
-        reason: 'Install the local Summary AI add-on in Settings to enable private offline Chat.',
+        reason: 'Enable the Summaries & Chat add-on in Settings to use Chat.',
         setupTarget: 'ai-addons',
         modelId,
         modelName,
@@ -963,7 +963,7 @@ function createHistoryQaService(deps) {
       ? options.question.replace(/\s+/g, ' ').trim().slice(0, 2000)
       : '';
     if (!question) {
-      throw new Error('Please enter a question to search your local meeting history.');
+      throw new Error('Enter a question to search your recordings.');
     }
 
     const requestedScope = options.scope == null ? null : chatThreadStore.sanitizeScope(options.scope);
@@ -1012,7 +1012,7 @@ function createHistoryQaService(deps) {
       emitQaProgress({
         threadId: thread.id,
         phase: 'retrieving',
-        message: 'Searching local meeting transcripts…',
+        message: 'Searching your transcripts…',
         percent: 10,
       });
 
@@ -1060,8 +1060,8 @@ function createHistoryQaService(deps) {
           status: 'insufficient_evidence',
           answerMarkdown:
             searchedMeetingCount === 0
-              ? 'No indexed meetings match the selected filter scope yet.'
-              : "I couldn't find any matching excerpts in your selected local meeting history for that question.",
+              ? 'No indexed recordings match the selected filter yet.'
+              : 'No matching excerpts were found in the selected recordings for that question.',
           citations: [],
           searchedMeetingCount,
           evidenceCount: 0,
@@ -1195,7 +1195,7 @@ function createHistoryQaService(deps) {
               emitQaProgress({
                 threadId: thread.id,
                 phase: 'loading_model',
-                message: wasLoaded ? 'Using loaded local Q&A model…' : 'Loading local Q&A model into memory…',
+                message: wasLoaded ? 'Using loaded local model…' : 'Loading local model into memory…',
                 percent: wasLoaded ? 45 : 30,
               });
               const server = await ensureServerRunning({

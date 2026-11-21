@@ -14,7 +14,7 @@ This directory separates current guides, maintainer references, completed implem
 
 - [Troubleshooting](guides/TROUBLESHOOTING.md)
 - [Transcription guide](guides/TRANSCRIPTION_GUIDE.md)
-- [Meeting transcription and history](guides/MEETING_TRANSCRIPTION.md)
+- [Recording history and transcript storage](guides/MEETING_TRANSCRIPTION.md)
 - [macOS installation](guides/MACOS_INSTALLATION.md)
 - [macOS feature compatibility](guides/MACOS_FEATURE_COMPATIBILITY.md)
 

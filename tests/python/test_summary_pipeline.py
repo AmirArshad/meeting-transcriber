@@ -211,7 +211,7 @@ def test_render_summary_markdown_includes_sections_and_metadata():
         {'profile': 'balanced', 'model': 'Qwen3.5-9B', 'generatedAt': '2026-05-16T00:00:00Z'},
     )
 
-    assert markdown.startswith('# Meeting Summary')
+    assert markdown.startswith('# Summary')
     assert '**Profile:** balanced' in markdown
     assert '## Decisions' in markdown
     assert '- Launch on Friday (owner: Speaker 1; timestamp: 00:12)' in markdown

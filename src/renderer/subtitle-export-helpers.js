@@ -201,7 +201,7 @@
       return {
         valid: false,
         code: 'CAPTIONS_MISSING',
-        reason: 'Accurate subtitles require caption-scale timing. Re-transcribe from the saved audio to generate cue timings.',
+        reason: 'Subtitles require exact segment timings. Re-transcribe from the saved audio to generate them.',
         cues: [],
       };
     }
@@ -210,7 +210,7 @@
       return {
         valid: false,
         code: 'CAPTIONS_INVALID',
-        reason: 'Saved caption timing data is invalid. Re-transcribe from the saved audio to regenerate subtitle timings.',
+        reason: 'Saved subtitle timing data is invalid. Re-transcribe from the saved audio to regenerate timings.',
         cues: [],
       };
     }
@@ -219,7 +219,7 @@
       return {
         valid: false,
         code: 'CAPTIONS_INVALID',
-        reason: 'Saved caption timing schema is unsupported. Re-transcribe from the saved audio to regenerate subtitle timings.',
+        reason: 'Saved subtitle timing format is unsupported. Re-transcribe from the saved audio to regenerate timings.',
         cues: [],
       };
     }
@@ -228,7 +228,7 @@
       return {
         valid: false,
         code: 'CAPTIONS_INVALID',
-        reason: 'Saved caption timing data is missing a transcript checksum. Re-transcribe from the saved audio to regenerate subtitle timings.',
+        reason: 'Saved subtitle timing data is missing a transcript checksum. Re-transcribe from the saved audio to regenerate timings.',
         cues: [],
       };
     }
@@ -237,7 +237,7 @@
       return {
         valid: false,
         code: 'CAPTIONS_INVALID',
-        reason: 'Saved caption timing provenance is invalid. Re-transcribe from the saved audio to regenerate subtitle timings.',
+        reason: 'Saved subtitle timing metadata is invalid. Re-transcribe from the saved audio to regenerate timings.',
         cues: [],
       };
     }
@@ -246,7 +246,7 @@
       return {
         valid: false,
         code: 'CAPTIONS_INVALID',
-        reason: 'Saved caption timing cues are invalid. Re-transcribe from the saved audio to regenerate subtitle timings.',
+        reason: 'Saved subtitle timing entries are invalid. Re-transcribe from the saved audio to regenerate timings.',
         cues: [],
       };
     }
@@ -258,7 +258,7 @@
         return {
           valid: false,
           code: 'CAPTIONS_INVALID',
-          reason: 'Saved caption cue data is malformed. Re-transcribe from the saved audio to regenerate subtitle timings.',
+          reason: 'Saved subtitle timing data is damaged. Re-transcribe from the saved audio to regenerate timings.',
           cues: [],
         };
       }
@@ -267,7 +267,7 @@
         return {
           valid: false,
           code: 'CAPTIONS_INVALID',
-          reason: 'Saved caption cue timestamps are invalid. Re-transcribe from the saved audio to regenerate subtitle timings.',
+          reason: 'Saved subtitle timestamps are invalid. Re-transcribe from the saved audio to regenerate timings.',
           cues: [],
         };
       }
@@ -275,7 +275,7 @@
         return {
           valid: false,
           code: 'CAPTIONS_INVALID',
-          reason: 'Saved caption cue text is invalid. Re-transcribe from the saved audio to regenerate subtitle timings.',
+          reason: 'Saved subtitle text is invalid. Re-transcribe from the saved audio to regenerate timings.',
           cues: [],
         };
       }
@@ -283,7 +283,7 @@
         return {
           valid: false,
           code: 'CAPTIONS_INVALID',
-          reason: 'Saved caption speaker label is invalid. Re-transcribe from the saved audio to regenerate subtitle timings.',
+          reason: 'Saved subtitle speaker label is invalid. Re-transcribe from the saved audio to regenerate timings.',
           cues: [],
         };
       }
@@ -294,7 +294,7 @@
       return {
         valid: false,
         code: 'CAPTIONS_STALE',
-        reason: 'This transcript changed after caption timings were created. Re-transcribe from the saved audio to regenerate subtitle timings.',
+        reason: 'This transcript changed after its subtitle timings were created. Re-transcribe from the saved audio to update them.',
         cues: [],
       };
     }
@@ -304,7 +304,7 @@
       return {
         valid: false,
         code: 'CAPTIONS_MISSING',
-        reason: 'Accurate subtitles require caption-scale timing. Re-transcribe from the saved audio to generate cue timings.',
+        reason: 'Subtitles require exact segment timings. Re-transcribe from the saved audio to generate them.',
         cues: [],
       };
     }
@@ -326,8 +326,8 @@
   } = {}) {
     const subtitlesReady = Boolean(captionsAvailable);
     const unavailableReason = captionsStatus === 'stale'
-      ? 'This transcript changed after its caption timings were generated. Re-transcribe from the saved audio to regenerate cue timings.'
-      : 'Accurate subtitles require caption-scale timing. Re-transcribe from the saved audio to generate cue timings.';
+      ? 'This transcript changed after its subtitle timings were created. Re-transcribe from the saved audio to update them.'
+      : 'Subtitles require exact segment timings. Re-transcribe from the saved audio to generate them.';
 
     return {
       defaultFormat: 'md',
@@ -338,7 +338,7 @@
           format: 'md',
           label: 'Markdown',
           extLabel: '.md',
-          description: 'Full meeting metadata, speaker headings, and transcript sections.',
+          description: 'Recording details, speaker headings, and formatted transcript.',
           available: true,
           disabledReason: '',
         },
@@ -346,7 +346,7 @@
           format: 'txt',
           label: 'Plain Text',
           extLabel: '.txt',
-          description: 'Clean readable text with timestamps and no Markdown syntax.',
+          description: 'Readable plain text with timestamps and no Markdown.',
           available: true,
           disabledReason: '',
         },
@@ -355,8 +355,8 @@
           label: 'SubRip Subtitles',
           extLabel: '.srt',
           description: subtitlesReady
-            ? 'Standard caption file with millisecond comma timestamps (HH:MM:SS,mmm).'
-            : 'Requires caption-scale timing from audio transcription.',
+            ? 'SubRip captions with millisecond timestamps (HH:MM:SS,mmm).'
+            : 'Needs subtitle timings from audio transcription.',
           available: subtitlesReady,
           disabledReason: subtitlesReady ? '' : unavailableReason,
         },
@@ -365,8 +365,8 @@
           label: 'WebVTT Subtitles',
           extLabel: '.vtt',
           description: subtitlesReady
-            ? 'Modern web/player caption file with millisecond dot timestamps (HH:MM:SS.mmm).'
-            : 'Requires caption-scale timing from audio transcription.',
+            ? 'WebVTT captions for web and video players (HH:MM:SS.mmm).'
+            : 'Needs subtitle timings from audio transcription.',
           available: subtitlesReady,
           disabledReason: subtitlesReady ? '' : unavailableReason,
         },

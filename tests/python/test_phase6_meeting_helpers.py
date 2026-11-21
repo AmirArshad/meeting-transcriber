@@ -171,14 +171,14 @@ class MeetingScanImportTests(unittest.TestCase):
         )
         meeting_id, title = parse_scan_meeting_id_and_title("meeting_20260107_104555_1")
         self.assertEqual(meeting_id, "20260107_104555_1")
-        self.assertEqual(title, "Meeting 2026-01-07 10:45")
+        self.assertEqual(title, "Recording 2026-01-07 10:45")
 
         meeting_id, title = parse_scan_meeting_id_and_title(
             "recording_2025-12-01T13-31-43",
             now=datetime(2026, 1, 1, 0, 0, 0),
         )
         self.assertEqual(meeting_id, "20251201_133143")
-        self.assertEqual(title, "Meeting 2025-12-01 13:31:43")
+        self.assertEqual(title, "Recording 2025-12-01 13:31:43")
 
 
 class MeetingPathsSecurityTests(unittest.TestCase):

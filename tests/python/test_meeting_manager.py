@@ -471,7 +471,7 @@ def test_scan_and_sync_recordings_preserves_suffixed_meeting_ids(tmp_path):
     assert result == {'scanned': 1, 'added': 1, 'skipped': 0}
     assert meeting is not None
     assert meeting['id'] == '20250101_120000_1'
-    assert meeting['title'] == 'Meeting 2025-01-01 12:00'
+    assert meeting['title'] == 'Recording 2025-01-01 12:00'
     assert meeting['transcriptionStatus'] == 'completed'
 
 

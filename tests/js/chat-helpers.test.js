@@ -135,14 +135,14 @@ test('filterChatThreads, formatChatScopeLabel, and buildModelMemoryPillView prod
   assert.deepEqual(filtered.map((t) => t.id), ['1']);
 
   const map = new Map([['m1', { id: 'm1', title: 'Architecture Sync' }]]);
-  assert.equal(formatChatScopeLabel({ type: 'all' }, map), 'All History');
+  assert.equal(formatChatScopeLabel({ type: 'all' }, map), 'All recordings');
   assert.equal(
     formatChatScopeLabel({ type: 'selected_meetings', meetingIds: ['m1'], dateFrom: '2026-11-01' }, map),
     'Architecture Sync · From 2026-11-01',
   );
   assert.equal(
     formatChatScopeLabel({ type: 'selected_meetings', meetingIds: ['m1', 'm2'] }, map),
-    '2 meetings',
+    '2 recordings',
   );
 
   assert.deepEqual(buildModelMemoryPillView({ status: 'unloaded' }), {
@@ -154,7 +154,7 @@ test('filterChatThreads, formatChatScopeLabel, and buildModelMemoryPillView prod
   });
   assert.deepEqual(buildModelMemoryPillView({ status: 'loaded', modelName: 'Qwen3.5 9B' }), {
     status: 'loaded',
-    label: 'Loaded in memory · Qwen3.5 9B',
+    label: 'Loaded · Qwen3.5 9B',
     tone: 'loaded',
     showUnload: true,
     busy: false,

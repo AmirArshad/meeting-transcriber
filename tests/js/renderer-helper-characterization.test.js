@@ -285,7 +285,7 @@ test('meeting detail exposes semantic header and labelled action region without 
   assert.match(html, /<header\s+class="meeting-header meeting-detail-header"/);
   assert.match(
     html,
-    /<div\s+class="meeting-detail-actions"\s+role="group"\s+aria-label="Meeting actions">[\s\S]*?id="delete-meeting"[\s\S]*?<\/div>/,
+    /<div\s+class="meeting-detail-actions"\s+role="group"\s+aria-label="Recording actions">[\s\S]*?id="delete-meeting"[\s\S]*?<\/div>/,
   );
   for (const id of [
     'meeting-title',
@@ -417,10 +417,10 @@ test('Record navigation uses the microphone treatment and Record page naming', (
   const railButtons = [...html.matchAll(/<button[^>]+class="rail-btn[^"]*"[^>]*data-tab="([^"]+)"[^>]*aria-label="([^"]+)"[^>]*>([\s\S]*?)<\/button>/g)];
   assert.ok(railButtons.length >= 3);
   assert.equal(railButtons[0][1], 'record');
-  assert.equal(railButtons[0][2], 'Record page');
+  assert.equal(railButtons[0][2], 'Record');
   assert.match(railButtons[0][3], /M12 2a3 3/);
   assert.doesNotMatch(railButtons[0][3], /circle cx="12" cy="12" r="6"/);
-  assert.match(html, /<span class="rail-tooltip">Record page<\/span>/);
+  assert.match(html, /<span class="rail-tooltip">Record<\/span>/);
 });
 
 test('keyboard shortcuts dispatch through guarded actions without new IPC', () => {
@@ -974,7 +974,7 @@ test('AI Add-on Log keeps exactly 250 entries across single and multiline append
 
 test('removal confirmations and surfaced reasons use disable/enable wording', () => {
   const appSource = readAppSource();
-  assert.match(appSource, /Disable and remove the local summary model from this device\?/);
+  assert.match(appSource, /Disable and remove the Summaries & Chat model from this device\?/);
   assert.doesNotMatch(appSource, /confirm\('Remove the local summary model/);
   const manifestSource = readUtf8(path.join(ROOT, 'src', 'ai-addon', 'manifest-store.js'));
   assert.match(manifestSource, /Disable and remove speaker identification setup, then enable it again\./);

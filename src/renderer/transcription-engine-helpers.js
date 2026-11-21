@@ -174,15 +174,15 @@
       };
       const statusTexts = {
         checking: 'Checking Parakeet…',
-        unsupported: sourceStatus.message || 'Parakeet is not supported on this OS and architecture.',
-        'device-unavailable': 'The required GPU is unavailable. Recheck or repair Parakeet to continue.',
-        'not-installed': 'Set up the pinned model and GPU runtime on this device.',
-        downloading: 'Downloading the Parakeet model and GPU runtime…',
-        verifying: 'Verifying the downloaded model and runtime…',
-        'waiting-for-validation': 'Waiting for current AI work to finish…',
-        validating: 'Testing Parakeet on the GPU…',
-        ready: 'Parakeet is ready. It transcribes English only.',
-        'repair-required': sourceStatus.message || 'A Parakeet file is missing or failed its integrity check.',
+        unsupported: sourceStatus.message || 'Parakeet is not supported on this system.',
+        'device-unavailable': 'Compatible GPU not found. Recheck or repair Parakeet to use it.',
+        'not-installed': 'Download the Parakeet model and GPU runtime to use it on this device.',
+        downloading: 'Downloading Parakeet model and GPU runtime…',
+        verifying: 'Verifying downloaded files…',
+        'waiting-for-validation': 'Waiting for current transcription or AI work to finish…',
+        validating: 'Testing Parakeet on your GPU…',
+        ready: 'Ready. Transcribes English only.',
+        'repair-required': sourceStatus.message || 'Parakeet files are missing or damaged. Run Repair to reinstall them.',
         removing: 'Removing Parakeet…',
       };
       if (!Object.hasOwn(statusTexts, state)) {

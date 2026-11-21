@@ -78,7 +78,7 @@
   function formatChatScopeLabel(scope, meetingsById = null) {
     const normalized = scope && typeof scope === 'object' ? scope : { type: 'all' };
     const dateSuffix = formatDateWindowSuffix(normalized);
-    let base = 'All History';
+    let base = 'All recordings';
     if (normalized.type === 'selected_meetings' && Array.isArray(normalized.meetingIds)) {
       const ids = normalized.meetingIds.filter(Boolean);
       if (ids.length === 1) {
@@ -86,11 +86,11 @@
           ? meetingsById.get(String(ids[0]))
           : (meetingsById && typeof meetingsById === 'object' ? meetingsById[String(ids[0])] : null);
         const title = lookup && lookup.title ? String(lookup.title).trim() : '';
-        base = title ? (title.length > 32 ? `${title.slice(0, 31).trimEnd()}…` : title) : '1 meeting';
+        base = title ? (title.length > 32 ? `${title.slice(0, 31).trimEnd()}…` : title) : '1 recording';
       } else if (ids.length > 1) {
-        base = `${ids.length} meetings`;
+        base = `${ids.length} recordings`;
       } else {
-        base = 'No meetings selected';
+        base = 'No recordings selected';
       }
     }
     return dateSuffix ? `${base} · ${dateSuffix}` : base;
@@ -111,7 +111,7 @@
     if (status === 'loaded') {
       return {
         status: 'loaded',
-        label: `Loaded in memory · ${modelName}`,
+        label: `Loaded · ${modelName}`,
         tone: 'loaded',
         showUnload: true,
         busy: false,
@@ -140,22 +140,22 @@
     const list = Array.isArray(meetings) ? meetings : [];
     if (scope?.type === 'selected_meetings' && scopedIds.length === 1) {
       const target = list.find((m) => String(m?.id) === String(scopedIds[0]));
-      const label = target?.title ? `"${target.title.slice(0, 42)}"` : 'this meeting';
+      const label = target?.title ? `"${target.title.slice(0, 42)}"` : 'this recording';
       return [
-        `What key decisions were made in ${label}?`,
-        `List the main action items or owners discussed in ${label}.`,
-        `What open questions, blockers, or risks came up in ${label}?`,
+        `Summarize the main points from ${label}.`,
+        `What decisions, tasks, or follow-ups came up in ${label}?`,
+        `What questions or issues were left open in ${label}?`,
       ];
     }
     if (list.length > 0) {
       return [
-        'What decisions or commitments were finalized across recent meetings?',
-        'Summarize action items and deadlines discussed recently.',
-        'Which risks, blockers, or disagreements came up in recent meetings?',
+        'What key points or decisions came up in my recent recordings?',
+        'List any follow-ups, tasks, or deadlines mentioned recently.',
+        'What open questions or issues were raised recently?',
       ];
     }
     return [
-      'Record or import a meeting first to ask grounded questions here.',
+      'Record or import audio first to ask questions here.',
     ];
   }
 

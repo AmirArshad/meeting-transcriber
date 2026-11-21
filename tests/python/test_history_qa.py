@@ -351,7 +351,7 @@ def test_oversized_first_evidence_is_bounded_with_metadata_and_history(monkeypat
     result = retrieval.retrieve_evidence(tmp_path, tmp_path / 'index', question='launch', max_evidence_tokens=500)
     assert len(result['evidence']) == 1
     messages = build_qa_messages(question='launch', evidence=result['evidence'], history=[{'role': 'user', 'content': 'previous question'}, {'role': 'assistant', 'content': 'previous answer'}])
-    evidence_text = messages[-1]['content'].split('Evidence passages from local meeting history:\n\n', 1)[1].split('\n\nUser question:', 1)[0]
+    evidence_text = messages[-1]['content'].split('Evidence passages from local recording history:\n\n', 1)[1].split('\n\nUser question:', 1)[0]
     assert estimate_token_count(evidence_text) <= 500
     assert len(messages) == 4
     assert result['evidence'][0]['text'].encode('utf-8').decode('utf-8')

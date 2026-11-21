@@ -1,7 +1,7 @@
 {
   "name": "avanevis",
   "version": "2.12.0",
-  "description": "AvaNevis private meeting recorder and local AI transcriber",
+  "description": "Local audio recorder and transcriber for microphone, desktop audio, and audio files",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -31,8 +31,9 @@
   "keywords": [
     "transcription",
     "whisper",
-    "meeting",
-    "audio"
+    "parakeet",
+    "audio",
+    "recorder"
   ],
   "author": "AvaNevis",
   "homepage": "https://github.com/AmirArshad/meeting-transcriber",
@@ -117,12 +118,12 @@
       "category": "AudioVideo",
       "executableName": "avanevis",
       "syncDesktopName": true,
-      "synopsis": "Private meeting recorder and local AI transcriber",
+      "synopsis": "Local audio recorder and transcriber for microphone and desktop audio",
       "maintainer": "AvaNevis <AmirArshad@users.noreply.github.com>",
       "desktop": {
         "entry": {
           "Name": "AvaNevis",
-          "Comment": "Private meeting recorder and local AI transcriber",
+          "Comment": "Local audio recorder and transcriber for microphone and desktop audio",
           "Categories": "AudioVideo;Audio;Office;Utility;"
         }
       },
@@ -205,12 +206,12 @@
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
         "LSMinimumSystemVersion": "15.0",
-        "CFBundleDisplayName": "AvaNevis Meeting Recorder & Transcriber",
-        "NSMicrophoneUsageDescription": "AvaNevis needs microphone access to record your voice during meetings.",
-        "NSAudioCaptureUsageDescription": "AvaNevis needs system audio access to capture desktop audio locally for meeting transcription.",
+        "CFBundleDisplayName": "AvaNevis Audio Recorder & Transcriber",
+        "NSMicrophoneUsageDescription": "AvaNevis needs microphone access to record your voice.",
+        "NSAudioCaptureUsageDescription": "AvaNevis needs system audio access to capture desktop audio locally for transcription.",
         "NSAppleMusicUsageDescription": "AvaNevis does not access your music library.",
         "NSCameraUsageDescription": "AvaNevis does not use your camera.",
-        "NSScreenCaptureUsageDescription": "AvaNevis needs screen recording permission to capture system audio (desktop audio) using ScreenCaptureKit. No screen video is recorded, only audio."
+        "NSScreenCaptureUsageDescription": "AvaNevis needs screen recording permission to capture desktop audio using ScreenCaptureKit. Only audio is recorded; no screen video is saved."
       }
     },
     "dmg": {
@@ -236,7 +237,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "AvaNevis Meeting Recorder & Transcriber",
+      "shortcutName": "AvaNevis Audio Recorder & Transcriber",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",

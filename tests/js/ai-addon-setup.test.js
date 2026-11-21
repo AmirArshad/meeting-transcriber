@@ -1755,7 +1755,7 @@ test('Intel macOS diarization setup remains unsupported', async () => {
 
   assert.equal(status.features.diarization.status, 'unsupported');
   assert.equal(status.features.diarization.setupComplete, false);
-  assert.match(status.features.diarization.error, /Apple Silicon.*Metal\/MPS/);
+  assert.match(status.features.diarization.error, /Apple Silicon/i);
 });
 
 test('remove diarization setup deletes token and managed cache reference', async () => {

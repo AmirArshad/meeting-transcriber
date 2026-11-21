@@ -2585,15 +2585,26 @@ footer {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 16px;
+  gap: 6px;
   font-size: 12px;
   margin: 2px 0 10px;
 }
 
 .settings-subnav a {
-  color: var(--accent-strong);
-  text-underline-offset: 3px;
+  color: var(--text-secondary);
+  text-decoration: none;
   white-space: nowrap;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  transition: color 0.15s var(--ease-out), border-color 0.15s var(--ease-out), background-color 0.15s var(--ease-out);
+}
+
+.settings-subnav a:hover {
+  color: var(--text-primary);
+  border-color: var(--hairline-strong);
+  background: var(--surface-3);
 }
 
 .settings-group {
@@ -2683,7 +2694,7 @@ footer {
   font-size: 13px;
   line-height: 1.6;
   margin: 6px 0 16px 0;
-  max-width: 56ch;
+  max-width: 64ch;
 }
 
 .gpu-info {
@@ -2787,7 +2798,24 @@ footer {
 .transcription-engine-settings {
   display: flex;
   flex-direction: column;
+  gap: 10px;
+}
+
+.transcription-engine-card {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  padding: 14px;
+  width: 100%;
+  transition: border-color 0.15s var(--ease-out), box-shadow 0.15s var(--ease-out);
+}
+
+.transcription-engine-card.is-active {
+  border-color: rgba(var(--accent-rgb), 0.58);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.16);
 }
 
 .transcription-engine-row {
@@ -2796,16 +2824,11 @@ footer {
   justify-content: space-between;
   gap: 18px;
   min-width: 0;
-  padding: 11px 13px;
-  background: var(--surface-2);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-sm);
-  transition: border-color 0.15s var(--ease-out), box-shadow 0.15s var(--ease-out);
+  padding: 0;
 }
 
 .transcription-engine-row.is-active {
   border-color: rgba(var(--accent-rgb), 0.58);
-  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.16);
 }
 
 .transcription-engine-row-copy {
@@ -3337,10 +3360,24 @@ footer {
 }
 
 .diarization-engine-static {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
-  margin: 4px 0 0;
+  padding: 8px 10px;
+  background: var(--surface-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  margin: 4px 0 10px;
+}
+
+.diarization-engine-static-meta {
+  color: var(--text-tertiary);
+  font-weight: 400;
+  font-size: 12px;
 }
 
 .diarization-engine-static[hidden] {
@@ -3413,13 +3450,16 @@ footer {
 .diarization-setup-prompt .diarization-engine-card-sub {
   display: inline;
   color: var(--text-tertiary);
-  font-size: 10px;
-  line-height: 1.2;
-  white-space: nowrap;
+  font-size: 10.5px;
+  line-height: 1.25;
+  white-space: normal;
 }
 
 .diarization-setup-prompt .diarization-engine-static {
   margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
   font-size: 12px;
 }
 

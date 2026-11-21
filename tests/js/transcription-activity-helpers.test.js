@@ -179,6 +179,10 @@ test('completion toast prefers renamed titles and duration otherwise', () => {
     buildCompletionToastView({ title: 'Meeting 2026-07-16 11:42', durationSeconds: 120 }).message,
     /2 min/,
   );
+  assert.match(
+    buildCompletionToastView({ title: 'Recording 2026-07-16 11:42', durationSeconds: 120 }).message,
+    /2 min/,
+  );
 });
 
 test('first-run tip and soft queue-depth warning helpers', () => {

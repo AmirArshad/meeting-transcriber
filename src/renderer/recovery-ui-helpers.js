@@ -99,8 +99,8 @@
 
     const sizeText = formatBytesSafe(formatBytes, recoveryState.totals?.approxBytes);
     const body = count === 1
-      ? 'AvaNevis closed before it finished saving a recording. The audio is safe on this computer and can still be turned into a meeting.'
-      : `AvaNevis closed before it finished saving ${count} recordings. The audio is safe on this computer and can still be turned into meetings.`;
+      ? 'AvaNevis closed before saving this recording. Your audio is still on disk and can be recovered into History.'
+      : `AvaNevis closed before saving ${count} recordings. Your audio is still on disk and can be recovered into History.`;
 
     let detail = `Interrupted recordings: ${count}`;
     if (sizeText) {
@@ -117,7 +117,7 @@
       body,
       detail,
       candidateLines,
-      footer: 'Recovery runs entirely on this computer. "Later" keeps the files safe and asks again next time.',
+      footer: 'Recovery runs locally on this computer. Choosing "Later" keeps the files safe and asks again next launch.',
       primaryLabel: 'Recover Now',
       secondaryLabel: 'Later',
     };
@@ -241,7 +241,7 @@
         : Math.max(0, batchSize - failedCount);
       let text;
       if (failedCount > 0 && finished > 0) {
-        text = `${finished} of ${batchSize} recordings was finished. ${failedCount} still needs another try. Your audio files were kept safe.`;
+        text = `${finished} of ${batchSize} recordings recovered. ${failedCount} still need${failedCount === 1 ? 's' : ''} another try. Your audio files were kept safe.`;
       } else if (failedCount > 1 || count > 1) {
         text = `${failedCount || count} recordings still need another try. Your audio files were kept safe.`;
       } else {

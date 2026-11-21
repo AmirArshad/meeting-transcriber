@@ -88,7 +88,7 @@
   }
 
   function formatCitationPillLabel(citation) {
-    const title = String(citation && citation.meetingTitle ? citation.meetingTitle : 'Meeting').trim() || 'Meeting';
+    const title = String(citation && citation.meetingTitle ? citation.meetingTitle : 'Recording').trim() || 'Recording';
     const compactTitle = title.length > 34 ? `${title.slice(0, 33).trimEnd()}…` : title;
     const ts = formatCitationSeconds(citation ? citation.startSec : null);
     return ts ? `${compactTitle} · ${ts}` : compactTitle;
@@ -195,8 +195,8 @@
           const label = formatCitationPillLabel(citation);
           btn.textContent = label;
           btn.title = formattedTs
-            ? `Open ${citation.meetingTitle || 'meeting'} at ${formattedTs}`
-            : `Open ${citation.meetingTitle || 'meeting'}`;
+            ? `Open ${citation.meetingTitle || 'recording'} at ${formattedTs}`
+            : `Open ${citation.meetingTitle || 'recording'}`;
           btn.setAttribute('aria-label', btn.title);
           if (typeof onCitationClick === 'function') {
             btn.addEventListener('click', () => onCitationClick(citation, btn));

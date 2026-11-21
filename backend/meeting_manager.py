@@ -312,7 +312,7 @@ class MeetingManager:
 
             # Auto-generate title if not provided
             if not title:
-                title = f"Meeting {now.strftime('%Y-%m-%d %H:%M')}"
+                title = f"Recording {now.strftime('%Y-%m-%d %H:%M')}"
 
             # Format duration
             minutes = int(duration // 60)

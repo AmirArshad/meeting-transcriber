@@ -7,8 +7,8 @@ import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 INSUFFICIENT_EVIDENCE_MESSAGE = (
-    "I couldn't find enough grounded evidence in the matched local meeting "
-    "transcripts or summaries to answer that confidently."
+    "Not enough matching information in the selected transcripts "
+    "or summaries to answer that."
 )
 JSON_REPAIR_BYTE_CAP = 12_000
 

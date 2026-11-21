@@ -1,48 +1,48 @@
-# Meeting History And Transcript Storage
+# Recording History And Transcript Storage
 
-This document describes what gets saved after a recording and how AvaNevis recovers existing meeting data.
+This document describes what gets saved after a recording and how AvaNevis recovers existing recording data. (On-disk filenames such as `meetings.json` and `meeting_<id>.*`, as well as internal `meeting_manager.py` / `update-meeting` APIs, keep legacy `meeting` naming.)
 
 ## What Gets Saved
 
-After a successful recording/transcription flow, the app stores:
+After a successful recording or audio import flow, the app stores:
 
-- an audio file for the meeting (`.opus` when compression succeeds, `.wav` fallback otherwise)
+- an audio file for the recording (`.opus` when compression succeeds, `.wav` fallback otherwise)
 - a markdown transcript (`.md`)
 - metadata in `meetings.json`
 
-Meeting data lives in Electron's `userData` recordings directory, not in the repository.
+Recording data lives in Electron's `userData` recordings directory, not in the repository.
 
 ## History View Behavior
 
 The renderer keeps the history list responsive by separating metadata display from transcript loading:
 
-- selecting a meeting shows the details panel immediately
+- selecting a recording shows the details panel immediately
 - transcript text loads asynchronously in the background
 - a race guard prevents a late transcript load from overwriting a newer selection
 
 ## Transcript Loading Rules
 
-When loading a meeting by ID, the backend now prefers:
+When loading a recording by ID, the backend prefers:
 
 1. the transcript markdown file on disk
 2. legacy inline transcript text stored in older metadata records
 3. an empty transcript if neither exists
 
-That preserves transcript access for older meetings whose `.md` file is missing but whose metadata still contains inline transcript text.
+That preserves transcript access for older recordings whose `.md` file is missing but whose metadata still contains inline transcript text.
 
 ## Scan / Import Recovery
 
-The app rescans the recordings folder on launch and when you explicitly refresh history. Listing or searching meetings does not rescan the filesystem on every load (that keeps large libraries responsive).
+The app rescans the recordings folder on launch and when you explicitly refresh history. Listing or searching recordings does not rescan the filesystem on every load (that keeps large libraries responsive).
 
 The scan looks for orphaned recordings that are not yet in `meetings.json`.
 
-The recovery scan now:
+The recovery scan:
 
 - prefers one audio candidate per filename stem
 - skips duplicates already represented in metadata
-- preserves suffixed meeting IDs like `meeting_20260107_104555_1`
+- preserves suffixed IDs like `meeting_20260107_104555_1`
 - prefers the healthy `.wav` fallback if both `.opus` and `.wav` exist for the same recording stem
-- recovers or cleans orphan recorder temps (`.pcm.tmp`) before selecting scannable audio; never imports `.pcm.tmp`, legacy `*.temp.wav`, or `{stem}.capture/` spool files as meetings
+- recovers or cleans orphan recorder temps (`.pcm.tmp`) before selecting scannable audio; never imports `.pcm.tmp`, legacy `*.temp.wav`, or `{stem}.capture/` spool files as recordings
 
 That Opus/WAV preference matters when Opus compression failed but left behind a bad `.opus` file before the recorder fell back to `.wav`.
 
@@ -50,7 +50,7 @@ That Opus/WAV preference matters when Opus compression failed but left behind a 
 
 If the app or recorder process dies mid-recording, durable `{stem}.capture/` track spools may remain on disk. On the next launch AvaNevis discovers those sessions asynchronously (after the first window paints) and offers:
 
-- **Recover Now** — finalize the capture into meeting audio, then run the normal scan/import path so the meeting appears in History
+- **Recover Now** — finalize the capture into recording audio, then run the normal scan/import path so the recording appears in History
 - **Later** — dismiss the prompt; a banner keeps the deferred count/disk estimate visible; recovery remains available next launch
 
 From v2.10, recovered recordings retain their captured engine/model/language
@@ -84,30 +84,31 @@ The Electron main process applies the same recordings-directory rules before spa
 
 ## Delete Behavior
 
-Deleting a meeting removes:
+Deleting a recording removes:
 
 - the persisted audio file
 - the persisted transcript file
+- any derived speaker, subtitle timing, and summary sidecars
 - the metadata entry
 
 The renderer also clears the audio player first to reduce Windows file-lock issues.
 
-## Renaming Meetings
+## Renaming Recordings
 
-Meetings can be renamed inline from both the history detail view and the post-recording view:
+Recordings can be renamed inline from both the history detail view and Activity:
 
 - Click the pencil icon next to the title, edit, then press Enter, click Save, or click away to save.
 - Esc cancels.
 - The rename is persisted via the `update-meeting` IPC, which calls `MeetingManager.update_meeting(meeting_id, title=...)`.
-- Filenames stay anchored to the meeting ID; only the `title` field in `meetings.json` changes. Existing audio and transcript files are not moved or rewritten.
+- Filenames stay anchored to the recording ID; only the `title` field in `meetings.json` changes. Existing audio and transcript files are not moved or rewritten.
 
 ## Saving / Exporting Transcripts
 
 Transcripts can be exported to disk via Electron's native save dialog:
 
-- Available from the history detail view (Save button next to the transcript header) and from the post-recording view (Save Transcript button).
-- The default filename is derived from the meeting title with filesystem-unsafe characters sanitized.
-- File-type filters: Markdown (`.md`), Plain Text (`.txt`), All Files.
+- Available from the history detail view (Export / Save button next to the transcript header).
+- The default filename is derived from the recording title with filesystem-unsafe characters sanitized.
+- Supported formats: Markdown (`.md`), Plain Text (`.txt`), SubRip Subtitles (`.srt`), and WebVTT Subtitles (`.vtt`).
 - Wired through the `save-transcript-as` IPC, which uses `dialog.showSaveDialog` and writes via `fs.promises.writeFile`. The raw `.md` content from disk is preserved as the export source so the user always gets the original Markdown formatting.
 
 ## Transcript Retry And Derived Output (v2.10)
@@ -120,10 +121,10 @@ sidecars are not used as the source for new summaries.
 
 ## Current Limitations
 
-- Search/filter tooling in the history view is functional (sidebar text filter, multi-select with bulk delete) but does not yet support semantic search or full-text indexing.
+- Local SQLite FTS5 full-text search and optional local Chat Q&A are supported, while semantic/embedding search is not implemented.
 - Manual filesystem edits inside the recordings directory can still confuse recovery if files are renamed arbitrarily.
 
-## If You Need To Recover Meetings Manually
+## If You Need To Recover Recordings Manually
 
 Keep matching audio and transcript files together in the recordings directory.
 

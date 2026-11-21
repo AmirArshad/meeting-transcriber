@@ -1,6 +1,6 @@
 # AvaNevis Agent Guide
 
-AvaNevis records and transcribes locally: Electron, plain HTML/CSS/JS, Python 3.11 subprocesses, Swift audio and Rust Speakrs CLI. Canonical guide; CLAUDE.md imports it. Runtime pins: package.json/native manifests. Platform rules: contracts below.
+AvaNevis records mic/desktop audio, imports audio files, and transcribes locally: Electron, plain HTML/CSS/JS, Python 3.11 subprocesses, Swift audio and Rust Speakrs CLI. Canonical guide; CLAUDE.md imports it. Runtime pins: package.json/native manifests. Platform rules: contracts below.
 
 ## Quick commands
 
@@ -29,13 +29,14 @@ No lint/typecheck/E2E npm target. Setup and native checks: README.md and docs/de
 
 ## Invariants / do-not
 
-- Never add cloud processing, telemetry, background uploads, embedded/proxied secrets or hidden downloads. Model/add-on setup is explicit; summaries are user-triggered. User tokens stay in safeStorage and validated stdin boundaries.
-- Store recordings, metadata and derived AI sidecars in Electron userData, never the repo. Preserve locks, atomic writes, recovery, stop/discard distinctions and graceful degradation.
-- Preserve Windows 10/11 x64, macOS arm64 and Linux x86_64 targets. The packaging contract owns the current macOS minimum. Preserve Windows faster-whisper, Apple Silicon MLX and Linux CPU transcription with optional managed CUDA 12.
+- Never add cloud processing, telemetry, background uploads, embedded/proxied secrets or hidden downloads. Model/add-on setup is explicit; summaries are user-triggered. Tokens stay in safeStorage and validated stdin boundaries.
+- Store recordings, metadata and AI sidecars in Electron userData, never the repo. Preserve locks, atomic writes, recovery, stop/discard distinctions and graceful degradation.
+- Preserve Windows 10/11 x64, macOS arm64 and Linux x86_64 targets (packaging owns macOS minimum). Preserve Windows faster-whisper, Apple Silicon MLX and Linux CPU transcription with optional managed CUDA 12.
 - Linux device IDs are opaque strings; never parseInt them. A managed CUDA tree makes transcription fail-closed; preserve Repair/Uninstall escape paths and component gates. Linux speaker identification is Speakrs-only, CUDA-only; summaries need their own CUDA gate. Never add CPU/cloud fallbacks for those add-ons.
 - Preserve supported Omarchy/CachyOS Hyprland/Wayland/PipeWire versus experimental distro/desktop tiers. Use compatibility evidence for acceptance claims; never infer hardware success from CI.
 - Change IPC owner, preload, every renderer caller and characterization tests together. Preserve facade export key sets and AI_ADDON_PROGRESS_CHANNEL / AI_ADDON_CANCEL_CODE values.
-- Do not hand-edit generated build/resources, dist, native targets, Swift .build, caches or local data. Change manifests and regenerate deliberately; update lockfiles only with authorized dependency work. Never commit secrets or machine-local settings.
+- UI/docs use `recording`/`audio`/`Summaries & Chat` in plain operator copy; internal modules, IPC, DOM IDs and on-disk `meetings.json`/`meeting_*` names stay until a dedicated refactor.
+- Do not hand-edit generated build/resources, dist, native targets, Swift .build, caches or local data. Change manifests and regenerate deliberately; update lockfiles only for authorized dependency work. Never commit secrets or machine-local settings.
 - Read the applicable canonical contract before editing:
 
 | Surface | Read first |
@@ -44,17 +45,17 @@ No lint/typecheck/E2E npm target. Setup and native checks: README.md and docs/de
 | AI add-ons, tokens, downloads, queues, quit, GPU/cache policy | `docs/development/contracts/local-ai.md` |
 | Prepared resources, installers, signing, tray | `docs/development/contracts/packaging.md` |
 | Swift helper or macOS desktop audio | `docs/development/contracts/macos-audio.md` |
-| Meeting metadata, scan/import, rename | `docs/development/contracts/meeting-persistence.md` |
+| Recording/meeting metadata, scan/import, rename | `docs/development/contracts/meeting-persistence.md` |
 | Main/preload/renderer, exports, cross-cutting change checklists | `docs/development/contracts/ipc.md` |
 
 ## Working agreements
 
-- Work inline; delegate only when explicitly requested. Risk alone is not permission. Keep plans file-level; routine builds/small fixes need only a short inline plan. No automatic planning/review/TDD/handoff chain.
-- Preserve behavior before simplifying; prefer extraction behind stable interfaces and explicit platforms.
-- Use focused tests while iterating. Run `npm run test:all` on final integrated inputs before any PR and for cross-cutting, recorder, persistence, packaging or security behavior changes. Instruction/docs/setup-only edits use their relevant checks. Use real types/asset bytes where fakes hide behavior.
-- Reuse passing evidence while code, dependencies and relevant environment are unchanged, including at commit/push time. Fresh does not mean same-message. Inspect the final diff; repeat checks/review only for changed inputs or unresolved concerns. One lead owns full-suite/installer gates in authorized parallel work.
+- Work inline; delegate only when requested. Risk alone is not permission. Keep plans file-level; small fixes need only a short inline plan. No automatic planning/review/TDD/handoff chain.
+- Preserve behavior before simplifying; extract behind stable interfaces and explicit platforms.
+- Use focused tests while iterating. Run `npm run test:all` on final integrated inputs before any PR and for cross-cutting, recorder, persistence, packaging or security changes. Instruction/docs/setup edits use their relevant checks. Use real types/bytes where fakes hide behavior.
+- Reuse passing evidence while code, dependencies and environment are unchanged, including at commit/push time. Inspect the final diff; repeat checks/review only for changed inputs or unresolved concerns. One lead owns full-suite/installer gates in parallel work.
 - Search paths/symbols before large reads. Load applicable contracts once; read long plans by constraints, sequencing and current tasks. Parse lockfile keys instead of dumping files. Skip generated/ignored trees unless diagnosing them.
-- Capture verbose build/test output to ignored local logs, preserve the real exit code, and read summaries/failure excerpts. Use completion notifications or blocking waits instead of repeated short polls. Run one build per output tree; rebuild only for changed inputs or a specific unresolved check.
+- Capture verbose build/test output to ignored logs, preserve exit code, and read summaries/failure excerpts. Use completion notifications or blocking waits instead of short polls. Run one build per output tree; rebuild only for changed inputs or unresolved checks.
 - Stage/commit/push/publish only with user authorization; editing permission is not enough.
 - Do not edit AGENTS.md, adapters or skill wiring during ordinary feature work; change them only for an explicitly requested instruction/setup task. Keep runtime facts in contracts and task status in todo.md.
 - Trust scripts/tests and compatibility evidence over stale prose; resolve conflicts at the canonical contract.

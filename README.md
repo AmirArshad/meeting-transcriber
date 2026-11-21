@@ -1,6 +1,6 @@
 # AvaNevis
 
-> Privacy-first desktop app for recording and transcribing meetings locally with Whisper.
+> Local desktop app for recording microphone and desktop audio, importing audio files, and transcribing on your device.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6.svg)](https://www.microsoft.com/windows)
@@ -9,31 +9,30 @@
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Electron](https://img.shields.io/badge/Electron-46%20alpha-47848F.svg)](https://www.electronjs.org/)
 
-AvaNevis (formerly Meeting Transcriber) records your microphone *and* desktop audio at the same time, then transcribes everything on-device with Whisper. No cloud, no telemetry, no account.
+AvaNevis (formerly Meeting Transcriber) is a local audio recorder and transcriber. Capture your microphone, desktop audio, or both at once—or import existing audio files—and transcribe on your device with Whisper or optional NVIDIA Parakeet. Optional local add-ons add speaker labels and recording summaries or transcript chat. No cloud upload, no telemetry, no account.
 
-**Latest published release:** [v2.12.0](docs/releases/v2.12.0.md) adds local audio import and qualified dependency updates. See its [qualification record](docs/development/V2_12_QUALIFICATION.md) and [release status](todo.md). Tagged installers are published by the [release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/workflows/build-release.yml).
+**Latest published release:** [v2.12.0](docs/releases/v2.12.0.md) adds local audio import and dependency updates. See its [qualification record](docs/development/V2_12_QUALIFICATION.md) and [release status](todo.md). Tagged installers are published by the [release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/workflows/build-release.yml).
 
 ## Why
 
-Online meetings are a tax on memory. The good options for getting transcripts back either upload your audio to someone else's cloud, charge per minute, or only listen to your microphone and miss whatever the other side said. AvaNevis captures both sides, runs the model locally, and keeps everything on disk under your user folder.
+Most transcription tools either upload your audio to a remote server, charge per minute, or only record your microphone and miss whatever is playing on your computer. AvaNevis works for calls, interviews, lectures, voice notes, podcasts, or any desktop audio: it records mic and system streams locally, runs transcription on your own hardware, and keeps everything stored in your user folder.
 
 ## Highlights
 
-- **Dual capture** — microphone + desktop audio recorded in parallel, then mixed after the recording stops to keep both streams intact.
-- **Durable long recordings** — capture spills to on-disk track spools (not whole-session RAM). Stop uses bounded multi-pass finalization; interrupted sessions can be recovered after relaunch.
-- **Recording awareness** — always-visible in-app recording pill + elapsed clock; macOS menu-bar `REC` / Dock badge; Windows taskbar overlay; Linux StatusNotifierItem tray (`setContextMenu` only) with a taskbar-visible fallback when tray creation fails; hourly best-effort reminders; single-instance relaunch focuses the existing window.
-- **Local transcription** — `faster-whisper` on Windows and Linux, `lightning-whisper-mlx` on Apple Silicon. Linux defaults to CPU; managed CUDA 12 is an explicit, verified x86_64 NVIDIA setup path. A broken installed Linux runtime fails closed until repaired or removed.
-- **Transcription choices** — Whisper Small (default), Medium and Large v3; optional English-only Parakeet v2 on Windows CUDA, Apple Silicon Metal and Linux managed CUDA 12. Setup is explicit; queued and recovered work retains its captured selection.
-- **Premium dark UI** — vertical icon rail, top-bar app pane, dense waveform visualizer with peak-hold and DPR-aware rendering, and a stutter-free custom audio scrubber driven by `requestAnimationFrame`.
-- **Markdown transcripts** — saved transcripts are real Markdown (timestamps, headings, lists), and the in-app viewer renders them inline with chip-style timestamp pills.
-- **Import local audio** — add a WAV, MP3 or Opus file to History, confirm the transcription selection and queue it locally while keeping the original file intact.
-- **Editable meetings** — rename meetings inline (history *and* immediately after recording) without renaming any files; metadata stays anchored to the meeting ID.
-- **Save As anywhere** — export any transcript through Electron's native save dialog as `.md` or `.txt`.
-- **Search and bulk-manage history** — filter the meeting list, multi-select, bulk delete, replay with synchronized audio.
-- **Recovery-friendly storage** — meetings are persisted with an atomic write + cross-process file lock, with corrupt-metadata backups (`meetings.corrupt.*.json`) and filesystem rescan/import on launch or when you refresh history (not on every list reload).
-- **Optional local AI add-ons** — speaker labels and meeting summaries are explicit local setup on Windows and macOS. Linux uses CUDA-only Speakrs and CUDA-only Qwen summaries after managed-runtime admission; Linux Pyannote, CPU fallback, and cloud fallback are unavailable. Linux support evidence is limited to CachyOS x86_64 + RTX 4070; see the [Linux guide](docs/guides/LINUX_EXPERIMENTAL.md) for support boundaries.
-- **One-click installer** — Windows NSIS and macOS DMG bundle Python, ffmpeg, `speakrs-cli`, and the macOS helper. Linux x86_64 packages bundle Python/ffmpeg/backend and stage `speakrs-cli`; add-on model packs and CUDA runtimes are explicit setup-time downloads. No system Python is required.
-- **Update awareness** — checks GitHub Releases on launch and shows an in-app banner with one-click download of the matching installer (or the release page if no installer matches).
+- **Dual or single capture** — record microphone audio, desktop audio, or both in parallel (mixed cleanly after recording stops).
+- **Durable long recordings** — capture writes to on-disk track spools rather than holding the full recording in memory. Stop uses bounded finalization; interrupted sessions can be recovered after relaunch.
+- **Recording status indicators** — visible in-app recording indicator and elapsed clock; macOS menu-bar `REC` and Dock badge; Windows taskbar overlay; Linux StatusNotifierItem tray (with taskbar fallback when tray creation fails); hourly reminders; single-instance focus.
+- **Local transcription engines** — `faster-whisper` on Windows and Linux, `lightning-whisper-mlx` on Apple Silicon (Small, Medium, Large v3), plus optional English-only **Parakeet v2** (`parakeet-tdt-0.6b-v2`) on Windows CUDA, Apple Silicon Metal, and Linux managed CUDA 12. Linux defaults to CPU Whisper; managed CUDA 12 is an explicit x86_64 NVIDIA setup path, and a broken installed runtime stays disabled until repaired or removed.
+- **Desktop interface** — vertical navigation rail, dual-channel level meters with peak hold, custom audio scrubber synced to playback, keyboard shortcuts, and built-in dark theme.
+- **Markdown transcripts** — saved transcripts use standard Markdown (timestamps, headings, lists), and the built-in viewer renders them with clickable timestamp pills.
+- **Import local audio** — add WAV, MP3, or Opus files to History, choose the transcription engine and language, and run them through the local queue without altering the original file.
+- **Editable titles** — rename recordings inline in History or right after stopping, without moving or renaming files on disk.
+- **Export anywhere** — save any transcript as `.md`, `.txt`, `.srt`, or `.vtt` subtitles through your OS save dialog.
+- **Search and local Chat** — full-text search across recordings and transcripts (`SQLite FTS5`), bulk selection and deletion, synchronized playback, and optional local Q&A with clickable timestamp citations when Summaries & Chat is set up.
+- **Recovery-friendly storage** — recordings are saved with atomic writes and a cross-process file lock, corrupt-metadata backups (`meetings.corrupt.*.json`), and filesystem rescanning on launch or manual refresh.
+- **Optional local AI add-ons** — speaker labels (**Speakrs** token-free or **Pyannote** on Windows and macOS; **Speakrs** CUDA-only on Linux) and **Summaries & Chat** (`Qwen + llama.cpp`) are explicit opt-in downloads in Settings. On Linux, Pyannote, CPU fallback, and cloud fallback are unavailable; Speakrs and summaries require an admitted CUDA runtime. Linux test evidence is limited to CachyOS x86_64 + RTX 4070; see the [Linux guide](docs/guides/LINUX_EXPERIMENTAL.md).
+- **Standalone installers** — Windows NSIS and macOS DMG bundle Python, ffmpeg, `speakrs-cli`, and the macOS audio helper. Linux x86_64 packages bundle Python/ffmpeg/backend and stage `speakrs-cli`; add-on models and CUDA libraries download only when you run setup. No system Python is required.
+- **Update checks** — checks GitHub Releases on launch and offers one-click download of the matching installer (or opens the release page).
 
 ## Privacy
 
@@ -132,9 +131,9 @@ See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS
 
 AI Add-ons are optional and live under Settings. They are not required for recording or transcription.
 
-- **Speaker Identification:** Settings lets you install **one** engine: **Speakrs** (token-free; default for new users; Windows CUDA / macOS Apple Silicon CoreML) or **Pyannote** (`pyannote/speaker-diarization-community-1` with the user's own Hugging Face token; Windows CUDA / macOS Apple Silicon MPS). Switching uninstalls the other engine's models; a saved Hugging Face token is kept across a switch and when removing Speakrs; token deletion applies to Pyannote removal. When setup is ready, AvaNevis runs diarization before transcription and uses padded speaker turns to create speaker-guided Whisper chunks; if that guided path fails, it saves a normal transcript and records the speaker-label failure. The main process uses catalog-resolved model refs, validates the required accelerator, disables standalone Speakrs CPU mode, and serializes GPU-heavy work (transcription, diarization, guided transcription, summaries) through one compute queue with wall-clock timeouts so a hung job cannot block the app for the rest of the session.
-- **Meeting Summaries:** Uses a pinned local `llama.cpp` runtime and pinned GGUF model artifacts stored under Electron `userData`. Hugging Face-hosted public GGUF downloads use bundled `huggingface_hub` HTTPS with patched certifi, without reusing the speaker token. Native Xet acceleration is disabled pending its certificate-trust qualification; large downloads can take longer. Summary setup verifies HTTPS artifact hosts, SHA-256 checksums, and safe runtime extraction. Summary generation is always user-triggered from Home or History. The current Qwen model supports English, Spanish, French, German, Chinese, Japanese, Italian, Panjabi, Hindi, Korean and Portuguese. Each generation asks for transcript-language confirmation and checks input/output language locally; failed checks preserve the previous summary.
-- **Expected size:** the default summary model is about 5.7 GB plus platform runtime archives. CUDA setup remains separate and can add several GB.
+- **Speaker Identification:** Settings lets you install **one** engine: **Speakrs** (no account needed; default for new users on Windows CUDA / macOS Apple Silicon CoreML; the only engine on Linux CUDA) or **Pyannote** (`pyannote/speaker-diarization-community-1` with your own Hugging Face token; Windows CUDA / macOS Apple Silicon MPS only — unavailable on Linux). Switching uninstalls the other engine's models; a saved Hugging Face token is kept across a switch and when removing Speakrs, and deleted when removing Pyannote. When ready, AvaNevis runs diarization before transcription and uses padded speaker turns to create speaker-guided chunks; if that guided path fails, it saves a standard transcript and records the speaker-label error. The main process uses catalog-resolved model refs, validates the required accelerator, disables standalone Speakrs CPU mode, and serializes heavy AI work (transcription, diarization, guided transcription, summaries, and Chat) through one compute queue with timeouts so a stalled job cannot block the app.
+- **Summaries & Chat:** Uses a pinned local `llama.cpp` runtime and pinned GGUF model artifacts stored under Electron `userData`. Hugging Face-hosted public GGUF downloads use bundled `huggingface_hub` HTTPS with patched certifi, without reusing the speaker token. Native Xet acceleration is disabled pending its certificate-trust qualification; large downloads can take longer. Setup verifies HTTPS artifact hosts, SHA-256 checksums, and safe runtime extraction. Summary generation and Chat questions are always user-triggered. The current Qwen model supports English, Spanish, French, German, Chinese, Japanese, Italian, Panjabi, Hindi, Korean and Portuguese. Summary generation asks for transcript-language confirmation and checks input/output language locally; failed checks preserve the previous summary.
+- **Expected size:** the default summary/chat model is about 5.7 GB plus platform runtime archives. CUDA setup remains separate and can add several GB.
 - **Outputs:** derived files are saved beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; raw transcripts remain the source of truth.
 
 See [docs/development/LOCAL_AI_MODEL_CATALOG.md](docs/development/LOCAL_AI_MODEL_CATALOG.md) for catalog maintenance, [tests/manual/local-ai-addons-checklist.md](tests/manual/local-ai-addons-checklist.md) for manual validation, and the [v2.9 compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) for the historical Linux evidence. Linux Pyannote is unavailable; Linux Speakrs and summaries require admitted CUDA and have no CPU or cloud fallback.
@@ -175,18 +174,18 @@ Codex, Claude Code, OpenCode and Cursor share root AGENTS.md and canonical on-de
 
 ## How it works
 
-1. **Pick devices.** Choose a mic, a desktop-audio loopback device, the language, and a Whisper model size in the Settings tab.
-2. **Record.** Both streams are written to disk in parallel (WASAPI loopback on Windows; CoreAudio process tap via the bundled Swift helper on macOS 14.2+, with Swift/PyObjC ScreenCaptureKit fallback; Pulse/PipeWire mic + sink-monitor capture on Linux). The audio visualizer shows live mic + desktop levels.
-3. **Stop.** The recorder reports completion as structured stdout JSON (`success: true` with a file path, or `success: false` with a code and message when capture fails). The main process normalizes Windows `audioPath` and macOS `outputPath` into one `audioPath` for the UI. On success, the two streams are aligned, mixed at 48 kHz stereo, kept mono-compatible for transcription, and compressed to Opus (with WAV fallback if ffmpeg fails).
-4. **Transcribe.** The mixed audio is passed to the platform-appropriate Whisper backend; output lands as a Markdown transcript with `[mm:ss - mm:ss]` timestamp lines.
-5. **Save.** Meeting metadata, audio file, and transcript are persisted to the user-data folder under a unique meeting ID. Meetings that already exist on disk get rescanned and re-imported on launch.
+1. **Pick devices and engine.** Choose a microphone, a desktop-audio loopback device, language, and Whisper model size or Parakeet v2 in Settings.
+2. **Record.** Both streams are written to disk in parallel (WASAPI loopback on Windows; CoreAudio process tap via the bundled Swift helper on macOS 14.2+, with Swift/PyObjC ScreenCaptureKit fallback; Pulse/PipeWire mic + sink-monitor capture on Linux). The audio visualizer shows live mic + system levels.
+3. **Stop.** The recorder reports completion as structured stdout JSON (`success: true` with a file path, or `success: false` with a code and message when capture fails). The main process normalizes Windows `audioPath` and macOS `outputPath` into one `audioPath` for the UI. On success, the streams are aligned, mixed at 48 kHz stereo, kept mono-compatible for transcription, and compressed to Opus (with WAV fallback if ffmpeg fails).
+4. **Transcribe.** The mixed audio is passed to the selected local Whisper or Parakeet backend; output is saved as a Markdown transcript with `[mm:ss - mm:ss]` timestamp lines.
+5. **Save.** Recording metadata, audio file, and transcript are saved under your Electron user-data folder under a unique recording ID. Recordings already on disk are rescanned and re-imported on launch or refresh.
 
 ## Audio quality
 
 - 48 kHz target sample rate end-to-end on Windows, macOS, and Linux.
 - soxr VHQ resampling via shared `backend/audio/processor.py` (Windows and Linux capture rates, and shared spool finalization); macOS capture remains separate mix/align paths in `macos_recorder.py`.
 - Gentle mic enhancement (DC-offset removal, light normalization) — no aggressive denoising or compression. Desktop audio is left untouched.
-- Stereo output, Opus-compressed (≈ 95% size reduction vs WAV — a 40-minute meeting is roughly 23 MB).
+- Stereo output, Opus-compressed (≈ 95% size reduction vs WAV — a 40-minute recording is roughly 23 MB).
 
 ## Languages
 
@@ -207,7 +206,7 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
 - macOS 15 (Sequoia) or later
 - Apple Silicon (M1 or newer) — Intel Macs have a CPU fallback path in dev but are not a packaged target
 - 4 GB RAM minimum, 8 GB recommended
-- Speaker identification (optional): **8 GB RAM minimum, 16 GB recommended** (Speakrs CLI peaked at 3.81 GB RSS on a 56 min Mac meeting)
+- Speaker identification (optional): **8 GB RAM minimum, 16 GB recommended** (Speakrs CLI peaked at 3.81 GB RSS on a 56 min Mac recording)
 - 2 GB free disk minimum, 10 GB recommended
 
 ## Tech stack
@@ -226,7 +225,7 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
   - [Documentation index](docs/README.md)
   - [Troubleshooting](docs/guides/TROUBLESHOOTING.md) — common issues and fixes
   - [Transcription tips](docs/guides/TRANSCRIPTION_GUIDE.md)
-  - [Meeting features](docs/guides/MEETING_TRANSCRIPTION.md) — history, recovery, metadata
+  - [Recording features & history](docs/guides/MEETING_TRANSCRIPTION.md) — history, recovery, metadata
   - [macOS install guide](docs/guides/MACOS_INSTALLATION.md)
 - **Developers**
   - [Agent guide / invariants](AGENTS.md) — architecture, IPC contracts, compute queue, validation expectations
@@ -278,9 +277,9 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
 - Codebase refactor (July 2026): main-process Pattern C services under `src/main/`, AI-addon and main-process helper facades, Python `meetings/` / shared recorder stdout helpers, characterization gates. Soft-cap accepted for `src/renderer/app.js`; see [AVANEVIS_CODEBASE_REFACTOR.md](docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md).
 - Security and reliability hardening (May 2026): IPC path guards, sensitive-text redaction, trusted update downloads, single GPU compute queue with wall-clock timeouts, recording lifecycle guards (`RECORDER_BUSY`, session-aware failures), recorder `success: false` results, summary sidecar staging, and expanded regression tests. See [docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md).
 - Optional local AI add-on foundations: Settings setup cards, pinned summary model/runtime catalog, secure diarization token storage, automatic post-transcription speaker labels when setup is ready, and user-triggered summary generation with History Transcript/Summary tabs.
-- Premium dark UI overhaul: vertical icon rail, top-bar pane, expressive dual-channel waveform with peak-hold and interpolation, custom rAF-driven audio scrubber, multi-select with bulk delete, sidebar search, relative-time meeting timestamps, developer console drawer.
-- Markdown transcript rendering in the meeting viewer (timestamps as accent pill chips), with the raw `.md` preserved as the copy/save source of truth.
-- Inline meeting rename in both history and post-recording views (via a new `update-meeting` IPC + `MeetingManager.update_meeting`).
+- Desktop UI overhaul: vertical icon rail, top-bar pane, dual-channel waveform with peak-hold and interpolation, custom rAF-driven audio scrubber, multi-select with bulk delete, sidebar search, relative-time recording timestamps, developer console drawer.
+- Markdown transcript rendering in the transcript viewer (timestamps as accent pill chips), with the raw `.md` preserved as the copy/save source of truth.
+- Inline recording rename in both History and post-recording views (via a new `update-meeting` IPC + `MeetingManager.update_meeting`).
 - Save transcripts via the native save dialog (`.md` / `.txt` / All Files) with sanitized default filenames.
 - Slimmer audio visualizer (denser buffer, gentler glow and peak cap).
 - Cross-process atomic meeting metadata writes with corrupt-file backups and transactional add behavior.
@@ -288,9 +287,8 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
 
 **Next up**
 - True silent auto-install updater (today's updater detects the new release and opens the download page).
-- Upload existing audio files (reuses the transcription queue / Activity UI).
 - Real-time / streaming transcription.
-- Export to SRT, VTT, DOCX, JSON.
+- Export to DOCX, JSON (`.md`, `.txt`, `.srt`, and `.vtt` already ship).
 - Acoustic echo cancellation when desktop audio bleeds into the mic.
 
 Full plan: [docs/initiatives/ROADMAP.md](docs/initiatives/ROADMAP.md).
@@ -307,12 +305,13 @@ PRs welcome. Please run `npm run test:all` before opening one and add coverage f
 ## Acknowledgments
 
 - **OpenAI** for [Whisper](https://github.com/openai/whisper) (MIT).
+- **NVIDIA** for [Parakeet (`parakeet-tdt-0.6b-v2`)](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) (CC BY 4.0), with ONNX and MLX model conversions (`istupakov/parakeet-tdt-0.6b-v2-onnx`, `istupakov/silero-vad-onnx`, `mlx-community/parakeet-tdt-0.6b-v2`).
 - **Systran / guillaumekln** and **mlx-community** for packaged Whisper weights used by faster-whisper and Lightning-Whisper-MLX.
 - **faster-whisper** for the efficient CUDA/CPU transcription runtime.
 - **Lightning-Whisper-MLX** for Apple Silicon Metal acceleration.
 - **Speakrs / avencera** for the [Speakrs](https://github.com/avencera/speakrs) speaker engine (Apache-2.0) and the `avencera/speakrs-models` pack (WeSpeaker CC BY 4.0; pyannote segmentation MIT; pyannote PLDA/VBx CC BY 4.0).
 - **pyannote** for [Speaker Diarization Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (CC BY 4.0), used when you enable optional Pyannote speaker labels with your own Hugging Face token.
-- **Alibaba Qwen** and community quantizers (e.g. Unsloth GGUF builds) for optional local meeting summaries (Apache-2.0).
+- **Alibaba Qwen** and community quantizers (e.g. Unsloth GGUF builds) for optional local summaries and Chat (Apache-2.0).
 - **ggml-org** for [llama.cpp](https://github.com/ggml-org/llama.cpp) summary inference (MIT).
 - **PyAudioWPatch** for WASAPI loopback on Windows.
 - **ffmpeg** for Opus compression in installers (GPLv3 — see third-party notices).

@@ -63,7 +63,7 @@
 
   function getKeyboardShortcutBindings({ platform } = {}) {
     return [
-      { action: 'goto-record', label: 'Record page', display: getKeyboardShortcutDisplay('goto-record', { platform }) },
+      { action: 'goto-record', label: 'Record', display: getKeyboardShortcutDisplay('goto-record', { platform }) },
       { action: 'goto-history', label: 'History', display: getKeyboardShortcutDisplay('goto-history', { platform }) },
       { action: 'goto-chat', label: 'Chat', display: getKeyboardShortcutDisplay('goto-chat', { platform }) },
       { action: 'goto-settings', label: 'Settings', display: getKeyboardShortcutDisplay('goto-settings', { platform }) },

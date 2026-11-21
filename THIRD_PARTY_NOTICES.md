@@ -56,6 +56,18 @@ Users download these artifacts on first use or during explicit setup in Settings
 
 **Trademark:** “Whisper” is associated with OpenAI. AvaNevis is not affiliated with or endorsed by OpenAI.
 
+### Optional transcription — NVIDIA Parakeet
+
+| Item | License | Source |
+|------|---------|--------|
+| NVIDIA Parakeet (`parakeet-tdt-0.6b-v2`) | **CC BY 4.0** | [nvidia/parakeet-tdt-0.6b-v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) |
+| Windows / Linux CUDA ONNX weights | **CC BY 4.0** (converted weights) | [`istupakov/parakeet-tdt-0.6b-v2-onnx`](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx) via `onnx-asr` |
+| macOS Apple Silicon MLX weights | **CC BY 4.0** (converted weights) | [`mlx-community/parakeet-tdt-0.6b-v2`](https://huggingface.co/mlx-community/parakeet-tdt-0.6b-v2) via `parakeet-mlx` |
+| Silero VAD ONNX | MIT | [`istupakov/silero-vad-onnx`](https://huggingface.co/istupakov/silero-vad-onnx) |
+
+**Attribution (CC BY 4.0):** When using Parakeet transcription, credit the model, for example:  
+*Transcription uses NVIDIA Parakeet ([nvidia/parakeet-tdt-0.6b-v2](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2), CC BY 4.0).*
+
 ### Optional speaker diarization — pyannote
 
 | Item | License | Terms |
@@ -88,7 +100,7 @@ same source notices are installed under
 **Attribution (CC BY 4.0):** When using Speakrs speaker identification, credit the CC BY pack components, for example:  
 *Speaker identification uses [Speakrs](https://github.com/avencera/speakrs) (Apache-2.0) with WeSpeaker embeddings and pyannote PLDA/VBx parameters (CC BY 4.0).*
 
-### Optional meeting summaries — Qwen + llama.cpp
+### Optional summaries and Chat — Qwen + llama.cpp
 
 | Item | License (typical) | Source |
 |------|-------------------|--------|
@@ -109,7 +121,7 @@ same source notices are installed under
 
 ## 4. Trademarks
 
-Names such as **Whisper**, **Qwen**, **pyannote**, **Speakrs**, **Hugging Face**, **Electron**, **NVIDIA**, and **CUDA** are trademarks of their respective owners. AvaNevis uses them only to describe compatible components and does not claim endorsement.
+Names such as **Whisper**, **Parakeet**, **Qwen**, **pyannote**, **Speakrs**, **Hugging Face**, **Electron**, **NVIDIA**, and **CUDA** are trademarks of their respective owners. AvaNevis uses them only to describe compatible components and does not claim endorsement.
 
 ---
 

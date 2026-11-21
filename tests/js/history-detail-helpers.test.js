@@ -73,7 +73,7 @@ test('normalizeHistoryDetailTab falls back to transcript', () => {
 test('setup messages explain graceful degradation paths', () => {
   assert.match(
     getDiarizationSetupMessage({ status: 'needsAccount' }),
-    /own Hugging Face token.*model terms/i,
+    /Hugging Face token.*model terms/i,
   );
   assert.doesNotMatch(
     getDiarizationSetupMessage({
@@ -115,7 +115,7 @@ test('setup messages explain graceful degradation paths', () => {
   );
   assert.match(
     getSummarySetupMessage({ status: 'notConfigured' }),
-    /Enable the local summary model/i,
+    /Enable Summaries & Chat in Settings/i,
   );
   assert.match(
     getDiarizationSetupMessage({ status: 'notConfigured' }),
@@ -305,17 +305,17 @@ test('summary generation button view exposes spinner and cancel hover copy', () 
 
   assert.deepEqual(getSummaryGenerationButtonView({ active: true }), {
     active: true,
-    label: 'Summarising...',
-    hoverLabel: 'Cancel Summarisation',
-    title: 'Click to cancel summary generation',
+    label: 'Summarizing…',
+    hoverLabel: 'Cancel summary',
+    title: 'Click to cancel summary',
     ariaBusy: true,
   });
 
   assert.deepEqual(getSummaryGenerationButtonView({ active: true, cancelling: true }), {
     active: true,
-    label: 'Cancelling...',
-    hoverLabel: 'Cancelling...',
-    title: 'Cancelling summary generation...',
+    label: 'Cancelling…',
+    hoverLabel: 'Cancelling…',
+    title: 'Cancelling summary…',
     ariaBusy: true,
   });
 });
@@ -520,7 +520,7 @@ test('new-user home speaker prompt selects Speakrs and existing pyannote stays',
 test('needsAccount copy stays for pyannote and is not used for Speakrs', () => {
   assert.match(
     getDiarizationSetupMessage({ engine: 'pyannote', status: 'needsAccount' }),
-    /own Hugging Face token.*model terms/i,
+    /Hugging Face token.*model terms/i,
   );
   assert.doesNotMatch(
     getDiarizationSetupMessage({

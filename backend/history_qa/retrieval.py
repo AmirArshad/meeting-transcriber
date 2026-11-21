@@ -381,7 +381,7 @@ def retrieve_evidence(
             candidates.append(
                 {
                     "meetingId": mid,
-                    "meetingTitle": str(meeting_hit.get("title") or "Untitled Meeting"),
+                    "meetingTitle": str(meeting_hit.get("title") or "Untitled recording"),
                     "meetingDate": str(meeting_hit.get("date") or ""),
                     "kind": kind,
                     "seqIndex": int(passage.get("seqIndex") or 0),

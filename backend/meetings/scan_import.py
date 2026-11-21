@@ -498,19 +498,19 @@ def parse_scan_meeting_id_and_title(
             parts = meeting_id.split("_")
             base_id = f"{parts[0]}_{parts[1]}" if len(parts) >= 2 else meeting_id
             dt = datetime.strptime(base_id, "%Y%m%d_%H%M%S")
-            title = f"Meeting {dt.strftime('%Y-%m-%d %H:%M')}"
+            title = f"Recording {dt.strftime('%Y-%m-%d %H:%M')}"
         except ValueError:
-            title = f"Meeting {meeting_id}"
+            title = f"Recording {meeting_id}"
         return meeting_id, title
 
     recording_match = re.search(r"(\d{4}-\d{2}-\d{2})T(\d{2}-\d{2}-\d{2})", filename_stem)
     if recording_match:
         date_str, time_str = recording_match.groups()
         meeting_id = date_str.replace("-", "") + "_" + time_str.replace("-", "")
-        title = f"Meeting {date_str} {time_str.replace('-', ':')}"
+        title = f"Recording {date_str} {time_str.replace('-', ':')}"
         return meeting_id, title
 
     stamp = now or datetime.now()
     meeting_id = stamp.strftime("%Y%m%d_%H%M%S")
-    title = f"Meeting {filename_stem}"
+    title = f"Recording {filename_stem}"
     return meeting_id, title

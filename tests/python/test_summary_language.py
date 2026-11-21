@@ -258,8 +258,8 @@ def test_localized_markdown_preserves_schema_keys_and_legacy_output():
         markdown = render_summary_markdown({'summary': SPANISH, 'action_items': [{'task': 'Preparar la lista.', 'owner': 'Mira', 'timestamp': '01:02'}]}, {'language': language, 'profile': 'balanced'})
         assert 'Mira' in markdown and '01:02' in markdown
         if language != 'en':
-            assert '# Meeting Summary' not in markdown
+            assert '# Summary' not in markdown
             assert 'None captured.' not in markdown
             assert '**Profile:**' not in markdown
             assert '(owner:' not in markdown
-    assert '# Meeting Summary' in render_summary_markdown({'summary': 'Legacy overview'})
+    assert '# Summary' in render_summary_markdown({'summary': 'Legacy overview'})

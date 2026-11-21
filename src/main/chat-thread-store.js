@@ -114,7 +114,7 @@ function sanitizeCitation(raw) {
   return {
     evidenceId,
     meetingId,
-    meetingTitle: String(raw.meetingTitle || 'Untitled Meeting').slice(0, 160),
+    meetingTitle: String(raw.meetingTitle || 'Untitled recording').slice(0, 160),
     meetingDate: String(raw.meetingDate || '').slice(0, 64),
     startSec: Number.isFinite(startSecNum) && startSecNum >= 0 ? startSecNum : null,
     endSec: Number.isFinite(endSecNum) && endSecNum >= 0 ? endSecNum : null,

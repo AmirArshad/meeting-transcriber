@@ -126,14 +126,14 @@ test('Speakrs is Recommended only on Apple Silicon and uses selector copy', () =
   const winPyannote = getDiarizationEngineCard({ engine: 'pyannote', platform: 'win32', arch: 'x64' });
 
   assert.equal(macSpeakrs.title, 'Speakrs');
-  assert.equal(macSpeakrs.subtitle, 'Faster. No Hugging Face account.');
+  assert.equal(macSpeakrs.subtitle, 'Faster on Mac. No account needed.');
   assert.equal(macSpeakrs.recommended, true);
-  assert.equal(winSpeakrs.subtitle, 'No Hugging Face account.');
+  assert.equal(winSpeakrs.subtitle, 'No account needed.');
   assert.equal(winSpeakrs.recommended, false);
   assert.equal(macPyannote.title, 'Pyannote');
   assert.equal(macPyannote.subtitle, 'Needs a Hugging Face account.');
   assert.equal(macPyannote.recommended, false);
-  assert.equal(winPyannote.subtitle, 'More accurate and faster here. Needs a Hugging Face account.');
+  assert.equal(winPyannote.subtitle, 'More accurate and faster on Windows. Needs a Hugging Face account.');
   assert.equal(winPyannote.recommended, false);
 
   const cards = buildDiarizationEngineCards({ platform: 'darwin', arch: 'arm64' });
@@ -194,11 +194,11 @@ test('new users resolve to Speakrs and existing pyannote stays selected', () => 
 test('switch confirm copy matches the exclusive selector table', () => {
   assert.equal(
     getDiarizationSwitchConfirmMessage({ targetEngine: 'speakrs', platform: 'win32' }),
-    'Switch to Speakrs? This removes the current speaker model (about 2–4 GB). Your saved Hugging Face token is kept so you can switch back to Pyannote without pasting it again. Speakrs does not need an account.',
+    'Switch to Speakrs? This removes Pyannote (about 2–4 GB). Your saved Hugging Face token is kept in case you switch back. Speakrs does not need an account.',
   );
   assert.equal(
     getDiarizationSwitchConfirmMessage({ targetEngine: 'pyannote', platform: 'win32' }),
-    'Switch to Pyannote? This removes Speakrs (about 800 MB). Pyannote needs a Hugging Face account and a larger download. On this PC it is more accurate and faster.',
+    'Switch to Pyannote? This removes Speakrs (about 800 MB). Pyannote needs a Hugging Face account and a larger download. On Windows it is more accurate and faster.',
   );
   assert.equal(
     getDiarizationSwitchConfirmMessage({ targetEngine: 'pyannote', platform: 'darwin' }),

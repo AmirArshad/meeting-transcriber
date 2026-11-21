@@ -23,18 +23,18 @@
   function getEmptyMicrophoneDeviceGuidance(hostFamily) {
     if (hostFamily === 'darwin') {
       return {
-        logMessage: '⚠️ No microphone devices found - permission may not be granted',
+        logMessage: 'No microphone devices found — permission may not be granted',
         openSettings: 'microphone',
-        confirmMessage: 'No microphone devices found!\n\n'
-          + 'This usually means microphone permission is not granted.\n\n'
-          + 'Would you like to open System Settings to grant permission?\n\n'
+        confirmMessage: 'No microphone devices found.\n\n'
+          + 'This usually means microphone permission has not been granted.\n\n'
+          + 'Open System Settings to grant permission?\n\n'
           + '1. Go to Privacy & Security → Microphone\n'
-          + '2. Grant permission to AvaNevis\n'
-          + '3. Restart the app',
+          + '2. Enable access for AvaNevis\n'
+          + '3. Restart AvaNevis',
       };
     }
     return {
-      logMessage: '⚠️ No microphone devices found',
+      logMessage: 'No microphone devices found',
       openSettings: null,
       confirmMessage: null,
     };

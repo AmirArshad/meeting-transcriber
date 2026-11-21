@@ -735,7 +735,7 @@ def _extract_meeting_snapshot(
     if not meeting_id:
         return None
 
-    title = _clean_inline(meeting.get("title") or "Untitled Meeting") or "Untitled Meeting"
+    title = _clean_inline(meeting.get("title") or "Untitled recording") or "Untitled recording"
     date_iso = _clean_inline(meeting.get("date") or "")
     duration_sec = _parse_duration_seconds(meeting)
     language = _clean_inline(meeting.get("language") or "")

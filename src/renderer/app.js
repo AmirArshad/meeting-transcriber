@@ -485,7 +485,7 @@ function createDeleteButton() {
   const button = document.createElement('button');
   button.className = 'delete-btn-list';
   button.title = 'Delete';
-  button.setAttribute('aria-label', 'Delete meeting');
+  button.setAttribute('aria-label', 'Delete recording');
 
   button.appendChild(createDeleteIcon());
 
@@ -498,7 +498,7 @@ function createMeetingCheckbox(meetingId) {
   box.setAttribute('role', 'checkbox');
   box.setAttribute('aria-checked', 'false');
   box.setAttribute('tabindex', '0');
-  box.title = 'Select meeting';
+  box.title = 'Select recording';
   box.dataset.id = meetingId;
 
   const svg = createSvgElement('svg', {
@@ -941,7 +941,7 @@ function renderActivityList() {
       input.className = 'activity-rename-input';
       input.value = activityRenameDraft;
       input.maxLength = 120;
-      input.setAttribute('aria-label', 'Meeting title');
+      input.setAttribute('aria-label', 'Recording title');
       input.disabled = busy;
       input.addEventListener('input', () => {
         activityRenameDraft = input.value;
@@ -1152,16 +1152,16 @@ async function commitActivityRename(meetingId) {
   try {
     const updated = await window.electronAPI.updateMeeting(id, { title: decision.title });
     if (!updated || !updated.title) {
-      throw new Error('Meeting was not found.');
+      throw new Error('Recording was not found.');
     }
     activityRenameMeetingId = null;
     activityRenameDraft = '';
     activityRenameOriginal = '';
     applyMeetingTitleLocally(updated);
-    addLog(`Renamed meeting to "${updated.title}"`);
+    addLog(`Renamed recording to "${updated.title}"`);
   } catch (error) {
-    addLog(`Failed to rename meeting: ${error.message}`, 'error');
-    alert(`Failed to rename meeting: ${error.message}`);
+    addLog(`Could not rename recording: ${error.message}`, 'error');
+    alert(`Could not rename recording: ${error.message}`);
   } finally {
     activityActionBusyMeetingId = null;
     renderActivityList();
@@ -1781,7 +1781,7 @@ async function openMeetingAtTimestamp(meetingId, startSec = null) {
     meeting = meetings.find((item) => String(item.id) === targetId);
   }
   if (!meeting) {
-    showAppToast('This meeting is no longer in History.', 'warning');
+    showAppToast('This recording is no longer in History.', 'warning');
     return false;
   }
 
@@ -1959,7 +1959,7 @@ function applyKeyboardShortcutDiscovery() {
   });
   const note = document.getElementById('keyboard-shortcuts-note');
   if (note) {
-    note.textContent = 'Works while AvaNevis is focused. Start uses Mic + Desktop; use the recording menu for other modes.';
+    note.textContent = 'Works while AvaNevis is focused. Start Recording captures mic and desktop audio; use its dropdown menu for single-source modes.';
   }
 }
 
@@ -2522,7 +2522,7 @@ async function showFirstTimeSetup(modelSize) {
   if (!modal) return;
 
   modal.classList.remove('hidden');
-  progressText.textContent = 'Downloading Whisper AI model...';
+  progressText.textContent = 'Downloading Whisper model…';
 
   const cancelBtn = document.getElementById('ftue-cancel-download-btn');
   let downloadCanceled = false;
@@ -2531,7 +2531,7 @@ async function showFirstTimeSetup(modelSize) {
     if (cancelBtn) {
       cancelBtn.disabled = true;
     }
-    progressText.textContent = 'Canceling download...';
+    progressText.textContent = 'Cancelling download…';
     try {
       await window.electronAPI.cancelDownloadModel();
     } catch (_error) {
@@ -2550,11 +2550,11 @@ async function showFirstTimeSetup(modelSize) {
 
     // Update progress text with meaningful messages
     if (data.includes('Loading')) {
-      progressText.textContent = 'Loading model configuration...';
+      progressText.textContent = 'Loading model configuration…';
     } else if (data.includes('Downloading')) {
-      progressText.textContent = 'Downloading model files (this may take a few minutes)...';
+      progressText.textContent = 'Downloading model files (this may take a few minutes)…';
     } else if (data.includes('Model loaded') || data.includes('successfully')) {
-      progressText.textContent = 'Model ready!';
+      progressText.textContent = 'Model ready.';
     }
   }));
 
@@ -2574,9 +2574,9 @@ async function showFirstTimeSetup(modelSize) {
     // Complete
     clearInterval(progressInterval);
     progressBar.style.width = '100%';
-    progressText.textContent = 'Setup complete!';
+    progressText.textContent = 'Setup complete.';
 
-    addLog('AI model downloaded successfully!');
+    addLog('Whisper model downloaded.');
 
     // Wait a moment then remove overlay
     await new Promise(resolve => setTimeout(resolve, 1500));
@@ -2588,12 +2588,12 @@ async function showFirstTimeSetup(modelSize) {
     clearInterval(progressInterval);
     const canceled = downloadCanceled
       || /canceled|cancelled/i.test(String(error && error.message ? error.message : error));
-    progressText.textContent = canceled ? 'Download canceled' : 'Setup failed!';
+    progressText.textContent = canceled ? 'Download cancelled' : 'Setup failed.';
     logOutput.textContent += `\nERROR: ${error.message}`;
 
     addLog(
       canceled
-        ? 'Model download was canceled. You can download it later from Settings.'
+        ? 'Model download was cancelled. You can download it later from Settings.'
         : 'Model download failed. You can try again from Settings.',
       canceled ? 'warning' : 'error',
     );
@@ -2685,7 +2685,7 @@ async function loadMeetingHistory({ scan = false } = {}) {
   } catch (error) {
     if (requestEpoch !== meetingHistoryRequestEpoch) return;
     console.error('Failed to load meeting history:', error);
-    setPlaceholder(meetingList, 'Could not load meetings. Refresh to try again.');
+    setPlaceholder(meetingList, 'Could not load recordings. Refresh to try again.');
     renderActivityList();
     return;
   }
@@ -2742,7 +2742,7 @@ function renderMeetingList() {
   if (filtered.length === 0) {
     setPlaceholder(
       meetingList,
-      meetings.length === 0 ? 'No meetings yet. Record a meeting or import an audio file.' : 'No matches for your search',
+      meetings.length === 0 ? 'No recordings yet. Record audio or import a file.' : 'No matching recordings',
     );
     updateSelectionToolbar();
     restoreInlineTitleEditorFocus();
@@ -2832,8 +2832,8 @@ async function deleteCheckedMeetings() {
 
   const ids = [...checkedMeetingIds];
   const confirmMsg = ids.length === 1
-    ? 'Delete the selected meeting? This cannot be undone.'
-    : `Delete ${ids.length} selected meetings? This cannot be undone.`;
+    ? 'Delete the selected recording? This cannot be undone.'
+    : `Delete ${ids.length} selected recordings? This cannot be undone.`;
   if (!confirm(confirmMsg)) return;
 
   // Release audio player file lock if a checked meeting is currently playing
@@ -2872,13 +2872,13 @@ async function deleteCheckedMeetings() {
   await loadMeetingHistory();
 
   if (failures.length === 0) {
-    addLog(`Deleted ${ids.length} meeting${ids.length === 1 ? '' : 's'}.`);
+    addLog(`Deleted ${ids.length} recording${ids.length === 1 ? '' : 's'}.`);
   } else {
     addLog(
-      `Deleted ${ids.length - failures.length} of ${ids.length} meetings (${failures.length} failed).`,
+      `Deleted ${ids.length - failures.length} of ${ids.length} recordings (${failures.length} failed).`,
       'error',
     );
-    alert(`Some meetings could not be deleted:\n\n${failures.map((f) => `- ${f.id}: ${f.message}`).join('\n')}`);
+    alert(`Some recordings could not be deleted:\n\n${failures.map((f) => `- ${f.id}: ${f.message}`).join('\n')}`);
   }
 }
 
@@ -2936,7 +2936,7 @@ async function selectMeeting(meetingId) {
   if (retryBtn) {
     retryBtn.style.display = isMeetingTranscriptionRetryable(meeting) ? 'inline-flex' : 'none';
     retryBtn.disabled = false;
-    retryBtn.textContent = 'Retry Transcription';
+    retryBtn.textContent = 'Retry transcription';
   }
   if (retryWhisperBtn) {
     retryWhisperBtn.hidden = !isMeetingTranscriptionRetryable(meeting);
@@ -2965,7 +2965,7 @@ async function refreshMeetingDetails(targetId) {
     if (retryBtn) {
       retryBtn.style.display = isMeetingTranscriptionRetryable(fullMeeting) ? 'inline-flex' : 'none';
       retryBtn.disabled = false;
-      retryBtn.textContent = 'Retry Transcription';
+      retryBtn.textContent = 'Retry transcription';
     }
     if (retryWhisperBtn) {
       retryWhisperBtn.hidden = !isMeetingTranscriptionRetryable(fullMeeting);
@@ -3016,7 +3016,7 @@ async function refreshMeetingDetails(targetId) {
     if (fullMeeting.summary) {
       renderSummaryMarkdown(fullMeeting.summary, { stale: fullMeeting.summaryStale });
     } else {
-      showSummaryMessage('No summary yet. Generate one locally when the summary model is installed.');
+      showSummaryMessage('No summary yet. Click Generate summary once Summaries & Chat is set up in Settings.');
     }
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
@@ -3027,7 +3027,7 @@ async function refreshMeetingDetails(targetId) {
       err.className = 'placeholder error';
       err.textContent = 'Failed to load transcript. The saved recording is still available above.';
       transcriptEl.appendChild(err);
-      showSummaryMessage('Summary unavailable because the meeting details could not be loaded.', true);
+      showSummaryMessage('Summary unavailable because this recording could not be loaded.', true);
     }
   } finally {
     restoreInlineTitleEditorFocus();
@@ -3130,7 +3130,7 @@ function wireInlineTitleEditor({
     try {
       const updated = await window.electronAPI.updateMeeting(meeting.id, { title: newTitle });
       if (!updated || !updated.title) {
-        throw new Error('Meeting was not found.');
+        throw new Error('Recording was not found.');
       }
 
       const activeMeeting = getMeeting();
@@ -3138,11 +3138,11 @@ function wireInlineTitleEditor({
         heading.textContent = updated.title;
       }
       if (typeof onSaved === 'function') onSaved(updated);
-      addLog(`Renamed meeting to "${updated.title}"`);
+      addLog(`Renamed recording to "${updated.title}"`);
     } catch (err) {
       console.error('Rename failed:', err);
-      addLog(`Failed to rename meeting: ${err.message}`, 'error');
-      alert(`Failed to rename meeting: ${err.message}`);
+      addLog(`Could not rename recording: ${err.message}`, 'error');
+      alert(`Could not rename recording: ${err.message}`);
     } finally {
       commitInFlight = false;
       const activeMeeting = getMeeting();
@@ -4690,7 +4690,7 @@ function writeTranscriptMarkdown({ meeting, transcriptionResult, diarizationResu
     ? diarizationResult.segments
     : (transcriptionResult.segments || []);
   const lines = [
-    '# Meeting Transcription',
+    '# Audio Transcript',
     '',
     `**File:** ${meeting && meeting.audioPath ? meeting.audioPath.split(/[\\/]/).pop() : 'recording'}`,
     `**Date:** ${new Date().toISOString().replace('T', ' ').slice(0, 19)}`,
@@ -4728,7 +4728,7 @@ function renderMeetingDiarizationStatus(meeting, container) {
 
   const message = document.createElement('p');
   message.className = 'placeholder error';
-  message.textContent = `Speaker identification failed for this recording. ${diarization.error || 'The transcript was saved without speaker-guided chunks.'}`;
+  message.textContent = `Speaker identification failed for this recording. ${diarization.error || 'The transcript was saved without speaker labels.'}`;
   container.appendChild(message);
 }
 
@@ -4819,7 +4819,7 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = n
     const name = policy.names?.[select.value];
     const available = policy.languages.includes(select.value);
     submit.disabled = !available;
-    message.textContent = !name ? 'Confirm the predominant transcript language.'
+    message.textContent = !name ? 'Choose the main language spoken in this recording.'
       : available ? `Summary will use ${name}.`
         : `Summaries are not available for ${name} with this model.`;
   };
@@ -5021,7 +5021,7 @@ async function transcribeAudio(options = {}) {
     });
 
     if (result && result.success === false) {
-      throw Object.assign(new Error(result.error || 'Could not save pending meeting.'), {
+      throw Object.assign(new Error(result.error || 'Could not save recording.'), {
         code: result.code || 'TRANSCRIPTION_FAILED',
         meeting: result.meeting || result.pendingMeeting || null,
       });
@@ -5100,7 +5100,7 @@ async function transcribeAudio(options = {}) {
 
 async function retryMeetingTranscription() {
   if (!currentMeetingId) {
-    addLog('Select a meeting first.', 'warning');
+    addLog('Select a recording first.', 'warning');
     return;
   }
 
@@ -5136,7 +5136,7 @@ async function retryMeetingTranscription() {
   } finally {
     if (retryBtn) {
       retryBtn.disabled = false;
-      retryBtn.textContent = 'Retry Transcription';
+      retryBtn.textContent = 'Retry transcription';
     }
   }
 }
@@ -5307,7 +5307,7 @@ function setupWhisperRetryDialog() {
 
 // Copy transcript to clipboard (legacy Home panel removed)
 function copyTranscript() {
-  addLog('Open the meeting in History to copy its transcript.', 'warning');
+  addLog('Open the recording in History to copy its transcript.', 'warning');
 }
 
 // Copy meeting transcript to clipboard
@@ -5360,7 +5360,7 @@ function copyMeetingSummary() {
 async function saveMeetingSummaryToFile() {
   const meetingId = currentMeetingId;
   if (!meetingId) {
-    addLog('No meeting selected to save.', 'warning');
+    addLog('Select a recording first.', 'warning');
     return;
   }
 
@@ -5536,7 +5536,7 @@ function openTranscriptExportDialog({ suggestedName, content, meeting = null, tr
   }
   if (confirmBtn) {
     confirmBtn.disabled = false;
-    confirmBtn.textContent = 'Save As…';
+    confirmBtn.textContent = 'Save as…';
   }
 
   renderTranscriptExportFormatOptions(config, config.defaultFormat);
@@ -5563,7 +5563,7 @@ async function retranscribeMeetingForCaptions(meetingId) {
     errorEl.textContent = '';
     errorEl.hidden = true;
   }
-  addLog(`Re-transcribing meeting ${id} to generate caption timings...`);
+  addLog(`Re-transcribing recording ${id} to generate subtitle timings...`);
   try {
     const result = await window.electronAPI.retryTranscription(buildOrdinaryRetryOptions(id));
     if (result && result.meeting) {
@@ -5691,7 +5691,7 @@ function setupTranscriptExportDialog() {
       });
 
       if (result && result.ok === false) {
-        const message = result.error || 'Subtitle timing data is unavailable for this meeting.';
+        const message = result.error || 'Subtitle timing data is unavailable for this recording.';
         if (errorEl) {
           errorEl.textContent = message;
           errorEl.hidden = false;
@@ -5729,7 +5729,7 @@ function setupTranscriptExportDialog() {
       transcriptExportBusy = false;
       if (confirmBtn) {
         confirmBtn.disabled = false;
-        confirmBtn.textContent = 'Save As…';
+        confirmBtn.textContent = 'Save as…';
       }
     }
   });
@@ -5740,7 +5740,7 @@ function setupTranscriptExportDialog() {
 // save with the user-friendly name they chose.
 async function saveMeetingTranscriptToFile() {
   if (!currentMeetingId) {
-    addLog('No meeting selected to save.', 'warning');
+    addLog('Select a recording first.', 'warning');
     return;
   }
 
@@ -5842,7 +5842,7 @@ async function deleteMeetingHandler(meetingId, fallbackTitle = '') {
   const meeting = findMeetingById(idToDelete);
   const displayTitle = (meeting && meeting.title) || String(fallbackTitle || '').trim() || idToDelete;
 
-  if (confirm(`Are you sure you want to delete "${displayTitle}"?`)) {
+  if (confirm(`Delete "${displayTitle}"? This cannot be undone.`)) {
     try {
       // Release audio player file lock before deleting (Windows issue)
       const audioPlayer = document.getElementById('audio-player');
@@ -5852,7 +5852,7 @@ async function deleteMeetingHandler(meetingId, fallbackTitle = '') {
         audioPlayer.load();
       }
 
-      addLog(`Deleting meeting: ${displayTitle}...`);
+      addLog(`Deleting recording: ${displayTitle}...`);
 
       // Small delay to ensure OS releases the file handle
       await new Promise(resolve => setTimeout(resolve, 300));
@@ -5871,11 +5871,11 @@ async function deleteMeetingHandler(meetingId, fallbackTitle = '') {
       renderMeetingList();
       await loadMeetingHistory();
 
-      addLog('Meeting deleted successfully!');
+      addLog('Recording deleted.');
     } catch (error) {
       console.error('Delete failed:', error);
       addLog(`Error: ${error.message}`, 'error');
-      alert('Failed to delete meeting: ' + error.message);
+      alert('Could not delete recording: ' + error.message);
     }
   }
 }
@@ -6266,22 +6266,22 @@ function updateDiarizationFootprint(diarization) {
   const engine = resolveSelectedDiarizationEngine(diarization);
   const runtimeLabel = engine === 'speakrs'
     ? (diarization && diarization.availability && diarization.availability.acceleration === 'mps'
-      ? 'Apple Silicon (CoreML), isolated under user data'
-      : 'Speakrs CUDA, isolated under user data')
+      ? 'Apple Silicon (CoreML)'
+      : 'NVIDIA GPU (CUDA)')
     : (diarization && diarization.availability && diarization.availability.acceleration === 'mps'
-      ? 'PyTorch Metal/MPS, isolated under user data'
-      : 'PyTorch CUDA, isolated under user data');
+      ? 'Apple Silicon (Metal)'
+      : 'NVIDIA GPU (CUDA)');
   const downloadFallback = engine === 'speakrs'
-    ? 'model pack download'
+    ? 'about 800 MB'
     : (diarization && diarization.availability && diarization.availability.acceleration === 'mps'
-      ? 'depends on PyTorch MPS wheels'
-      : 'depends on PyTorch CUDA wheels');
+      ? 'about 2 GB'
+      : 'about 4 GB');
   const downloadState = aiAddonDownloadState.diarization;
   renderFootprintRows(document.getElementById('diarization-footprint'), [
     { label: 'Download', value: estimatedDownload ? `up to ${formatBytes(estimatedDownload)}` : downloadFallback },
     { label: 'Progress', value: downloadState.active ? `${Math.round(downloadState.percent || 0)}%` : null },
-    { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'not installed') },
-    { label: 'Runtime', value: runtimeLabel },
+    { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'Not installed') },
+    { label: 'Hardware', value: runtimeLabel },
   ]);
 }
 
@@ -6298,16 +6298,16 @@ function updateSummaryFootprint(summary) {
   const installed = storage && storage.installedBytes;
   const estimatedInstalled = storage && storage.estimatedInstalledBytes;
   const runtimeLabel = summary && summary.artifact && summary.artifact.acceleration === 'metal'
-    ? 'llama.cpp Metal'
-    : 'llama.cpp CUDA';
+    ? 'Apple Silicon (Metal)'
+    : 'NVIDIA GPU (CUDA)';
   const downloadState = aiAddonDownloadState.summary;
   renderFootprintRows(document.getElementById('summary-footprint'), [
     { label: 'Model', value: summary && summary.artifact && summary.artifact.label },
     { label: 'Model download', value: estimatedModel ? formatBytes(estimatedModel) : null },
     { label: 'Runtime download', value: estimatedRuntime ? formatBytes(estimatedRuntime) : null },
     { label: 'Progress', value: downloadState.active ? `${Math.round(downloadState.percent || 0)}%` : null },
-    { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'not installed') },
-    { label: 'Runtime', value: runtimeLabel },
+    { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'Not installed') },
+    { label: 'Hardware', value: runtimeLabel },
   ]);
 }
 
@@ -6918,7 +6918,7 @@ function setupAiAddonSettingsListeners() {
       if (!canRunControlAction('summary', 'remove')) {
         return;
       }
-      if (!confirm('Disable and remove the local summary model from this device?')) {
+      if (!confirm('Disable and remove the Summaries & Chat model from this device? Summaries and Chat will stay off until you enable them again. Your recordings and transcripts are not affected.')) {
         return;
       }
       withAiAddonAction(removeSummaryBtn, 'Removing...', async () => {
@@ -6951,6 +6951,9 @@ function setupAiAddonSettingsListeners() {
 // ============================================================================
 
 function renderTranscriptionEngineSettings() {
+  const whisperCard = document.getElementById('whisper-engine-card');
+  const whisperBadge = document.getElementById('whisper-status-badge');
+  const parakeetCard = document.getElementById('parakeet-engine-card');
   const parakeetRow = document.getElementById('parakeet-engine-row');
   const parakeetToggle = document.getElementById('use-parakeet-engine-toggle');
   const parakeetBadge = document.getElementById('parakeet-status-badge');
@@ -6978,6 +6981,13 @@ function renderTranscriptionEngineSettings() {
     formatBytes,
   });
 
+  if (whisperCard) whisperCard.classList.toggle('is-active', activeEngine === 'whisper');
+  if (whisperBadge) {
+    whisperBadge.textContent = activeEngine === 'whisper' ? 'Active' : 'Standby';
+    whisperBadge.classList.remove('enabled', 'disabled', 'installing');
+    whisperBadge.classList.add(activeEngine === 'whisper' ? 'enabled' : 'disabled');
+  }
+  if (parakeetCard) parakeetCard.classList.toggle('is-active', activeEngine === 'parakeet');
   parakeetRow.classList.toggle('is-active', activeEngine === 'parakeet');
   parakeetToggle.checked = activeEngine === 'parakeet';
   const canSwitchAway = activeEngine === 'parakeet' && view.actions.includes('use-whisper');
@@ -7200,7 +7210,7 @@ async function validateParakeetEngine() {
 async function removeParakeetEngine() {
   if (parakeetEngineSettingsBusy) return;
   const confirmed = confirm(
-    'Remove the Parakeet model and GPU runtime from this device? Existing recordings and Whisper models will be kept. If Parakeet is active, it stays selected until you turn off Use Parakeet.',
+    'Remove Parakeet and its GPU runtime from this device? Your recordings and Whisper models will be kept. If Parakeet is active, turn off Use Parakeet to switch back to Whisper.',
   );
   if (!confirmed) return;
 
@@ -7352,14 +7362,14 @@ async function checkGPUStatus() {
   const gpuActions = document.getElementById('gpu-actions');
   const ctaState = { platform: null, gpuInfo: null, cudaInfo: null };
   const resetInstallButton = () => {
-    installBtn.textContent = 'Install GPU Acceleration';
+    installBtn.textContent = 'Install GPU acceleration';
     installBtn.dataset.mode = 'install';
-    installBtn.title = 'Install AvaNevis-compatible CUDA runtime libraries';
+    installBtn.title = 'Install CUDA libraries needed by AvaNevis';
   };
   const setRepairInstallButton = () => {
-    installBtn.textContent = 'Repair GPU Runtime (Recommended)';
+    installBtn.textContent = 'Repair GPU runtime';
     installBtn.dataset.mode = 'repair';
-    installBtn.title = 'Reinstall AvaNevis-compatible CUDA runtime libraries';
+    installBtn.title = 'Reinstall CUDA libraries needed by AvaNevis';
   };
   resetInstallButton();
 
@@ -7373,7 +7383,7 @@ async function checkGPUStatus() {
 
     if (platform === 'darwin') {
       // ============ macOS: Show Metal/MLX Status ============
-      gpuDescription.textContent = 'GPU acceleration using Apple\'s Metal framework for Apple Silicon Macs. Provides 3-5x faster transcription.';
+      gpuDescription.textContent = 'Uses Apple Silicon GPU acceleration (Metal) automatically for faster transcription.';
       
       // Check if Apple Silicon
       const arch = await window.electronAPI.getArch();
@@ -7382,7 +7392,7 @@ async function checkGPUStatus() {
       if (isAppleSilicon) {
         // Apple Silicon - Metal always available
         gpuLabel1.textContent = 'GPU:';
-        gpuValue1.textContent = 'Apple Silicon (Metal GPU)';
+        gpuValue1.textContent = 'Apple Silicon (Metal)';
         gpuValue1.className = 'info-value success';
 
         gpuLabel2.textContent = 'Framework:';
@@ -7394,7 +7404,7 @@ async function checkGPUStatus() {
         gpuValue3.className = 'info-value success';
         if (gpuLabel4) gpuLabel4.textContent = 'Diagnostics:';
         if (gpuValue4) {
-          gpuValue4.textContent = 'No CUDA runtime required on Apple Silicon (MLX/Metal).';
+          gpuValue4.textContent = 'Built in on Apple Silicon. No extra setup needed.';
           gpuValue4.className = 'info-value';
         }
         if (gpuRow4) gpuRow4.style.display = 'flex';
@@ -7416,7 +7426,7 @@ async function checkGPUStatus() {
         gpuValue3.className = 'info-value';
         if (gpuLabel4) gpuLabel4.textContent = 'Diagnostics:';
         if (gpuValue4) {
-          gpuValue4.textContent = 'CUDA diagnostics are not applicable on Intel macOS.';
+          gpuValue4.textContent = 'GPU acceleration requires Apple Silicon on macOS.';
           gpuValue4.className = 'info-value';
         }
         if (gpuRow4) gpuRow4.style.display = 'flex';
@@ -7460,7 +7470,7 @@ async function checkGPUStatus() {
       } else {
         gpuDescription.textContent = platform === 'linux'
           ? getLinuxCudaSettingsDescription()
-          : 'Enable faster-whisper GPU acceleration for 4-5x faster transcription. Installs only the CUDA runtime libraries needed by CTranslate2.';
+          : 'Use your NVIDIA GPU for faster transcription. Downloads only the CUDA libraries AvaNevis needs; other apps are unaffected.';
         gpuLabel1.textContent = 'GPU Detected:';
         gpuLabel2.textContent = 'CUDA Libraries:';
         gpuLabel3.textContent = 'Download Size:';
@@ -7496,11 +7506,11 @@ async function checkGPUStatus() {
         ctaState.cudaInfo = cudaInfo;
 
         if (cudaInfo.installed) {
-          gpuValue2.textContent = 'Installed and loadable';
+          gpuValue2.textContent = 'Installed and ready';
           gpuValue2.classList.add('success');
-          gpuValue3.textContent = 'Already installed';
+          gpuValue3.textContent = 'Installed';
           if (gpuValue4) {
-            gpuValue4.textContent = 'CUDA runtime libraries are healthy and loadable.';
+            gpuValue4.textContent = 'CUDA libraries installed and ready.';
             gpuValue4.className = 'info-value success';
           }
           if (gpuRow4) gpuRow4.style.display = 'flex';
@@ -7517,7 +7527,7 @@ async function checkGPUStatus() {
             resetInstallButton();
           }
           if (cudaInfo.repairRecommendedAfterQuit) {
-            gpuValue2.textContent = 'Repair recommended (previous quit interrupted GPU setup)';
+            gpuValue2.textContent = 'Repair recommended (previous setup was interrupted)';
           } else if (statusCode === 'unsupportedRuntimeMajor') {
             const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
               ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
@@ -7526,16 +7536,16 @@ async function checkGPUStatus() {
               ? `Unsupported runtime detected (${unsupportedProfiles.join(', ')})`
               : 'Unsupported CUDA runtime detected';
           } else if (statusCode === 'runtimeIntegrityFailed') {
-            gpuValue2.textContent = 'Managed CUDA runtime failed integrity checks';
+            gpuValue2.textContent = 'CUDA runtime failed verification';
           } else if (cudaInfo.deviceAvailable && cudaInfo.runtimeLoadable === false) {
             const missing = Array.isArray(cudaInfo.missingLibraries) && cudaInfo.missingLibraries.length
               ? `Missing: ${cudaInfo.missingLibraries.join(', ')}`
-              : 'CUDA runtime libraries are not loadable';
+              : 'CUDA libraries could not be loaded';
             gpuValue2.textContent = missing;
           } else if (cudaInfo.deviceAvailable) {
-            gpuValue2.textContent = 'CUDA runtime not ready';
+            gpuValue2.textContent = 'CUDA runtime not installed';
           } else {
-            gpuValue2.textContent = 'No CUDA device available';
+            gpuValue2.textContent = 'No CUDA GPU available';
           }
           gpuValue2.classList.add('warning');
           gpuValue3.textContent = cudaInfo.pythonSupportedForInstall === false && cudaInfo.pythonVersion
@@ -7545,7 +7555,7 @@ async function checkGPUStatus() {
             const diagnostics = [];
             if (cudaInfo.repairRecommendedAfterQuit) {
               diagnostics.push(cudaInfo.repairRecommendedReason
-                || 'GPU runtime setup was interrupted by a previous quit. Repair before relying on CUDA.');
+                || 'Repair interrupted GPU setup before using CUDA.');
             }
             if (statusCode === 'unsupportedRuntimeMajor') {
               const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
@@ -7553,29 +7563,29 @@ async function checkGPUStatus() {
                 : [];
               diagnostics.push(
                 unsupportedProfiles.length
-                  ? `Detected newer CUDA runtime (${unsupportedProfiles.join(', ')}), but packaged transcription currently supports ${Array.isArray(cudaInfo.supportedProfiles) ? cudaInfo.supportedProfiles.join(', ') : 'cuda12'}.`
-                  : 'Detected CUDA runtime is newer than the packaged transcription stack currently supports.',
+                  ? `Detected ${unsupportedProfiles.join(', ')}, but AvaNevis requires ${Array.isArray(cudaInfo.supportedProfiles) ? cudaInfo.supportedProfiles.join(', ') : 'cuda12'}.`
+                  : 'Detected CUDA version is newer than AvaNevis supports.',
               );
             }
             if (cudaInfo.deviceAvailable === false) {
-              diagnostics.push('CUDA device not available to CTranslate2.');
+              diagnostics.push('NVIDIA GPU was not available for GPU transcription.');
             }
             if (Array.isArray(cudaInfo.missingLibraries) && cudaInfo.missingLibraries.length > 0) {
               diagnostics.push(
                 platform === 'linux'
-                  ? `Missing runtime libraries: ${cudaInfo.missingLibraries.join(', ')}`
-                  : `Missing runtime DLLs: ${cudaInfo.missingLibraries.join(', ')}`,
+                  ? `Missing libraries: ${cudaInfo.missingLibraries.join(', ')}`
+                  : `Missing DLLs: ${cudaInfo.missingLibraries.join(', ')}`,
               );
             }
             if (cudaInfo.error) {
-              diagnostics.push(`Probe error: ${String(cudaInfo.error).replace(/\s+/g, ' ').trim().slice(0, 180)}`);
+              diagnostics.push(`Error: ${String(cudaInfo.error).replace(/\s+/g, ' ').trim().slice(0, 180)}`);
             }
             if (platform === 'linux' && shouldShowGpuUninstallButton(platform, cudaInfo)) {
               diagnostics.push('Uninstall this runtime to return transcription to CPU.');
             }
             gpuValue4.textContent = diagnostics.length
               ? diagnostics.join(' ')
-              : 'CUDA runtime is not ready. Reinstall CUDA libraries from this page.';
+              : 'CUDA runtime is not ready. Install or repair CUDA libraries below.';
             gpuValue4.className = 'info-value warning';
           }
           if (gpuRow4) gpuRow4.style.display = 'flex';
@@ -7586,7 +7596,7 @@ async function checkGPUStatus() {
           uninstallBtn.style.display = shouldShowGpuUninstallButton(platform, cudaInfo) ? 'block' : 'none';
         }
 
-        gpuActions.style.display = 'block';
+        gpuActions.style.display = 'flex';
       }
     }
   } catch (error) {
@@ -7644,7 +7654,7 @@ function updateGPUCTA({ platform, gpuInfo, cudaInfo }) {
     title.textContent = 'Install CUDA for faster transcription';
   }
   if (sub && gpuInfo.gpuName) {
-    sub.textContent = `${gpuInfo.gpuName} detected - enable 4-5x faster transcription`;
+    sub.textContent = `${gpuInfo.gpuName} detected — install CUDA for faster transcription`;
   }
   cta.style.display = 'flex';
 }
@@ -7727,12 +7737,9 @@ async function installGPUAcceleration() {
   const isRepairFlow = installBtn.dataset.mode === 'repair';
   const confirmed = confirm(
     (isRepairFlow
-      ? 'This will repair AvaNevis GPU compatibility by adding the app-supported CUDA runtime libraries (about 1GB).\n\n'
-      : 'This will download and install about 1GB of CUDA runtime libraries for faster transcription.\n\n') +
-    'This does not remove newer CUDA runtime libraries used by other applications.\n\n' +
-    'Speaker identification uses its own managed PyTorch CUDA setup only if you explicitly enable it.\n\n' +
-    'The download may take 10-30 minutes depending on your internet speed.\n\n' +
-    'Continue?'
+      ? 'Repair AvaNevis CUDA libraries (about 1 GB)?\n\n'
+      : 'Download and install CUDA libraries (about 1 GB) for faster transcription on your NVIDIA GPU?\n\n') +
+    'Other CUDA versions on this computer will not be modified. This may take several minutes depending on your connection.'
   );
 
   if (!confirmed) return;
@@ -7826,11 +7833,10 @@ async function installGPUAcceleration() {
 async function uninstallGPUAcceleration() {
   const platform = await window.electronAPI.getPlatform().catch(() => null);
   const confirmed = confirm(
-    'This will remove AvaNevis-installed GPU runtime libraries used for transcription acceleration.\n\n' +
-    'It does not remove newer system CUDA runtimes used by other applications.\n\n' +
+    'Remove AvaNevis CUDA libraries? Other CUDA versions on this computer will not be modified.\n\n' +
     (platform === 'linux'
       ? getLinuxCudaUninstallConfirmSuffix()
-      : 'AvaNevis transcription will fall back to CPU mode.\n\n') +
+      : 'Transcription will return to CPU.\n\n') +
     'Continue?'
   );
 
@@ -9325,12 +9331,12 @@ function renderChatOnboardingAndComposer() {
     onboarding.hidden = eligible;
   }
   if (reasonEl && chatState.eligibility && chatState.eligibility.reason) {
-    reasonEl.textContent = `${chatState.eligibility.reason} Instant History full-text search remains available anytime.`;
+    reasonEl.textContent = `${chatState.eligibility.reason} Keyword search in History still works anytime.`;
   }
 
   const scopeText = formatChatScopeLabel(getCurrentChatScope(), getMeetingsMapById());
   if (headerTitle) {
-    headerTitle.textContent = chatState.activeThread ? chatState.activeThread.title : 'Ask your history';
+    headerTitle.textContent = chatState.activeThread ? chatState.activeThread.title : 'Ask your recordings';
   }
   if (headerScope) {
     headerScope.textContent = scopeText;
@@ -9573,7 +9579,7 @@ function renderChatStream() {
     if (msg.status === 'insufficient_evidence') {
       const callout = document.createElement('div');
       callout.className = 'chat-insufficient-callout';
-      callout.textContent = msg.content || 'Insufficient grounded evidence in your selected local meeting history.';
+      callout.textContent = msg.content || 'Not enough matching transcript text in the selected recordings to answer that.';
       wrap.appendChild(callout);
     } else {
       const prose = document.createElement('div');
@@ -9610,8 +9616,8 @@ function renderChatStream() {
         jumpPill.className = 'chat-citation-pill';
         const tsLabel = formatJumpTimestamp(citation.startSec);
         jumpPill.textContent = tsLabel
-          ? `${citation.meetingTitle || 'Meeting'} · ${tsLabel}`
-          : (citation.meetingTitle || 'Meeting');
+          ? `${citation.meetingTitle || 'Recording'} · ${tsLabel}`
+          : (citation.meetingTitle || 'Recording');
         jumpPill.addEventListener('click', () => handleChatCitationClick(citation));
         head.appendChild(jumpPill);
 
@@ -9637,7 +9643,7 @@ function renderChatStream() {
     if (Number.isFinite(msg.searchedMeetingCount) && msg.searchedMeetingCount > 0) {
       const meta = document.createElement('div');
       meta.className = 'chat-turn-meta-row';
-      meta.textContent = `Searched ${msg.searchedMeetingCount} meeting${msg.searchedMeetingCount === 1 ? '' : 's'} · ${msg.evidenceCount || 0} cited excerpt${(msg.evidenceCount || 0) === 1 ? '' : 's'}`;
+      meta.textContent = `Searched ${msg.searchedMeetingCount} recording${msg.searchedMeetingCount === 1 ? '' : 's'} · ${msg.evidenceCount || 0} matching excerpt${(msg.evidenceCount || 0) === 1 ? '' : 's'}`;
       wrap.appendChild(meta);
     }
 
@@ -9652,7 +9658,7 @@ function renderChatStream() {
     progressBanner.hidden = !chatSendVisible();
     if (chatSendVisible()) {
       progressText.textContent = (chatState.progress && chatState.progress.message)
-        || 'Searching local meeting history…';
+        || 'Searching your transcripts…';
     }
   }
 
@@ -9763,7 +9769,7 @@ function renderScopePopover() {
       ? meetings.filter((m) => String(m.title || '').toLowerCase().includes(filterTerm))
       : meetings;
     if (!visible.length) {
-      setPlaceholder(listEl, 'No meetings match');
+      setPlaceholder(listEl, 'No matching recordings');
     } else {
       const selectedSet = new Set(Array.isArray(draft.meetingIds) ? draft.meetingIds.map(String) : []);
       for (const m of visible) {
@@ -9780,7 +9786,7 @@ function renderScopePopover() {
         });
         const span = document.createElement('span');
         span.className = 'chat-scope-meeting-title';
-        span.textContent = m.title || 'Untitled Meeting';
+        span.textContent = m.title || 'Untitled recording';
         label.append(cb, span);
         listEl.appendChild(label);
       }
@@ -9845,7 +9851,7 @@ async function sendCurrentChatQuestion() {
   chatState.sending = true;
   chatState.sendingKey = originKey;
   chatState.optimisticQuestion = question;
-  chatState.progress = { phase: 'retrieving', message: 'Searching local meeting history…' };
+  chatState.progress = { phase: 'retrieving', message: 'Searching your transcripts…' };
   renderChatOnboardingAndComposer();
   renderChatStream();
 
@@ -10010,7 +10016,7 @@ function setupChatWorkspace() {
         chatState.modelState = res.modelState;
       }
       renderChatModelPill();
-      showAppToast('Local Q&A model unloaded from memory.', 'success');
+      showAppToast('Local model unloaded from memory.', 'success');
     } catch (error) {
       showAppToast(`Could not unload model: ${error.message}`, 'error');
     }

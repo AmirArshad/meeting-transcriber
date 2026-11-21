@@ -330,7 +330,7 @@ function buildMeetingTranscriptMarkdown({
     : (transcriptionResult.segments || []);
   const basename = String(audioPath || 'recording').split(/[\\/]/).pop() || 'recording';
   const lines = [
-    '# Meeting Transcription',
+    '# Audio Transcript',
     '',
     `**File:** ${basename}`,
     `**Date:** ${new Date().toISOString().replace('T', ' ').slice(0, 19)}`,

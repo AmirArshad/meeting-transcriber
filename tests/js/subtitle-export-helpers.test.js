@@ -334,7 +334,7 @@ test('buildExportFormatOptions sets format availability, notices, and canRetrans
     hasAudio: true,
   });
   assert.equal(missingWithAudio.canRetranscribe, true);
-  assert.match(missingWithAudio.captionsUnavailableNotice, /caption-scale timing/i);
+  assert.match(missingWithAudio.captionsUnavailableNotice, /exact segment timings/i);
   assert.deepEqual(
     missingWithAudio.options.map((opt) => ({ format: opt.format, available: opt.available })),
     [
@@ -353,7 +353,7 @@ test('buildExportFormatOptions sets format availability, notices, and canRetrans
     hasAudio: false,
   });
   assert.equal(staleWithoutAudio.canRetranscribe, false);
-  assert.match(staleWithoutAudio.captionsUnavailableNotice, /changed after its caption timings/i);
+  assert.match(staleWithoutAudio.captionsUnavailableNotice, /changed after its subtitle timings/i);
   assert.equal(staleWithoutAudio.options.find((opt) => opt.format === 'md').available, true);
   assert.equal(staleWithoutAudio.options.find((opt) => opt.format === 'txt').available, true);
   assert.equal(staleWithoutAudio.options.find((opt) => opt.format === 'srt').available, false);

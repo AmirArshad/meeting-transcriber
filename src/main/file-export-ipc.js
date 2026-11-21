@@ -123,7 +123,7 @@ function createFileExportIpc(deps) {
       return {
         ok: false,
         code: 'CAPTIONS_MISSING',
-        error: 'Accurate subtitles require a saved meeting with caption-scale timing.',
+        error: 'Subtitles require a saved recording with exact segment timings.',
       };
     }
 
@@ -132,7 +132,7 @@ function createFileExportIpc(deps) {
       return {
         ok: false,
         code: 'CAPTIONS_MISSING',
-        error: 'Meeting transcript could not be found on disk.',
+        error: 'Transcript file could not be found on disk.',
       };
     }
 
@@ -155,7 +155,7 @@ function createFileExportIpc(deps) {
       return {
         ok: false,
         code: 'CAPTIONS_MISSING',
-        error: 'Accurate subtitles require caption-scale timing. Re-transcribe from the saved audio to generate cue timings.',
+        error: 'Subtitles require exact segment timings. Re-transcribe from the saved audio to generate them.',
       };
     }
     if (!isSafeRecordingsJsonPath({ filePath: rawCaptionsPath, recordingsDir })) {
@@ -169,7 +169,7 @@ function createFileExportIpc(deps) {
         return {
           ok: false,
           code: 'CAPTIONS_MISSING',
-          error: 'Accurate subtitles require caption-scale timing. Re-transcribe from the saved audio to generate cue timings.',
+          error: 'Subtitles require exact segment timings. Re-transcribe from the saved audio to generate them.',
         };
       }
       throw error;

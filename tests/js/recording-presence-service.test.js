@@ -193,7 +193,7 @@ test('formatTrayElapsed switches to H:MM:SS after one hour', () => {
 test('buildTrayView returns idle, starting, recording, and stopping labels', () => {
   assert.deepEqual(buildTrayView({ state: 'idle', startedAt: null }, 1_000), {
     title: '',
-    tooltip: 'AvaNevis - Private meeting recorder and transcriber',
+    tooltip: 'AvaNevis - Local audio recorder and transcriber',
     statusLabel: 'Ready',
     trayImage: 'idle',
   });

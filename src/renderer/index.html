@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' file:; media-src 'self' file:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AvaNevis Meeting Recorder &amp; Transcriber</title>
+    <title>AvaNevis — Audio Recorder &amp; Transcriber</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -23,7 +23,7 @@
         <form id="import-audio-form" class="modal-form">
           <div class="modal-body">
             <p id="import-audio-name" class="import-audio-name"></p>
-            <p id="import-audio-description" class="setting-description">AvaNevis saves a playable copy in History and transcribes it on this device. Your original stays where it is.</p>
+            <p id="import-audio-description" class="setting-description">AvaNevis saves a playable copy in History and transcribes it on this device. Your original file is not changed.</p>
             <div id="import-audio-fields">
               <div class="ai-addon-field">
                 <label for="import-audio-engine">Engine</label>
@@ -50,7 +50,7 @@
           <div class="modal-actions">
             <button type="button" id="import-audio-cancel" class="btn btn-secondary">Cancel</button>
             <button type="button" id="import-audio-retry" class="btn btn-secondary" hidden>Try again</button>
-            <button type="button" id="import-audio-open" class="btn btn-primary" hidden>Open meeting</button>
+            <button type="button" id="import-audio-open" class="btn btn-primary" hidden>Open recording</button>
             <button type="submit" id="import-audio-submit" class="btn btn-primary">Import and transcribe</button>
           </div>
         </form>
@@ -62,7 +62,7 @@
         <div class="modal-header"><h2 id="summary-language-title">Confirm transcript language</h2></div>
         <form id="summary-language-form" class="modal-form">
           <div class="modal-body">
-            <p id="summary-language-description" class="setting-description">Choose the language actually spoken in this transcript. For mixed content, choose its predominant language. Balanced multilingual meetings are not supported.</p>
+            <p id="summary-language-description" class="setting-description">Choose the main language spoken in this recording. Mixed-language recordings without one main language are not supported.</p>
             <div class="ai-addon-field">
               <label for="summary-transcript-language">Transcript language</label>
               <select id="summary-transcript-language" class="device-select"></select>
@@ -79,7 +79,7 @@
 
     <div id="transcript-export-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="transcript-export-title" aria-describedby="transcript-export-description">
       <div class="modal-content transcript-export-modal-content">
-        <div class="modal-header"><h2 id="transcript-export-title" tabindex="-1">Save Transcript As</h2></div>
+        <div class="modal-header"><h2 id="transcript-export-title" tabindex="-1">Save transcript as</h2></div>
         <form id="transcript-export-form" class="modal-form">
           <div class="modal-body">
             <p id="transcript-export-description" class="setting-description">Choose a file format for <strong id="transcript-export-meeting-name"></strong>.</p>
@@ -105,7 +105,7 @@
           </div>
           <div class="modal-actions">
             <button type="button" id="transcript-export-cancel" class="btn btn-secondary">Cancel</button>
-            <button type="submit" id="transcript-export-confirm" class="btn btn-primary">Save As…</button>
+            <button type="submit" id="transcript-export-confirm" class="btn btn-primary">Save as…</button>
           </div>
         </form>
       </div>
@@ -119,7 +119,7 @@
         </div>
         <div class="modal-body">
           <p class="setting-description">
-            Downloading AI transcription model. This only happens once and takes
+            Downloading the default Whisper transcription model. This runs once and usually takes
             2&ndash;5 minutes.
           </p>
 
@@ -137,7 +137,7 @@
         </div>
         <div class="modal-actions">
           <button type="button" id="ftue-cancel-download-btn" class="btn btn-secondary btn-small cancel-download-btn">
-            Cancel Download
+            Cancel download
           </button>
         </div>
       </div>
@@ -171,7 +171,7 @@
         <form id="whisper-retry-form" class="modal-form">
           <div class="modal-body">
             <p id="whisper-retry-description" class="setting-description">
-              This starts a new Whisper attempt with these preferences. It does not change your active transcription engine.
+              Runs a one-time Whisper transcription with these settings. Your default transcription engine does not change.
             </p>
             <div class="modal-field-grid">
               <div class="ai-addon-field">
@@ -224,13 +224,13 @@
             draggable="false"
           />
         </div>
-        <button type="button" class="rail-btn active" data-tab="record" aria-label="Record page" aria-current="page">
+        <button type="button" class="rail-btn active" data-tab="record" aria-label="Record" aria-current="page">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
             <path d="M5 11a7 7 0 0 0 14 0"/>
             <line x1="12" y1="18" x2="12" y2="22"/>
           </svg>
-          <span class="rail-tooltip">Record page</span>
+          <span class="rail-tooltip">Record</span>
         </button>
 
         <button type="button" class="rail-btn" data-tab="history" aria-label="History">
@@ -374,7 +374,7 @@
         <div class="top-bar">
           <div class="top-bar-title">
             <h1>AvaNevis</h1>
-            <span class="subtitle">Meeting Recorder &amp; Transcriber</span>
+            <span class="subtitle">Audio Recorder &amp; Transcriber</span>
           </div>
           <div class="top-bar-spacer"></div>
           <div id="recording-presence" class="top-bar-status recording-presence" hidden>
@@ -476,7 +476,7 @@
             aria-describedby="update-ai-confirm-text"
             hidden
           >
-            <p id="update-ai-confirm-text" class="update-ai-confirm-text">Local AI work is running. Your audio is saved and will resume after restart.</p>
+            <p id="update-ai-confirm-text" class="update-ai-confirm-text">Transcription or AI work is still running. Your recordings are saved and pending work will resume after restart.</p>
             <div class="update-ai-confirm-actions">
               <button type="button" id="update-ai-confirm-restart" class="btn btn-update-ready btn-small">Restart anyway</button>
               <button type="button" id="update-ai-confirm-wait" class="btn btn-secondary btn-small">Wait</button>
@@ -608,7 +608,7 @@
               id="gpu-cta"
               class="gpu-cta"
               style="display: none"
-              title="Install CUDA for 4-5x faster transcription on your NVIDIA GPU"
+              title="Install CUDA for faster transcription on your NVIDIA GPU"
               aria-label="Install CUDA for faster transcription"
             >
               <span class="gpu-cta-icon" aria-hidden="true">
@@ -618,7 +618,7 @@
               </span>
               <span class="gpu-cta-text">
                 <strong>Install CUDA for faster transcription</strong>
-                <span class="gpu-cta-sub">NVIDIA GPU detected — enable 4-5x faster transcription</span>
+                <span class="gpu-cta-sub">NVIDIA GPU detected — install CUDA for faster transcription</span>
               </span>
               <span class="gpu-cta-arrow" aria-hidden="true">→</span>
             </button>
@@ -642,7 +642,7 @@
               </span>
               <span class="gpu-cta-text">
                 <strong id="ai-addon-cta-title">Set up local AI add-ons</strong>
-                <span class="gpu-cta-sub" id="ai-addon-cta-sub">Optional local speaker labels and summaries</span>
+                <span class="gpu-cta-sub" id="ai-addon-cta-sub">Optional local speaker labels, summaries, and Chat</span>
               </span>
               <span class="gpu-cta-arrow" aria-hidden="true">→</span>
             </button>
@@ -653,8 +653,8 @@
               style="display: none"
             >
               <div class="diarization-setup-prompt-copy">
-                <h3 id="diarization-setup-prompt-title">Add speaker labels to future transcripts</h3>
-                <p id="diarization-setup-prompt-message">Set up once. Speaker labels will be added automatically after transcription.</p>
+                <h3 id="diarization-setup-prompt-title">Label speakers automatically</h3>
+                <p id="diarization-setup-prompt-message">Set up once. Speaker labels are added automatically to new transcripts.</p>
               </div>
               <div class="diarization-setup-prompt-controls">
                 <div class="diarization-engine-selector" role="radiogroup" aria-label="Speaker engine">
@@ -664,7 +664,7 @@
                       <span>Speakrs</span>
                       <span class="setting-badge diarization-engine-recommended" data-speakrs-recommended hidden>Recommended</span>
                     </span>
-                    <span class="diarization-engine-card-sub" data-engine-sub="speakrs">No Hugging Face account.</span>
+                    <span class="diarization-engine-card-sub" data-engine-sub="speakrs">No account needed.</span>
                   </label>
                   <label class="diarization-engine-card" data-engine="pyannote" data-prompt-engine="pyannote" id="home-diarization-engine-pyannote" hidden>
                     <input type="radio" name="home-diarization-engine" value="pyannote" class="diarization-engine-radio" disabled />
@@ -674,7 +674,7 @@
                     <span class="diarization-engine-card-sub" data-engine-sub="pyannote">Needs a Hugging Face account.</span>
                   </label>
                 </div>
-                <p class="diarization-engine-static" data-speakrs-static hidden><span class="diarization-engine-static-label">Engine:</span> Speakrs</p>
+                <p class="diarization-engine-static" data-speakrs-static hidden><span class="diarization-engine-static-label">Engine:</span> Speakrs <span class="diarization-engine-static-meta">· No account needed</span></p>
                 <div class="ai-addon-field" id="home-diarization-token-field" hidden>
                   <label for="home-diarization-token-input">Hugging Face token</label>
                   <input
@@ -698,13 +698,13 @@
                 <span id="cuda-runtime-warning-sub">GPU runtime libraries are missing. Transcription will automatically fall back to CPU.</span>
               </div>
               <button type="button" id="cuda-runtime-warning-action" class="btn btn-small">
-                Open CUDA Settings
+                Open GPU settings
               </button>
             </div>
 
             <section class="card recording-section">
               <div class="recording-header">
-                <h2>Current Meeting</h2>
+                <h2>Record Audio</h2>
                 <div class="recording-status">
                   <div class="status-indicator" id="status-indicator"></div>
                   <span id="status-text">Ready</span>
@@ -725,8 +725,8 @@
                     </button>
                     <div id="record-mode-menu" class="record-mode-menu" role="menu"
                       aria-labelledby="record-mode-toggle" hidden>
-                      <button type="button" role="menuitem" data-capture-mode="mic-only">Record Mic Only</button>
-                      <button type="button" role="menuitem" data-capture-mode="desktop-only">Record Desktop Only</button>
+                      <button type="button" role="menuitem" data-capture-mode="mic-only">Record mic only</button>
+                      <button type="button" role="menuitem" data-capture-mode="desktop-only">Record desktop only</button>
                     </div>
                   </div>
                   <button
@@ -827,7 +827,7 @@
                 ></div>
                 <div class="activity-list" id="activity-list" role="list">
                   <p class="placeholder" id="activity-empty">
-                    Recordings you finish will appear here while they transcribe.
+                    Finished recordings appear here while they transcribe.
                   </p>
                 </div>
                 <div
@@ -866,13 +866,13 @@
               <!-- Sidebar: Meeting List -->
               <aside class="history-sidebar">
                 <div class="sidebar-header">
-                  <h3>Meetings</h3>
+                  <h3>Recordings</h3>
                   <div class="history-header-actions"><button type="button" id="import-audio-button" class="btn btn-small">Import audio</button>
                   <button
                     id="refresh-history"
                     class="btn-icon-only"
                     title="Refresh"
-                    aria-label="Refresh meetings"
+                    aria-label="Refresh recordings"
                   >
                     <svg
                       width="13"
@@ -901,8 +901,8 @@
                   <input
                     type="search"
                     id="meeting-search"
-                    placeholder="Search titles, transcripts, speakers..."
-                    aria-label="Search meeting history"
+                    placeholder="Search recordings, transcripts, speakers…"
+                    aria-label="Search recordings"
                   />
                 </div>
 
@@ -923,14 +923,14 @@
                 </div>
 
                 <div class="meeting-list" id="meeting-list">
-                  <p class="placeholder">No meetings recorded yet</p>
+                  <p class="placeholder">No recordings yet</p>
                 </div>
               </aside>
 
               <!-- Main Content: Meeting Details -->
               <main class="history-content">
                 <div id="meeting-details-empty" class="empty-state">
-                  <p class="placeholder">Select a meeting to view details</p>
+                  <p class="placeholder">Select a recording to view details</p>
                 </div>
 
                 <div
@@ -942,13 +942,13 @@
                     <div class="meeting-header-layout">
                       <div class="meeting-heading-copy">
                         <div class="meeting-title-row" id="meeting-title-row">
-                          <h2 id="meeting-title">Meeting Details</h2>
+                          <h2 id="meeting-title">Recording Details</h2>
                           <button
                             type="button"
                             id="meeting-title-edit"
                             class="title-edit-btn"
-                            title="Rename meeting"
-                            aria-label="Rename meeting"
+                            title="Rename recording"
+                            aria-label="Rename recording"
                           >
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                               <path d="M12 20h9"/>
@@ -977,19 +977,19 @@
                           <span id="meeting-duration"></span>
                         </div>
                       </div>
-                      <div class="meeting-detail-actions" role="group" aria-label="Meeting actions">
+                      <div class="meeting-detail-actions" role="group" aria-label="Recording actions">
                         <button
                           type="button"
                           id="ask-meeting-in-chat-btn"
                           class="btn btn-secondary btn-small"
-                          title="Ask grounded questions about this meeting in Chat"
+                          title="Ask questions about this recording in Chat"
                         >
                           Ask in Chat
                         </button>
                         <button
                           id="delete-meeting"
                           class="btn btn-danger btn-small"
-                          title="Delete Meeting"
+                          title="Delete recording"
                         >
                           Delete
                         </button>
@@ -1047,7 +1047,7 @@
                     </div>
                   </div>
 
-                  <div class="history-detail-tabs" role="tablist" aria-label="Meeting details">
+                  <div class="history-detail-tabs" role="tablist" aria-label="Recording details">
                     <button
                       type="button"
                       class="history-detail-tab-btn active"
@@ -1087,7 +1087,7 @@
                         </p>
                         <div class="transcript-section-actions history-toolbar-actions">
                           <div class="history-toolbar-group history-toolbar-processing">
-                            <button id="retry-transcription-btn" class="btn btn-small btn-secondary" type="button" style="display: none;">Retry Transcription</button>
+                            <button id="retry-transcription-btn" class="btn btn-small btn-secondary" type="button" style="display: none;">Retry transcription</button>
                             <button id="retry-whisper-transcription-btn" class="btn btn-small btn-secondary" type="button" hidden>Retry with Whisper…</button>
                             <button id="generate-summary-btn" class="btn btn-small btn-primary" type="button" disabled>Generate summary</button>
                           </div>
@@ -1202,8 +1202,8 @@
                     </svg>
                   </button>
                   <div class="chat-header-titles">
-                    <h2 id="chat-thread-title">Ask your history</h2>
-                    <span class="chat-header-scope" id="chat-header-scope">All History</span>
+                    <h2 id="chat-thread-title">Ask your recordings</h2>
+                    <span class="chat-header-scope" id="chat-header-scope">All recordings</span>
                   </div>
                 </div>
                 <div class="chat-header-right">
@@ -1215,7 +1215,7 @@
                       id="chat-unload-model-btn"
                       class="chat-unload-model-btn"
                       hidden
-                      title="Unload local Q&amp;A model from GPU / unified memory"
+                      title="Unload local model from memory"
                     >
                       Unload
                     </button>
@@ -1227,9 +1227,9 @@
                 <div class="chat-stream">
                   <section class="chat-onboarding-card" id="chat-onboarding-card" hidden>
                     <div class="chat-onboarding-copy">
-                      <h3>Local Q&amp;A uses the Summary AI add-on</h3>
+                      <h3>Chat requires the Summaries &amp; Chat add-on</h3>
                       <p id="chat-onboarding-reason">
-                        Install the local Qwen / llama.cpp add-on in Settings to ask grounded questions across your meeting history. History search works anytime with zero AI add-ons.
+                        Set up the local Summaries &amp; Chat add-on in Settings to ask questions across your transcripts. Keyword search in History works without any add-ons.
                       </p>
                     </div>
                     <button
@@ -1237,15 +1237,15 @@
                       id="chat-open-ai-settings-btn"
                       class="btn btn-primary btn-small"
                     >
-                      Open Settings → AI Add-ons
+                      Open AI Add-ons in Settings
                     </button>
                   </section>
 
                   <div class="chat-empty-state" id="chat-empty-state">
-                    <p class="chat-empty-kicker">100% Local · Verifiable Citations</p>
-                    <h3>Ask across your recorded meetings</h3>
+                    <p class="chat-empty-kicker">Local only · Linked to timestamps</p>
+                    <h3>Ask about your recordings</h3>
                     <p class="chat-empty-subtitle">
-                      Answers stay strictly grounded in retrieved transcript segments and cite exact clickable timestamps. The local AI model loads only when needed and can be unloaded at any time.
+                      Answers use only your saved transcripts and link directly to matching timestamps. The local model loads on demand and can be unloaded anytime to free memory.
                     </p>
                     <div class="chat-starter-grid" id="chat-starter-prompts"></div>
                   </div>
@@ -1254,7 +1254,7 @@
 
                   <div class="chat-progress-banner" id="chat-progress-banner" hidden role="status" aria-live="polite">
                     <span class="chat-progress-spinner" aria-hidden="true"></span>
-                    <span id="chat-progress-text">Searching local meeting history…</span>
+                    <span id="chat-progress-text">Searching your transcripts…</span>
                   </div>
                 </div>
               </div>
@@ -1263,16 +1263,16 @@
                 <div class="chat-composer-inner">
                   <div class="chat-scope-popover" id="chat-scope-popover" hidden role="dialog" aria-label="Search scope">
                     <div class="chat-scope-mode-row">
-                      <button type="button" id="chat-scope-all-btn" class="btn btn-small">All History</button>
-                      <button type="button" id="chat-scope-selected-btn" class="btn btn-small">Pick meetings…</button>
+                      <button type="button" id="chat-scope-all-btn" class="btn btn-small">All recordings</button>
+                      <button type="button" id="chat-scope-selected-btn" class="btn btn-small">Select recordings…</button>
                     </div>
                     <div id="chat-scope-selected-panel" class="chat-scope-selected-panel" hidden>
                       <input
                         type="search"
                         id="chat-scope-meeting-filter"
                         class="chat-scope-filter-input"
-                        placeholder="Filter meetings..."
-                        aria-label="Filter meetings in scope picker"
+                        placeholder="Filter recordings…"
+                        aria-label="Filter recordings"
                       />
                       <div id="chat-scope-meetings-list" class="chat-scope-meetings-list"></div>
                     </div>
@@ -1299,10 +1299,10 @@
                       class="chat-scope-btn"
                       aria-expanded="false"
                       aria-controls="chat-scope-popover"
-                      title="Choose which meetings or dates to search"
+                      title="Choose which recordings or dates to search"
                     >
                       <span class="chat-scope-dot" aria-hidden="true"></span>
-                      <span id="chat-scope-btn-label">All History</span>
+                      <span id="chat-scope-btn-label">All recordings</span>
                     </button>
                     <textarea
                       id="chat-input"
@@ -1310,7 +1310,7 @@
                       rows="1"
                       maxlength="2000"
                       placeholder="Ask a question…"
-                      aria-label="Ask a question about your meetings"
+                      aria-label="Ask a question about your recordings"
                       title="Enter to send. Shift+Enter for a new line."
                     ></textarea>
                     <button
@@ -1347,51 +1347,61 @@
                     <span class="setting-badge enabled" id="transcription-active-engine-badge">Whisper active</span>
                   </div>
                   <p class="setting-description">
-                    Use Whisper for multiple languages, or Parakeet for English. Each recording saves its engine.
+                    Choose which local engine transcribes new recordings. Whisper supports 11 languages; Parakeet v2 is English-only and requires a compatible GPU. Each recording saves its own engine.
                   </p>
 
                   <div class="transcription-engine-settings">
-                    <div class="transcription-engine-row" id="parakeet-engine-row">
-                      <div class="transcription-engine-row-copy">
-                        <div class="transcription-engine-row-heading">
-                          <h4>Parakeet</h4>
-                          <span class="setting-badge" id="parakeet-status-badge">Checking…</span>
+                    <div class="transcription-engine-card is-active" id="whisper-engine-card">
+                      <div class="transcription-engine-row-heading">
+                        <h4>Whisper</h4>
+                        <span class="setting-badge enabled" id="whisper-status-badge">Active</span>
+                      </div>
+                      <p class="transcription-engine-description">Default engine. Supports 11 languages and runs on CPU or GPU.</p>
+                      <div class="transcription-whisper-summary">
+                        <span>Selected on Record page</span>
+                        <span class="transcription-engine-preferences" id="whisper-preferences-summary">English · Small</span>
+                      </div>
+                    </div>
+
+                    <div class="transcription-engine-card" id="parakeet-engine-card">
+                      <div class="transcription-engine-row" id="parakeet-engine-row">
+                        <div class="transcription-engine-row-copy">
+                          <div class="transcription-engine-row-heading">
+                            <h4>Parakeet v2</h4>
+                            <span class="setting-badge" id="parakeet-status-badge">Checking…</span>
+                          </div>
+                          <p class="transcription-engine-description" id="parakeet-engine-description">English only. Requires an NVIDIA CUDA GPU or Apple Silicon.</p>
                         </div>
-                        <p class="transcription-engine-description" id="parakeet-engine-description">Optional local English transcription. English only.</p>
+                        <label class="transcription-engine-toggle" for="use-parakeet-engine-toggle">
+                          <span>Use Parakeet</span>
+                          <input type="checkbox" id="use-parakeet-engine-toggle" role="switch" aria-label="Use Parakeet for future recordings" aria-describedby="parakeet-engine-description parakeet-status-text" disabled />
+                          <span class="transcription-engine-toggle-track" aria-hidden="true"><span></span></span>
+                        </label>
                       </div>
-                      <label class="transcription-engine-toggle" for="use-parakeet-engine-toggle">
-                        <span>Use Parakeet</span>
-                        <input type="checkbox" id="use-parakeet-engine-toggle" role="switch" aria-label="Use Parakeet for future recordings" aria-describedby="parakeet-engine-description parakeet-status-text" disabled />
-                        <span class="transcription-engine-toggle-track" aria-hidden="true"><span></span></span>
-                      </label>
-                    </div>
-                    <p class="transcription-engine-status" id="parakeet-status-text" role="status" aria-live="polite">Checking Parakeet…</p>
-                    <p class="transcription-engine-active-warning" id="parakeet-active-warning" role="status" hidden>
-                      Parakeet is selected but unavailable. Turn it off to use Whisper; saved recordings remain available in History.
-                    </p>
-                    <p class="transcription-engine-operation-error" id="parakeet-operation-error" role="alert" hidden></p>
-                    <div class="transcription-engine-progress" id="parakeet-progress" hidden>
-                      <div class="progress-bar-container" id="parakeet-progress-track" role="progressbar" aria-label="Parakeet setup progress" aria-valuemin="0" aria-valuemax="100">
-                        <div class="progress-bar" id="parakeet-progress-bar"></div>
+                      <p class="transcription-engine-status" id="parakeet-status-text" role="status" aria-live="polite">Checking Parakeet…</p>
+                      <p class="transcription-engine-active-warning" id="parakeet-active-warning" role="status" hidden>
+                        Parakeet is selected but unavailable. Turn off Use Parakeet to switch back to Whisper; saved recordings stay in History.
+                      </p>
+                      <p class="transcription-engine-operation-error" id="parakeet-operation-error" role="alert" hidden></p>
+                      <div class="transcription-engine-progress" id="parakeet-progress" hidden>
+                        <div class="progress-bar-container" id="parakeet-progress-track" role="progressbar" aria-label="Parakeet setup progress" aria-valuemin="0" aria-valuemax="100">
+                          <div class="progress-bar" id="parakeet-progress-bar"></div>
+                        </div>
+                        <p class="progress-text" id="parakeet-progress-text">Starting…</p>
                       </div>
-                      <p class="progress-text" id="parakeet-progress-text">Starting…</p>
-                    </div>
-                    <p class="transcription-engine-download" id="parakeet-download-size" hidden></p>
-                    <div class="transcription-engine-actions">
-                      <button type="button" id="parakeet-setup-btn" class="btn btn-primary btn-small" hidden>Set up Parakeet</button>
-                      <button type="button" id="parakeet-cancel-btn" class="btn btn-secondary btn-small" hidden>Cancel</button>
-                      <button type="button" id="parakeet-recheck-btn" class="btn btn-secondary btn-small" hidden>Recheck</button>
-                      <button type="button" id="parakeet-validate-btn" class="btn btn-secondary btn-small" hidden>Validate</button>
-                      <button type="button" id="parakeet-repair-btn" class="btn btn-secondary btn-small" hidden>Repair</button>
-                      <button type="button" id="parakeet-remove-btn" class="btn btn-danger btn-small" hidden>Remove</button>
-                    </div>
-                    <details class="transcription-engine-evidence">
-                      <summary>Performance notes</summary>
-                      <p>On one CachyOS RTX 4070 test, Parakeet was faster than Whisper Medium but used more GPU memory, with similar measured WER. Windows and Mac performance has not been measured.</p>
-                    </details>
-                    <div class="transcription-whisper-summary">
-                      <span>Whisper when off</span>
-                      <span class="transcription-engine-preferences" id="whisper-preferences-summary">English · Small</span>
+                      <p class="transcription-engine-download" id="parakeet-download-size" hidden></p>
+                      <div class="transcription-engine-actions">
+                        <button type="button" id="parakeet-setup-btn" class="btn btn-primary btn-small" hidden>Set up Parakeet</button>
+                        <button type="button" id="parakeet-cancel-btn" class="btn btn-secondary btn-small" hidden>Cancel</button>
+                        <button type="button" id="parakeet-recheck-btn" class="btn btn-secondary btn-small" hidden>Recheck</button>
+                        <button type="button" id="parakeet-validate-btn" class="btn btn-secondary btn-small" hidden>Check setup</button>
+                        <button type="button" id="parakeet-repair-btn" class="btn btn-secondary btn-small" hidden>Repair</button>
+                        <button type="button" id="parakeet-remove-btn" class="btn btn-danger btn-small" hidden>Remove</button>
+                      </div>
+                      <details class="transcription-engine-evidence">
+                        <summary>About Parakeet</summary>
+                        <p>Parakeet transcribes English faster than Whisper on supported GPUs, but uses more GPU memory. Whisper supports 11 languages and also runs on CPU.</p>
+                      </details>
                     </div>
                   </div>
                 </div>
@@ -1441,14 +1451,14 @@
                       disabled
                       style="display: none"
                     >
-                      Install GPU Acceleration
+                      Install GPU acceleration
                     </button>
                     <button
                       id="uninstall-gpu-btn"
                       class="btn btn-secondary"
                       style="display: none"
                     >
-                      Uninstall GPU Libraries
+                      Uninstall GPU libraries
                     </button>
                   </div>
 
@@ -1481,7 +1491,7 @@
                   </div>
 
                   <p class="setting-description">
-                    Optional local-only features for speaker labels and meeting summaries. Enabling downloads local files to this device; disabling removes them. Models and tokens stay on this device. Enabling summaries does not generate a summary.
+                    Optional features that run locally on this device. Enabling an add-on downloads its model files; removing it deletes them. Models and tokens stay on this device.
                   </p>
                   <div class="ai-addon-actions" id="ai-addon-retry-row" hidden>
                     <button id="retry-ai-addon-status-btn" class="btn btn-small" type="button">Retry</button>
@@ -1492,7 +1502,7 @@
                       <div class="ai-addon-card-header">
                         <div>
                           <h4>Speaker Identification</h4>
-                          <p>Runs after transcription when setup is ready.</p>
+                          <p>Labels different speakers automatically on new recordings once set up.</p>
                         </div>
                         <span class="setting-badge" id="diarization-status-badge">Checking&hellip;</span>
                       </div>
@@ -1504,7 +1514,7 @@
                             <span>Speakrs</span>
                             <span class="setting-badge diarization-engine-recommended" data-speakrs-recommended hidden>Recommended</span>
                           </span>
-                          <span class="diarization-engine-card-sub" id="diarization-engine-speakrs-sub">No Hugging Face account.</span>
+                          <span class="diarization-engine-card-sub" id="diarization-engine-speakrs-sub">No account needed.</span>
                         </label>
                         <label class="diarization-engine-card" data-engine="pyannote" id="diarization-engine-pyannote" hidden>
                           <input type="radio" name="settings-diarization-engine" value="pyannote" class="diarization-engine-radio" disabled />
@@ -1514,7 +1524,7 @@
                           <span class="diarization-engine-card-sub" id="diarization-engine-pyannote-sub">Needs a Hugging Face account.</span>
                         </label>
                       </div>
-                      <p class="diarization-engine-static" data-speakrs-static hidden>Engine: Speakrs</p>
+                      <p class="diarization-engine-static" data-speakrs-static hidden><span class="diarization-engine-static-label">Engine: Speakrs</span><span class="diarization-engine-static-meta">· No account needed · NVIDIA CUDA</span></p>
 
                       <div class="ai-addon-field" id="diarization-token-field" hidden>
                         <label for="diarization-token-input">Hugging Face token</label>
@@ -1527,8 +1537,7 @@
                           disabled
                         />
                         <p class="ai-addon-help">
-                          Create a Hugging Face read token from Settings > Access Tokens, then accept the pyannote model terms before setup.
-                          If a token is already saved, leave this blank to reuse it.
+                          Create a Hugging Face read token and accept the pyannote model terms before setup. Leave blank to reuse a saved token.
                           <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener noreferrer">Create token</a>
                           <a href="https://huggingface.co/pyannote/speaker-diarization-community-1" target="_blank" rel="noopener noreferrer">Open model terms</a>
                         </p>
@@ -1556,7 +1565,7 @@
                       </div>
                       <div class="ai-addon-actions">
                         <button id="setup-diarization-btn" class="btn btn-primary btn-small" disabled>Enable speaker identification</button>
-                        <button id="cancel-diarization-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel Download</button>
+                        <button id="cancel-diarization-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel download</button>
                         <button id="validate-diarization-btn" class="btn btn-small" disabled>Check setup</button>
                         <button id="remove-diarization-btn" class="btn btn-danger btn-small" disabled>Disable and remove…</button>
                       </div>
@@ -1565,14 +1574,14 @@
                     <div class="ai-addon-card" id="summary-addon-card">
                       <div class="ai-addon-card-header">
                         <div>
-                          <h4>Meeting Summaries</h4>
-                          <p>User-triggered summaries from saved transcripts.</p>
+                          <h4>Summaries &amp; Chat</h4>
+                          <p>Generate summaries from transcripts on demand and ask questions in Chat.</p>
                         </div>
                         <span class="setting-badge" id="summary-status-badge">Checking&hellip;</span>
                       </div>
 
                       <div class="ai-addon-field compact">
-                        <label for="summary-profile-select">Profile</label>
+                        <label for="summary-profile-select">Summary style</label>
                         <select id="summary-profile-select" class="device-select" disabled>
                           <option value="concise">Concise</option>
                           <option value="balanced" selected>Balanced</option>
@@ -1591,7 +1600,7 @@
                       </div>
                       <div class="ai-addon-actions">
                         <button id="setup-summary-btn" class="btn btn-primary btn-small" disabled>Enable summaries</button>
-                        <button id="cancel-summary-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel Download</button>
+                        <button id="cancel-summary-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel download</button>
                         <button id="validate-summary-btn" class="btn btn-small" disabled>Check setup</button>
                         <button id="remove-summary-btn" class="btn btn-danger btn-small" disabled>Disable and remove…</button>
                       </div>
@@ -1611,10 +1620,10 @@
                   <div class="setting-header">
                     <h3>Keyboard Shortcuts</h3>
                   </div>
-                  <p class="setting-description" id="keyboard-shortcuts-note">Works while AvaNevis is focused. Start uses Mic + Desktop; use the recording menu for other modes.</p>
+                  <p class="setting-description" id="keyboard-shortcuts-note">Works while AvaNevis is focused. Start Recording captures mic and desktop audio; use its dropdown menu for single-source modes.</p>
                   <div class="gpu-info keyboard-shortcuts-table" role="table" aria-label="Keyboard shortcuts">
                     <div class="info-row" role="row">
-                      <span class="info-label" role="cell">Record page</span>
+                      <span class="info-label" role="cell">Record</span>
                       <span class="info-value" role="cell" data-shortcut-display="goto-record">Ctrl+Shift+1</span>
                     </div>
                     <div class="info-row" role="row">
@@ -1647,7 +1656,7 @@
                     <span class="setting-badge enabled" id="update-settings-badge">Up to date</span>
                   </div>
                   <p class="setting-description">
-                    Checks GitHub Releases for new AvaNevis builds. No telemetry is sent.
+                    Checks GitHub Releases for new versions. No usage data is sent.
                   </p>
                   <div class="gpu-info update-settings-meta">
                     <div class="info-row">
@@ -1739,7 +1748,7 @@
                     </div>
                   </div>
                   <p class="about-credits">
-                    Transcription uses OpenAI Whisper (MIT). Optional speaker labels use
+                    Transcription uses OpenAI Whisper (MIT) or optional NVIDIA Parakeet (<code>parakeet-tdt-0.6b-v2</code>, CC BY 4.0). Optional speaker labels use
                     <a
                       href="https://github.com/avencera/speakrs"
                       target="_blank"
@@ -1753,7 +1762,7 @@
                       rel="noopener noreferrer"
                       >pyannote Speaker Diarization Community-1</a
                     >
-                    (CC BY 4.0). Optional summaries use
+                    (CC BY 4.0, Windows and macOS). Optional summaries and Chat use
                     <a
                       href="https://huggingface.co/Qwen/Qwen3.5-9B"
                       target="_blank"
@@ -1767,7 +1776,7 @@
                       rel="noopener noreferrer"
                       >llama.cpp</a
                     >
-                    (MIT); Linux CUDA summaries also use the pinned
+                    (MIT); Linux CUDA also uses the
                     <a
                       href="https://github.com/ai-dock/llama.cpp-cuda"
                       target="_blank"
@@ -1794,7 +1803,7 @@
 
       <!-- Footer -->
       <footer>
-        <p>Powered by Whisper AI &middot; All processing happens locally</p>
+        <p>All recording and transcription runs locally on this device</p>
       </footer>
       <div
         id="app-toast"

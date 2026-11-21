@@ -112,7 +112,7 @@ test('supports macOS diarization only on Apple Silicon MPS policy', () => {
   assert.equal(availability.runtimeDevice, 'mps');
   assert.equal(availability.automaticAfterTranscription, true);
   assert.equal(intelAvailability.supported, false);
-  assert.match(intelAvailability.reason, /Apple Silicon.*Metal\/MPS/);
+  assert.match(intelAvailability.reason, /Apple Silicon/i);
   assert.equal(linuxAvailability.supported, false);
   assert.equal(linuxAvailability.acceleration, 'unsupported');
   assert.match(linuxAvailability.reason, /CUDA 12/);

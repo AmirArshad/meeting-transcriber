@@ -80,7 +80,7 @@ def build_transcript_markdown(
     stamp = dated_at or datetime.now()
     duration_text = str(timedelta(seconds=max(0, int(duration))))
     lines = [
-        "# Meeting Transcription",
+        "# Audio Transcript",
         "",
         f"**File:** {audio_file.name}",
         f"**Date:** {stamp.strftime('%Y-%m-%d %H:%M:%S')}",

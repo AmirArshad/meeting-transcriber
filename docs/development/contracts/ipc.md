@@ -6,7 +6,9 @@ The channel ownership table below is canonical. A channel rename or payload chan
 
 Plain HTML/CSS/JS — no React or Vue. `src/renderer/app.js` is the state machine; prefer **extracting** pure logic into `src/renderer/*-helpers.js` with a matching `tests/js/*-helpers.test.js` over growing `app.js`. IPC only through `window.electronAPI`.
 
-Non-obvious: the saved `.md` transcript is the source of truth (the viewer renders it with timestamp chips); meeting rename updates metadata **by meeting ID and deliberately does not rename files on disk**; keep the DPR-aware canvas/scrubber patterns when touching the visualizer or playback UI.
+Non-obvious: the saved `.md` transcript is the source of truth (the viewer renders it with timestamp chips); recording rename updates metadata **by meeting ID and deliberately does not rename files on disk**; keep the DPR-aware canvas/scrubber patterns when touching the visualizer or playback UI.
+
+User-facing copy in the renderer, main-process alerts/toasts, and docs uses `recording`, `audio`, and `Summaries & Chat` in plain, non-hyperbolic operator language, whereas IPC channels, preload keys, DOM IDs, and schema fields intentionally retain their existing `meeting*` identifiers until a dedicated refactor.
 
 ## Cross-cutting change checklists
 

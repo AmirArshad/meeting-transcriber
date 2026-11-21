@@ -64,9 +64,9 @@
   function getUnsupportedGpuSettingsCopy(platform) {
     if (platform === 'linux') {
       return {
-        description: 'No NVIDIA GPU was detected. Transcription uses CPU faster-whisper. Optional CUDA 12 setup appears when an NVIDIA GPU is available; it is tested on CachyOS x86_64 with an RTX 4070, and other NVIDIA Linux setups are best-effort.',
+        description: 'No NVIDIA GPU was detected. Transcription uses CPU. Optional CUDA 12 setup appears when an NVIDIA GPU is available (tested on CachyOS x86_64 with an RTX 4070; other NVIDIA Linux setups are best-effort).',
         statusLabel: 'CPU transcription',
-        diagnostics: 'Linux CUDA is opt-in. Uninstall returns transcription to CPU.',
+        diagnostics: 'Linux CUDA is opt-in. Uninstalling returns transcription to CPU.',
       };
     }
     return {
@@ -77,7 +77,7 @@
   }
 
   function getLinuxCudaSettingsDescription() {
-    return 'Optional CUDA 12 acceleration for faster-whisper. Tested on CachyOS x86_64 with an NVIDIA RTX 4070; other NVIDIA Linux setups are best-effort. Transcription uses the CPU until you install a working runtime, and returns to CPU if you uninstall.';
+    return 'Optional CUDA 12 acceleration for faster NVIDIA GPU transcription. Tested on CachyOS x86_64 with an NVIDIA RTX 4070; other NVIDIA Linux setups are best-effort. Transcription uses CPU until installed, and returns to CPU if you uninstall.';
   }
 
   function getLinuxCudaBrokenRuntimeCopy() {
@@ -85,7 +85,7 @@
   }
 
   function getLinuxCudaUninstallConfirmSuffix() {
-    return 'AvaNevis transcription will return to CPU faster-whisper.\n\n';
+    return 'Transcription will return to CPU.\n\n';
   }
 
   function hasLinuxManagedCudaRuntime(cudaInfo) {
