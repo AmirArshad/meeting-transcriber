@@ -413,3 +413,65 @@ def test_denials_for_all_recording_types_are_rejected(noun):
             {'summary': f'No {noun} transcript was provided.'},
             'The speaker described several substantive ideas during this session.',
         )
+
+
+def test_summary_speaker_overlay_preserves_sidecar_and_transcript(tmp_path):
+    import json
+    from backend.summaries.summary_runner import hash_transcript_text, load_summary_segments
+
+    text = '[00:01 - 00:03] **Speaker 1:** Hello\n'
+    transcript = tmp_path / 'meeting.md'
+    transcript.write_text(text, encoding='utf-8')
+    sidecar = tmp_path / 'meeting.speakers.json'
+    sidecar.write_text(json.dumps({'sourceTranscriptHash': hash_transcript_text(text), 'segments': [
+        {'start': 1, 'end': 3, 'speaker': 'Speaker 1', 'text': 'Hello'}
+    ]}), encoding='utf-8')
+    assert load_summary_segments(str(transcript), str(sidecar), {'Speaker 1': 'Alice'})[0]['speaker'] == 'Alice'
+    assert load_summary_segments(str(transcript), None, {'Speaker 1': 'Alice'})[0]['speaker'] == 'Alice'
+    assert transcript.read_text(encoding='utf-8') == text
+    assert json.loads(sidecar.read_text())['segments'][0]['speaker'] == 'Speaker 1'
+
+
+def test_summary_parses_custom_bold_speaker_name():
+    assert parse_markdown_transcript('[00:01 - 00:03] **Alice Doe:** Hello\n')[0]['speaker'] == 'Alice Doe'
+
+
+def test_summary_fallback_keeps_mixed_untimed_speakers_and_empty_boundaries(tmp_path):
+    from backend.summaries.summary_runner import load_summary_segments
+
+    transcript = tmp_path / 'meeting.md'
+    transcript.write_text("""## Transcript
+**Speaker 1:**
+**Speaker 2:** First line
+continued line
+
+[00:04 - 00:06] **Speaker 1:** Timed speech
+**Speaker 1:** Untimed again
+""", encoding='utf-8')
+    segments = load_summary_segments(str(transcript), speaker_names={'Speaker 1': 'Alice', 'Speaker 2': 'Bob'})
+    assert [(item['speaker'], item['text']) for item in segments] == [
+        ('Bob', 'First line continued line'), ('Alice', 'Timed speech'), ('Alice', 'Untimed again')
+    ]
+    lines = [item['line'] for item in normalize_transcript_segments(segments)]
+    assert lines == ['Bob: First line continued line', '[00:04 - 00:06] Alice: Timed speech', 'Alice: Untimed again']
+
+
+def test_empty_timed_speaker_does_not_consume_untimed_speaker():
+    segments = parse_markdown_transcript('[00:01 - 00:03] **Speaker 1:**\n**Speaker 2:** Hello\n')
+    assert [(item['speaker'], item['text']) for item in segments] == [('Speaker 2', 'Hello')]
+
+
+def test_summary_speaker_overlay_normalizes_names_and_preserves_empty_labels(tmp_path):
+    import json
+    from backend.summaries.summary_runner import hash_transcript_text, load_summary_segments
+
+    text = '[00:01 - 00:03] **Speaker 1:** Hello\n[00:04 - 00:05] **Speaker 2:** Hi\n'
+    transcript = tmp_path / 'meeting.md'
+    transcript.write_text(text, encoding='utf-8')
+    sidecar = tmp_path / 'meeting.speakers.json'
+    sidecar.write_text(json.dumps({'sourceTranscriptHash': hash_transcript_text(text), 'segments': [
+        {'speaker': 'Speaker 1', 'text': 'Hello'}, {'speaker': 'Speaker 2', 'text': 'Hi'}
+    ]}), encoding='utf-8')
+    names = {'Speaker 1': ' *Alice*--->-> ', 'Speaker 2': '', 'invalid': 'Ignored'}
+    for path in (None, str(sidecar)):
+        assert [segment['speaker'] for segment in load_summary_segments(str(transcript), path, names)] == ['Alice', 'Speaker 2']

@@ -27,7 +27,8 @@ SUMMARY_ARRAY_FIELDS = SUMMARY_TEMPLATES["meeting"]["array_fields"]
 TRANSCRIPT_TIMESTAMP_RE = re.compile(
     r"^(?:\*\*)?\[(?P<start>\d{1,2}:\d{2}(?::\d{2})?)\s+-\s+(?P<end>\d{1,2}:\d{2}(?::\d{2})?)\](?:\*\*)?\s*(?P<tail>.*)$"
 )
-SPEAKER_PREFIX_RE = re.compile(r"^(?:\*\*)?(?P<speaker>Speaker\s+\d+|Unknown):(?:\*\*)?\s*(?P<text>.*)$", re.IGNORECASE)
+SPEAKER_PREFIX_RE = re.compile(r"^(?:\*\*(?P<speaker>[^*\n:]{1,64}):\*\*|(?P<plain_speaker>Speaker\s+\d+|Unknown):)\s*(?P<text>.*)$", re.IGNORECASE)
+UNTIMED_SPEAKER_RE = re.compile(r"^\*\*(?P<speaker>Speaker (?:[1-9]|[1-9]\d)|SPEAKER_\d{2}):\*\*\s*(?P<text>.*)$")
 TOPIC_BOUNDARY_RE = re.compile(
     r"\b(next|new|another)\s+(topic|item|section)\b|"
     r"\b(moving|move)\s+on\b|"
@@ -115,7 +116,7 @@ def _split_speaker_prefix(text: str) -> Dict[str, str]:
         return {"speaker": "Unknown", "text": cleaned}
 
     return {
-        "speaker": _clean_text(match.group("speaker")) or "Unknown",
+        "speaker": _clean_text(match.group("speaker") or match.group("plain_speaker")) or "Unknown",
         "text": _clean_text(match.group("text")),
     }
 
@@ -135,7 +136,8 @@ def _pull_following_body_line(lines: List[str], index: int) -> tuple[int, str]:
     next_index, next_text = _next_nonempty_line(lines, index + 1)
     if next_index < 0:
         return index, ""
-    if TRANSCRIPT_TIMESTAMP_RE.match(lines[next_index].strip()):
+    if (TRANSCRIPT_TIMESTAMP_RE.match(lines[next_index].strip())
+            or UNTIMED_SPEAKER_RE.match(lines[next_index].strip())):
         return index, ""
     return next_index, next_text
 
@@ -158,7 +160,23 @@ def parse_markdown_transcript(markdown_text: str) -> List[Dict[str, Any]]:
         line = lines[index].strip()
         match = TRANSCRIPT_TIMESTAMP_RE.match(line)
         if not match:
-            index += 1
+            untimed = UNTIMED_SPEAKER_RE.match(line)
+            if not untimed:
+                index += 1
+                continue
+            text_parts = [_clean_text(untimed.group("text"))]
+            cursor = index + 1
+            while cursor < len(lines):
+                body = lines[cursor].strip()
+                if (not body or body.startswith("#") or TRANSCRIPT_TIMESTAMP_RE.match(body)
+                        or UNTIMED_SPEAKER_RE.match(body)):
+                    break
+                text_parts.append(_clean_text(body))
+                cursor += 1
+            text = " ".join(part for part in text_parts if part)
+            if text:
+                segments.append({"start": None, "end": None, "speaker": untimed.group("speaker"), "text": text})
+            index = cursor
             continue
 
         tail = _clean_text(match.group("tail"))
@@ -203,8 +221,13 @@ def normalize_transcript_segments(segments: Iterable[Dict[str, Any]]) -> List[Di
 
         start = _to_float(segment.get("start"))
         end = _to_float(segment.get("end"), start)
-        speaker = _clean_text(segment.get("speaker")) or "Unknown"
-        line = f"[{format_timestamp(start)} - {format_timestamp(end)}] {speaker}: {text}"
+        speaker_value = segment.get("speaker")
+        speaker = speaker_value.strip() if isinstance(speaker_value, str) else ""
+        speaker = speaker or "Unknown"
+        if segment.get("start") is None or segment.get("end") is None:
+            line = f"{speaker}: {text}"
+        else:
+            line = f"[{format_timestamp(start)} - {format_timestamp(end)}] {speaker}: {text}"
 
         normalized.append({
             "start": start,

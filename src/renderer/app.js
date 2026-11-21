@@ -69,6 +69,13 @@ const {
   shouldSkipMeetingReselect,
 } = window.historyDetailHelpers;
 const {
+  isCanonicalSpeakerKey,
+  extractSpeakerSamples,
+  hasUnnamedSpeakers,
+  normalizeSpeakerName,
+  diffSpeakerNames,
+} = window.speakerLabelHelpers;
+const {
   buildHighlightSegmentsFromParts,
   fallbackFilterMeetingsByTitle,
   findClosestTranscriptSegmentIndex,
@@ -104,6 +111,8 @@ const {
   getMeetingTranscriptionStatusMessage,
   isMeetingTranscriptionRetryable,
   shouldAbortSummaryGenerationAfterPreflight,
+  shouldPromptSpeakerNamesBeforeSummary,
+  haveSummarySpeakerNamesChanged,
 } = window.summaryUiHelpers;
 const {
   applyDiarizationEngineCardDomState,
@@ -270,6 +279,8 @@ let recoveryActionBusy = false;
 let currentAudioFile = null;
 let currentRecordingDurationSeconds = 0;
 let currentMeetingId = null;
+let historySpeakers = null;
+let stopSpeakerPreview = null;
 // Tracks the meeting saved from the most recent recording (post-transcription).
 // Powers the in-place rename on the post-recording transcript card and the
 // default filename used by the "Save" button.
@@ -363,6 +374,7 @@ function setPlaceholder(container, message, className = 'placeholder') {
 }
 
 function showSummaryMessage(message, isError = false) {
+  updateSummaryTagMismatchBanner(null);
   const summaryEl = document.getElementById('meeting-summary');
   if (!summaryEl) {
     return;
@@ -403,12 +415,12 @@ async function restoreCurrentHistorySummary(meetingId, message, { isError = fals
   }
 
   if (!meetingIdsEqual(currentMeetingId, meetingId)) return;
-  updateSummaryTagMismatchBanner(fullMeeting);
   if (fullMeeting?.summary) {
     renderSummaryMarkdown(fullMeeting.summary, { stale: fullMeeting.summaryStale });
   } else {
     showSummaryMessage(message, isError);
   }
+  updateSummaryTagMismatchBanner(fullMeeting);
   if (showTab) activateHistoryDetailTab('summary');
 }
 
@@ -1143,6 +1155,19 @@ function renderActivityList() {
       });
       actions.appendChild(openBtn);
     }
+    if (row.status === 'ready' && !isRenaming
+        && (rowMeeting?.ai?.diarization?.speakerCount > 0
+          || transcriptionQueueState.jobs.some((job) => String(job.meetingId) === String(row.meetingId) && job.speakerCount > 0))) {
+      const nameButton = document.createElement('button');
+      nameButton.type = 'button';
+      nameButton.className = 'btn btn-small';
+      nameButton.textContent = 'Name speakers';
+      nameButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void openHistorySpeakerNames(row.meetingId);
+      });
+      actions.appendChild(nameButton);
+    }
     item.appendChild(actions);
 
     if (row.actions.includes('open') && !row.actions.includes('cancel') && !isRenaming) {
@@ -1278,14 +1303,41 @@ function showCompletionToast(job) {
   if (!view.visible) {
     return;
   }
-  toastEl.textContent = view.message;
-  toastEl.hidden = false;
-  toastEl.classList.add('is-visible');
-  clearTimeout(showCompletionToast._timer);
-  showCompletionToast._timer = setTimeout(() => {
+  const message = document.getElementById('activity-completion-message');
+  const nameButton = document.getElementById('activity-completion-name-speakers');
+  showCompletionToast._cleanup?.();
+  const cleanup = () => {
+    clearTimeout(showCompletionToast._timer);
+    showCompletionToast._timer = null;
+    showCompletionToast._cleanup = null;
+    toastEl.removeEventListener('focusout', onFocusOut);
+  };
+  const hide = () => {
+    cleanup();
     toastEl.classList.remove('is-visible');
     toastEl.hidden = true;
-  }, 4500);
+  };
+  const onFocusOut = (event) => {
+    if (!toastEl.contains(event.relatedTarget)) hide();
+  };
+  showCompletionToast._cleanup = cleanup;
+  if (message) message.textContent = view.message;
+  if (nameButton) {
+    nameButton.hidden = !(job.speakerCount > 0);
+    nameButton.onclick = () => {
+      hide();
+      void openHistorySpeakerNames(job.meetingId);
+    };
+  }
+  toastEl.hidden = false;
+  toastEl.classList.add('is-visible');
+  showCompletionToast._timer = setTimeout(() => {
+    if (toastEl.contains(document.activeElement)) {
+      toastEl.addEventListener('focusout', onFocusOut);
+    } else {
+      hide();
+    }
+  }, job.speakerCount > 0 ? 8000 : 4500);
 }
 
 function updateBackgroundTranscriptionTip() {
@@ -1344,6 +1396,19 @@ function openMeetingInHistory(meetingId) {
   activateTab('history');
   activateHistoryDetailTab('transcript');
   void selectMeeting(meetingId);
+}
+
+async function openHistorySpeakerNames(meetingId) {
+  const id = String(meetingId);
+  if (!findMeetingById(id)) await loadMeetingHistory();
+  activateTab('history');
+  activateHistoryDetailTab('transcript');
+  if (meetingIdsEqual(currentMeetingId, id)) await refreshMeetingDetails(id);
+  else await selectMeeting(id);
+  if (!meetingIdsEqual(currentMeetingId, id)) return;
+  const samples = historySpeakers?.samples || [];
+  const speaker = samples.find((sample) => !historySpeakers.names[sample.speaker]) || samples[0];
+  if (speaker) focusHistorySpeaker(speaker.speaker);
 }
 
 async function cancelActivityTranscription(meetingId) {
@@ -1427,12 +1492,14 @@ async function resumePendingTranscriptionsFromBanner() {
 }
 
 function setMeetingAudioSource(audioPath) {
+  stopSpeakerPreview?.();
   if (typeof pendingAudioSeekCleanup === 'function') {
     pendingAudioSeekCleanup();
     pendingAudioSeekCleanup = null;
   }
   const audioPlayer = document.getElementById('audio-player');
-  audioPlayer.src = window.electronAPI.buildFileUrl(audioPath);
+  if (audioPath) audioPlayer.src = window.electronAPI.buildFileUrl(audioPath);
+  else audioPlayer.removeAttribute('src');
   audioPlayer.load();
   // Reset custom player UI when a new source loads
   if (typeof window.__resetCustomAudioPlayer === 'function') {
@@ -1440,16 +1507,17 @@ function setMeetingAudioSource(audioPath) {
   }
 }
 
-function seekMeetingAudio(targetSeconds) {
+function seekMeetingAudio(targetSeconds, { player, afterSeek } = {}) {
   const numeric = Number(targetSeconds);
   if (!Number.isFinite(numeric) || numeric < 0) {
     return;
   }
-  const audioPlayer = document.getElementById('audio-player');
+  const audioPlayer = player || document.getElementById('audio-player');
   if (!audioPlayer || !audioPlayer.getAttribute('src')) {
     return;
   }
 
+  if (!afterSeek) stopSpeakerPreview?.();
   if (typeof pendingAudioSeekCleanup === 'function') {
     pendingAudioSeekCleanup();
     pendingAudioSeekCleanup = null;
@@ -1463,9 +1531,10 @@ function seekMeetingAudio(targetSeconds) {
       ? Math.max(0, Math.min(duration, numeric))
       : Math.max(0, numeric);
     audioPlayer.currentTime = clamped;
-    if (typeof window.__syncCustomAudioPlayer === 'function') {
+    if (!player && typeof window.__syncCustomAudioPlayer === 'function') {
       window.__syncCustomAudioPlayer();
     }
+    afterSeek?.();
   };
 
   if (audioPlayer.readyState >= 1) {
@@ -1483,11 +1552,232 @@ function seekMeetingAudio(targetSeconds) {
   };
 }
 
-function renderHistoryTranscriptMarkdown(transcriptEl, markdown) {
+function playSpeakerSample(button, player, sample, updateButton) {
+  if (button.getAttribute('aria-pressed') === 'true') {
+    stopSpeakerPreview?.();
+    return;
+  }
+  stopSpeakerPreview?.();
+  const endSec = Number.isFinite(sample.endSec) && sample.endSec > sample.startSec
+    ? sample.endSec : sample.startSec + 4;
+  const stop = () => {
+    stopSpeakerPreview = null;
+    pendingAudioSeekCleanup?.();
+    pendingAudioSeekCleanup = null;
+    player.removeEventListener('timeupdate', onTime);
+    player.removeEventListener('pause', stop);
+    player.removeEventListener('ended', stop);
+    player.removeEventListener('error', stop);
+    player.pause();
+    updateButton(false);
+  };
+  const onTime = () => {
+    if (player.currentTime >= endSec) stop();
+  };
+  stopSpeakerPreview = stop;
+  updateButton(true);
+  player.addEventListener('ended', stop);
+  player.addEventListener('error', stop);
+  seekMeetingAudio(sample.startSec, {
+    player: player.id === 'audio-player' ? undefined : player,
+    afterSeek: async () => {
+      if (stopSpeakerPreview !== stop) return;
+      player.addEventListener('timeupdate', onTime);
+      try {
+        await player.play();
+        if (stopSpeakerPreview === stop) player.addEventListener('pause', stop);
+      } catch {
+        if (stopSpeakerPreview === stop) stop();
+      }
+    },
+  });
+}
+
+function buildSpeakerRow(prefix, sample, names, player, signal) {
+  const row = document.createElement('div');
+  row.className = 'speaker-row';
+  const label = document.createElement('label');
+  label.htmlFor = `${prefix}-name-${sample.speaker.replace(' ', '-')}`;
+  label.textContent = sample.speaker;
+  const field = document.createElement('input');
+  field.type = 'text';
+  field.id = label.htmlFor;
+  field.className = 'speaker-name-input';
+  field.maxLength = 64;
+  field.autocomplete = 'off';
+  field.placeholder = 'Add a name';
+  field.value = names[sample.speaker] || '';
+  row.append(label, field);
+  if (player?.getAttribute('src') && !player.error && sample.startSec !== null) {
+    const preview = document.createElement('button');
+    preview.type = 'button';
+    preview.className = 'btn btn-small speaker-preview';
+    const timestamp = formatJumpTimestamp(sample.startSec);
+    const update = (playing) => {
+      preview.setAttribute('aria-pressed', String(playing));
+      preview.setAttribute('aria-label', `Voice preview for ${sample.speaker} at ${timestamp}`);
+      preview.textContent = `${playing ? '❚❚' : '▶'} ${timestamp}`;
+    };
+    update(false);
+    preview.addEventListener('click', () => playSpeakerSample(preview, player, sample, update));
+    player.addEventListener('error', () => {
+      preview.disabled = true;
+      preview.title = 'Recording audio is unavailable';
+    }, { once: true, signal });
+    row.appendChild(preview);
+  }
+  if (sample.excerpt) {
+    const excerpt = document.createElement('p');
+    excerpt.className = 'speaker-excerpt';
+    excerpt.id = `${field.id}-excerpt`;
+    excerpt.textContent = `“${sample.excerpt}”`;
+    excerpt.title = sample.excerpt;
+    field.setAttribute('aria-describedby', excerpt.id);
+    row.appendChild(excerpt);
+  }
+  return { row, field };
+}
+
+function setHistorySpeakerLabel(button, speaker, names) {
+  const name = names[speaker] || speaker;
+  button.textContent = name;
+  button.setAttribute('aria-label', `Edit name for ${name}`);
+}
+
+function setHistorySpeakersExpanded(expanded) {
+  const toggle = document.getElementById('history-speaker-toggle');
+  const chips = document.getElementById('history-speaker-chips');
+  if (!historySpeakers || !toggle || !chips) return;
+  historySpeakers.expanded = expanded;
+  document.getElementById('history-speaker-rows').hidden = !expanded;
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.textContent = expanded ? 'Hide names' : 'Edit names';
+  chips.hidden = expanded;
+  chips.replaceChildren();
+  if (expanded) return;
+  for (const { speaker } of historySpeakers.samples) {
+    const chip = document.createElement('button');
+    chip.className = 'history-transcript-speaker';
+    chip.type = 'button';
+    setHistorySpeakerLabel(chip, speaker, historySpeakers.names);
+    chip.addEventListener('click', () => focusHistorySpeaker(speaker));
+    chips.appendChild(chip);
+  }
+}
+
+function focusHistorySpeaker(speaker) {
+  if (!historySpeakers) return;
+  setHistorySpeakersExpanded(true);
+  historySpeakers.fields.get(speaker)?.focus();
+}
+
+function clearHistorySpeakers() {
+  stopSpeakerPreview?.();
+  historySpeakers?.controller.abort();
+  historySpeakers = null;
+  const bar = document.getElementById('history-speaker-bar');
+  if (bar) bar.hidden = true;
+}
+
+function renderHistorySpeakers(meeting, segments) {
+  clearHistorySpeakers();
+  const bar = document.getElementById('history-speaker-bar');
+  const samples = extractSpeakerSamples(segments);
+  if (!bar || !samples.length) return;
+  const rows = document.getElementById('history-speaker-rows');
+  const status = document.getElementById('history-speaker-status');
+  const player = document.getElementById('audio-player');
+  const state = {
+    meeting,
+    samples,
+    names: meeting.ai?.diarization?.speakerNames || {},
+    fields: new Map(),
+    requestedNames: new Map(),
+    controller: new AbortController(),
+    transcriptHash: null,
+  };
+  historySpeakers = state;
+  status.textContent = '';
+  rows.replaceChildren();
+  document.getElementById('history-speaker-heading').textContent = `Speakers (${samples.length})`;
+  document.getElementById('history-speaker-toggle').onclick = () => setHistorySpeakersExpanded(!state.expanded);
+  const collapseIfNamed = (nextFocus) => {
+    if (historySpeakers === state && state.expanded && !rows.contains(nextFocus)
+        && !hasUnnamedSpeakers({ ai: { diarization: { speakerNames: state.names } } }, samples)) {
+      setHistorySpeakersExpanded(false);
+    }
+  };
+  rows.addEventListener('focusout', (event) => collapseIfNamed(event.relatedTarget), { signal: state.controller.signal });
+  for (const sample of samples) {
+    const { speaker } = sample;
+    const { row, field } = buildSpeakerRow('history-speaker', sample, state.names, player, state.controller.signal);
+    state.fields.set(speaker, field);
+    rows.appendChild(row);
+    state.requestedNames.set(speaker, state.names[speaker] || '');
+    const save = async (nextFocus = document.activeElement) => {
+      const name = normalizeSpeakerName(field.value);
+      if (name === state.requestedNames.get(speaker)) {
+        collapseIfNamed(nextFocus);
+        return;
+      }
+      state.requestedNames.set(speaker, name);
+      field.value = name;
+      status.textContent = 'Saving speaker name…';
+      try {
+        const updated = await window.electronAPI.updateMeeting(meeting.id, {
+          speakerNames: { [speaker]: name },
+          expectedSourceTranscriptHash: await (state.transcriptHash ||= hashSummaryTranscript(meeting.transcript)),
+          expectedTranscriptionAttemptId: meeting.transcriptionResult?.attemptId || '',
+        });
+        syncMeetingInList(updated);
+        if (historySpeakers !== state) return;
+        state.names = updated.ai?.diarization?.speakerNames || {};
+        if (state.requestedNames.get(speaker) === name) {
+          if (field.value === name) field.value = state.names[speaker] || '';
+          state.requestedNames.set(speaker, state.names[speaker] || '');
+          status.textContent = 'Speaker name saved.';
+        }
+        updateHistorySpeakerLabels(state, updated);
+        collapseIfNamed(document.activeElement);
+        if (meetingSearchQueryNormalized) void runHistorySearch(meetingSearchQuery);
+      } catch (error) {
+        if (historySpeakers !== state || state.requestedNames.get(speaker) !== name) return;
+        state.requestedNames.set(speaker, state.names[speaker] || '');
+        status.textContent = 'Could not save the name. Press Enter to try again or Escape to restore it.';
+        console.warn('Speaker name update failed:', error.message);
+      }
+    };
+    field.addEventListener('blur', (event) => void save(event.relatedTarget));
+    field.addEventListener('keydown', (event) => {
+      if (event.isComposing) return;
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        void save();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        field.value = state.names[speaker] || '';
+        state.requestedNames.set(speaker, field.value);
+        status.textContent = '';
+      }
+    });
+  }
+  bar.hidden = false;
+  setHistorySpeakersExpanded(hasUnnamedSpeakers(meeting, samples));
+}
+
+function updateHistorySpeakerLabels(state, meeting) {
+  for (const badge of document.querySelectorAll('#meeting-transcript [data-speaker-key]')) {
+    setHistorySpeakerLabel(badge, badge.dataset.speakerKey, state.names);
+  }
+  updateSummaryTagMismatchBanner(meeting);
+  if (!state.expanded) setHistorySpeakersExpanded(false);
+}
+
+function renderHistoryTranscriptMarkdown(transcriptEl, markdown, segments = parseTranscriptMarkdownSegments(markdown)) {
   transcriptEl.classList.remove('markdown-body');
   clearElement(transcriptEl);
 
-  const segments = parseTranscriptMarkdownSegments(markdown);
   if (!segments.length) {
     transcriptEl.classList.add('markdown-body');
     renderMarkdownInto(transcriptEl, markdown);
@@ -1509,21 +1799,29 @@ function renderHistoryTranscriptMarkdown(transcriptEl, markdown) {
     const meta = document.createElement('div');
     meta.className = 'history-transcript-meta';
 
-    const timestamp = document.createElement(startSec !== null ? 'button' : 'span');
     if (startSec !== null) {
+      const timestamp = document.createElement('button');
       timestamp.type = 'button';
       timestamp.title = `Jump audio to ${segment.start}`;
       timestamp.setAttribute('aria-label', `Jump audio to ${segment.start}`);
       timestamp.addEventListener('click', () => seekMeetingAudio(startSec));
+      timestamp.className = 'history-transcript-timestamp';
+      timestamp.textContent = `[${segment.start} - ${segment.end}]`;
+      meta.appendChild(timestamp);
     }
-    timestamp.className = 'history-transcript-timestamp';
-    timestamp.textContent = `[${segment.start} - ${segment.end}]`;
-    meta.appendChild(timestamp);
 
     if (segment.speaker) {
-      const speaker = document.createElement('span');
+      const editable = historySpeakers && isCanonicalSpeakerKey(segment.speaker);
+      const speaker = document.createElement(editable ? 'button' : 'span');
       speaker.className = 'history-transcript-speaker';
-      speaker.textContent = segment.speaker;
+      if (editable) {
+        speaker.type = 'button';
+        speaker.dataset.speakerKey = segment.speaker;
+        setHistorySpeakerLabel(speaker, segment.speaker, historySpeakers.names);
+        speaker.addEventListener('click', () => focusHistorySpeaker(segment.speaker));
+      } else {
+        speaker.textContent = segment.speaker;
+      }
       meta.appendChild(speaker);
     }
 
@@ -2982,13 +3280,18 @@ function updateSummaryTagMismatchBanner(meeting) {
       ? { ...meeting, summary: displayedSummary }
       : meeting,
   );
-  if (!mismatch) {
+  const namesChanged = Boolean((meeting?.summary || displayedSummary)
+    && haveSummarySpeakerNamesChanged(meeting, meeting?.speakerNamesHash));
+  if (!mismatch && !namesChanged) {
     banner.hidden = true;
     return;
   }
 
-  textEl.textContent = `Tag changed to ${mismatch.currentLabel}.`;
-  regenBtn.textContent = `Regenerate with ${mismatch.currentLabel} format`;
+  textEl.textContent = [
+    mismatch && `Tag changed to ${mismatch.currentLabel}.`,
+    namesChanged && 'Speaker names changed since this summary was generated.',
+  ].filter(Boolean).join(' ');
+  regenBtn.textContent = mismatch ? `Regenerate with ${mismatch.currentLabel} format` : 'Regenerate with current names';
   banner.hidden = false;
 }
 
@@ -3201,6 +3504,7 @@ async function deleteCheckedMeetings() {
     meetingDetails.style.display = 'none';
     document.getElementById('meeting-details-empty').style.display = 'flex';
     currentMeetingId = null;
+    clearHistorySpeakers();
   }
 
   meetings = meetings.filter((m) => !ids.includes(String(m.id)));
@@ -3274,6 +3578,7 @@ async function selectMeeting(meetingId) {
   const retryBtn = document.getElementById('retry-transcription-btn');
   const retryWhisperBtn = document.getElementById('retry-whisper-transcription-btn');
   transcriptEl.classList.remove('markdown-body');
+  clearHistorySpeakers();
   delete transcriptEl.dataset.markdown;
   clearElement(transcriptEl);
   renderSummaryMarkdown('');
@@ -3329,8 +3634,11 @@ async function refreshMeetingDetails(targetId) {
       && transcript.includes('The recording was saved successfully, but a transcript is not available yet.');
     if (transcript && !(pending && generatedPlaceholder)) {
       transcriptEl.dataset.markdown = transcript;
-      renderHistoryTranscriptMarkdown(transcriptEl, transcript);
+      const segments = parseTranscriptMarkdownSegments(transcript);
+      renderHistorySpeakers(fullMeeting, segments);
+      renderHistoryTranscriptMarkdown(transcriptEl, transcript, segments);
     } else {
+      clearHistorySpeakers();
       delete transcriptEl.dataset.markdown;
       clearElement(transcriptEl);
       if (!pending) {
@@ -3372,6 +3680,7 @@ async function refreshMeetingDetails(targetId) {
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
     if (currentMeetingId === targetId && requestEpoch === meetingDetailRequestEpoch) {
+      clearHistorySpeakers();
       clearElement(transcriptEl);
       delete transcriptEl.dataset.markdown;
       const err = document.createElement('p');
@@ -5217,13 +5526,46 @@ function updateSummaryLanguageCaptions(meeting) {
   }
 }
 
-function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = null) {
+function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash) {
   const modal = document.getElementById('summary-language-modal');
   const select = document.getElementById('summary-transcript-language');
   const form = document.getElementById('summary-language-form');
   const cancel = document.getElementById('summary-language-cancel');
   const submit = document.getElementById('summary-language-confirm');
   const message = document.getElementById('summary-language-message');
+  const speakerFieldset = document.getElementById('summary-speaker-fieldset');
+  const speakerRows = document.getElementById('summary-speaker-rows');
+  const tagField = document.getElementById('summary-recording-type');
+  const tagSelect = document.getElementById('summary-recording-tag');
+  const formatPreview = document.getElementById('summary-format-preview');
+  const fields = new Map();
+  const names = meeting.ai?.diarization?.speakerNames || {};
+  const samples = extractSpeakerSamples(parseTranscriptMarkdownSegments(meeting.transcript));
+  const showSpeakers = shouldPromptSpeakerNamesBeforeSummary(meeting, samples);
+  const controller = new AbortController();
+  const historyPlayer = document.getElementById('audio-player');
+  const useHistoryPlayer = meeting.id && meetingIdsEqual(meeting.id, currentMeetingId);
+  const dedicatedPlayer = showSpeakers && !useHistoryPlayer && meeting.audioPath ? new Audio() : null;
+  if (dedicatedPlayer) dedicatedPlayer.src = window.electronAPI.buildFileUrl(meeting.audioPath);
+  speakerRows.replaceChildren();
+  speakerFieldset.hidden = !showSpeakers;
+  tagField.hidden = Boolean(normalizeTag(meeting.tag));
+  tagSelect.replaceChildren(new Option('Choose recording type', ''));
+  for (const tag of RECORDING_TAGS) tagSelect.add(new Option(tag.label, tag.slug));
+  const updateFormat = () => {
+    const tag = getTagMeta(tagSelect.value || 'other');
+    formatPreview.textContent = `${tag.label} format · ${tag.formatPreview}`;
+  };
+  tagSelect.addEventListener('change', updateFormat, { signal: controller.signal });
+  updateFormat();
+  if (!speakerFieldset.hidden) {
+    const player = useHistoryPlayer ? historyPlayer : dedicatedPlayer;
+    for (const sample of samples) {
+      const { row, field } = buildSpeakerRow('summary-speaker', sample, names, player, controller.signal);
+      fields.set(sample.speaker, field);
+      speakerRows.appendChild(row);
+    }
+  }
   const previousFocus = document.activeElement;
   select.replaceChildren();
   const placeholder = document.createElement('option');
@@ -5238,10 +5580,11 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = n
   }
   const defaultLanguage = preferredLanguage || meeting.language;
   select.value = Object.hasOwn(policy.names || {}, defaultLanguage) ? defaultLanguage : '';
+  let saving = false;
   const update = () => {
     const name = policy.names?.[select.value];
     const available = policy.languages.includes(select.value);
-    submit.disabled = !available;
+    submit.disabled = saving || !available;
     message.textContent = !name ? 'Choose the main language spoken in this recording.'
       : available ? `Summary will use ${name}.`
         : `Summaries are not available for ${name} with this model.`;
@@ -5250,7 +5593,16 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = n
   modal.classList.remove('hidden');
   select.focus();
   return new Promise((resolve) => {
+    let closed = false;
     const close = (language) => {
+      if (closed) return;
+      closed = true;
+      stopSpeakerPreview?.();
+      controller.abort();
+      if (dedicatedPlayer) {
+        dedicatedPlayer.removeAttribute('src');
+        dedicatedPlayer.load();
+      }
       modal.classList.add('hidden');
       form.removeEventListener('submit', onSubmit);
       select.removeEventListener('change', update);
@@ -5260,18 +5612,73 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = n
       if (previousFocus?.isConnected) previousFocus.focus();
       resolve(language);
     };
-    const onSubmit = (event) => {
+    const onSubmit = async (event) => {
       event.preventDefault();
-      if (policy.languages.includes(select.value)) close(select.value);
+      if (saving || !policy.languages.includes(select.value)) return;
+      const transcriptLanguage = select.value;
+      const editedNames = { ...names };
+      for (const [speaker, field] of fields) editedNames[speaker] = field.value;
+      const speakerNames = diffSpeakerNames(names, editedNames);
+      const updates = {};
+      if (Object.keys(speakerNames).length) {
+        updates.speakerNames = speakerNames;
+        updates.expectedSourceTranscriptHash = sourceTranscriptHash;
+        updates.expectedTranscriptionAttemptId = meeting.transcriptionResult?.attemptId || '';
+      }
+      if (!tagField.hidden && tagSelect.value) updates.tag = tagSelect.value;
+      if (Object.keys(updates).length) {
+        saving = true;
+        submit.disabled = true;
+        message.textContent = 'Saving recording details…';
+        try {
+          const updated = await window.electronAPI.updateMeeting(meeting.id, updates);
+          if (closed) return;
+          if (Object.hasOwn(updates, 'tag')) {
+            const id = String(updated.id);
+            meetingTagMutationVersions.set(id, (meetingTagMutationVersions.get(id) || 0) + 1);
+          }
+          syncMeetingInList(updated);
+          if (meetingIdsEqual(currentMeetingId, updated.id)) {
+            applyTagPillView(document.getElementById('meeting-tag-btn'), document.getElementById('meeting-tag-btn-label'), updated.tag);
+            if (!historySpeakers) updateSummaryTagMismatchBanner(updated);
+          }
+          if (historySpeakers && meetingIdsEqual(historySpeakers.meeting.id, updated.id)) {
+            historySpeakers.names = updated.ai?.diarization?.speakerNames || {};
+            for (const [speaker, field] of historySpeakers.fields) {
+              field.value = historySpeakers.names[speaker] || '';
+              historySpeakers.requestedNames.set(speaker, field.value);
+            }
+            updateHistorySpeakerLabels(historySpeakers, updated);
+            if (!hasUnnamedSpeakers(updated, historySpeakers.samples)) setHistorySpeakersExpanded(false);
+          }
+          renderHistoryTagFilterBar();
+          renderActivityList();
+          if (chatState.popoverOpen) renderScopePopover();
+          if (meetingSearchQueryNormalized || meetingSearchDebounceTimer) {
+            clearTimeout(meetingSearchDebounceTimer);
+            meetingSearchDebounceTimer = null;
+            void runHistorySearch(meetingSearchQuery);
+          }
+        } catch (error) {
+          if (closed) return;
+          saving = false;
+          update();
+          message.textContent = 'Could not save recording details. Try again, or reopen Prepare summary if the transcript changed.';
+          console.warn('Summary preparation update failed:', error.message);
+          return;
+        }
+      }
+      close(transcriptLanguage);
     };
     const onCancel = () => close(null);
     const onKey = (event) => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(null); }
       if (event.key !== 'Tab') return;
-      const elements = [select, cancel, submit].filter((element) => !element.disabled);
+      const elements = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled)')]
+        .filter((element) => !element.closest('[hidden]'));
       const index = elements.indexOf(document.activeElement);
       const next = event.shiftKey ? index - 1 : index + 1;
-      if (next < 0 || next >= elements.length) {
+      if (elements.length && (index === -1 || next < 0 || next >= elements.length)) {
         event.preventDefault();
         elements[event.shiftKey ? elements.length - 1 : 0].focus();
       }
@@ -5348,7 +5755,7 @@ async function generateSummaryForMeeting(meetingId) {
     const sourceTranscriptHash = await hashSummaryTranscript(meeting?.transcript);
     if (summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) throw new Error('Summary generation cancelled.');
     const preferredLanguage = window.summaryLanguageHelpers.reusableSummaryLanguage(meeting, sourceTranscriptHash, policy);
-    const transcriptLanguage = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage);
+    const transcriptLanguage = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash);
     if (!transcriptLanguage || summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) {
       await restoreCurrentHistorySummary(normalizedMeetingId, 'Summary generation cancelled. Transcript is unchanged.', { showTab: false });
       return;
@@ -5744,8 +6151,9 @@ function copyTranscript() {
 // Copy meeting transcript to clipboard
 function copyMeetingTranscript() {
   const transcriptEl = document.getElementById('meeting-transcript');
-  // Prefer the original markdown source so users get the .md they expect.
-  const text = transcriptEl.dataset.markdown || transcriptEl.textContent;
+  const text = transcriptEl.dataset.markdown
+    ? window.subtitleExportHelpers.applySpeakerNamesToMarkdown(transcriptEl.dataset.markdown, historySpeakers?.names)
+    : transcriptEl.textContent;
 
   navigator.clipboard.writeText(text).then(() => {
     // Visual feedback
@@ -6295,6 +6703,7 @@ async function deleteMeetingHandler(meetingId, fallbackTitle = '') {
         meetingDetails.style.display = 'none';
         document.getElementById('meeting-details-empty').style.display = 'flex';
         currentMeetingId = null;
+        clearHistorySpeakers();
       }
 
       // Remove from local list immediately

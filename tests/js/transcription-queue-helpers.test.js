@@ -103,6 +103,10 @@ test('queue upsert/publish payload tracks active meeting, order, and busyCount',
   assert.equal(withPercent.seq, 2);
   const payload2 = buildTranscriptionQueueStatePayload(state);
   assert.equal(payload2.seq, 4, 'payload seq must be monotonic across publishes');
+  upsertQueueJob(state, { meetingId: 'meeting_a', status: QUEUE_JOB_STATUSES.ready, speakerCount: 2 });
+  assert.equal(buildTranscriptionQueueStatePayload(state).jobs[0].speakerCount, 2);
+  upsertQueueJob(state, { meetingId: 'meeting_a', status: QUEUE_JOB_STATUSES.queued });
+  assert.equal(buildTranscriptionQueueStatePayload(state).jobs[0].speakerCount, undefined);
 });
 
 test('cancel flag marks queued jobs cancelled and is readable at head', () => {

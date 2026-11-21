@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from common.sensitive_text import redact_sensitive_text
+from meetings.speaker_names import speaker_names_hash
 
 MAX_AI_METADATA_STRING_LENGTH = 300
 VALID_RECORDING_TAGS = (
@@ -377,6 +378,9 @@ def public_transcription_provenance(meeting: Dict) -> Dict:
     """Copy display provenance, dropping malformed values instead of raising."""
     cleaned = dict(meeting)
     cleaned["tag"] = normalize_recording_tag(meeting.get("tag"), strict=False)
+    ai = meeting.get("ai") if isinstance(meeting.get("ai"), dict) else {}
+    diarization = ai.get("diarization") if isinstance(ai.get("diarization"), dict) else {}
+    cleaned["speakerNamesHash"] = speaker_names_hash(diarization.get("speakerNames"))
     try:
         cleaned["transcriptionRequest"] = normalize_transcription_request(meeting.get("transcriptionRequest"))
     except (TranscriptionMetadataError, ValueError, TypeError):

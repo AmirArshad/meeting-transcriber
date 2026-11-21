@@ -64,8 +64,8 @@
     </div>
 
     <div id="summary-language-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="summary-language-title" aria-describedby="summary-language-description">
-      <div class="modal-content">
-        <div class="modal-header"><h2 id="summary-language-title">Confirm transcript language</h2></div>
+      <div class="modal-content prepare-summary-content">
+        <div class="modal-header"><h2 id="summary-language-title">Prepare summary</h2></div>
         <form id="summary-language-form" class="modal-form">
           <div class="modal-body">
             <p id="summary-language-description" class="setting-description">Choose the main language spoken in this recording. Mixed-language recordings without one main language are not supported.</p>
@@ -74,6 +74,16 @@
               <select id="summary-transcript-language" class="device-select"></select>
             </div>
             <p id="summary-language-message" class="setting-description" aria-live="polite"></p>
+            <fieldset id="summary-speaker-fieldset" class="prepare-summary-section" hidden>
+              <legend>Speaker names <span>(optional)</span></legend>
+              <p class="setting-description">Add names to help attribute decisions and tasks.</p>
+              <div id="summary-speaker-rows" class="speaker-rows"></div>
+            </fieldset>
+            <div id="summary-recording-type" class="prepare-summary-section ai-addon-field" hidden>
+              <label for="summary-recording-tag">Recording type <span>(optional)</span></label>
+              <select id="summary-recording-tag" class="device-select"></select>
+              <p id="summary-format-preview" class="setting-description" aria-live="polite"></p>
+            </div>
           </div>
           <div class="modal-actions">
             <button type="button" id="summary-language-cancel" class="btn btn-secondary">Cancel</button>
@@ -864,9 +874,10 @@
                   id="activity-completion-toast"
                   class="activity-completion-toast"
                   hidden
-                  role="status"
-                  aria-live="polite"
-                ></div>
+                >
+                  <span id="activity-completion-message" role="status"></span>
+                  <button type="button" id="activity-completion-name-speakers" class="btn btn-small" hidden>Name speakers</button>
+                </div>
               </div>
 
               <!-- Developer Console (collapsible drawer) -->
@@ -1158,6 +1169,16 @@
                           </div>
                         </div>
                       </div>
+                      <section id="history-speaker-bar" class="history-speaker-bar" aria-labelledby="history-speaker-heading" hidden>
+                        <div class="history-speaker-header">
+                          <h4 id="history-speaker-heading">Speakers</h4>
+                          <div id="history-speaker-chips" class="history-speaker-chips" hidden></div>
+                          <button type="button" id="history-speaker-toggle" class="btn btn-small"
+                            aria-expanded="true" aria-controls="history-speaker-rows">Hide names</button>
+                        </div>
+                        <div id="history-speaker-rows" class="speaker-rows"></div>
+                        <p id="history-speaker-status" class="speaker-save-status" role="status"></p>
+                      </section>
                       <div
                         class="meeting-transcript"
                         id="meeting-transcript"
@@ -1910,6 +1931,7 @@
     <script src="transcription-activity-helpers.js"></script>
     <script src="recovery-ui-helpers.js"></script>
     <script src="update-notification-helpers.js"></script>
+    <script src="speaker-label-helpers.js"></script>
     <script src="history-detail-helpers.js"></script>
     <script src="tag-helpers.js"></script>
     <script src="history-search-helpers.js"></script>

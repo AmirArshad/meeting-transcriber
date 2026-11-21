@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeTagStrict } = require('../renderer/tag-helpers');
+const { isCanonicalSpeakerKey, normalizeSpeakerName } = require('../renderer/speaker-label-helpers');
 
 /**
  * Meeting-manager IPC client for the AvaNevis main process.
@@ -484,6 +485,29 @@ function createMeetingManagerClient(deps) {
           args.push('--clear-tag');
         } else {
           args.push('--tag', normalizedTag);
+        }
+      }
+      if (Object.hasOwn(updates, 'speakerNames')) {
+        const names = updates.speakerNames;
+        const expectedHash = updates.expectedSourceTranscriptHash;
+        const expectedAttempt = updates.expectedTranscriptionAttemptId;
+        if (!names || typeof names !== 'object' || Array.isArray(names)
+            || Object.keys(names).length > 199 || Object.entries(names).some(([speaker, name]) => (
+              !isCanonicalSpeakerKey(speaker) || typeof name !== 'string' || name.length > 1024
+            ))) {
+          throw new Error('Invalid speaker names.');
+        }
+        if (typeof expectedHash !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(expectedHash)) {
+          throw new Error('Speaker names require the current transcript.');
+        }
+        const patch = Object.fromEntries(Object.entries(names)
+          .map(([speaker, name]) => [speaker, normalizeSpeakerName(name)]));
+        args.push('--speaker-names-json', JSON.stringify(patch), '--expected-source-transcript-hash', expectedHash);
+        if (expectedAttempt !== undefined) {
+          if (typeof expectedAttempt !== 'string' || expectedAttempt.length > 128 || expectedAttempt.includes('\0')) {
+            throw new Error('Invalid transcription attempt.');
+          }
+          args.push(`--expected-transcription-attempt-id=${expectedAttempt}`);
         }
       }
 

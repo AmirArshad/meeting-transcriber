@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from common.sensitive_text import redact_sensitive_text
 from meetings.normalization import normalize_recording_tag
+from meetings.speaker_names import normalize_speaker_names, speaker_names_hash
 
 from .llama_runtime import build_summary_progress_event, resolve_llama_runtime, run_llama_prompt, smoke_test_llama_runtime
 from .summary_language import (LANGUAGE_POLICY_VERSION, SummaryLanguageError, language_instruction, check_summary_language)
@@ -65,19 +66,22 @@ def read_transcript_text(transcript_path: str) -> str:
     return Path(transcript_path).read_text(encoding="utf-8", errors="replace")
 
 
-def load_summary_segments(transcript_path: str, speakers_json_path: Optional[str] = None) -> List[Dict[str, Any]]:
+def load_summary_segments(transcript_path: str, speakers_json_path: Optional[str] = None, speaker_names: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
     transcript_text = read_transcript_text(transcript_path)
+    normalized_names = normalize_speaker_names(speaker_names)
     if speakers_json_path and Path(speakers_json_path).exists():
         with open(speakers_json_path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
         segments = payload.get("segments") if isinstance(payload, dict) else None
         if (isinstance(segments, list) and segments
                 and payload.get('sourceTranscriptHash') == hash_transcript_text(transcript_text)):
-            return [dict(segment) for segment in segments if isinstance(segment, dict)]
+            return [{**segment, "speaker": normalized_names.get(segment.get("speaker")) or segment.get("speaker")}
+                    for segment in segments if isinstance(segment, dict)]
 
     segments = parse_markdown_transcript(transcript_text)
     if segments:
-        return segments
+        return [{**segment, "speaker": normalized_names.get(segment.get("speaker")) or segment.get("speaker")}
+                for segment in segments]
     cleaned = transcript_text.strip()
     return [{"start": 0.0, "end": 0.0, "speaker": "Unknown", "text": cleaned}] if cleaned else []
 
@@ -266,6 +270,7 @@ def generate_summary(
     profile: str = DEFAULT_PROFILE,
     language: Optional[str] = None,
     tag: Optional[str] = None,
+    speaker_names: Optional[Dict[str, str]] = None,
     model_label: str = "local-summary-model",
     model_id: Optional[str] = None,
     source_transcript_hash: Optional[str] = None,
@@ -280,7 +285,7 @@ def generate_summary(
     source_hash = hash_transcript_text(transcript_text)
     if source_transcript_hash is not None and source_hash != source_transcript_hash:
         raise SummaryLanguageError("Transcript changed. Confirm the transcript language again.")
-    segments = load_summary_segments(transcript_path, speakers_json_path)
+    segments = load_summary_segments(transcript_path, speakers_json_path, speaker_names)
     runtime = resolve_llama_runtime(runtime_dir=runtime_dir, model_path=model_path, platform=platform, arch=arch)
 
     prompt_runner = run_prompt or (lambda resolved_runtime, prompt_path, max_tokens: run_llama_prompt(
@@ -305,6 +310,7 @@ def generate_summary(
         "model": model_label,
         "generatedAt": generated_at,
         "sourceTranscriptHash": source_hash,
+        "speakerNamesHash": speaker_names_hash(speaker_names or {}),
         "tag": normalized_tag,
         "template": template_id,
         "templateVersion": TEMPLATE_VERSION,
@@ -358,6 +364,7 @@ def main() -> None:
     parser.add_argument("--output-json")
     parser.add_argument("--output-markdown")
     parser.add_argument("--speakers-json")
+    parser.add_argument("--speaker-names-json", default="{}")
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
     parser.add_argument("--language")
     parser.add_argument("--tag", default=None)
@@ -387,6 +394,7 @@ def main() -> None:
             raise SummaryLanguageError("Confirmed transcript language, hash and model ID are required.")
         language_instruction(args.language)
         normalized_tag = normalize_recording_tag(args.tag, strict=True) if args.tag is not None else None
+        speaker_names = normalize_speaker_names(json.loads(args.speaker_names_json), strict=True)
         result = generate_summary(
             meeting_id=args.meeting_id,
             transcript_path=args.transcript,
@@ -395,6 +403,7 @@ def main() -> None:
             output_json=args.output_json,
             output_markdown=args.output_markdown,
             speakers_json_path=args.speakers_json,
+            speaker_names=speaker_names,
             profile=args.profile,
             model_label=args.model_label,
             language=args.language,

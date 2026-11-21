@@ -1,11 +1,11 @@
 (function initSummaryUiHelpers(root, factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
+    module.exports = factory(require('./speaker-label-helpers'));
     return;
   }
 
-  root.summaryUiHelpers = factory();
-}(typeof globalThis !== 'undefined' ? globalThis : this, function buildSummaryUiHelpers() {
+  root.summaryUiHelpers = factory(root.speakerLabelHelpers);
+}(typeof globalThis !== 'undefined' ? globalThis : this, function buildSummaryUiHelpers({ hasUnnamedSpeakers }) {
   function isMeetingTranscriptionRetryable(meeting) {
     const status = meeting && meeting.transcriptionStatus;
     return status === 'failed' || status === 'pending';
@@ -40,7 +40,20 @@
     return String(activeMeetingId) !== String(requestedMeetingId);
   }
 
+  function shouldPromptSpeakerNamesBeforeSummary(meeting, samples = []) {
+    return hasUnnamedSpeakers(meeting, samples);
+  }
+
+  function haveSummarySpeakerNamesChanged(meeting, currentSpeakerNamesHash) {
+    const summary = meeting?.ai?.summary;
+    return summary?.status === 'completed'
+      && typeof currentSpeakerNamesHash === 'string'
+      && (summary.speakerNamesHash || '') !== currentSpeakerNamesHash;
+  }
+
   return {
+    shouldPromptSpeakerNamesBeforeSummary,
+    haveSummarySpeakerNamesChanged,
     getMeetingTranscriptionStatusMessage,
     isMeetingTranscriptionRetryable,
     shouldAbortSummaryGenerationAfterPreflight,

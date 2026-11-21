@@ -243,6 +243,8 @@ _GENERIC_TITLE_TOKENS = frozenset(
         "notes",
         "recording",
         "recordings",
+        "speaker",
+        "speakers",
         "untitled",
     }
 )
@@ -383,7 +385,7 @@ _MONTH_YEAR_RE = re.compile(
     rf"\b(?:in\s+)?({_MONTH_PATTERN})\.?\s+(\d{{4}})\b",
     re.IGNORECASE,
 )
-_GENERIC_SPEAKER_RE = re.compile(r"^(?:speaker\s+\d+|unknown)$", re.IGNORECASE)
+_GENERIC_SPEAKER_RE = re.compile(r"^(?:speaker(?:\s+|_)\d+|unknown)$", re.IGNORECASE)
 
 
 def estimate_token_count(text: Any) -> int:
@@ -845,18 +847,12 @@ def _format_overview_segments(segments: Sequence[Tuple[str, str]]) -> str:
 
 
 def _format_targeted_segments(
-    segments: Sequence[Tuple[str, str, bool]],
-    primary_speaker: str,
+    segments: Sequence[Tuple[str, str]],
 ) -> str:
-    parts: List[str] = []
-    for seg_speaker, seg_text, seg_is_neighbor in segments:
-        if not seg_text:
-            continue
-        if seg_is_neighbor and seg_speaker and seg_speaker != primary_speaker:
-            parts.append(f"[{seg_speaker}]: {seg_text}")
-        else:
-            parts.append(seg_text)
-    return " ".join(parts).strip()
+    turns = [(speaker, text) for speaker, text in segments if text]
+    if len({speaker for speaker, _ in turns}) <= 1:
+        return " ".join(text for _, text in turns).strip()
+    return "\n".join(f"[{speaker or 'Unknown'}]: {text}" for speaker, text in turns)
 
 
 def _merge_adjacent_candidates(
@@ -896,7 +892,7 @@ def _merge_adjacent_candidates(
                 is_nb = bool(item.get("isNeighbor"))
                 block["_hasDirect"] = not is_nb
                 block["_targetedSegments"] = [
-                    (str(item.get("speaker") or ""), str(item.get("text") or "").strip(), is_nb)
+                    (str(item.get("speaker") or ""), str(item.get("text") or "").strip())
                 ]
             return block
 
@@ -951,9 +947,8 @@ def _merge_adjacent_candidates(
                     or (current_has_direct and item_is_neighbor)
                 )
                 if can_merge_targeted:
-                    prospective_primary = item_speaker if (not current_has_direct and not item_is_neighbor) else str(current.get("speaker") or "")
-                    prospective_segments = [*current["_targetedSegments"], (item_speaker, item_text, item_is_neighbor)]
-                    combined_text = _format_targeted_segments(prospective_segments, prospective_primary)
+                    prospective_segments = [*current["_targetedSegments"], (item_speaker, item_text)]
+                    combined_text = _format_targeted_segments(prospective_segments)
                     if len(combined_text) <= max_merged_chars:
                         current["seqLastIndex"] = item["seqIndex"]
                         if not current_has_direct and not item_is_neighbor:

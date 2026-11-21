@@ -20,6 +20,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from meeting_manager import MeetingManager
 from meetings import normalization as meeting_norm
+from meetings.speaker_names import normalize_speaker_names, speaker_names_hash
 from summaries import language_labels as summary_language_labels
 from summaries import summary_pipeline
 from transcription import captions as transcript_captions
@@ -500,7 +501,7 @@ def _chunk_plain_paragraphs(
 
 
 _BOLD_SPEAKER_RE = re.compile(r"^\*\*(?P<speaker>[^*\n]{1,64}):\*\*\s*(?P<text>.*)$")
-_PLAIN_SPEAKER_RE = re.compile(r"^(?P<speaker>Speaker\s+\d+|Unknown):\s*(?P<text>.*)$", re.IGNORECASE)
+_PLAIN_SPEAKER_RE = re.compile(r"^(?P<speaker>Speaker\s+\d+|SPEAKER_\d{2}|Unknown):\s*(?P<text>.*)$", re.IGNORECASE)
 
 
 def _split_markdown_speaker_prefix(raw_line: str) -> Tuple[str, str]:
@@ -509,6 +510,12 @@ def _split_markdown_speaker_prefix(raw_line: str) -> Tuple[str, str]:
         match = pattern.match(cleaned)
         if match:
             speaker = _clean_inline(match.group("speaker"))
+            numbered = re.fullmatch(r"speaker\s+(\d+)", speaker, re.IGNORECASE)
+            underscored = re.fullmatch(r"speaker_(\d{2})", speaker, re.IGNORECASE)
+            if numbered:
+                speaker = f"Speaker {numbered.group(1).lstrip('0') or '0'}"
+            elif underscored:
+                speaker = f"SPEAKER_{underscored.group(1)}"
             if speaker.lower() == "unknown":
                 speaker = ""
             return speaker, _clean_inline(match.group("text"))
@@ -524,7 +531,27 @@ def _build_markdown_passages(transcript_text: str) -> List[Dict[str, Any]]:
         stripped = lines[index].strip()
         ts_match = summary_pipeline.TRANSCRIPT_TIMESTAMP_RE.match(stripped)
         if not ts_match:
-            index += 1
+            untimed = summary_pipeline.UNTIMED_SPEAKER_RE.match(stripped)
+            if not untimed:
+                index += 1
+                continue
+            speaker = untimed.group("speaker")
+            initial_text = _clean_inline(untimed.group("text"))
+            text_parts = [initial_text] if initial_text else []
+            cursor = index + 1
+            while cursor < len(lines):
+                body = lines[cursor].strip()
+                if (not body or body.startswith("#")
+                        or summary_pipeline.TRANSCRIPT_TIMESTAMP_RE.match(body)
+                        or summary_pipeline.UNTIMED_SPEAKER_RE.match(body)):
+                    break
+                text_parts.append(_clean_inline(body))
+                cursor += 1
+            joined = _clean_inline(" ".join(text_parts))
+            if joined:
+                passages.append({"kind": "transcript", "start_ms": None, "end_ms": None,
+                                 "speaker": speaker, "text": joined})
+            index = cursor
             continue
 
         start_sec = max(0.0, float(summary_pipeline.parse_timestamp(ts_match.group("start"))))
@@ -547,6 +574,7 @@ def _build_markdown_passages(transcript_text: str) -> List[Dict[str, Any]]:
             next_stripped = lines[cursor].strip()
             if (
                 summary_pipeline.TRANSCRIPT_TIMESTAMP_RE.match(next_stripped)
+                or summary_pipeline.UNTIMED_SPEAKER_RE.match(next_stripped)
                 or re.match(r"^#{1,6}\s+", next_stripped)
                 or next_stripped in ("---", "***", "___")
             ):
@@ -814,16 +842,11 @@ def _extract_meeting_snapshot(
     tag = meeting_norm.normalize_recording_tag(meeting.get("tag"), strict=False) or ""
     diarization_meta = (meeting.get("ai") or {}).get("diarization")
     speaker_names = diarization_meta.get("speakerNames") if isinstance(diarization_meta, dict) else None
-    speaker_names_hash = (
-        transcript_captions.hash_transcript_text(
-            json.dumps(speaker_names, sort_keys=True, ensure_ascii=False)
-        )
-        if isinstance(speaker_names, dict) and speaker_names
-        else ""
-    )
+    speaker_names = normalize_speaker_names(speaker_names)
+    names_hash = speaker_names_hash(speaker_names)
     status = str(meeting.get("transcriptionStatus") or "completed").strip().lower()
     title_hash = transcript_captions.hash_transcript_text(
-        f"{title}|{date_iso}|{language}|{status}|{tag}|{speaker_names_hash}"
+        f"{title}|{date_iso}|{language}|{status}|{tag}|{names_hash}"
     )
 
     transcript_text = ""
@@ -862,7 +885,8 @@ def _extract_meeting_snapshot(
         "duration_sec": duration_sec,
         "language": language,
         "tag": tag,
-        "speaker_names_hash": speaker_names_hash,
+        "speaker_names_hash": names_hash,
+        "speaker_names": speaker_names,
         "transcript_hash": transcript_hash,
         "summary_hash": summary_hash,
         "captions_hash": captions_hash,
@@ -908,7 +932,7 @@ def _build_passages_for_snapshot(snapshot: Dict[str, Any]) -> List[Dict[str, Any
                     "start_ms": item["start_ms"],
                     "end_ms": item["end_ms"],
                     "title": title,
-                    "speaker": _strip_sentinels(item.get("speaker", "")),
+                    "speaker": _strip_sentinels(snapshot["speaker_names"].get(item.get("speaker", "")) or item.get("speaker", "")),
                     "text": text,
                     "source_transcript_hash": transcript_hash,
                 }
@@ -1305,6 +1329,9 @@ def _format_passage_hit(
         parts = _build_window_snippet_parts(text or speaker, tokens, max_chars=180)
     else:
         parts = _build_window_snippet_parts(text or title, tokens, max_chars=180)
+
+    if kind != "title" and speaker and SNIPPET_START in str(raw_speaker_snippet or ""):
+        parts = [*snippet_text_to_parts(raw_speaker_snippet), {"text": ": ", "match": False}, *parts]
 
     body_token_match = kind != "title" and any(
         tok.casefold() in text.casefold() or tok.casefold() in speaker.casefold()

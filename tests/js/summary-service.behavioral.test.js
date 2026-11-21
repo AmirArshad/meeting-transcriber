@@ -27,6 +27,7 @@ function createHarness({
   metadataOutput = null,
   previousSummary = null,
   meetingTag = null,
+  speakerNames = null,
   checkAiAddonSetupStatus,
   platform = 'win32',
   arch = platform === 'darwin' ? 'arm64' : 'x64',
@@ -51,6 +52,7 @@ function createHarness({
     transcriptionStatus: 'completed',
     ...(meetingTag ? { tag: meetingTag } : {}),
     ai: {
+      ...(speakerNames ? { diarization: { speakerNames } } : {}),
       summary: previousSummary || {
         status: 'completed',
         jsonPath: previousOutputJson,
@@ -125,6 +127,7 @@ function createHarness({
       '--language', options.transcriptLanguage,
       '--source-transcript-hash', options.sourceTranscriptHash,
       '--model-id', options.modelId,
+      '--speaker-names-json', JSON.stringify(options.speakerNames),
       ...(options.tag ? ['--tag', options.tag] : []),
     ],
     collectPythonProcessOutput(python) {
@@ -395,4 +398,14 @@ test('untagged regeneration clears a previous summary tag', async () => {
   assert.equal(result.meeting.ai.summary.tag, null);
   const args = harness.getSpawnedArgs().find((entry) => entry.includes('update-ai'));
   assert.equal(JSON.parse(args[args.indexOf('--summary-json') + 1]).tag, null);
+});
+
+
+test('generation captures speaker names and persists the runner snapshot hash', async () => {
+  const hash = `sha256:${'a'.repeat(64)}`;
+  const harness = createHarness({ speakerNames: { 'Speaker 1': 'Alice' }, summaryMetadata: { speakerNamesHash: hash } });
+  const result = await harness.handlers['generate-summary']({}, confirmedOptions);
+  const args = harness.getSpawnedArgs()[1];
+  assert.deepEqual(JSON.parse(args[args.indexOf('--speaker-names-json') + 1]), { 'Speaker 1': 'Alice' });
+  assert.equal(result.meeting.ai.summary.speakerNamesHash, hash);
 });

@@ -297,6 +297,9 @@ function buildTranscriptionQueueStatePayload(state) {
         title: job.title || '',
         durationSeconds: Number(job.durationSeconds) || 0,
         percent,
+        ...(job.status === QUEUE_JOB_STATUSES.ready && job.speakerCount > 0
+          ? { speakerCount: job.speakerCount }
+          : {}),
       };
     });
 

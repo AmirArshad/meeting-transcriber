@@ -159,9 +159,7 @@ test('save-transcript-as without format preserves legacy Summary Save As filters
 test('save-transcript-as with format md and txt works for Windows-style names and legacy meetings without captions', async (t) => {
   const legacyMeetingId = 'legacy-meeting-1';
   const harness = createHarness(t, {
-    getMeeting: async () => {
-      throw new Error('getMeeting should not be required for md/txt exports');
-    },
+    getMeeting: async () => ({ ai: { diarization: { speakerNames: { 'Speaker 1': 'Alice' } } } }),
   });
 
   const markdown = [
@@ -170,7 +168,7 @@ test('save-transcript-as with format md and txt works for Windows-style names an
     '**Date:** 2026-11-20',
     '---',
     '## Transcript',
-    '**[00:00 - 00:05]** **Speaker 1:** Hello **world**.',
+    '[00:00 - 00:05] **Speaker 1:** Hello **world**.',
   ].join('\r\n');
 
   const mdResult = await harness.handlers['save-transcript-as'](harness.fakeEvent, {
@@ -183,7 +181,7 @@ test('save-transcript-as with format md and txt works for Windows-style names an
   assert.equal(mdResult.ok, true);
   assert.equal(mdResult.format, 'md');
   assert.equal(path.basename(mdResult.filePath), 'C Meetings Standup.md');
-  assert.equal(fs.readFileSync(mdResult.filePath, 'utf8'), markdown);
+  assert.equal(fs.readFileSync(mdResult.filePath, 'utf8'), markdown.replace('**Speaker 1:**', '**Alice:**'));
 
   const txtResult = await harness.handlers['save-transcript-as'](harness.fakeEvent, {
     suggestedName: 'CON.md',
@@ -197,7 +195,7 @@ test('save-transcript-as with format md and txt works for Windows-style names an
   assert.equal(path.basename(txtResult.filePath), 'file CON.txt');
   assert.equal(
     fs.readFileSync(txtResult.filePath, 'utf8'),
-    'Standup Notes\n\nDate: 2026-11-20\nTranscript\n[00:00 - 00:05] Speaker 1: Hello world.\n',
+    'Standup Notes\n\nDate: 2026-11-20\nTranscript\n[00:00 - 00:05] Alice: Hello world.\n',
   );
 
   const plainPassthrough = await harness.handlers['save-transcript-as'](harness.fakeEvent, {
@@ -247,6 +245,7 @@ test('save-transcript-as exports legacy and attempt-scoped captions with CRLF ma
     id: 'dotted-crlf-meeting',
     audioPath,
     transcriptPath,
+    ai: { diarization: { speakerNames: { 'Speaker 2': 'Alice' } } },
   };
 
   const srtResult = await harness.handlers['save-transcript-as'](harness.fakeEvent, {
@@ -263,11 +262,11 @@ test('save-transcript-as exports legacy and attempt-scoped captions with CRLF ma
     [
       '1',
       '00:00:00,000 --> 00:00:01,200',
-      'Speaker <1>: Hello team',
+      'Speaker &lt;1&gt;: Hello team',
       '',
       '2',
       '00:00:01,400 --> 00:00:02,500',
-      'Speaker 2: Let us begin.',
+      'Alice: Let us begin.',
       '',
     ].join('\n'),
   );
@@ -297,7 +296,7 @@ test('save-transcript-as exports legacy and attempt-scoped captions with CRLF ma
       '<v Speaker 1>Hello team',
       '',
       '00:00:01.400 --> 00:00:02.500',
-      '<v Speaker 2>Let us begin.',
+      '<v Alice>Let us begin.',
       '',
     ].join('\n'),
   );
@@ -525,4 +524,17 @@ test('renderer export modal markup, script order, and summary/transcript save wi
   const activeTranscriptSaveFn = extractTopLevelFunctionSource(appJs, 'saveTranscript');
   assert.ok(activeTranscriptSaveFn, 'missing saveTranscript');
   assert.match(activeTranscriptSaveFn, /openTranscriptExportDialog\(/);
+});
+
+
+test('markdown and text exports survive meeting lookup failure', async (t) => {
+  const harness = createHarness(t, { getMeeting: async () => { throw new Error('unavailable'); } });
+  const content = '[00:01 - 00:03] **Speaker 1:** Hello';
+  for (const format of ['md', 'txt']) {
+    const result = await harness.handlers['save-transcript-as'](harness.fakeEvent, {
+      suggestedName: `fallback.${format}`, content, format, meetingId: 'meeting-1',
+    });
+    assert.equal(result.ok, true);
+    assert.equal(fs.readFileSync(result.filePath, 'utf8'), format === 'md' ? content : '[00:01 - 00:03] Speaker 1: Hello\n');
+  }
 });
