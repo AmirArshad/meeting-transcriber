@@ -6,12 +6,13 @@ Last updated: 2026-11-21 (includes follow-up on both Windows 11 observations; re
 **Release timing:** The user intends to merge the current development branch
 and add more features and polish before v3.0 ships; the current plan and this
 record are not a complete feature scope. Windows signing credentials and Apple
-Developer ID are deferred until the final release stage. Continue development,
-merging, and feasible unsigned/ad-hoc qualification without them, recording
-artifact and test limits. Before publication, obtain the credentials, sign the
-Windows artifacts, sign and notarize macOS artifacts, verify the signed outputs,
-and perform the dependent live updater acceptance. Other open release gates
-remain in force, and later code or environment changes may require requalification.
+Developer ID are optional for v3.0 and deferred until developer accounts are
+ready. Continue development, merging, and unsigned/ad-hoc qualification and
+releases without them, recording artifact and test limits. When credentials are
+obtained, add the CI secrets and set `vars.REQUIRE_SIGNED_RELEASE=true` to
+enforce signed Windows, signed/notarized macOS, and macOS Squirrel.Mac in-app
+updates. Other open release gates remain in force, and later code or
+environment changes may require requalification.
 
 ## Dependency & Upstream Decisions (Checked 2026-11-20)
 

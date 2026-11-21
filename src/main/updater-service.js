@@ -1,5 +1,6 @@
 'use strict';
 
+const { spawnSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { resolveExternalUrl } = require('../main-process-helpers');
@@ -16,21 +17,86 @@ const PREFERENCES_FILENAME = 'updater-preferences.json';
 const STARTUP_CHECK_DELAY_MS = 5000;
 const PERIODIC_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const PROGRESS_THROTTLE_MS = 150;
-const INSTALLER_NAME_REGEX = /^AvaNevis-Setup-[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\.(?:pkg\.tar\.zst|deb|AppImage)$/;
+const INSTALLER_NAME_REGEX = /^AvaNevis-Setup-[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?\.(?:pkg\.tar\.zst|deb|AppImage|dmg)$/;
 const SEMVER_TAG_REGEX = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/;
+
+function resolveMacAppBundlePath({
+  resourcesPath = process.resourcesPath,
+  execPath = process.execPath,
+} = {}) {
+  if (typeof resourcesPath === 'string' && resourcesPath.trim()) {
+    const candidate = path.posix.resolve(resourcesPath.trim(), '..', '..');
+    if (candidate.endsWith('.app')) {
+      return candidate;
+    }
+  }
+  if (typeof execPath === 'string' && execPath.trim()) {
+    const candidate = path.posix.resolve(execPath.trim(), '..', '..', '..');
+    if (candidate.endsWith('.app')) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function isMacAppDeveloperIdSigned({
+  platform = process.platform,
+  resourcesPath = process.resourcesPath,
+  execPath = process.execPath,
+  spawnSync: spawnSyncImpl = spawnSync,
+} = {}) {
+  if (platform !== 'darwin') {
+    return false;
+  }
+  const appBundlePath = resolveMacAppBundlePath({ resourcesPath, execPath });
+  if (!appBundlePath) {
+    return false;
+  }
+  try {
+    const result = spawnSyncImpl('/usr/bin/codesign', ['-dv', '--verbose=4', appBundlePath], {
+      encoding: 'utf8',
+      timeout: 2000,
+    });
+    if (!result || result.error || result.status !== 0) {
+      return false;
+    }
+    const output = `${result.stdout || ''}\n${result.stderr || ''}`;
+    return /Authority=Developer ID Application:/.test(output) && !/Signature=adhoc/.test(output);
+  } catch (_error) {
+    return false;
+  }
+}
 
 function resolveUpdateMode({
   isPackaged = false,
   platform = process.platform,
   env = process.env,
   osReleaseText,
+  macAppDeveloperIdSigned,
+  resourcesPath = process.resourcesPath,
+  execPath = process.execPath,
+  spawnSync: spawnSyncImpl = spawnSync,
 } = {}) {
   if (!isPackaged) {
     return { mode: 'dev-unpackaged', manualPackageKind: null };
   }
 
-  if (platform === 'win32' || platform === 'darwin') {
+  if (platform === 'win32') {
     return { mode: 'in-app', manualPackageKind: null };
+  }
+
+  if (platform === 'darwin') {
+    const isSigned = typeof macAppDeveloperIdSigned === 'boolean'
+      ? macAppDeveloperIdSigned
+      : isMacAppDeveloperIdSigned({
+        platform,
+        resourcesPath,
+        execPath,
+        spawnSync: spawnSyncImpl,
+      });
+    return isSigned
+      ? { mode: 'in-app', manualPackageKind: null }
+      : { mode: 'manual-package', manualPackageKind: 'dmg' };
   }
 
   if (platform === 'linux') {
@@ -230,6 +296,10 @@ function createUpdaterService(deps = {}) {
     platform = process.platform,
     env = process.env,
     osReleaseText,
+    macAppDeveloperIdSigned,
+    resourcesPath = process.resourcesPath,
+    execPath = process.execPath,
+    spawnSync: spawnSyncImpl = spawnSync,
     userDataPath = typeof app.getPath === 'function' ? app.getPath('userData') : '',
     fs: fsImpl = fs,
     autoUpdater: injectedAutoUpdater = null,
@@ -260,6 +330,10 @@ function createUpdaterService(deps = {}) {
     platform,
     env,
     osReleaseText,
+    macAppDeveloperIdSigned,
+    resourcesPath,
+    execPath,
+    spawnSync: spawnSyncImpl,
   });
 
   function getPreferencesPath() {
@@ -664,7 +738,7 @@ function createUpdaterService(deps = {}) {
           return cloneState();
         }
 
-        const release = await checkManualRelease();
+        const release = await checkManualRelease({ throwOnError: true });
         const checkedAt = nowIso();
         const latestVersion = release && release.version
           ? (normalizeSemverTag(release.version) || '')
@@ -1107,6 +1181,7 @@ module.exports = {
   PERIODIC_CHECK_INTERVAL_MS,
   PROGRESS_THROTTLE_MS,
   INSTALLER_NAME_REGEX,
+  isMacAppDeveloperIdSigned,
   resolveUpdateMode,
   buildManualInstallCommand,
   normalizeReleaseNotes,

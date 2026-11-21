@@ -110,6 +110,11 @@ app.whenReady().then(async () => {
       return { historyOpened, opened, name, focus, inert, resultActionsHidden, resultTitle, resultFocus, activeStatus, readyStatus, staleStatus, call, closed, restored, draftPreserved, returnedToEdit, finalFocus, diskMessage, diskRetry, retryResult, placeholderText, hasActivity, previousText, cancelChip, rowFocus, failedRetryVisible, failedText, readyText, readyRetryHidden, focusAfterDismiss, pickerMessage, immediateOpenId, immediateOpenFocus };
     })()`, true);
     win.setContentSize(420, 360);
+    win.webContents.enableDeviceEmulation({
+      screenPosition: 'desktop',
+      screenSize: { width: 420, height: 360 },
+      viewSize: { width: 420, height: 360 },
+    });
     result.shortWindowLayout = await win.webContents.executeJavaScript(`(async () => {
       document.getElementById('import-audio-button').click();
       await new Promise(resolve => setTimeout(resolve, 50));

@@ -136,6 +136,9 @@
       return 'Development build';
     }
     if (mode === 'manual-package') {
+      if (manualPackageKind === 'dmg') {
+        return 'Manual download (DMG)';
+      }
       if (manualPackageKind === 'pacman') {
         return 'System package (pacman)';
       }
@@ -151,6 +154,9 @@
   }
 
   function getManualPackageDownloadLabel(manualPackageKind, installerName = null) {
+    if (manualPackageKind === 'dmg') {
+      return 'Download .dmg';
+    }
     if (manualPackageKind === 'pacman') {
       return 'Download .pkg.tar.zst';
     }
@@ -161,6 +167,9 @@
       return 'Download .AppImage';
     }
     const name = String(installerName || '').trim();
+    if (name.endsWith('.dmg')) {
+      return 'Download .dmg';
+    }
     if (name.endsWith('.pkg.tar.zst')) {
       return 'Download .pkg.tar.zst';
     }
@@ -299,7 +308,9 @@
       case 'manual-required':
         railTone = 'lilac';
         railIconKind = 'arrow-up';
-        railTooltip = availableTag ? `Update ${availableTag} available` : 'Manual package update';
+        railTooltip = availableTag
+          ? `Update ${availableTag} available`
+          : (manualPackageKind === 'dmg' ? 'Manual update' : 'Manual package update');
         railShowDot = !isDismissedForCurrentAvailable;
         break;
       case 'error':
@@ -366,7 +377,7 @@
       case 'manual-required':
         popoverTone = 'amber';
         popoverChipLabel = 'Manual update';
-        popoverTitle = 'Manual package update';
+        popoverTitle = manualPackageKind === 'dmg' ? 'Update available' : 'Manual package update';
         primaryAction = {
           visible: true,
           action: 'download',
@@ -516,7 +527,9 @@
     const autoDownloadSupported = mode === 'in-app';
     let autoDownloadHint = 'When off, AvaNevis checks for new releases and waits for you to start the download.';
     if (mode === 'manual-package') {
-      autoDownloadHint = 'Unavailable for system package installs. Updates are installed through your package manager.';
+      autoDownloadHint = manualPackageKind === 'dmg'
+        ? 'Automatic in-app macOS updates require Developer ID signing. Download the latest .dmg from GitHub Releases to update.'
+        : 'Unavailable for system package installs. Updates are installed through your package manager.';
     } else if (mode === 'dev-unpackaged') {
       autoDownloadHint = 'Unavailable in development builds.';
     }

@@ -314,7 +314,7 @@ On Windows, `npm run build` / `build:dir` runs `scripts/check-win-signing-config
 
 **Default PR/local builds remain unsigned/ad-hoc signed** so contributors and PR CI do not need paid signing certificates (users on unsigned local builds use the Gatekeeper note in [MACOS_INSTALLATION.md](../guides/MACOS_INSTALLATION.md)).
 
-To enable signed/notarized CI builds in `.github/workflows/build-release.yml` (tags `v*.*.*` always enforce `AVANEVIS_REQUIRE_SIGNED_RELEASE=1`; `workflow_dispatch` supports a `require_signed_release` toggle), configure GitHub Actions repository secrets:
+To enable signed/notarized CI builds in `.github/workflows/build-release.yml`, configure the GitHub Actions repository secrets below (signing and notarization activate automatically whenever secrets are present; `v*.*.*` tags keep signing optional until `vars.REQUIRE_SIGNED_RELEASE` is set to `true` to enforce fail-closed `AVANEVIS_REQUIRE_SIGNED_RELEASE=1`, and `workflow_dispatch` supports a `require_signed_release` toggle):
 
 | Platform | Secret | Purpose |
 |---|---|---|

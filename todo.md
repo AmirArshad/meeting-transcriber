@@ -9,17 +9,20 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 
 Phased implementation plan on `release/3.0`: [v3.0.0 release plan](docs/superpowers/plans/2026-11-20-v3.0-release-plan.md) · [v3.0 qualification record](docs/development/V3_0_QUALIFICATION.md).
 
-**Release direction, 2026-11-20:** v3.0 is still in development. The current
+**Release direction, 2026-11-21:** v3.0 is still in development. The current
 plan and this list do not define its complete feature scope: more features and
 polish are planned before shipping. The user intends to merge the current
 development branch and continue that work. Windows signing certificates and
-Apple Developer ID credentials are not expected for a while; their absence is
-not a blocker to development, ordinary testing, or merging this branch. Use
-unsigned/ad-hoc builds where appropriate and describe their limits accurately.
-Obtain credentials and complete Windows signing, macOS signing/notarization,
-signed-artifact verification and the dependent live updater acceptance as the
-final release stage, after the additional v3.0 work and before publishing.
-Other outstanding release gates remain open and should be tested when feasible;
+Apple Developer ID credentials are optional for v3.0 and not expected until
+accounts are ready; their absence is not a blocker to development, ordinary
+testing, merging this branch, or shipping unsigned/ad-hoc v3.0 releases.
+`.github/workflows/build-release.yml` auto-activates signing when secrets are
+configured, allows unsigned Windows / ad-hoc macOS tag builds when secrets are
+absent (unless `vars.REQUIRE_SIGNED_RELEASE=true`), and `updater-service.js`
+falls back to manual `.dmg` download on ad-hoc macOS builds. Obtain credentials
+and enable `vars.REQUIRE_SIGNED_RELEASE=true` when ready for signed Windows,
+signed/notarized macOS, and macOS Squirrel.Mac in-app updates. Other
+outstanding release gates remain open and should be tested when feasible;
 repeat qualification for inputs changed by later work.
 
 Progress across mandatory post-v2.12 gates and v3.0 feature tracks:
@@ -77,14 +80,15 @@ these gates for a later release.
   compatible qualified dependency update and verify production and full audits.
   _(Resolved cleanly: `npm audit --omit=dev` and `npm audit` both report `0
   vulnerabilities` with `picomatch@4.0.7` as of 2026-11-20.)_
-- [ ] **Final v3.0 release stage:** obtain the Windows and Apple credentials,
-  sign the Windows installer, sign and notarize the macOS build, verify the
-  resulting distribution artifacts, and complete the dependent signed live
-  updater acceptance before publishing. _(Repo wiring in `build/after-pack.js`,
+- [ ] **Optional post-account release signing (deferred for v3.0):** Windows
+  Authenticode signing, macOS Developer ID signing/notarization, and macOS
+  Squirrel.Mac in-app updater acceptance are optional for v3.0 while developer
+  accounts are not yet enrolled. Repo wiring (`build/after-pack.js`,
   `build/mac-sign.js`, `scripts/check-*-signing-*.js`,
   `scripts/notarize-macos-dmg.sh`, `scripts/verify-*.{ps1,sh}`, and
-  `build-release.yml` complete on `release/3.0`; pending CI secrets & native
-  signed build verification on Windows and macOS.)_
+  `build-release.yml`) is in place and auto-activates when secrets are added;
+  set `vars.REQUIRE_SIGNED_RELEASE=true` to enforce fail-closed signed tags once
+  credentials are configured.
 - [ ] Test Speakrs multi-speaker separation with representative speech on each
   supported native platform and record the results.
 

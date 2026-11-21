@@ -39,6 +39,7 @@ function loadUpdaterWithShell(openExternal = () => Promise.resolve()) {
 }
 
 const {
+  checkForUpdates,
   findInstallerAsset,
   isNewerVersion,
   parseOsRelease,
@@ -46,10 +47,51 @@ const {
 } = loadUpdaterWithShell();
 
 
-test('isNewerVersion compares semantic versions correctly', () => {
+test('isNewerVersion compares semantic versions and SemVer prereleases correctly', () => {
   assert.equal(isNewerVersion('1.8.0', '1.7.18'), true);
   assert.equal(isNewerVersion('1.7.18', '1.7.18'), false);
   assert.equal(isNewerVersion('1.7.17', '1.7.18'), false);
+
+  assert.equal(isNewerVersion('3.0.0', '3.0.0-rc.1'), true);
+  assert.equal(isNewerVersion('3.0.0-rc.1', '3.0.0'), false);
+  assert.equal(isNewerVersion('3.0.0-rc.2', '3.0.0-rc.1'), true);
+  assert.equal(isNewerVersion('3.0.0-rc.10', '3.0.0-rc.2'), true);
+  assert.equal(isNewerVersion('3.0.0-rc.1', '3.0.0-beta.9'), true);
+  assert.equal(isNewerVersion('3.0.0-rc.1.1', '3.0.0-rc.1'), true);
+  assert.equal(isNewerVersion('3.0.0-alpha.beta', '3.0.0-alpha.1'), true);
+  assert.equal(isNewerVersion('3.0.0-rc.1', '3.0.0-rc.1'), false);
+  assert.equal(isNewerVersion('3.0.0-', '3.0.0-rc.1'), false);
+});
+
+test('checkForUpdates rethrows HTTP errors when throwOnError=true and stays silent by default', async () => {
+  const https = require('node:https');
+  const { EventEmitter } = require('node:events');
+  const originalGet = https.get;
+
+  https.get = (_url, _options, callback) => {
+    const req = new EventEmitter();
+    process.nextTick(() => {
+      const res = new EventEmitter();
+      res.statusCode = 503;
+      res.setEncoding = () => {};
+      callback(res);
+      res.emit('data', 'Service Unavailable');
+      res.emit('end');
+    });
+    return req;
+  };
+
+  try {
+    const silentResult = await checkForUpdates();
+    assert.equal(silentResult, null);
+
+    await assert.rejects(
+      () => checkForUpdates({ throwOnError: true }),
+      /GitHub API returned 503/,
+    );
+  } finally {
+    https.get = originalGet;
+  }
 });
 
 

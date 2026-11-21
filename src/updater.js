@@ -21,7 +21,7 @@ const INSTALLER_NAME_TOKEN = 'AvaNevis-Setup-';
  *
  * @returns {Promise<Object|null>} Update info or null if no update
  */
-async function checkForUpdates() {
+async function checkForUpdates({ throwOnError = false } = {}) {
   try {
     console.log('Checking for updates...');
     const currentVersion = app.getVersion(); // From package.json
@@ -59,7 +59,10 @@ async function checkForUpdates() {
 
   } catch (error) {
     console.error('Failed to check for updates:', error.message);
-    // Don't throw - update check failures should be silent
+    if (throwOnError) {
+      throw error;
+    }
+    // Don't throw - update check failures should be silent for legacy callers
     return null;
   }
 }
@@ -208,38 +211,85 @@ function findInstallerAsset(assets, options = {}) {
   return null;
 }
 
+function parseSemver(version) {
+  if (typeof version !== 'string') {
+    return null;
+  }
+  const cleaned = version.trim().replace(/^v/, '');
+  const match = cleaned.match(/^([0-9]+)\.([0-9]+)\.([0-9]+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/);
+  if (!match) {
+    return null;
+  }
+  const prereleaseRaw = match[4];
+  let prerelease = [];
+  if (prereleaseRaw !== undefined) {
+    prerelease = prereleaseRaw.split('.');
+    if (prerelease.some((id) => id === '')) {
+      return null;
+    }
+  }
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease,
+  };
+}
+
+function comparePrereleaseIdentifiers(aIds, bIds) {
+  const len = Math.max(aIds.length, bIds.length);
+  for (let i = 0; i < len; i++) {
+    if (i >= aIds.length) return -1;
+    if (i >= bIds.length) return 1;
+    const a = aIds[i];
+    const b = bIds[i];
+    if (a === b) continue;
+    const aNum = /^[0-9]+$/.test(a);
+    const bNum = /^[0-9]+$/.test(b);
+    if (aNum && bNum) {
+      const diff = Number(a) - Number(b);
+      if (diff !== 0) return diff > 0 ? 1 : -1;
+      continue;
+    }
+    if (aNum !== bNum) {
+      return aNum ? -1 : 1;
+    }
+    return a > b ? 1 : -1;
+  }
+  return 0;
+}
+
 /**
- * Compare two semantic versions
+ * Compare two semantic versions per SemVer 2.0.0.
  *
- * @param {string} latest - Latest version (e.g., "1.3.0")
- * @param {string} current - Current version (e.g., "1.2.4")
+ * @param {string} latest - Latest version (e.g., "3.0.0")
+ * @param {string} current - Current version (e.g., "3.0.0-rc.1")
  * @returns {boolean} True if latest is newer than current
  */
 function isNewerVersion(latest, current) {
-  if (typeof latest !== 'string' || typeof current !== 'string') {
-    return false;
-  }
-  const cleanLatest = latest.trim().replace(/^v/, '');
-  const cleanCurrent = current.trim().replace(/^v/, '');
-  if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(cleanLatest)) {
-    return false;
-  }
-  if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(cleanCurrent)) {
+  const parsedLatest = parseSemver(latest);
+  const parsedCurrent = parseSemver(current);
+  if (!parsedLatest || !parsedCurrent) {
     return false;
   }
 
-  const latestParts = cleanLatest.split('-')[0].split('.').map(Number);
-  const currentParts = cleanCurrent.split('-')[0].split('.').map(Number);
-
-  for (let i = 0; i < 3; i++) {
-    const latestPart = latestParts[i] || 0;
-    const currentPart = currentParts[i] || 0;
-
-    if (latestPart > currentPart) return true;
-    if (latestPart < currentPart) return false;
+  for (const field of ['major', 'minor', 'patch']) {
+    if (parsedLatest[field] > parsedCurrent[field]) return true;
+    if (parsedLatest[field] < parsedCurrent[field]) return false;
   }
 
-  return false; // Versions are equal
+  const latestHasPre = parsedLatest.prerelease.length > 0;
+  const currentHasPre = parsedCurrent.prerelease.length > 0;
+  if (!latestHasPre && !currentHasPre) {
+    return false;
+  }
+  if (!latestHasPre && currentHasPre) {
+    return true;
+  }
+  if (latestHasPre && !currentHasPre) {
+    return false;
+  }
+  return comparePrereleaseIdentifiers(parsedLatest.prerelease, parsedCurrent.prerelease) > 0;
 }
 
 /**

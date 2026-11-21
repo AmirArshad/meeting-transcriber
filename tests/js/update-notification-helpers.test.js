@@ -96,6 +96,7 @@ test('formatters format bytes, speed, relative last-checked time, and update mod
   assert.equal(formatUpdateLastChecked('2026-11-18T15:00:00.000Z', now), '2d ago');
 
   assert.equal(formatUpdateModeLabel('in-app', null), 'Automatic in-app');
+  assert.equal(formatUpdateModeLabel('manual-package', 'dmg'), 'Manual download (DMG)');
   assert.equal(formatUpdateModeLabel('manual-package', 'pacman'), 'System package (pacman)');
   assert.equal(formatUpdateModeLabel('manual-package', 'deb'), 'System package (deb)');
   assert.equal(formatUpdateModeLabel('dev-unpackaged', null), 'Development build');
@@ -214,6 +215,22 @@ test('buildUpdateViewModel handles Linux manual-package, error, and dev-unpackag
   }));
   assert.equal(debVm.popover.primaryAction.label, 'Download .deb');
   assert.equal(debVm.settings.modeText, 'System package (deb)');
+
+  const macDmgVm = buildUpdateViewModel(makeBaseState({
+    status: 'manual-required',
+    mode: 'manual-package',
+    availableVersion: '3.1.0',
+    manualPackageKind: 'dmg',
+    manualInstallCommand: null,
+    autoDownload: true,
+  }));
+  assert.equal(macDmgVm.popover.title, 'Update available');
+  assert.equal(macDmgVm.popover.showManualPackage, false);
+  assert.equal(macDmgVm.popover.primaryAction.label, 'Download .dmg');
+  assert.equal(macDmgVm.settings.modeText, 'Manual download (DMG)');
+  assert.equal(macDmgVm.settings.autoDownload.disabled, true);
+  assert.equal(macDmgVm.settings.autoDownload.checked, false);
+  assert.match(macDmgVm.settings.autoDownload.hint, /Developer ID signing/);
 
   const errorVm = buildUpdateViewModel(makeBaseState({
     status: 'error',

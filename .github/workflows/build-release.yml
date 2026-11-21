@@ -50,6 +50,8 @@ jobs:
     name: Build ${{ matrix.os }} Installer
     runs-on: ${{ matrix.runner }}
     needs: verify-speakrs-release-artifacts
+    env:
+      AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (inputs.require_signed_release == true || (startsWith(github.ref, 'refs/tags/') && (vars.REQUIRE_SIGNED_RELEASE == 'true' || vars.REQUIRE_SIGNED_RELEASE == '1'))) && '1' || '0' }}
     strategy:
       fail-fast: false
       matrix:
@@ -176,7 +178,6 @@ jobs:
       - name: Build installer (Windows)
         if: matrix.os == 'Windows'
         env:
-          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           WINDOWS_AZURE_ENDPOINT: ${{ secrets.WINDOWS_AZURE_ENDPOINT }}
@@ -204,7 +205,6 @@ jobs:
       - name: Build installer (macOS)
         if: matrix.os == 'macOS'
         env:
-          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           CSC_NAME: ${{ secrets.CSC_NAME }}
@@ -223,7 +223,6 @@ jobs:
       - name: Notarize and staple macOS DMG
         if: matrix.os == 'macOS'
         env:
-          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           CSC_NAME: ${{ secrets.CSC_NAME }}
@@ -248,7 +247,6 @@ jobs:
         if: matrix.os == 'Windows'
         shell: pwsh
         env:
-          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WINDOWS_AZURE_ENDPOINT: ${{ secrets.WINDOWS_AZURE_ENDPOINT }}
         run: |
@@ -262,7 +260,6 @@ jobs:
         if: matrix.os == 'macOS'
         env:
           APPLE_KEYCHAIN_PROFILE: ${{ vars.APPLE_KEYCHAIN_PROFILE }}
-          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
         run: bash scripts/verify-macos-packaged-app.sh
 
       - name: Clean up macOS notarization API key
@@ -271,8 +268,6 @@ jobs:
 
       - name: Verify packaged macOS installer
         if: matrix.os == 'macOS'
-        env:
-          AVANEVIS_REQUIRE_SIGNED_RELEASE: ${{ (startsWith(github.ref, 'refs/tags/') || inputs.require_signed_release == true) && '1' || '0' }}
         run: bash scripts/verify-macos-installer.sh
 
       - name: Verify packaged Linux artifacts

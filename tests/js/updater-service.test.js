@@ -9,6 +9,7 @@ const path = require('node:path');
 
 const {
   DEFAULT_RELEASES_URL,
+  isMacAppDeveloperIdSigned,
   resolveUpdateMode,
   buildManualInstallCommand,
   normalizeReleaseNotes,
@@ -94,8 +95,12 @@ test('resolveUpdateMode detects dev, win32, darwin, Linux AppImage, pacman, deb,
     { mode: 'in-app', manualPackageKind: null },
   );
   assert.deepEqual(
-    resolveUpdateMode({ isPackaged: true, platform: 'darwin' }),
+    resolveUpdateMode({ isPackaged: true, platform: 'darwin', macAppDeveloperIdSigned: true }),
     { mode: 'in-app', manualPackageKind: null },
+  );
+  assert.deepEqual(
+    resolveUpdateMode({ isPackaged: true, platform: 'darwin', macAppDeveloperIdSigned: false }),
+    { mode: 'manual-package', manualPackageKind: 'dmg' },
   );
   assert.deepEqual(
     resolveUpdateMode({ isPackaged: true, platform: 'linux', env: { APPIMAGE: '/tmp/AvaNevis.AppImage' } }),
@@ -142,6 +147,107 @@ test('buildManualInstallCommand strictly validates installer filename and reject
   assert.equal(buildManualInstallCommand('../AvaNevis-Setup-3.1.0.deb', 'deb'), null);
   assert.equal(buildManualInstallCommand('evil.deb', 'deb'), null);
   assert.equal(buildManualInstallCommand(null, 'pacman'), null);
+});
+
+test('isMacAppDeveloperIdSigned distinguishes Developer ID from ad-hoc signatures and errors', () => {
+  assert.equal(isMacAppDeveloperIdSigned({ platform: 'win32', resourcesPath: '/Applications/AvaNevis.app/Contents/Resources' }), false);
+
+  assert.equal(
+    isMacAppDeveloperIdSigned({
+      platform: 'darwin',
+      resourcesPath: '/Applications/AvaNevis.app/Contents/Resources',
+      spawnSync: (cmd, args) => {
+        assert.equal(cmd, '/usr/bin/codesign');
+        assert.deepEqual(args, ['-dv', '--verbose=4', '/Applications/AvaNevis.app']);
+        return {
+          status: 0,
+          stdout: '',
+          stderr: 'Executable=/Applications/AvaNevis.app/Contents/MacOS/AvaNevis\nAuthority=Developer ID Application: AvaNevis (TEAM123)\n',
+        };
+      },
+    }),
+    true,
+  );
+
+  assert.equal(
+    isMacAppDeveloperIdSigned({
+      platform: 'darwin',
+      resourcesPath: '/Applications/AvaNevis.app/Contents/Resources',
+      spawnSync: () => ({
+        status: 0,
+        stdout: '',
+        stderr: 'Executable=/Applications/AvaNevis.app/Contents/MacOS/AvaNevis\nSignature=adhoc\n',
+      }),
+    }),
+    false,
+  );
+
+  assert.equal(
+    isMacAppDeveloperIdSigned({
+      platform: 'darwin',
+      resourcesPath: '/Applications/AvaNevis.app/Contents/Resources',
+      spawnSync: () => ({ status: 1, stdout: '', stderr: 'code object is not signed at all' }),
+    }),
+    false,
+  );
+});
+
+test('ad-hoc macOS build uses manual .dmg download mode without Squirrel.Mac', async () => {
+  const userDataPath = makeTempUserData();
+  const openedUrls = [];
+
+  const service = createUpdaterService({
+    app: { isPackaged: true, getVersion: () => '3.0.0' },
+    platform: 'darwin',
+    macAppDeveloperIdSigned: false,
+    userDataPath,
+    checkManualRelease: async () => ({
+      version: '3.1.0',
+      releaseUrl: 'https://github.com/AmirArshad/meeting-transcriber/releases/tag/v3.1.0',
+      downloadUrl: 'https://github.com/AmirArshad/meeting-transcriber/releases/download/v3.1.0/AvaNevis-Setup-3.1.0.dmg',
+      installerName: 'AvaNevis-Setup-3.1.0.dmg',
+      releaseDate: '2026-11-21T00:00:00Z',
+      releaseNotes: 'macOS release',
+    }),
+    openDownloadPage: async (url) => {
+      openedUrls.push(url);
+    },
+  });
+
+  const checked = await service.checkForUpdates({ manual: true });
+  assert.equal(checked.mode, 'manual-package');
+  assert.equal(checked.manualPackageKind, 'dmg');
+  assert.equal(checked.status, 'manual-required');
+  assert.equal(checked.manualInstallCommand, null);
+
+  const downloadRes = await service.downloadUpdate();
+  assert.equal(downloadRes.ok, true);
+  assert.deepEqual(openedUrls, [
+    'https://github.com/AmirArshad/meeting-transcriber/releases/download/v3.1.0/AvaNevis-Setup-3.1.0.dmg',
+  ]);
+});
+
+test('ad-hoc macOS manual check propagates GitHub errors as status=error instead of up-to-date', async () => {
+  const userDataPath = makeTempUserData();
+  const receivedOptions = [];
+
+  const service = createUpdaterService({
+    app: { isPackaged: true, getVersion: () => '3.0.0' },
+    platform: 'darwin',
+    macAppDeveloperIdSigned: false,
+    userDataPath,
+    checkManualRelease: async (options) => {
+      receivedOptions.push(options);
+      throw new Error('GitHub API returned 503: Service Unavailable');
+    },
+    log: { warn: () => {} },
+  });
+
+  const checked = await service.checkForUpdates({ manual: true });
+  assert.deepEqual(receivedOptions, [{ throwOnError: true }]);
+  assert.equal(checked.status, 'error');
+  assert.ok(checked.error);
+  assert.match(checked.error.message, /GitHub API returned 503/);
 });
 
 test('normalizeReleaseNotes handles strings, arrays, and empty inputs', () => {
@@ -213,6 +319,7 @@ test('in-app lifecycle transitions, throttled progress, cancellation, and monoto
   const service = createUpdaterService({
     app: { isPackaged: true, getVersion: () => '3.0.0' },
     platform: 'darwin',
+    macAppDeveloperIdSigned: true,
     userDataPath,
     autoUpdater: fakeUpdater,
     CancellationToken: FakeCancellationToken,

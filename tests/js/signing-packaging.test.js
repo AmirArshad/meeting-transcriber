@@ -326,6 +326,12 @@ test('package.json, release workflow, and platform verifiers wire signing and no
 
   assert.match(RELEASE_WORKFLOW, /require_signed_release:/);
   assert.match(RELEASE_WORKFLOW, /AVANEVIS_REQUIRE_SIGNED_RELEASE:/);
+  assert.match(RELEASE_WORKFLOW, /vars\.REQUIRE_SIGNED_RELEASE/);
+  assert.equal(
+    /AVANEVIS_REQUIRE_SIGNED_RELEASE:\s*\$\{\{\s*\(startsWith\(github\.ref,\s*'refs\/tags\/'\)\s*\|\|/.test(RELEASE_WORKFLOW),
+    false,
+    'tag releases should keep strict signing opt-in via vars.REQUIRE_SIGNED_RELEASE',
+  );
   assert.match(RELEASE_WORKFLOW, /bash scripts\/notarize-macos-dmg\.sh/);
   assert.match(RELEASE_WORKFLOW, /API_KEY_CONTENT: \${{ secrets\.APPLE_API_KEY }}/);
   assert.match(RELEASE_WORKFLOW, /umask 077/);
