@@ -103,6 +103,9 @@ function createSummaryService(deps) {
     fs,
     pythonConfig,
     spawnTrackedPython,
+    spawnSummaryPython = spawnTrackedPython,
+    ensureSummaryProcessExited = async () => {},
+    getSummaryDeviceMemory = async () => null,
     getBackendModuleArgs,
     enqueueAiComputeAction,
     createAiAddonCancelError,
@@ -321,8 +324,10 @@ function createSummaryService(deps) {
         // Skip full GGUF re-hash on every generate; setup/validate already pin checksums.
         // Re-verify only when the artifact mtime/size changed since the last match.
         const statusOptions = getAiAddonRuntimeOptions({
+          verifySelectedSummaryOnly: true,
           verifyChecksums: true,
           verifyChecksumsIfChanged: true,
+          ...(modelId ? { summaryModelId: modelId } : {}),
         });
         aiStatus = await checkAiAddonSetupStatus(statusOptions);
       } catch (error) {
@@ -354,7 +359,7 @@ function createSummaryService(deps) {
       const selectedModelId = aiStatus.features.summary.modelId;
       if (modelId && modelId !== selectedModelId) {
         clearActiveSummaryGeneration();
-        throw new Error('Summary model selection is managed by local setup. Validate or reinstall the selected model in Settings.');
+        throw new Error('The selected summary model is unavailable. Choose another installed model.');
       }
       const languagePolicy = getSummaryLanguagePolicy(selectedModelId, platform, arch);
       if (!languagePolicy.languages.includes(transcriptLanguage)) {
@@ -376,7 +381,7 @@ function createSummaryService(deps) {
       let transcriptPath;
       try {
         modelPath = getSummaryArtifactPath(app.getPath('userData'), artifact);
-        runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
+        runtimeDir = aiStatus.features.summary.runtimeCache?.runtimeDir || getSummaryRuntimeDir(app.getPath('userData'), artifact);
         transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
         if (transcriptHash(await fs.promises.readFile(transcriptPath, 'utf8')) !== sourceTranscriptHash) {
           throw new Error('Transcript changed. Confirm the transcript language again.');
@@ -426,11 +431,22 @@ function createSummaryService(deps) {
         },
         action: async (registerProcess) => {
         if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
+        const deviceMemory = await getSummaryDeviceMemory({ live: true });
+        if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
         const admittedStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
-          verifyChecksums: true, verifyChecksumsIfChanged: true,
+          verifySelectedSummaryOnly: true,
+          verifyChecksums: true, verifyChecksumsIfChanged: true, summaryModelId: selectedModelId, deviceMemory,
         }));
         if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
-        if (admittedStatus.features.summary.modelId !== selectedModelId
+        const admittedFit = admittedStatus.features.summary.fit || admittedStatus.summaryLibrary?.models?.find((item) => item.modelId === selectedModelId)?.fit;
+        if (admittedFit?.blocked === true) {
+          throw new Error(admittedFit.reason || 'This model cannot run safely on this device.');
+        }
+        if (getSummaryLanguagePolicy(selectedModelId, platform, arch).version !== languagePolicy.version
+          || !getSummaryLanguagePolicy(selectedModelId, platform, arch).languages.includes(transcriptLanguage)
+          || JSON.stringify(admittedStatus.features.summary.runtimeCache?.runtimeArtifact) !== JSON.stringify(aiStatus.features.summary.runtimeCache?.runtimeArtifact)
+          || admittedStatus.features.summary.runtimeCache?.runtimeDir !== aiStatus.features.summary.runtimeCache?.runtimeDir
+          || admittedStatus.features.summary.modelId !== selectedModelId
           || admittedStatus.features.summary.artifactId !== aiStatus.features.summary.artifactId
           || (platform !== 'linux' && (admittedStatus.features.summary.status !== 'ready'
             || !admittedStatus.features.summary.setupComplete))
@@ -478,12 +494,16 @@ function createSummaryService(deps) {
             ...buildSummaryRuntimeEnv({
               userDataDir: app.getPath('userData'),
               artifact,
+              runtimeDir,
+              runtimeArtifact: admittedStatus.features.summary.runtimeCache?.runtimeArtifact,
               platform,
               arch,
             }),
           };
         }
-        return new Promise((resolve, reject) => {
+        let spawnedSummary = false;
+        try {
+        return await new Promise((resolve, reject) => {
         if (!activeSummaryGeneration || activeSummaryGeneration.controller !== controller || controller.signal.aborted) {
           clearActiveSummaryGeneration();
           reject(createAiAddonCancelError('Summary generation was canceled.'));
@@ -495,7 +515,7 @@ function createSummaryService(deps) {
         // While assigning the actual subprocess, cancellation relies on the shared
         // AbortController. terminateProcessBestEffort is best-effort for null.
         activeSummaryGeneration.process = null;
-        const python = spawnTrackedPython(buildSummaryArgs({
+        const summaryArgs = buildSummaryArgs({
           meetingId: normalizedMeetingId,
           transcriptPath,
           runtimeDir,
@@ -509,8 +529,11 @@ function createSummaryService(deps) {
           modelId: selectedModelId,
           transcriptLanguage,
           sourceTranscriptHash,
+          inferenceDescriptor: artifact.inference || { contextTokens: 32768, family: 'qwen', promptFormat: 'chatml', disableThinking: true },
           ...(meetingTag ? { tag: meetingTag } : {}),
-        }), { cwd: pythonConfig.backendPath, env: summaryEnv });
+        });
+        const python = spawnSummaryPython(summaryArgs, { cwd: pythonConfig.backendPath, env: summaryEnv });
+        spawnedSummary = true;
         activeSummaryGeneration.process = python;
         registerProcess(python);
 
@@ -772,6 +795,11 @@ function createSummaryService(deps) {
           finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error);
         });
         });
+        } finally {
+          if (spawnedSummary) {
+            await ensureSummaryProcessExited().catch(() => {});
+          }
+        }
         },
         });
       }).catch((error) => {

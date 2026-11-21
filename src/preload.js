@@ -130,7 +130,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getHistoryIndexStatus: () => ipcRenderer.invoke('get-history-index-status'),
 
   // Grounded local Q&A & threaded Chat
-  getHistoryQaEligibility: () => ipcRenderer.invoke('get-history-qa-eligibility'),
+  getHistoryQaEligibility: (options) => ipcRenderer.invoke('get-history-qa-eligibility', options),
   getHistoryQaModelState: () => ipcRenderer.invoke('get-history-qa-model-state'),
   unloadHistoryQaModel: () => ipcRenderer.invoke('unload-history-qa-model'),
   askHistory: (options = {}) => ipcRenderer.invoke('ask-history', options),
@@ -141,6 +141,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   renameChatThread: (threadId, title) => ipcRenderer.invoke('rename-chat-thread', { threadId, title }),
   deleteChatThread: (threadId) => ipcRenderer.invoke('delete-chat-thread', { threadId }),
   updateChatThreadScope: (threadId, scope) => ipcRenderer.invoke('update-chat-thread-scope', { threadId, scope }),
+  updateChatThreadModel: (options) => ipcRenderer.invoke('update-chat-thread-model', options),
 
   // GPU acceleration
   checkGPU: () => ipcRenderer.invoke('check-gpu'),
@@ -168,7 +169,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openUpdateReleasePage: () => ipcRenderer.invoke('open-update-release-page'),
 
   // Local AI add-ons
-  getAiAddonStatus: (options) => ipcRenderer.invoke('get-ai-addon-status', options),
+  // Pass { checkDevice: true } for an explicit live Summaries & Chat device check.
+  getAiAddonStatus: (options = {}) => ipcRenderer.invoke('get-ai-addon-status', options),
   storeDiarizationToken: (token) => ipcRenderer.invoke('store-diarization-token', token),
   getDiarizationTokenStatus: () => ipcRenderer.invoke('get-diarization-token-status'),
   deleteDiarizationToken: () => ipcRenderer.invoke('delete-diarization-token'),
@@ -180,6 +182,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cancelSummaryModelSetup: () => ipcRenderer.invoke('cancel-summary-model-setup'),
   validateSummaryModel: (options) => ipcRenderer.invoke('validate-summary-model', options),
   removeSummaryModel: (options) => ipcRenderer.invoke('remove-summary-model', options),
+  setDefaultSummaryModel: (options) => ipcRenderer.invoke('set-default-summary-model', options),
 
   // Event listeners
   onRecordingProgress: (callback) => addListener('recording-progress', callback),

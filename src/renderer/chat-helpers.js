@@ -161,6 +161,15 @@
         busy: true,
       };
     }
+    if (status === 'release_error') {
+      return {
+        status: 'release_error',
+        label: 'Still unloading',
+        tone: 'unloading',
+        showUnload: true,
+        busy: false,
+      };
+    }
     return {
       status: 'unloaded',
       label: 'Not loaded',
@@ -250,7 +259,7 @@
       }
       const detailParts = [searchedLabel];
       if (detectedDateFilter) {
-        detailParts.push(`Date filter parsed: ${detectedDateFilter}`);
+        detailParts.push(`Date filter: ${detectedDateFilter}`);
       }
       const actions = [];
       if (filtered && scope?.type === 'selected_meetings') {
@@ -278,8 +287,8 @@
       }
       return {
         variant: 'verification_failed',
-        title: 'The local model returned an unverified format.',
-        detail: 'Citation checks rejected the output so ungrounded claims are never shown.',
+        title: 'Could not verify sources for this answer.',
+        detail: 'AvaNevis skipped this reply because it could not match it to your transcripts. Try again.',
         actions,
         showInspectedSources: hasInspectedSources,
       };
@@ -294,7 +303,7 @@
       detailParts.push(searchedLabel);
     }
     if (detectedDateFilter) {
-      detailParts.push(`Date filter parsed: ${detectedDateFilter}`);
+      detailParts.push(`Date filter: ${detectedDateFilter}`);
     }
     const actions = [];
     if (filtered) {

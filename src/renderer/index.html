@@ -68,7 +68,15 @@
         <div class="modal-header"><h2 id="summary-language-title">Prepare summary</h2></div>
         <form id="summary-language-form" class="modal-form">
           <div class="modal-body">
-            <p id="summary-language-description" class="setting-description">Choose the main language spoken in this recording. Mixed-language recordings without one main language are not supported.</p>
+            <p id="summary-language-description" class="setting-description">Choose a model and the main language spoken in this recording.</p>
+            <div class="ai-addon-field" id="summary-model-field">
+              <div class="summary-model-field-header">
+                <label for="summary-model-select">Model</label>
+                <button id="summary-manage-models" type="button" class="btn btn-small btn-link-subtle">Manage models</button>
+              </div>
+              <select id="summary-model-select" class="device-select"></select>
+              <span id="summary-model-static-label" class="summary-model-static-label" hidden></span>
+            </div>
             <div class="ai-addon-field">
               <label for="summary-transcript-language">Transcript language</label>
               <select id="summary-transcript-language" class="device-select"></select>
@@ -76,7 +84,7 @@
             <p id="summary-language-message" class="setting-description" aria-live="polite"></p>
             <fieldset id="summary-speaker-fieldset" class="prepare-summary-section" hidden>
               <legend>Speaker names <span>(optional)</span></legend>
-              <p class="setting-description">Add names to help attribute decisions and tasks.</p>
+              <p class="setting-description">Optional names appear in the summary, transcript, and exports.</p>
               <div id="summary-speaker-rows" class="speaker-rows"></div>
             </fieldset>
             <div id="summary-recording-type" class="prepare-summary-section ai-addon-field" hidden>
@@ -1313,7 +1321,7 @@
                       id="chat-unload-model-btn"
                       class="chat-unload-model-btn"
                       hidden
-                      title="Unload local model from memory"
+                      title="Free memory by unloading the local model"
                     >
                       Unload
                     </button>
@@ -1325,7 +1333,7 @@
                 <div class="chat-stream">
                   <section class="chat-onboarding-card" id="chat-onboarding-card" hidden>
                     <div class="chat-onboarding-copy">
-                      <h3>Chat requires the Summaries &amp; Chat add-on</h3>
+                      <h3>Set up a local model to use Chat</h3>
                       <p id="chat-onboarding-reason">
                         Set up the local Summaries &amp; Chat add-on in Settings to ask questions across your transcripts. Keyword search in History works without any add-ons.
                       </p>
@@ -1335,7 +1343,7 @@
                       id="chat-open-ai-settings-btn"
                       class="btn btn-primary btn-small"
                     >
-                      Open AI Add-ons in Settings
+                      Manage models in Settings
                     </button>
                   </section>
 
@@ -1405,33 +1413,41 @@
                   </div>
 
                   <div class="chat-composer-dock">
-                    <button
-                      type="button"
-                      id="chat-scope-btn"
-                      class="chat-scope-btn"
-                      aria-expanded="false"
-                      aria-controls="chat-scope-popover"
-                      title="Choose which recordings or dates to search"
-                    >
-                      <span class="chat-scope-dot" aria-hidden="true"></span>
-                      <span id="chat-scope-btn-label">All recordings</span>
-                    </button>
-                    <textarea
-                      id="chat-input"
-                      class="chat-input"
-                      rows="1"
-                      maxlength="2000"
-                      placeholder="Ask a question…"
-                      aria-label="Ask a question about your recordings"
-                      title="Enter to send. Shift+Enter for a new line."
-                    ></textarea>
-                    <button
-                      type="button"
-                      id="chat-send-btn"
-                      class="btn btn-primary btn-small chat-send-btn"
-                    >
-                      Send
-                    </button>
+                    <div class="chat-composer-input-row">
+                      <textarea
+                        id="chat-input"
+                        class="chat-input"
+                        rows="1"
+                        maxlength="2000"
+                        placeholder="Ask a question…"
+                        aria-label="Ask a question about your recordings"
+                        title="Enter to send. Shift+Enter for a new line."
+                      ></textarea>
+                      <button
+                        type="button"
+                        id="chat-send-btn"
+                        class="btn btn-primary btn-small chat-send-btn"
+                      >
+                        Send
+                      </button>
+                    </div>
+                    <div class="chat-composer-controls">
+                      <button
+                        type="button"
+                        id="chat-scope-btn"
+                        class="chat-scope-btn"
+                        aria-expanded="false"
+                        aria-controls="chat-scope-popover"
+                        title="Choose which recordings or dates to search"
+                      >
+                        <span class="chat-scope-dot" aria-hidden="true"></span>
+                        <span id="chat-scope-btn-label">All recordings</span>
+                      </button>
+                      <label class="sr-only" for="chat-model-select">Model for this chat</label>
+                      <select id="chat-model-select" class="device-select" hidden aria-label="Model for this chat"></select>
+                      <span id="chat-model-label" class="chat-composer-model-label" hidden></span>
+                      <button type="button" id="chat-manage-models" class="btn btn-small" hidden>Manage models</button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1702,6 +1718,7 @@
                         </select>
                       </div>
 
+                      <div id="summary-model-library" aria-live="polite"></div>
                       <div class="ai-addon-footprint" id="summary-footprint" aria-live="polite"></div>
                       <p class="ai-addon-status-text" id="summary-status-text">Checking setup&hellip;</p>
                       <div class="ai-addon-progress" id="summary-progress" style="display: none">
@@ -1881,6 +1898,10 @@
                       rel="noopener noreferrer"
                       >Qwen</a
                     >
+                    (Apache-2.0),
+                    <a href="https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF" target="_blank" rel="noopener noreferrer">Gemma 4</a>
+                    (Apache-2.0), and, where available,
+                    <a href="https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF" target="_blank" rel="noopener noreferrer">Inkling 2 Mini</a>
                     (Apache-2.0) with
                     <a
                       href="https://github.com/ggml-org/llama.cpp"

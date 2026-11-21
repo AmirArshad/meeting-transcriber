@@ -1,4 +1,4 @@
-"""Local Qwen language checking, independent of the requested output language.
+"""Local language checking, independent of the requested output language.
 
 Classify only substantive prose, never schema keys, names or fixed labels.
 The same tracked llama.cpp subprocess tree and repair budget own this work.
@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from .templates import get_template
 
-LANGUAGE_POLICY_VERSION = "qwen-language-v2"
+LANGUAGE_POLICY_VERSION = "summary-language-v3"
 # A model-estimated share is approximate. Require a clear majority, rather than
 # treating language identity confidence as evidence that mixed input is dominant.
 INPUT_MIN_LANGUAGE_SHARE = 0.6
@@ -32,6 +32,15 @@ LANGUAGE_NAMES = {
 
 class SummaryLanguageError(ValueError):
     """Language mismatch or insufficient evidence; never a runtime repair error."""
+
+
+def is_model_language_supported(model_id, language, platform=None, arch=None):
+    # Match src/summary-language-policy.js and the recorded platform qualification.
+    if model_id == "qwen3.5-9b-q4-k-m":
+        return ((platform, arch) in ((None, None), ("win32", "x64"), ("darwin", "arm64"), ("linux", "x64"))
+                and language in LANGUAGE_NAMES)
+    return ((platform, arch) == ("darwin", "arm64") and language == "en"
+            and model_id in ("gemma-4-e4b", "gemma-4-12b"))
 
 
 def language_instruction(language):

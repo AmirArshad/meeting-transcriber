@@ -1953,6 +1953,7 @@ function applySummaryActionAvailability() {
   const control = getSummaryActionControlState(summary, {
     platformSupportsSummaries: platform === 'win32' || platform === 'darwin',
   });
+  if (aiAddonStatusSnapshot?.summaryLibrary && usableSummaryModels().length) { control.enabled = true; control.title = ''; }
   const mismatchButton = document.getElementById('summary-tag-mismatch-regenerate');
   if (mismatchButton) mismatchButton.disabled = !control.enabled || Boolean(summaryGenerationMeetingId);
   for (const button of getSummaryGenerationButtons()) {
@@ -5507,7 +5508,12 @@ function updateSummaryLanguageCaptions(meeting) {
   if (!helpers) return;
   const captions = [
     ['transcript-summary-language-caption', helpers.formatTranscriptLanguageCaption(meeting && meeting.language)],
-    ['summary-language-caption', helpers.formatSummaryLanguageCaption(meeting)],
+    ['summary-language-caption', (() => {
+      const caption = helpers.formatSummaryLanguageCaption(meeting);
+      const modelId = meeting?.ai?.summary?.modelId;
+      if (caption.visible && modelId && typeof summaryModelName === 'function') caption.value += ` · ${summaryModelName(modelId)}`;
+      return caption;
+    })()],
   ];
   for (const [id, caption] of captions) {
     const element = document.getElementById(id);
@@ -5526,7 +5532,60 @@ function updateSummaryLanguageCaptions(meeting) {
   }
 }
 
-function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash) {
+function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash, library = null) {
+  const modelSelect = document.getElementById('summary-model-select');
+  const modelField = document.getElementById('summary-model-field');
+  const manageModels = document.getElementById('summary-manage-models');
+  const staticModelLabel = document.getElementById('summary-model-static-label');
+  const usableModels = library ? usableSummaryModels(library) : [];
+  const defaultLanguage = preferredLanguage || meeting.language;
+  const modelLanguages = (item) => item?.qualifiedLanguages || item?.languagePolicy?.languages || [];
+  let chatOnlyDefaultName = null;
+  let autoSelectedModelId = null;
+  if (modelField) modelField.hidden = !library;
+  if (!library && staticModelLabel) staticModelLabel.hidden = true;
+  if (library && modelSelect) {
+    modelSelect.replaceChildren();
+    const defaultUsable = usableModels.some((model) => model.modelId === library.defaultModelId);
+    if (!defaultUsable && usableModels.length !== 1) modelSelect.add(new Option('Choose an available model', ''));
+    for (const model of usableModels) modelSelect.add(new Option(`${model.modelName}${model.modelId === library.defaultModelId ? ' · Default' : ''}`, model.modelId));
+    let initialModelId = defaultUsable ? library.defaultModelId : '';
+    const defaultModel = defaultUsable ? usableModels.find((item) => item.modelId === library.defaultModelId) : null;
+    if (defaultModel && modelLanguages(defaultModel).length === 0) {
+      const capable = usableModels.find((item) => modelLanguages(item).includes(defaultLanguage))
+        || usableModels.find((item) => modelLanguages(item).length > 0);
+      if (capable) {
+        initialModelId = capable.modelId;
+        autoSelectedModelId = capable.modelId;
+        chatOnlyDefaultName = defaultModel.modelName;
+      }
+    }
+    if (usableModels.length === 1) {
+      modelSelect.value = usableModels[0].modelId;
+      modelSelect.hidden = true;
+      modelSelect.disabled = false;
+      if (staticModelLabel) {
+        staticModelLabel.hidden = false;
+        staticModelLabel.textContent = `${usableModels[0].modelName}${usableModels[0].modelId === library.defaultModelId ? ' · Default' : ''}`;
+      }
+    } else if (usableModels.length === 0) {
+      modelSelect.value = '';
+      modelSelect.hidden = true;
+      modelSelect.disabled = true;
+      if (staticModelLabel) staticModelLabel.hidden = true;
+    } else {
+      modelSelect.value = initialModelId;
+      modelSelect.hidden = false;
+      modelSelect.disabled = false;
+      if (staticModelLabel) staticModelLabel.hidden = true;
+    }
+  }
+  if (manageModels && library) {
+    manageModels.hidden = false;
+    manageModels.textContent = usableModels.length
+      ? 'Manage models'
+      : (library.models?.some((m) => m.installed) ? 'Manage models' : 'Set up a model');
+  }
   const modal = document.getElementById('summary-language-modal');
   const select = document.getElementById('summary-transcript-language');
   const form = document.getElementById('summary-language-form');
@@ -5550,7 +5609,7 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
   speakerRows.replaceChildren();
   speakerFieldset.hidden = !showSpeakers;
   tagField.hidden = Boolean(normalizeTag(meeting.tag));
-  tagSelect.replaceChildren(new Option('Choose recording type', ''));
+  tagSelect.replaceChildren(new Option('None (use general format)', ''));
   for (const tag of RECORDING_TAGS) tagSelect.add(new Option(tag.label, tag.slug));
   const updateFormat = () => {
     const tag = getTagMeta(tagSelect.value || 'other');
@@ -5578,15 +5637,26 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
     option.textContent = `${name}${policy.languages.includes(id) ? '' : ' — summaries unavailable'}`;
     select.appendChild(option);
   }
-  const defaultLanguage = preferredLanguage || meeting.language;
   select.value = Object.hasOwn(policy.names || {}, defaultLanguage) ? defaultLanguage : '';
   let saving = false;
+  const selectedModel = () => usableModels.find((item) => item.modelId === modelSelect?.value);
+  const selectedLanguages = (model) => model?.qualifiedLanguages || model?.languagePolicy?.languages || (model && model.modelId !== library?.defaultModelId ? [] : policy.languages);
   const update = () => {
+    const model = selectedModel();
+    const languages = selectedLanguages(model);
+    for (const option of (select.options || [])) {
+      if (option.value && policy.names?.[option.value]) option.textContent = `${policy.names[option.value]}${languages.includes(option.value) ? '' : ' — summaries unavailable'}`;
+    }
     const name = policy.names?.[select.value];
-    const available = policy.languages.includes(select.value);
+    const available = languages.includes(select.value) && (!library || Boolean(model));
     submit.disabled = saving || !available;
-    message.textContent = !name ? 'Choose the main language spoken in this recording.'
-      : available ? `Summary will use ${name}.`
+    message.textContent = library && !model ? 'The default model is unavailable. Choose an installed model.'
+      : !languages.length ? 'This model is Chat-only on this device. Choose another model for summaries.'
+      : !name ? 'Choose the main language spoken in this recording.'
+      : available
+        ? (chatOnlyDefaultName && model?.modelId === autoSelectedModelId
+          ? `Summary will use ${name}. (${chatOnlyDefaultName} is Chat-only on this device.)`
+          : `Summary will use ${name}.`)
         : `Summaries are not available for ${name} with this model.`;
   };
   update();
@@ -5614,8 +5684,9 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
     };
     const onSubmit = async (event) => {
       event.preventDefault();
-      if (saving || !policy.languages.includes(select.value)) return;
+      if (saving || submit.disabled) return;
       const transcriptLanguage = select.value;
+      const selectedModelId = modelSelect?.value || null;
       const editedNames = { ...names };
       for (const [speaker, field] of fields) editedNames[speaker] = field.value;
       const speakerNames = diffSpeakerNames(names, editedNames);
@@ -5668,7 +5739,7 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
           return;
         }
       }
-      close(transcriptLanguage);
+      close(library ? { transcriptLanguage, modelId: selectedModelId } : transcriptLanguage);
     };
     const onCancel = () => close(null);
     const onKey = (event) => {
@@ -5686,6 +5757,14 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
     closeSummaryLanguageConfirmation = close;
     form.addEventListener('submit', onSubmit);
     select.addEventListener('change', update);
+    modelSelect?.addEventListener('change', () => {
+      if (!selectedLanguages(selectedModel()).includes(select.value)) select.value = '';
+      update();
+    }, { signal: controller.signal });
+    manageModels?.addEventListener('click', () => {
+      close(null);
+      openSettingsAtAiAddons();
+    }, { signal: controller.signal });
     cancel.addEventListener('click', onCancel);
     modal.addEventListener('keydown', onKey);
   });
@@ -5711,10 +5790,7 @@ async function generateSummaryForMeeting(meetingId) {
   addLog('Checking summary availability…');
   let aiStatus;
   try {
-    aiStatus = await window.electronAPI.getAiAddonStatus({
-      verifyChecksums: true,
-      verifyChecksumsIfChanged: true,
-    });
+    aiStatus = await window.electronAPI.getAiAddonStatus();
   } catch (error) {
     addLog(`Summary setup status unavailable: ${error.message}`, 'error');
     summaryGenerationMeetingId = null;
@@ -5737,7 +5813,9 @@ async function generateSummaryForMeeting(meetingId) {
   }
 
   const summaryStatus = aiStatus && aiStatus.features && aiStatus.features.summary;
-  if (!summaryStatus || !summaryStatus.setupComplete || summaryStatus.status !== 'ready') {
+  const library = aiStatus?.summaryLibrary;
+  aiAddonStatusSnapshot = aiStatus;
+  if (library ? !usableSummaryModels(library).length : (!summaryStatus || !summaryStatus.setupComplete || summaryStatus.status !== 'ready')) {
     const message = getSummarySetupMessage(summaryStatus);
     addLog(message, summaryStatus && summaryStatus.status === 'unsupported' ? 'error' : 'warning');
     await restoreCurrentHistorySummary(normalizedMeetingId, message, { isError: summaryStatus?.status === 'error' });
@@ -5749,13 +5827,14 @@ async function generateSummaryForMeeting(meetingId) {
   }
 
   try {
-    const policy = summaryStatus.languagePolicy;
-    if (!policy || !policy.languages?.length) throw new Error('No transcript languages have been checked for the installed model.');
+    const policy = summaryStatus?.languagePolicy || usableSummaryModels(library)[0]?.languagePolicy;
+    if (!policy || (!library && !policy.languages?.length)) throw new Error('No transcript languages have been checked for the installed model.');
     const meeting = await window.electronAPI.getMeeting(normalizedMeetingId);
     const sourceTranscriptHash = await hashSummaryTranscript(meeting?.transcript);
     if (summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) throw new Error('Summary generation cancelled.');
     const preferredLanguage = window.summaryLanguageHelpers.reusableSummaryLanguage(meeting, sourceTranscriptHash, policy);
-    const transcriptLanguage = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash);
+    const selection = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash, library);
+    const transcriptLanguage = typeof selection === 'string' ? selection : selection?.transcriptLanguage;
     if (!transcriptLanguage || summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) {
       await restoreCurrentHistorySummary(normalizedMeetingId, 'Summary generation cancelled. Transcript is unchanged.', { showTab: false });
       return;
@@ -5767,6 +5846,7 @@ async function generateSummaryForMeeting(meetingId) {
       meetingId: normalizedMeetingId,
       transcriptLanguage,
       sourceTranscriptHash,
+      modelId: selection?.modelId || undefined,
       profile: (summaryProfileSelect && summaryProfileSelect.value) || summaryStatus.profile || DEFAULT_SUMMARY_PROFILE,
     });
 
@@ -6961,6 +7041,17 @@ function renderAiAddonProgress(feature) {
   const progressBar = document.getElementById(`${feature}-progress-bar`);
   const progressText = document.getElementById(`${feature}-progress-text`);
   const cancelButton = document.getElementById(`cancel-${feature === 'summary' ? 'summary' : 'diarization'}-btn`);
+  if (feature === 'summary' && typeof summaryLibrary === 'function' && summaryLibrary()) {
+    if (progressEl) {
+      if (progressEl.style) progressEl.style.display = 'none';
+      progressEl.hidden = true;
+    }
+    if (cancelButton) {
+      if (cancelButton.style) cancelButton.style.display = 'none';
+      cancelButton.hidden = true;
+    }
+    return;
+  }
   const terminalMessage = /ready|failed|error|cancel|unsupported|token|not supported/i.test((state && state.message) || '');
   const showCancel = Boolean(state && state.active && !(terminalMessage && !state.cancelling));
   if (!state || !progressEl || !progressBar || !progressText) {
@@ -6994,6 +7085,13 @@ function setAiAddonProgressState(feature, updates = {}) {
     ...updates,
   };
   renderAiAddonProgress(feature);
+  if (feature === 'summary' && aiAddonStatusSnapshot?.summaryLibrary) {
+    if (typeof updateSummaryModelLibraryProgressInPlace === 'function') {
+      updateSummaryModelLibraryProgressInPlace(aiAddonStatusSnapshot.summaryLibrary);
+    } else if (typeof renderSummaryModelLibrary === 'function') {
+      renderSummaryModelLibrary(aiAddonStatusSnapshot.summaryLibrary);
+    }
+  }
 }
 
 const aiAddonProgressHideTimers = {
@@ -7055,9 +7153,11 @@ function handleAiAddonProgress(progress) {
     }
     setAiAddonProgressState(progress.feature, {
       active: holdProgress || isCancelled,
+      terminal: true,
       cancelling: false,
       percent: terminalPercent,
       message: progress.message || '',
+      modelId: progress.modelId || aiAddonDownloadState[progress.feature].modelId || null,
     });
     if (holdProgress || isCancelled) {
       hideAiAddonProgressSoon(progress.feature, progress.status === 'ready' ? 2500 : 5000);
@@ -7072,9 +7172,11 @@ function handleAiAddonProgress(progress) {
     clearAiAddonProgressHideTimer(progress.feature);
     setAiAddonProgressState(progress.feature, {
       active: true,
+      terminal: false,
       cancelling: false,
       percent: Math.max(0, Math.min(100, fallbackPercent || 0)),
       message: formatAiAddonProgressText(progress),
+      modelId: progress.modelId || aiAddonDownloadState[progress.feature].modelId || null,
     });
   }
 }
@@ -7284,9 +7386,567 @@ function shouldLogAiAddonProgress(progress) {
   return false;
 }
 
+function summaryLibrary() {
+  return aiAddonStatusSnapshot?.summaryLibrary || null;
+}
+
+function usableSummaryModels(library = summaryLibrary()) {
+  return (library?.models || []).filter((model) => model.installed && model.setupComplete && model.status === 'ready' && model.fit?.blocked !== true);
+}
+
+function summaryModelName(id, library = summaryLibrary()) {
+  return library?.models?.find((model) => model.modelId === id)?.modelName || id || 'No default';
+}
+
+function summaryModelHasFiles(model) {
+  return Boolean(model.installed || model.removalPending || model.installedBytes > 0 || /removal is incomplete/i.test(model.error || ''));
+}
+
+let summaryDeviceCheckSnapshot = null;
+let summaryDeviceCheckPending = false;
+
+function summaryFitLabel(status) {
+  return ({ fits: 'Fits this device', needs_more_memory: 'May need more memory', runtime_needed: 'Runtime setup needed', unavailable: 'Unavailable on this device', unknown: 'Couldn’t check memory' })[status] || 'Compatibility not checked';
+}
+
+function summaryDownloadConfirmation(model, library) {
+  const size = (value) => value == null ? 'unknown' : formatBytes(value);
+  const required = model.storageFit ? model.storageFit.requiredBytes : model.peakFreeBytes;
+  const available = model.storageFit
+    ? (model.storageFit.availableBytes ?? (required === 0 ? library.availableBytes : null))
+    : library.availableBytes;
+  const shortfall = available != null && required != null ? Math.max(0, required - available) : null;
+  return [
+    `Download ${model.modelName}?`,
+    '',
+    `Model download: ${size(model.downloadBytes)}`,
+    `Runtime download: ${size(model.runtimeDownloadBytes)}`,
+    `Total additional download: ${size(model.additionalDownloadBytes)}`,
+    `Peak free space needed: ${size(required)} (Available: ${size(available)})`,
+    shortfall ? `Free another ${formatBytes(shortfall)} before setup.` : '',
+  ].filter((line, index, arr) => line !== '' || index === 1 || (index < arr.length - 1 && arr[index + 1] !== '')).join('\n');
+}
+
+function formatSummaryModelCapabilities(model) {
+  if (!model || model.fit?.status === 'unavailable') return null;
+  const languages = Array.isArray(model.qualifiedLanguages)
+    ? model.qualifiedLanguages
+    : Array.isArray(model.languagePolicy?.languages)
+      ? model.languagePolicy.languages
+      : null;
+  if (!languages) return null;
+  if (languages.length === 0) return 'Chat only on this device';
+  if (languages.length === 1) {
+    const code = languages[0];
+    const name = model.languagePolicy?.names?.[code] || code;
+    return `${name} summaries & Chat`;
+  }
+  return `Summaries (${languages.length} languages) & Chat`;
+}
+
+function formatSummaryModelStateBadge(model, { activeModel, progress, removalIncomplete, installed }) {
+  if (activeModel) {
+    if (progress.cancelling) return { text: 'Cancelling…', tone: 'working' };
+    if (progress.terminal && /ready/i.test(progress.message || '')) return { text: 'Ready', tone: 'ready' };
+    if (/validat|check/i.test(progress.message || '')) return { text: 'Checking setup…', tone: 'working' };
+    if (/extract/i.test(progress.message || '')) return { text: 'Installing…', tone: 'working' };
+    if (/download/i.test(progress.message || '')) return { text: 'Downloading…', tone: 'working' };
+    return { text: 'Setting up…', tone: 'working' };
+  }
+  if (removalIncomplete) return { text: 'Removal incomplete', tone: 'error' };
+  if (installed) {
+    if (model.status === 'ready') return { text: 'Ready', tone: 'ready' };
+    if (model.status === 'error') return { text: 'Needs attention', tone: 'error' };
+    if (model.status === 'validating') return { text: 'Checking setup', tone: 'working' };
+    if (model.status === 'downloading') return { text: 'Downloading', tone: 'working' };
+    if (model.status === 'unsupported') return { text: 'Unavailable', tone: 'muted' };
+    return { text: 'Installed', tone: '' };
+  }
+  if (model.status === 'error') return { text: 'Download failed', tone: 'error' };
+  const fitStatus = model.fit?.status;
+  if (fitStatus === 'fits') return { text: 'Fits this device', tone: 'ready' };
+  if (fitStatus === 'needs_more_memory') return { text: model.fit?.blocked ? 'Needs more memory' : 'May need more memory', tone: 'error' };
+  if (fitStatus === 'runtime_needed') return { text: 'Runtime setup needed', tone: 'error' };
+  if (fitStatus === 'unavailable') return { text: 'Unavailable', tone: 'muted' };
+  if (fitStatus === 'unknown') return { text: 'Couldn’t check memory', tone: '' };
+  return { text: 'Available', tone: '' };
+}
+
+function createSummaryCardCancelButton() {
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn btn-small btn-secondary summary-library-cancel-btn';
+  cancel.textContent = 'Cancel setup';
+  cancel.addEventListener('click', async () => {
+    setAiAddonProgressState('summary', { cancelling: true, message: 'Cancelling and cleaning up partial files…' });
+    try {
+      await window.electronAPI.cancelSummaryModelSetup();
+    } catch (error) {
+      setAiAddonProgressState('summary', { cancelling: false, message: error.message || 'Could not cancel setup.' });
+      showAppToast(error.message || 'Could not cancel setup.', 'error');
+    }
+  });
+  return cancel;
+}
+
+function createSummaryCardProgressBox(progress) {
+  const box = document.createElement('div');
+  box.className = 'summary-library-card-progress';
+  const barWrap = document.createElement('div');
+  barWrap.className = 'progress-bar-container';
+  const bar = document.createElement('div');
+  bar.className = 'progress-bar';
+  if (bar.style) bar.style.width = `${Math.max(0, Math.min(100, progress?.percent || 0))}%`;
+  barWrap.appendChild(bar);
+  const progressText = document.createElement('p');
+  progressText.className = 'progress-text';
+  progressText.setAttribute('role', 'status');
+  progressText.textContent = `${progress?.message || 'Preparing setup…'}${Number.isFinite(progress?.percent) ? ` · ${Math.round(progress.percent)}%` : ''}`;
+  box.appendChild(barWrap);
+  box.appendChild(progressText);
+  return box;
+}
+
+function updateSummaryModelLibraryProgressInPlace(library) {
+  const container = document.getElementById('summary-model-library');
+  if (!container || !library) return;
+  if (typeof container.querySelectorAll !== 'function') {
+    renderSummaryModelLibrary(library);
+    return;
+  }
+  const cards = [...container.querySelectorAll('.summary-library-model')];
+  if (!cards.length) {
+    renderSummaryModelLibrary(library);
+    return;
+  }
+  const progress = aiAddonDownloadState.summary;
+  for (const card of cards) {
+    const modelId = card.dataset?.modelId;
+    const model = (library.models || []).find((item) => item.modelId === modelId);
+    if (!model) continue;
+    const installed = summaryModelHasFiles(model);
+    const removalIncomplete = Boolean(model.removalPending || /removal is incomplete/i.test(model.error || ''));
+    const activeModel = Boolean(progress.active && progress.modelId === model.modelId);
+    const stateBadgeInfo = typeof formatSummaryModelStateBadge === 'function'
+      ? formatSummaryModelStateBadge(model, { activeModel, progress, removalIncomplete, installed })
+      : { text: activeModel ? (progress.cancelling ? 'Cancelling…' : (progress.message || 'Preparing setup…')) : removalIncomplete ? 'Removal incomplete' : model.status === 'ready' ? 'Ready' : model.status === 'error' ? 'Needs attention' : 'Available', tone: '' };
+    const stateBadge = card.querySelector('.summary-library-state-badge');
+    if (stateBadge) {
+      stateBadge.textContent = stateBadgeInfo.text;
+      stateBadge.className = `summary-library-badge summary-library-state-badge${stateBadgeInfo.tone ? ` is-${stateBadgeInfo.tone}` : ''}`;
+    }
+    const actions = card.querySelector('.ai-addon-actions');
+    let progressBox = card.querySelector('.summary-library-card-progress');
+    if (activeModel) {
+      if (!progressBox) {
+        progressBox = createSummaryCardProgressBox(progress);
+        if (actions && typeof card.insertBefore === 'function') card.insertBefore(progressBox, actions);
+        else card.appendChild(progressBox);
+      }
+      progressBox.hidden = false;
+      const bar = progressBox.querySelector('.progress-bar');
+      if (bar?.style) bar.style.width = `${Math.max(0, Math.min(100, progress.percent || 0))}%`;
+      const progressText = progressBox.querySelector('.progress-text');
+      if (progressText) {
+        progressText.textContent = `${progress.cancelling ? 'Cancelling and cleaning up partial files…' : (progress.message || 'Preparing setup…')}${Number.isFinite(progress.percent) ? ` · ${Math.round(progress.percent)}%` : ''}`;
+      }
+    } else if (progressBox) {
+      progressBox.hidden = true;
+    }
+    if (actions) {
+      let cancelBtn = actions.querySelector('.summary-library-cancel-btn');
+      if (activeModel && !progress.terminal) {
+        if (!cancelBtn) {
+          cancelBtn = createSummaryCardCancelButton();
+          if (typeof actions.insertBefore === 'function') actions.insertBefore(cancelBtn, actions.firstChild || null);
+          else actions.appendChild(cancelBtn);
+        }
+        cancelBtn.hidden = false;
+        cancelBtn.disabled = Boolean(progress.cancelling);
+        cancelBtn.textContent = progress.cancelling ? 'Cancelling…' : 'Cancel setup';
+      } else if (cancelBtn) {
+        if (typeof cancelBtn.remove === 'function') cancelBtn.remove();
+        else cancelBtn.hidden = true;
+      }
+      for (const button of actions.querySelectorAll('button')) {
+        if (button === cancelBtn || button.className?.includes('summary-library-cancel-btn')) continue;
+        const baseDisabled = button.dataset?.baseDisabled === 'true';
+        button.disabled = baseDisabled || Boolean(progress.active);
+      }
+    }
+  }
+}
+
+function renderSummaryModelLibrary(library) {
+  const container = document.getElementById('summary-model-library');
+  if (!container) return;
+  container.replaceChildren();
+  const legacySetupBtn = document.getElementById('setup-summary-btn');
+  const legacyActionsRow = legacySetupBtn?.parentElement || null;
+  for (const id of ['summary-footprint', 'summary-status-text', 'setup-summary-btn', 'validate-summary-btn', 'remove-summary-btn', 'summary-progress', 'cancel-summary-btn']) {
+    const element = document.getElementById(id);
+    if (element) {
+      element.hidden = Boolean(library);
+      if (library && (id === 'summary-progress' || id === 'cancel-summary-btn') && element.style) {
+        element.style.display = 'none';
+      }
+    }
+  }
+  if (legacyActionsRow) {
+    legacyActionsRow.hidden = Boolean(library);
+  }
+  if (!library) return;
+  const total = document.createElement('p');
+  total.className = 'summary-library-storage-bar';
+  total.textContent = `${formatBytes(library.installedBytes || 0)} used by models · ${formatBytes(library.sharedRuntimeBytes || 0)} shared runtime · ${library.availableBytes == null ? 'Free space unknown' : `${formatBytes(library.availableBytes)} free`}`;
+  container.appendChild(total);
+  const checkDevice = document.createElement('button');
+  checkDevice.type = 'button';
+  checkDevice.id = 'summary-check-device';
+  checkDevice.disabled = summaryDeviceCheckPending;
+  checkDevice.className = 'btn btn-small btn-secondary';
+  checkDevice.textContent = summaryDeviceCheckPending ? 'Checking device…' : 'Check this device';
+  checkDevice.addEventListener('click', async () => {
+    if (summaryDeviceCheckPending) return;
+    summaryDeviceCheckPending = true;
+    checkDevice.disabled = true;
+    checkDevice.textContent = 'Checking device…';
+    try {
+      const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false, checkDevice: true });
+      summaryDeviceCheckSnapshot = new Map((status?.summaryLibrary?.models || []).map((model) => [model.modelId, { fit: model.fit, storageFit: model.storageFit }]));
+      aiAddonStatusSnapshot = status;
+      summaryDeviceCheckPending = false;
+      updateAiAddonSettings(status);
+      updateHomeAiAddonCTA(status);
+    } catch (error) {
+      showAppToast(error.message || 'Could not check this device. Try again.', 'error');
+    } finally {
+      summaryDeviceCheckPending = false;
+      const currentButton = document.getElementById('summary-check-device') || checkDevice;
+      currentButton.disabled = false;
+      currentButton.textContent = 'Check this device';
+    }
+  });
+  container.appendChild(checkDevice);
+  for (const [heading, installed] of [['Installed', true], ['Available to download', false]]) {
+    const models = (library.models || []).filter((model) => summaryModelHasFiles(model) === installed);
+    if (!models.length) continue;
+    const title = document.createElement('h4'); title.className = 'summary-library-section-title'; title.textContent = heading; container.appendChild(title);
+    for (const model of models) {
+      const card = document.createElement('div');
+      const isDefault = model.modelId === library.defaultModelId;
+      const isUnavailable = !installed && model.fit?.blocked === true;
+      card.className = `summary-library-model${isDefault ? ' is-default' : ''}${isUnavailable ? ' is-unavailable' : ''}`;
+      if (card.dataset) card.dataset.modelId = model.modelId;
+      const header = document.createElement('div'); header.className = 'summary-library-model-header';
+      const name = document.createElement('strong'); name.className = 'summary-library-model-name';
+      name.textContent = model.modelName;
+      const removalIncomplete = Boolean(model.removalPending || /removal is incomplete/i.test(model.error || ''));
+      const progress = aiAddonDownloadState.summary;
+      const activeModel = Boolean(progress.active && progress.modelId === model.modelId);
+      const stateBadgeInfo = typeof formatSummaryModelStateBadge === 'function'
+        ? formatSummaryModelStateBadge(model, { activeModel, progress, removalIncomplete, installed })
+        : { text: activeModel ? (progress.cancelling ? 'Cancelling…' : (progress.message || 'Preparing setup…')) : removalIncomplete ? 'Removal incomplete' : model.status === 'ready' ? 'Ready' : model.status === 'error' ? 'Needs attention' : 'Available', tone: '' };
+      const badges = document.createElement('span'); badges.className = 'summary-library-badges';
+      const stateBadge = document.createElement('span');
+      stateBadge.className = `summary-library-badge summary-library-state-badge${stateBadgeInfo.tone ? ` is-${stateBadgeInfo.tone}` : ''}`;
+      stateBadge.textContent = stateBadgeInfo.text;
+      badges.appendChild(stateBadge);
+      if (isDefault) {
+        const defaultBadge = document.createElement('span');
+        defaultBadge.className = 'summary-library-badge is-default';
+        defaultBadge.textContent = 'Default';
+        badges.appendChild(defaultBadge);
+      }
+      if (chatState.modelState.modelId === model.modelId && chatState.modelState.status === 'loaded') {
+        const loadedBadge = document.createElement('span');
+        loadedBadge.className = 'summary-library-badge is-ready';
+        loadedBadge.textContent = 'In memory';
+        badges.appendChild(loadedBadge);
+      }
+      header.appendChild(name);
+      header.appendChild(badges);
+      card.appendChild(header);
+
+      const descParts = [model.description, formatSummaryModelCapabilities(model)].filter(Boolean);
+      if (descParts.length) {
+        const descP = document.createElement('p');
+        descP.className = 'setting-description summary-library-model-desc';
+        descP.textContent = descParts.join(' · ');
+        card.appendChild(descP);
+      }
+
+      const memorySpec = model.fit?.workingMemoryBytes != null
+        ? `${formatBytes(model.fit.workingMemoryBytes)} ${model.fit.memoryType || 'memory'} recommended`
+        : null;
+      const storageParts = installed
+        ? [
+          `${formatBytes(removalIncomplete ? (model.residualBytes ?? model.installedBytes ?? 0) : (model.installedBytes || 0))} ${removalIncomplete ? 'remaining after removal' : 'on disk'}`,
+          !removalIncomplete ? memorySpec : null,
+        ].filter(Boolean)
+        : [
+          model.downloadBytes == null ? 'Download size unknown' : `${formatBytes(model.downloadBytes)} download`,
+          model.estimatedInstalledBytes != null && model.estimatedInstalledBytes !== model.downloadBytes ? `${formatBytes(model.estimatedInstalledBytes)} installed` : null,
+          memorySpec,
+        ].filter(Boolean);
+      const storageP = document.createElement('p');
+      storageP.className = 'setting-description summary-library-model-storage';
+      storageP.textContent = storageParts.join(' · ');
+      card.appendChild(storageP);
+
+      const checked = summaryDeviceCheckSnapshot?.get(model.modelId);
+      const activeStorageFit = checked ? (model.storageFit || checked.storageFit) : null;
+      if (checked) {
+        const fit = checked.fit || {};
+        const storageFit = activeStorageFit || {};
+        const measured = (value) => value == null ? 'unknown' : formatBytes(value);
+        const recommendation = (value) => value == null ? '' : `, ${formatBytes(value)} recommended`;
+        const unified = fit.memoryType === 'unified memory';
+        const memory = `${unified ? 'Unified memory' : 'Graphics memory'} — ${measured(fit.totalMemoryBytes)} total, ${measured(unified ? fit.systemAvailableBytes : fit.availableMemoryBytes)} free${recommendation(fit.workingMemoryBytes)}`;
+        const system = unified ? null : `System RAM — ${measured(fit.systemTotalBytes)} total, ${measured(fit.systemAvailableBytes)} free${fit.systemRecommendedBytes == null ? ', minimum unverified' : recommendation(fit.systemRecommendedBytes)}`;
+        let storage = null;
+        if (activeStorageFit) {
+          storage = storageFit.requiredBytes === 0
+            ? 'Setup needs no additional disk space'
+            : `Storage — ${measured(storageFit.availableBytes)} available, ${measured(storageFit.requiredBytes)} needed for setup`;
+        }
+        const deviceDetails = document.createElement('p');
+        deviceDetails.className = 'setting-description summary-library-model-device';
+        deviceDetails.textContent = ['Last device check', memory, system, storage, fit.reason, storageFit.reason].filter(Boolean).join(' · ');
+        card.appendChild(deviceDetails);
+      }
+      if (model.storageFit?.blocked && model.storageFit.reason && model.storageFit.reason !== activeStorageFit?.reason) {
+        const storageNote = document.createElement('p');
+        storageNote.className = 'setting-description summary-library-card-error';
+        storageNote.textContent = model.storageFit.reason;
+        card.appendChild(storageNote);
+      }
+
+      const fitStatus = model.fit?.status;
+      const showFitNote = Boolean(
+        model.fit?.reason && model.fit.reason !== checked?.fit?.reason
+        && (
+          model.fit?.blocked === true || ['needs_more_memory', 'runtime_needed', 'unavailable'].includes(fitStatus)
+          || (!installed && fitStatus === 'unknown')
+        ),
+      );
+      if (showFitNote) {
+        const deviceMemoryNote = fitStatus === 'needs_more_memory' && model.fit?.totalMemoryBytes != null
+          ? `Your device: ${formatBytes(model.fit.totalMemoryBytes)} ${model.fit.memoryType || 'memory'}${model.fit.availableMemoryBytes != null ? ` (${formatBytes(model.fit.availableMemoryBytes)} free)` : ''}.`
+          : null;
+        const fitP = document.createElement('p');
+        fitP.className = 'setting-description summary-library-model-fit';
+        fitP.textContent = [model.fit.reason, deviceMemoryNote].filter(Boolean).join(' ');
+        card.appendChild(fitP);
+      }
+
+      const showError = Boolean(
+        model.error
+        && !(removalIncomplete && /removal is incomplete/i.test(model.error))
+        && model.error !== model.fit?.reason,
+      );
+      if (showError) {
+        const errorP = document.createElement('p');
+        errorP.className = 'setting-description summary-library-card-error';
+        errorP.textContent = model.error;
+        card.appendChild(errorP);
+      }
+      if (!installed && !model.storageFit && library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes) {
+        const warning = document.createElement('p');
+        warning.className = 'setting-description summary-library-card-error';
+        warning.textContent = `Free ${formatBytes(model.peakFreeBytes - library.availableBytes)} to download this model. Remove an installed model above to free space.`;
+        card.appendChild(warning);
+      }
+      if (activeModel) {
+        card.appendChild(createSummaryCardProgressBox(progress));
+      }
+      const actions = document.createElement('div'); actions.className = 'ai-addon-actions';
+      if (activeModel && !progress.cancelling && !progress.terminal) {
+        actions.appendChild(createSummaryCardCancelButton());
+      }
+      const addAction = (label, action, disabled = false, variant = 'secondary') => {
+        const button = document.createElement('button'); button.type = 'button';
+        button.className = `btn btn-small btn-${variant}${variant === 'danger' ? ' summary-library-remove-btn' : ''}`;
+        button.textContent = label;
+        if (button.dataset) button.dataset.baseDisabled = disabled ? 'true' : 'false';
+        button.disabled = disabled || aiAddonDownloadState.summary.active;
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try { await action(); await refreshAiAddonSettings(); await refreshChatEligibility(); }
+          catch (error) { showAppToast(error.message || 'Could not update the model.', 'error'); await refreshAiAddonSettings(); }
+          finally { button.disabled = false; }
+        });
+        actions.appendChild(button);
+      };
+      const confirmSetup = async () => {
+        if (!window.confirm(summaryDownloadConfirmation(model, library))) return;
+        setAiAddonProgressState('summary', { active: true, terminal: false, modelId: model.modelId, percent: 0, message: 'Preparing setup…' });
+        try { await window.electronAPI.setupSummaryModel({ modelId: model.modelId }); }
+        catch (error) {
+          setAiAddonProgressState('summary', { active: true, terminal: true, modelId: model.modelId, message: error.message || 'Setup failed.' });
+          hideAiAddonProgressSoon('summary', 5000);
+          throw error;
+        }
+      };
+      const setupBlocked = model.fit?.blocked === true || model.storageFit?.blocked === true || (!model.storageFit && library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes);
+      if (!installed) {
+        addAction(model.status === 'error' ? 'Retry download' : 'Download', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
+      } else {
+        if (!removalIncomplete) {
+          if (model.modelId !== library.defaultModelId) addAction('Set as default', () => window.electronAPI.setDefaultSummaryModel({ modelId: model.modelId }), !usableSummaryModels(library).includes(model), 'secondary');
+          addAction('Check setup', () => window.electronAPI.validateSummaryModel({ modelId: model.modelId }), false, 'secondary');
+          if (!model.setupComplete && model.status === 'error') addAction('Repair', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
+        }
+        if (chatState.modelState.modelId === model.modelId && ['loaded', 'release_error'].includes(chatState.modelState.status)) addAction('Free memory', () => window.electronAPI.unloadHistoryQaModel(), false, 'secondary');
+        addAction(removalIncomplete ? 'Retry removal' : 'Remove model', async () => {
+          const others = usableSummaryModels(library).filter((item) => item.modelId !== model.modelId);
+          let replacementModelId = null;
+          if (model.modelId === library.defaultModelId && others.length > 1) {
+            replacementModelId = await chooseSummaryReplacement(model, others);
+            if (!replacementModelId) return;
+          } else {
+            replacementModelId = others[0]?.modelId || null;
+            const replacement = model.modelId === library.defaultModelId ? `\n${others.length ? `${others[0].modelName} will become the default.` : 'There will be no default model.'}` : '';
+            if (!window.confirm(`Remove ${model.modelName}? About ${formatBytes(model.reclaimableBytes || 0)} can be freed. Saved summaries and conversations stay available.${replacement}`)) return;
+          }
+          await window.electronAPI.removeSummaryModel({ modelId: model.modelId, replacementModelId });
+        }, false, 'danger');
+      }
+      card.appendChild(actions); container.appendChild(card);
+    }
+  }
+}
+
+function chooseSummaryReplacement(model, choices) {
+  return new Promise((resolve) => {
+    const previousFocus = document.activeElement;
+    const overlay = document.createElement('div'); overlay.className = 'modal-overlay';
+    const dialog = document.createElement('div'); dialog.className = 'modal-content';
+    dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-labelledby', 'summary-replacement-title');
+    const header = document.createElement('div'); header.className = 'modal-header';
+    const heading = document.createElement('h2'); heading.id = 'summary-replacement-title'; heading.textContent = 'Remove model';
+    header.appendChild(heading);
+    const body = document.createElement('div'); body.className = 'modal-body';
+    const text = document.createElement('p'); text.className = 'setting-description';
+    text.textContent = `Remove ${model.modelName} and free about ${formatBytes(model.reclaimableBytes || 0)}. Saved summaries and conversations stay available. Choose a new default.`;
+    const field = document.createElement('div'); field.className = 'ai-addon-field';
+    const label = document.createElement('label'); label.htmlFor = 'summary-replacement-select'; label.textContent = 'New default model';
+    const select = document.createElement('select'); select.id = 'summary-replacement-select'; select.className = 'device-select';
+    for (const choice of choices) select.add(new Option(choice.modelName, choice.modelId));
+    field.append(label, select);
+    body.append(text, field);
+    const actions = document.createElement('div'); actions.className = 'modal-actions';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-secondary'; cancel.textContent = 'Cancel';
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn btn-danger'; remove.textContent = 'Remove model';
+    actions.append(cancel, remove);
+    const finish = (value) => { overlay.remove(); if (previousFocus?.isConnected) previousFocus.focus(); resolve(value); };
+    cancel.onclick = () => finish(null); remove.onclick = () => finish(select.value);
+    overlay.onkeydown = (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); finish(null); return; }
+      if (event.key !== 'Tab') return;
+      const controls = [select, cancel, remove];
+      const index = controls.indexOf(document.activeElement);
+      if ((event.shiftKey && index <= 0) || (!event.shiftKey && index === controls.length - 1)) {
+        event.preventDefault(); controls[event.shiftKey ? controls.length - 1 : 0].focus();
+      }
+    };
+    dialog.append(header, body, actions); overlay.appendChild(dialog); document.body.appendChild(overlay); select.focus();
+  });
+}
+
+async function refreshChatEligibility() {
+  if (!window.electronAPI?.getHistoryQaEligibility) return;
+  chatState.eligibility = await window.electronAPI.getHistoryQaEligibility();
+  renderChatOnboardingAndComposer();
+}
+
+function renderChatModelChoice() {
+  const select = document.getElementById('chat-model-select');
+  const labelPill = document.getElementById('chat-model-label');
+  const manage = document.getElementById('chat-manage-models');
+  const library = summaryLibrary();
+  if (!select || !manage) return;
+  if (!library) {
+    select.hidden = true;
+    if (labelPill) labelPill.hidden = true;
+    manage.hidden = true;
+    return;
+  }
+  const usable = usableSummaryModels(library);
+  let saved = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || '';
+  const savedModel = library.models?.find((model) => model.modelId === saved);
+  if (saved && !summaryModelHasFiles(savedModel || {}) && usable.some((model) => model.modelId === library.defaultModelId)) {
+    const thread = chatState.activeThread;
+    if (thread && chatState.resettingRemovedModelThreadId !== thread.id) {
+      chatState.resettingRemovedModelThreadId = thread.id;
+      void window.electronAPI.updateChatThreadModel({ threadId: thread.id, modelId: null }).then((result) => {
+        if (chatState.activeThread?.id === thread.id) {
+          chatState.activeThread = result?.thread || { ...thread, modelId: null };
+          chatState.resettingRemovedModelThreadId = null;
+          showAppToast(`The removed model was replaced by the default, ${summaryModelName(library.defaultModelId, library)}.`);
+          renderChatOnboardingAndComposer();
+        }
+      }).catch((error) => showAppToast(`Could not reset the removed model: ${error.message}`, 'error'))
+        .finally(() => { chatState.resettingRemovedModelThreadId = null; });
+    } else if (!thread) chatState.pendingModelId = null;
+    saved = '';
+  }
+  const defaultUsable = usable.some((model) => model.modelId === library.defaultModelId);
+  const hasUnavailableSaved = Boolean(saved && !usable.some((model) => model.modelId === saved));
+  manage.hidden = false;
+  manage.textContent = usable.length ? 'Manage models' : (library.models?.some((m) => m.installed) ? 'Manage models' : 'Set up a model');
+  manage.onclick = openSettingsAtAiAddons;
+
+  if (usable.length === 0 && !hasUnavailableSaved) {
+    select.hidden = true;
+    if (labelPill) labelPill.hidden = true;
+    return;
+  }
+  if (usable.length === 1 && !hasUnavailableSaved) {
+    select.hidden = true;
+    if (labelPill) {
+      labelPill.hidden = false;
+      labelPill.textContent = usable[0].modelName;
+    }
+    return;
+  }
+
+  if (labelPill) labelPill.hidden = true;
+  select.hidden = false;
+  select.replaceChildren();
+  if (!defaultUsable) {
+    select.add(new Option('Choose an available model', ''));
+  }
+  for (const model of usable) {
+    const isDefault = defaultUsable && model.modelId === library.defaultModelId;
+    select.add(new Option(isDefault ? `${model.modelName} · Default` : model.modelName, isDefault ? '' : model.modelId));
+  }
+  if (hasUnavailableSaved) {
+    select.add(new Option(`${summaryModelName(saved, library)} · unavailable`, saved));
+  }
+  select.value = (saved && (!defaultUsable || saved !== library.defaultModelId)) ? saved : '';
+  select.disabled = Boolean(chatState.sending);
+  select.onchange = async () => {
+    const modelId = select.value || null;
+    try {
+      if (chatState.activeThread) {
+        const result = await window.electronAPI.updateChatThreadModel({ threadId: chatState.activeThread.id, modelId });
+        if (result?.thread) chatState.activeThread = result.thread;
+        else chatState.activeThread.modelId = modelId;
+      } else chatState.pendingModelId = modelId;
+      renderChatOnboardingAndComposer();
+    } catch (error) { showAppToast(`Could not change model: ${error.message}`, 'error'); renderChatModelChoice(); }
+  };
+}
+
 function updateAiAddonSettings(status) {
+  if (typeof renderSummaryModelLibrary === 'function') renderSummaryModelLibrary(status?.summaryLibrary);
+  if (typeof renderChatModelChoice === 'function') renderChatModelChoice();
   const diarization = status && status.features && status.features.diarization;
   const summary = status && status.features && status.features.summary;
+  const library = status && status.summaryLibrary;
+  const usableInLibrary = library ? usableSummaryModels(library) : [];
+  const hasInstalledSummaryError = Boolean(library?.models?.some((m) => summaryModelHasFiles(m) && (m.status === 'error' || m.removalPending)));
   const diarizationUnsupported = diarization && diarization.status === 'unsupported';
   const diarizationSetupLocking = isAiAddonSetupLockingControls({
     featureStatus: diarization && diarization.status,
@@ -7296,12 +7956,19 @@ function updateAiAddonSettings(status) {
     featureStatus: summary && summary.status,
     progressActive: aiAddonDownloadState.summary.active,
   });
+  const effectiveSummaryStatus = summarySetupLocking
+    ? 'downloading'
+    : (summary && summary.status === 'unsupported'
+      ? 'unsupported'
+      : library
+        ? (usableInLibrary.length > 0 ? 'ready' : (hasInstalledSummaryError ? 'error' : (summary?.status || 'notConfigured')))
+        : (summary?.status || 'notConfigured'));
   const hasActiveSetup = diarizationSetupLocking || summarySetupLocking;
   const overallStatus = hasActiveSetup
     ? 'downloading'
-    : ((diarization && diarization.status === 'ready') || (summary && summary.status === 'ready')
+    : ((diarization && diarization.status === 'ready') || effectiveSummaryStatus === 'ready'
       ? 'ready'
-      : ((diarization && diarization.status === 'error') || (summary && summary.status === 'error') ? 'error' : 'notConfigured'));
+      : ((diarization && diarization.status === 'error') || effectiveSummaryStatus === 'error' ? 'error' : 'notConfigured'));
 
   setStatusBadge(document.getElementById('ai-addons-status-badge'), overallStatus);
 
@@ -7376,7 +8043,7 @@ function updateAiAddonSettings(status) {
   }
 
   if (summary) {
-    setStatusBadge(document.getElementById('summary-status-badge'), summary.status);
+    setStatusBadge(document.getElementById('summary-status-badge'), effectiveSummaryStatus);
     const summaryControlState = buildAiAddonControlState({
       feature: summary,
       type: 'summary',
@@ -7386,7 +8053,9 @@ function updateAiAddonSettings(status) {
     if (profileSelect) {
       const savedProfile = loadSettings().summaryProfile;
       profileSelect.value = savedProfile || summary.profile || DEFAULT_SUMMARY_PROFILE;
-      profileSelect.disabled = !summaryControlState.canConfigure;
+      profileSelect.disabled = summarySetupLocking
+        || effectiveSummaryStatus === 'unsupported'
+        || (library ? usableInLibrary.length === 0 : !summaryControlState.canConfigure);
     }
 
     applyAiAddonButtonState({
@@ -7456,6 +8125,8 @@ async function refreshHomeAiAddonPrompt() {
   try {
     const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false });
     aiAddonStatusSnapshot = status;
+    if (typeof renderSummaryModelLibrary === 'function') renderSummaryModelLibrary(status?.summaryLibrary);
+    if (typeof renderChatOnboardingAndComposer === 'function') renderChatOnboardingAndComposer();
     updateHomeAiAddonCTA(status);
     updateSummaryGenerationButtons();
     return status;
@@ -10103,6 +10774,8 @@ const chatState = {
   listenersBound: false,
   threads: [],
   activeThread: null,
+  pendingModelId: null,
+  resettingRemovedModelThreadId: null,
   pendingScope: { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] },
   eligibility: null,
   modelState: { status: 'unloaded', modelId: null, modelName: null },
@@ -10209,12 +10882,25 @@ function renderChatOnboardingAndComposer() {
   const headerScope = document.getElementById('chat-header-scope');
   const scopeLabel = document.getElementById('chat-scope-btn-label');
 
-  const eligible = !chatState.eligibility || chatState.eligibility.eligible !== false;
+  renderChatModelChoice();
+  const library = summaryLibrary();
+  const selectedModelId = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || library?.defaultModelId;
+  const resettingRemovedOverride = Boolean(
+    library
+    && chatState.resettingRemovedModelThreadId
+    && chatState.activeThread?.id === chatState.resettingRemovedModelThreadId
+    && usableSummaryModels(library).some((model) => model.modelId === library.defaultModelId),
+  );
+  const eligible = library
+    ? (resettingRemovedOverride || usableSummaryModels(library).some((model) => model.modelId === selectedModelId))
+    : (!chatState.eligibility || chatState.eligibility.eligible !== false);
   if (onboarding) {
     onboarding.hidden = eligible;
   }
-  if (reasonEl && chatState.eligibility && chatState.eligibility.reason) {
-    reasonEl.textContent = `${chatState.eligibility.reason} Keyword search in History still works anytime.`;
+  if (reasonEl) {
+    const selected = library?.models?.find((model) => model.modelId === selectedModelId);
+    const reason = selected?.error || selected?.fit?.reason || chatState.eligibility?.reason || 'Choose an available model in Settings.';
+    reasonEl.textContent = `${reason} Keyword search in History still works anytime.`;
   }
 
   const scopeText = formatChatScopeLabel(
@@ -10242,7 +10928,7 @@ function renderChatOnboardingAndComposer() {
       sendBtn.textContent = 'Send';
       sendBtn.classList.remove('btn-danger');
       sendBtn.classList.add('btn-primary');
-      sendBtn.disabled = !eligible || chatThreadDetailPending();
+      sendBtn.disabled = !eligible || resettingRemovedOverride || chatThreadDetailPending();
     }
   }
   if (input) {
@@ -10637,10 +11323,18 @@ function renderChatStream() {
       wrap.appendChild(details);
     }
 
+    const metaParts = [];
+    if (msg.modelId || msg.modelName) {
+      metaParts.push(msg.modelName || summaryModelName(msg.modelId));
+    }
     if (Number.isFinite(msg.searchedMeetingCount) && msg.searchedMeetingCount > 0) {
+      metaParts.push(`Searched ${msg.searchedMeetingCount} recording${msg.searchedMeetingCount === 1 ? '' : 's'}`);
+      metaParts.push(`${msg.evidenceCount || 0} matching excerpt${(msg.evidenceCount || 0) === 1 ? '' : 's'}`);
+    }
+    if (metaParts.length > 0) {
       const meta = document.createElement('div');
       meta.className = 'chat-turn-meta-row';
-      meta.textContent = `Searched ${msg.searchedMeetingCount} recording${msg.searchedMeetingCount === 1 ? '' : 's'} · ${msg.evidenceCount || 0} matching excerpt${(msg.evidenceCount || 0) === 1 ? '' : 's'}`;
+      meta.textContent = metaParts.join(' · ');
       wrap.appendChild(meta);
     }
 
@@ -10901,15 +11595,27 @@ async function sendChatQuestionText(rawQuestion, { overrideScope = null, restore
     return;
   }
 
-  if (chatState.eligibility && chatState.eligibility.eligible === false) {
-    openSettingsAtAiAddons();
-    return;
-  }
-
   const input = document.getElementById('chat-input');
   const navigation = chatState.navigation;
   const originKey = chatState.draftKey;
   const originThreadId = chatState.activeThread?.id || null;
+  const library = summaryLibrary();
+  const newThreadOverride = chatState.activeThread ? null : chatState.pendingModelId;
+  const effectiveModelId = (chatState.activeThread ? chatState.activeThread.modelId : newThreadOverride) || library?.defaultModelId;
+  if (library ? !usableSummaryModels(library).some((model) => model.modelId === effectiveModelId) : (chatState.eligibility && chatState.eligibility.eligible === false)) {
+    if (restoreInputOnError && input) {
+      const currentDraft = chatState.draftKey === originKey ? input.value : (chatState.drafts.get(originKey) || '');
+      const restored = currentDraft ? `${question}\n${currentDraft}` : question;
+      chatState.drafts.set(originKey, restored);
+      if (chatState.draftKey === originKey) {
+        input.value = restored;
+        if (typeof autoResizeChatInput === 'function') autoResizeChatInput();
+      }
+    }
+    openSettingsAtAiAddons();
+    return;
+  }
+
   const scope = overrideScope || getCurrentChatScope();
   chatState.sending = true;
   chatState.sendingKey = originKey;
@@ -10920,7 +11626,13 @@ async function sendChatQuestionText(rawQuestion, { overrideScope = null, restore
   renderChatStream();
 
   try {
-    const res = await window.electronAPI.askHistory({ threadId: originThreadId, question, scope });
+    const res = await window.electronAPI.askHistory({
+      threadId: originThreadId,
+      question,
+      scope,
+      ...(effectiveModelId ? { modelId: effectiveModelId } : {}),
+      ...(!originThreadId && newThreadOverride ? { threadModelId: newThreadOverride } : {}),
+    });
     if (res && res.thread) {
       const threadKey = `thread:${res.thread.id}`;
       if (originKey !== threadKey) {
@@ -10929,7 +11641,7 @@ async function sendChatQuestionText(rawQuestion, { overrideScope = null, restore
         if (chatState.draftKey === originKey) chatState.draftKey = threadKey;
         if (chatState.newDraftKey === originKey) chatState.newDraftKey = `new:${++chatState.nextDraft}`;
       }
-      if (navigation === chatState.navigation) chatState.activeThread = res.thread;
+      if (navigation === chatState.navigation) { chatState.activeThread = res.thread; chatState.pendingModelId = null; }
     }
     chatState.optimisticQuestion = null;
     chatState.streamingDraft = '';
@@ -10978,11 +11690,6 @@ async function sendCurrentChatQuestion() {
   if (!input) return;
   const question = input.value.replace(/\s+/g, ' ').trim();
   if (!question) {
-    return;
-  }
-
-  if (chatState.eligibility && chatState.eligibility.eligible === false) {
-    openSettingsAtAiAddons();
     return;
   }
 
@@ -11036,6 +11743,9 @@ async function initChatTab() {
     return;
   }
   try {
+    if (typeof summaryLibrary === 'function' && !summaryLibrary() && typeof refreshHomeAiAddonPrompt === 'function') {
+      await refreshHomeAiAddonPrompt();
+    }
     const [elig, mState] = await Promise.all([
       window.electronAPI.getHistoryQaEligibility(),
       window.electronAPI.getHistoryQaModelState(),
@@ -11064,6 +11774,11 @@ function setupChatWorkspace() {
       if (state) {
         chatState.modelState = state;
         renderChatModelPill();
+        renderSummaryModelLibrary(summaryLibrary());
+        if (chatState.sending && state.status === 'unloading') {
+          chatState.progress = { phase: 'releasing', message: `Releasing ${state.modelName || 'model'}…` };
+          syncChatProgressBanner();
+        }
       }
     }));
   }
@@ -11076,7 +11791,10 @@ function setupChatWorkspace() {
       if (progress.threadId && chatState.activeThread?.id && progress.threadId !== chatState.activeThread.id) {
         return;
       }
-      chatState.progress = progress;
+      const selectedId = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || summaryLibrary()?.defaultModelId;
+      chatState.progress = progress.phase === 'loading_model'
+        ? { ...progress, message: `Loading ${summaryModelName(selectedId)}…` }
+        : progress.phase === 'queued' ? { ...progress, message: 'Waiting for current work…' } : progress;
       if (typeof progress.draftMarkdown === 'string' && progress.draftMarkdown) {
         const hadDraft = Boolean(chatState.streamingDraft);
         chatState.streamingDraft = progress.draftMarkdown;

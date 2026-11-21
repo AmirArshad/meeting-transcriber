@@ -5,6 +5,23 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 
 ## Status
 
+### v3.1 Phase 4 model library · 2026-11-21
+
+The model library, scoped selection, process-exit admission and managed removal
+are on `codex/v3.1-phase4-model-library`. Gemma 4 archive and weight verification,
+32k Metal smokes and isolated two-model installation and removal are recorded in
+the [Phase 4 qualification record](docs/development/V3_1_QUALIFICATION.md).
+Inkling's exact IQ4_NL weights passed 32,768-token Metal setup validation
+with a local build of the loop-layer fix. The Apple Silicon gate requires a
+published archive containing the fix and native checks on that archive.
+Windows and Linux CUDA acceptance and host-specific memory limits remain open.
+
+**Post-v3.1 follow-up · Inkling 2 Mini**
+
+- [ ] Pin a published Apple Silicon Metal runtime containing the initial Inkling support and loop-layer scale fix. Repeat native checks at 32,768 tokens with the exact release archive before enabling Chat.
+- [ ] Qualify Windows CUDA and managed Linux CUDA independently with compatible builds. Enable Chat on each platform after its native checks pass.
+- [ ] Resolve the indeterminate English language check with production CLI flags and verify that structured summaries preserve deadlines such as “before Tuesday.” Enable summary languages only after they pass on the target platform.
+
 ### v3.1 Phase 3 speaker labels · 2026-11-21
 
 Implemented on `feat/v3.1-phase3-speaker-labels` from `e5502d1`.

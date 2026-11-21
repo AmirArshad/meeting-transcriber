@@ -251,9 +251,9 @@ async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat,
   throw new Error(`Unsupported llama.cpp runtime archive format: ${archiveFormat || 'unknown'}.`);
 }
 
-function finalizeInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule = fs }) {
+function finalizeInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule = fs, catalog }) {
   const executablePath = findRuntimeExecutablePath(
-    getSummaryRuntimeExtractDir(userDataDir, artifact, runtimeArtifact),
+    getSummaryRuntimeExtractDir(userDataDir, artifact, runtimeArtifact, fsModule, catalog),
     runtimeArtifact.executableName,
     fsModule,
   );

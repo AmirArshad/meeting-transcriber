@@ -20,6 +20,21 @@ LLAMA_SMOKE_PREDICT_TOKENS = 1
 DEFAULT_GPU_LAYERS = -1
 
 
+def apply_inference_descriptor(runtime: Dict[str, Any], descriptor: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Apply bounded catalog-owned inference settings passed by main."""
+    descriptor = descriptor or {}
+    if not isinstance(descriptor, dict):
+        raise ValueError("Invalid inference descriptor.")
+    context = descriptor.get("contextTokens", LLAMA_CONTEXT_TOKENS)
+    family = descriptor.get("family", "qwen")
+    prompt_format = descriptor.get("promptFormat", "chatml")
+    if not isinstance(context, int) or isinstance(context, bool) or not 4096 <= context <= 131072:
+        raise ValueError("Invalid inference context budget.")
+    if family not in ("qwen", "gemma", "inkling") or prompt_format not in ("chatml", "gemma"):
+        raise ValueError("Unsupported inference format.")
+    return {**runtime, "contextTokens": context, "inference": dict(descriptor)}
+
+
 class SummaryRuntimeError(ValueError):
     """Raised when the local summary runtime cannot be resolved safely."""
 
@@ -150,17 +165,19 @@ def build_llama_cli_args(
         "--reasoning",
         "off",
     ]
-    if runtime.get("platform") in ("win32", "darwin"):
+    if runtime.get("inference", {}).get("singleTurnOnly"):
+        args.extend(("--fit", "off"))
+    elif runtime.get("platform") in ("win32", "darwin"):
         args.insert(args.index("--single-turn"), "--no-conversation")
     return args
 
 def build_llama_smoke_test_args(runtime: Dict[str, Any], *, prompt_path: str) -> List[str]:
     smoke_runtime = {
         **runtime,
-        "contextTokens": LLAMA_SMOKE_CONTEXT_TOKENS,
+        "contextTokens": runtime.get("contextTokens", LLAMA_CONTEXT_TOKENS) if runtime.get("inference") else LLAMA_SMOKE_CONTEXT_TOKENS,
     }
     args = build_llama_cli_args(smoke_runtime, prompt_path=prompt_path, max_tokens=LLAMA_SMOKE_PREDICT_TOKENS)
-    return [*args, "--seed", "1"]
+    return [*args, "--seed", "1", *(["--verbose"] if runtime.get("inference", {}).get("singleTurnOnly") else [])]
 
 
 def sanitize_runtime_error_line(line: str, runtime: Optional[Dict[str, Any]] = None) -> str:
@@ -181,6 +198,22 @@ def sanitize_runtime_error_line(line: str, runtime: Optional[Dict[str, Any]] = N
 
 def summarize_llama_failure(result: subprocess.CompletedProcess[str], runtime: Optional[Dict[str, Any]] = None) -> str:
     combined = f"{decode_process_output(result.stderr)}\n{decode_process_output(result.stdout)}"
+    # Native loaders often follow an actionable allocation error with a generic
+    # "failed to load model". Only classify explicit allocator diagnostics.
+    diagnostic = decode_process_output(result.stderr).lower()
+    if re.search(
+        r"cuda error: out of memory|cuda_error_out_of_memory|cudamalloc[^\n]*out of memory"
+        r"|cublas_status_alloc_failed|failed to allocate metal buffer"
+        r"|ggml_(?:backend_)?metal[^\n]*failed to allocate|metal[^\n]*out of memory",
+        diagnostic,
+    ):
+        return "The model ran out of GPU memory. Free GPU memory or choose a smaller model."
+    if re.search(
+        r"cannot allocate memory|std::bad_alloc|the paging file is too small"
+        r"|failed to allocate buffer|ggml_gallocr[^\n]*failed to allocate",
+        diagnostic,
+    ):
+        return "The runtime could not allocate memory. Close other apps or choose a smaller model."
     lines = [line.strip() for line in combined.splitlines() if line.strip()]
     for line in reversed(lines):
         lower = line.lower()
@@ -321,6 +354,11 @@ def smoke_test_llama_runtime(runtime: Dict[str, Any], *, timeout_seconds: int = 
     if result.returncode != 0:
         detail = summarize_llama_failure(result, runtime)
         raise SummaryRuntimeError(f"Local summary runtime validation failed: {detail}")
+    if runtime.get("inference", {}).get("singleTurnOnly"):
+        diagnostics = decode_process_output(result.stderr)
+        offload = re.findall(r"offloaded (\d+)/(\d+) layers to GPU", diagnostics)
+        if not offload or any(int(loaded) == 0 or loaded != total for loaded, total in offload):
+            raise SummaryRuntimeError("Local summary runtime validation failed: the model could not load fully on the GPU.")
 
 
 def build_summary_progress_event(

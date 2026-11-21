@@ -24,6 +24,10 @@ test('checked language policy retains product languages and rejects replacements
   }
   assert.deepEqual(getSummaryLanguagePolicy(modelId, 'darwin', 'x64').languages, []);
   assert.deepEqual(getSummaryLanguagePolicy(modelId, 'linux', 'x64').languages, policy.languages);
+  for (const id of ['gemma-4-e4b', 'gemma-4-12b']) {
+    assert.deepEqual(getSummaryLanguagePolicy(id, 'darwin', 'arm64').languages, ['en']);
+    assert.deepEqual(getSummaryLanguagePolicy(id, 'linux', 'x64').languages, []);
+  }
 });
 
 test('real composition-root CLI builder propagates language and hash without changing setup validation', () => {
@@ -876,4 +880,52 @@ test('real regeneration cannot bypass the dialog for a reusable language', async
   elements['summary-language-cancel'].dispatch('click');
   await pending;
   assert.equal(context.summaryGenerationMeetingId, null);
+});
+
+test('Prepare summary handles 0/1/2+ usable models and pre-selects summary-capable model when default is Chat-only', async () => {
+  const { context, elements } = createDialogHarness();
+  const makeControl = () => ({
+    value: '', hidden: true, disabled: false, textContent: '', children: [], listeners: new Map(),
+    replaceChildren(...items) { this.children = [...items]; },
+    add(opt) { this.children.push(opt); },
+    addEventListener(ev, fn) { this.listeners.set(ev, fn); },
+    removeEventListener(ev) { this.listeners.delete(ev); },
+    closest() { return null; },
+  });
+  Object.assign(elements, {
+    'summary-model-field': makeControl(),
+    'summary-model-select': makeControl(),
+    'summary-model-static-label': makeControl(),
+    'summary-manage-models': makeControl(),
+  });
+  context.usableSummaryModels = (lib) => (lib?.models || []).filter((m) => m.installed && m.setupComplete && m.status === 'ready');
+
+  // 1 usable model: select hidden, static label shown
+  const oneLib = {
+    defaultModelId: 'qwen3.5-9b-q4-k-m',
+    models: [{ modelId: 'qwen3.5-9b-q4-k-m', modelName: 'Qwen3.5 9B', installed: true, setupComplete: true, status: 'ready', qualifiedLanguages: ['en', 'es'] }],
+  };
+  let pending = context.confirmSummaryTranscriptLanguage({ language: 'en' }, policy, 'en', 'hash', oneLib);
+  assert.equal(elements['summary-model-select'].hidden, true);
+  assert.equal(elements['summary-model-static-label'].hidden, false);
+  assert.equal(elements['summary-model-static-label'].textContent, 'Qwen3.5 9B · Default');
+  elements['summary-language-cancel'].dispatch('click');
+  await pending;
+
+  // 2+ usable models where default is Chat-only: pre-selects summary-capable model and notes it
+  const multiLib = {
+    defaultModelId: 'qwen3.5-4b-q4-k-m',
+    models: [
+      { modelId: 'qwen3.5-4b-q4-k-m', modelName: 'Qwen3.5 4B', installed: true, setupComplete: true, status: 'ready', qualifiedLanguages: [] },
+      { modelId: 'gemma-4-e4b', modelName: 'Gemma 4 E4B', installed: true, setupComplete: true, status: 'ready', qualifiedLanguages: ['en'] },
+    ],
+  };
+  pending = context.confirmSummaryTranscriptLanguage({ language: 'en' }, policy, 'en', 'hash', multiLib);
+  assert.equal(elements['summary-model-select'].hidden, false);
+  assert.equal(elements['summary-model-static-label'].hidden, true);
+  assert.equal(elements['summary-model-select'].value, 'gemma-4-e4b');
+  assert.match(elements['summary-language-message'].textContent, /Qwen3\.5 4B is Chat-only on this device/);
+  elements['summary-language-form'].dispatch('submit');
+  const submitted = await pending;
+  assert.deepEqual({ ...submitted }, { transcriptLanguage: 'en', modelId: 'gemma-4-e4b' });
 });

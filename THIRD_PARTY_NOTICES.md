@@ -100,16 +100,18 @@ same source notices are installed under
 **Attribution (CC BY 4.0):** When using Speakrs speaker identification, credit the CC BY pack components, for example:  
 *Speaker identification uses [Speakrs](https://github.com/avencera/speakrs) (Apache-2.0) with WeSpeaker embeddings and pyannote PLDA/VBx parameters (CC BY 4.0).*
 
-### Optional summaries and Chat — Qwen + llama.cpp
+### Optional summaries and Chat — model weights and llama.cpp
 
 | Item | License (typical) | Source |
 |------|-------------------|--------|
 | Qwen3 / Qwen3.5 GGUF weights (catalog pins) | **Apache-2.0** | e.g. [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B), community GGUF repos such as `unsloth/Qwen3.5-9B-GGUF` |
+| Gemma 4 E4B and 12B GGUF weights | **Apache-2.0** | [Gemma 4 E4B](https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF), [Gemma 4 12B](https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF) |
+| Inkling 2 Mini GGUF weights (where supported) | **Apache-2.0** | [ggml-org/Inkling-2-Mini-GGUF](https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF) |
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime binaries | MIT | Downloaded from pinned GitHub releases during summary setup |
-| [ai-dock/llama.cpp-cuda](https://github.com/ai-dock/llama.cpp-cuda) Linux CUDA build scripts | MIT | The Linux summary runtime is pinned to the v0.3.0 build; the contained llama.cpp binaries remain MIT |
+| [ai-dock/llama.cpp-cuda](https://github.com/ai-dock/llama.cpp-cuda) Linux CUDA build scripts | MIT | The Linux summary runtimes are pinned to the v0.3.0 (Qwen) and v1.0.0 (Gemma 4) builds; the contained llama.cpp binaries remain MIT |
 | NVIDIA CUDA runtime and [NCCL](https://pypi.org/project/nvidia-nccl-cu12/2.31.2/) archives | NVIDIA Software License Agreement (the NCCL wheel's `nvidia/nccl/lib/LICENSE.txt`) | Downloaded only as part of optional user-triggered managed CUDA runtime and Linux summary setup; the pinned wheel is recorded in the catalog |
 
-**Trademark:** “Qwen” is associated with Alibaba Cloud. AvaNevis is not affiliated with or endorsed by Alibaba.
+**Trademark:** “Qwen” is associated with Alibaba Cloud; “Gemma” with Google; and “Inkling” with Thinking Machines Lab. AvaNevis is not affiliated with or endorsed by these organizations.
 
 ---
 

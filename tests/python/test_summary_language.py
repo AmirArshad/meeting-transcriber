@@ -289,3 +289,15 @@ def test_summary_prose_extracts_content_and_excludes_metadata_across_all_tags():
             assert token in extracted
         assert 'METADATA_SENTINEL_XYZ' not in extracted
         assert '00:42' not in extracted
+
+
+def test_model_language_policy_keeps_unqualified_models_disabled():
+    from backend.summaries.summary_language import is_model_language_supported
+    assert is_model_language_supported('qwen3.5-9b-q4-k-m', 'en')
+    for model in ('qwen3.5-4b-q4-k-m', 'gemma-4-e4b', 'gemma-4-12b'):
+        assert not is_model_language_supported(model, 'en')
+    assert not is_model_language_supported('qwen3.5-9b-q4-k-m', 'fa')
+    for model in ('gemma-4-e4b', 'gemma-4-12b'):
+        assert is_model_language_supported(model, 'en', 'darwin', 'arm64')
+        assert not is_model_language_supported(model, 'es', 'darwin', 'arm64')
+        assert not is_model_language_supported(model, 'en', 'linux', 'x64')

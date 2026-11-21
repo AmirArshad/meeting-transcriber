@@ -1,6 +1,6 @@
 ---
 description: Renderer UI — plain JS, helper extraction, and regression tests
-globs: src/renderer/**,tests/js/history-detail-helpers.test.js,tests/js/update-notification-helpers.test.js,tests/js/recording-state-helpers.test.js
+globs: src/renderer/**,tests/js/history-detail-helpers.test.js,tests/js/update-notification-helpers.test.js,tests/js/recording-state-helpers.test.js,tests/js/chat-helpers.test.js,tests/js/tag-helpers.test.js,tests/js/speaker-label-helpers.test.js,tests/js/summary-model-library-renderer.test.js
 alwaysApply: false
 ---
 

@@ -7,15 +7,15 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 ### Core
 
 - **Dual audio capture** — microphone + desktop audio recorded in parallel and mixed after the recording stops. WASAPI loopback on Windows; native Swift helper on macOS using CoreAudio process taps on macOS 14.2+ with Swift/PyObjC ScreenCaptureKit fallback.
-- **Local Whisper transcription** — `faster-whisper` on Windows with optional CUDA, `lightning-whisper-mlx` on Apple Silicon with Metal. CPU fallback path for non-GPU machines.
-- **Local AI add-ons (optional)** — speaker diarization and transcript summaries with explicit setup and local-only execution. Speaker identification is exclusive **Speakrs** (token-free; Windows CUDA / macOS Apple Silicon CoreML) or **Pyannote** (`pyannote/speaker-diarization-community-1`; Windows CUDA / macOS Apple Silicon MPS). Summaries use pinned local `llama.cpp` runtime/model setup with History integration.
+- **Local transcription** — `faster-whisper` on Windows and Linux (optional CUDA), `lightning-whisper-mlx` on Apple Silicon with Metal, plus optional English-only **Parakeet v2** on supported GPUs.
+- **Local AI add-ons (optional)** — speaker diarization (**Speakrs** token-free or **Pyannote** on Windows/macOS) and **Summaries & Chat** (`llama.cpp` with Qwen3.5 9B/4B and Gemma 4 E4B/12B) with explicit setup, device memory fit checks, and local-only execution.
+- **Local History search & grounded Chat (v3.0.0+)** — disposable SQLite FTS5 full-text search across transcripts and summaries without AI add-ons, plus threaded local Q&A with clickable timestamp citations (`llama-server` with `llama-cli` fallback) and manual/idle memory unload.
 - **Import local audio** — add WAV, MP3 or Opus to History and queue local transcription while preserving the source file.
-- **Meeting history** — persisted under the user-data folder with a unique meeting ID, browseable list, transcript viewer, and synchronized audio playback.
-- **Cross-platform installers** — Windows NSIS, macOS DMG, and Linux x86_64 AppImage/pacman/experimental `.deb` packages with bundled runtimes.
-- **GPU acceleration** — CUDA on Windows, Metal/MLX on Apple Silicon.
+- **Recording history & subtitle exports** — persisted under the user-data folder with a unique ID, browseable list, transcript viewer, synchronized audio playback, and `.md`/`.txt`/`.srt`/`.vtt` exports.
+- **Cross-platform installers & in-app updater (v3.0.0+)** — Windows NSIS, macOS DMG/ZIP, and Linux x86_64 AppImage/pacman/experimental `.deb` packages with bundled runtimes and differential in-app updates (plus copyable `pacman`/`apt` commands for system packages and manual `.dmg` fallback for ad-hoc macOS builds).
+- **GPU acceleration** — CUDA on Windows and managed Linux CUDA 12, Metal/MLX on Apple Silicon.
 - **Opus compression** — ~95% size reduction vs WAV (≈ 23 MB for a 40-minute meeting), with WAV fallback if ffmpeg fails or output verification fails.
-- **Model preloading** — improves first-time experience by warming the model in the background.
-- **Auto-aware updater** — checks GitHub Releases on launch and surfaces an in-app banner; clicking opens the release page in the user's browser.
+- **Model preloading** — improves first-time experience by warming the Whisper model in the background.
 - **macOS feature parity** — full parity with Windows including 48 kHz target sample rate (shared soxr VHQ in spool finalization; macOS capture still uses separate mix/align paths in `macos_recorder.py`).
 
 ### Audio quality
@@ -70,18 +70,14 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ---
 
-## Current release: v2.12.0
+## Current release: v3.0.0 (v3.1.0 in development)
 
-Published November 19, 2026. Import WAV, MP3 and Opus into History and
-transcribe them through Activity. This release includes keyboard access to
-History meetings, the Windows queue-status fix and qualified dependency updates.
-SRT and WebVTT remain deferred until saved transcripts retain cue-scale timing.
-See the [release notes](../releases/v2.12.0.md) and
-[qualification record](../development/V2_12_QUALIFICATION.md) for tested
-platforms and accepted limits.
+- **v3.0.0 (November 21, 2026)** — Local SQLite FTS5 History search, grounded local Chat with timestamp citations, caption-scale timing sidecars with `.srt`/`.vtt` exports, differential in-app auto-updater, bundled CPython `3.11.18+20261110`, and decoupled recovery locking. See the [v3.0.0 release notes](../releases/v3.0.0.md) and [v3.0 qualification record](../development/V3_0_QUALIFICATION.md).
+- **v3.1.0 (in progress on `codex/v3.1-phase4-model-library`)** — Streaming grounded Chat with tag/date filters and actionable recovery notices; 11 canonical recording tags with dedicated summary templates; inline speaker naming with timestamped voice previews across History, Activity, and Prepare summary; and the multi-model Summaries & Chat library (Qwen3.5 9B/4B, Gemma 4 E4B/12B, gated Inkling 2 Mini) with device-fit checks and single-slot memory release. See the [v3.1 qualification record](../development/V3_1_QUALIFICATION.md).
 
-A candidate v3 milestone is local History search and questions with citations
-that open the source meeting at the relevant timestamp.
+### Earlier v2.12.0 release
+
+Published November 19, 2026. Import WAV, MP3 and Opus into History and transcribe them through Activity, alongside keyboard access to History recordings and qualified dependency updates. See the [release notes](../releases/v2.12.0.md) and [qualification record](../development/V2_12_QUALIFICATION.md).
 
 ### Earlier v2.11 release
 
@@ -121,15 +117,15 @@ historical evidence.
 
 ## Planned
 
-### Updater
-
-- **True silent auto-install updater.** Today's updater detects new GitHub releases and opens the release page; the next iteration should download and apply the installer in-app. Reference: [FEATURE_AUTO_UPDATER.md](../completed/FEATURE_AUTO_UPDATER.md).
-
 ### Transcription
 
-- **History chat over meetings.** Use the installed local summary runtime/model to ask questions about historical meetings, with responses grounded in saved transcript and summary artifacts.
 - **Real-time transcription.** Live captions during the recording itself. Trade-off: requires a streaming Whisper implementation, raises CPU/GPU usage during capture, and accuracy is below post-processing.
-- **Export formats.** SRT, VTT, DOCX, PDF, JSON in addition to today's Markdown + plain-text Save As.
+- **Additional export formats.** DOCX, PDF, JSON in addition to Markdown, plain text, SRT, and WebVTT.
+
+### Summaries & Chat
+
+- **Inkling 2 Mini qualification.** Unblock once a distributable `llama.cpp` release includes both initial support and the loop-layer scale fix and passes native platform checks across Apple Silicon, Windows CUDA, and Linux CUDA.
+- **Expanded Gemma 4 language checks.** Extend beyond Apple Silicon English summaries after qualification on target platforms.
 
 ### Audio
 
@@ -173,7 +169,7 @@ Longer horizon, lower priority:
 - **Minor (1.X.0)** — New features, backwards compatible.
 - **Patch (1.2.X)** — Bug fixes and minor improvements.
 
-**Current release version:** v2.12.0. Hardware acceptance and its limits are recorded separately from CI.
+**Current release version:** v3.0.0 (`v3.1.0` in development). Hardware acceptance and its limits are recorded separately from CI.
 
 The v2.0 rebrand introduced a new Electron `productName`, which changes the user-data folder. Existing Meeting Transcriber installs won't see their old recordings until the user manually moves the data folder, so that release used a major version bump.
 

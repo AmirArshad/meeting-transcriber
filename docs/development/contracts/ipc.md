@@ -79,6 +79,20 @@ current speaker names to Markdown, text, and subtitle output.
 
 `history-search-service.js` owns the disposable SQLite FTS5 cache (`userData/search/history-index.sqlite`) and exposes `search-history` (debounced renderer search supporting optional `tags` filtering and returning BM25-ranked meetings with highlighted `snippetParts` and `[MM:SS]` timestamp jump coordinates), `rebuild-history-index`, and `get-history-index-status`. `history-qa-service.js` owns `userData/chat/threads.json` (`chat-thread-store.js`, where `scope` supports `{ type, meetingIds, dateFrom, dateTo, tags }`) and exposes `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, plus renderer push listeners `onHistoryQaModelState` (`history-qa-model-state`) and `onHistoryQaProgress` (`history-qa-progress`). Recording creation/update payloads (`add-meeting`, `update-meeting`, `finalize-recording-transcription`, `start-import-audio`) accept optional canonical `tag` values validated symmetrically in main and Python (`meeting_manager.py`). The renderer renders Chat responses exclusively via bundled offline `marked` + strict-allowlist `DOMPurify` (`src/renderer/markdown-render-helpers.js`) and never sends bearer tokens, ports, or arbitrary file paths over IPC.
 
+### Summaries & Chat model library
+
+`get-ai-addon-status` includes `summaryLibrary` with the saved default,
+model-specific installation, fit, language, download and reclaimable storage,
+and total managed/shared storage. `set-default-summary-model` takes `{modelId}`.
+Summary setup, validation and removal take a catalog `modelId`. Removal also
+accepts `replacementModelId` when the default is being removed. Main owns all
+resolved paths and checks readiness before applying a default.
+
+`update-chat-thread-model` takes `{threadId, modelId}`. Null follows the shared
+default. Chat submission includes the effective `modelId` observed by the picker
+so the service can detect a changed preference. A summary uses its requested
+model for that run. Completed messages and summaries retain model provenance.
+
 ### In-app auto-updater
 
 `updater-service.js` owns `electron-updater` lifecycle (`in-app` mode on packaged Windows NSIS, macOS `.zip`, and Linux AppImage), Linux `pacman`/`.deb` `manual-package` fallback (via `src/updater.js` release detection + strict filename-validated install command), and `userData/updater-preferences.json` (`autoDownload: false` by default). Every `update-state-changed` push and state snapshot carries a monotonically increasing `seq`. The renderer never passes feed URLs, versions, or paths over IPC, and renders release notes strictly through `markdown-render-helpers.js` (`STRICT_DOMPURIFY_CONFIG`). `install-update-now` rejects active recording (`UPDATE_BLOCKED_RECORDING`), active audio import (`UPDATE_BLOCKED_IMPORT_SAVE`), and summary `metadata` commits (`UPDATE_BLOCKED_SUMMARY_FINALIZING`), and prompts confirmation (`UPDATE_CONFIRM_AI_INTERRUPT`) before draining active local AI work and calling `quitAndInstall(false, true)`.

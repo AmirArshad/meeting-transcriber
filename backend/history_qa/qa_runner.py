@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from common.sensitive_text import redact_sensitive_text
 from meetings.normalization import recording_tag_display_label
-from summaries.llama_runtime import resolve_llama_runtime, run_llama_prompt
+from summaries.llama_runtime import apply_inference_descriptor, resolve_llama_runtime, run_llama_prompt
 
 from .citation_verifier import (
     INSUFFICIENT_EVIDENCE_MESSAGE,
@@ -264,6 +264,18 @@ def format_chatml_prompt(messages: Sequence[Dict[str, str]]) -> str:
     return "\n".join(parts)
 
 
+def format_gemma_prompt(messages: Sequence[Dict[str, str]]) -> str:
+    """Pass plain conversation text to llama-cli's native GGUF chat template."""
+    parts = []
+    for msg in messages:
+        role = str(msg.get("role") or "user")
+        content = str(msg.get("content") or "")
+        # Prevent supplied content from impersonating template control tokens.
+        content = content.replace("<start_of_turn>", "< start_of_turn>").replace("<end_of_turn>", "< end_of_turn>")
+        parts.append(f"{role.capitalize()}: {content}")
+    return "\n\n".join(parts)
+
+
 def call_llama_server(
     *,
     server_url: str,
@@ -469,10 +481,11 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
             )
         runtime_dir = str(payload.get("runtimeDir") or "")
         model_path = str(payload.get("modelPath") or "")
-        runtime = resolve_llama_runtime(runtime_dir=runtime_dir, model_path=model_path)
+        runtime = apply_inference_descriptor(resolve_llama_runtime(runtime_dir=runtime_dir, model_path=model_path), payload.get("inferenceDescriptor"))
         with tempfile.TemporaryDirectory(prefix="avanevis-qa-cli-") as work_dir:
             prompt_file = Path(work_dir) / "qa.prompt.txt"
-            prompt_file.write_text(format_chatml_prompt(turn_messages), encoding="utf-8")
+            formatter = format_gemma_prompt if runtime["inference"].get("promptFormat") == "gemma" else format_chatml_prompt
+            prompt_file.write_text(formatter(turn_messages), encoding="utf-8")
             return run_llama_prompt(
                 runtime,
                 prompt_path=str(prompt_file),

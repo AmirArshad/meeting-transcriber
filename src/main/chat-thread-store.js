@@ -157,6 +157,8 @@ function sanitizeMessage(raw) {
       'cancelled',
     ]);
     entry.status = allowedStatuses.has(raw.status) ? raw.status : 'answered';
+    if (typeof raw.modelId === 'string') entry.modelId = raw.modelId.slice(0, 120);
+    if (typeof raw.modelName === 'string') entry.modelName = raw.modelName.slice(0, 160);
     entry.citations = Array.isArray(raw.citations)
       ? raw.citations.map(sanitizeCitation).filter(Boolean)
       : [];
@@ -207,6 +209,7 @@ function sanitizeThreadRecord(raw) {
     createdAt,
     updatedAt,
     scope: sanitizeSavedScope(raw.scope),
+    modelId: typeof raw.modelId === 'string' ? raw.modelId.slice(0, 120) : null,
     messages: Array.isArray(raw.messages)
       ? raw.messages.map(sanitizeMessage).filter(Boolean)
       : [],
@@ -225,6 +228,7 @@ function summarizeThread(thread) {
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     scope: sanitizeScope(thread.scope),
+    modelId: thread.modelId || null,
     messageCount: messages.length,
     lastMessagePreview: preview,
   };
@@ -338,7 +342,10 @@ function createChatThreadStore(deps) {
     });
   }
 
-  function createThread({ title = DEFAULT_THREAD_TITLE, scope = null } = {}) {
+  function createThread({ title = DEFAULT_THREAD_TITLE, scope = null, modelId = null } = {}) {
+    const normalizedModelId = typeof modelId === 'string' && modelId.trim()
+      ? modelId.trim().slice(0, 120)
+      : null;
     return enqueueMutation(async () => {
       const store = await readStoreUnsafe();
       const now = nowIso();
@@ -348,6 +355,7 @@ function createChatThreadStore(deps) {
         createdAt: now,
         updatedAt: now,
         scope: sanitizeScope(scope),
+        modelId: normalizedModelId,
         messages: [],
       };
       store.threads.unshift(thread);
@@ -405,6 +413,18 @@ function createChatThreadStore(deps) {
     });
   }
 
+  function updateThreadModel(threadId, modelId) {
+    return enqueueMutation(async () => {
+      const store = await readStoreUnsafe();
+      const thread = store.threads.find((t) => t.id === String(threadId || '').trim());
+      if (!thread) throw new Error('Chat thread not found.');
+      thread.modelId = modelId;
+      thread.updatedAt = nowIso();
+      await writeStoreAtomic(store);
+      return structuredClone(thread);
+    });
+  }
+
   function appendTurn(
     threadId,
     {
@@ -418,6 +438,8 @@ function createChatThreadStore(deps) {
       detectedDateFilter = null,
       retrievalMode = null,
       inspectedSources = [],
+      modelId = null,
+      modelName = null,
       scope = null,
     },
     { beforeCommit = null } = {},
@@ -450,6 +472,8 @@ function createChatThreadStore(deps) {
         detectedDateFilter,
         retrievalMode,
         inspectedSources,
+        modelId,
+        modelName,
       });
       thread.messages.push(userMessage, assistantMessage);
       if (thread.title === DEFAULT_THREAD_TITLE && userMessage.content) {
@@ -477,6 +501,7 @@ function createChatThreadStore(deps) {
     renameThread,
     deleteThread,
     updateThreadScope,
+    updateThreadModel,
     appendTurn,
     sanitizeScope,
   };

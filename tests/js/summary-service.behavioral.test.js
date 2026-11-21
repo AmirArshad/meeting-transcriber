@@ -67,7 +67,7 @@ function createHarness({
       generatedAt: '2026-07-10T00:00:00.000Z',
       sourceTranscriptHash: confirmedHash,
       language: 'en', languageSource: 'userConfirmed',
-      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'qwen-language-v2',
+      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'summary-language-v3',
       ...summaryMetadata,
     },
     summary: { overview: 'new summary' },
@@ -350,7 +350,7 @@ for (const platform of ['win32', 'darwin']) {
     assert.equal(args[args.indexOf('--source-transcript-hash') + 1], confirmedHash);
     assert.equal(result.meeting.ai.summary.language, 'en');
     assert.equal(result.meeting.ai.summary.languageSource, 'userConfirmed');
-    assert.equal(result.meeting.ai.summary.languagePolicyVersion, 'qwen-language-v2');
+    assert.equal(result.meeting.ai.summary.languagePolicyVersion, 'summary-language-v3');
   });
 }
 
@@ -408,4 +408,103 @@ test('generation captures speaker names and persists the runner snapshot hash', 
   const args = harness.getSpawnedArgs()[1];
   assert.deepEqual(JSON.parse(args[args.indexOf('--speaker-names-json') + 1]), { 'Speaker 1': 'Alice' });
   assert.equal(result.meeting.ai.summary.speakerNamesHash, hash);
+});
+
+test('summary service awaits ensureSummaryProcessExited and passes inferenceDescriptor to buildSummaryArgs', async () => {
+  let exitWaitCalls = 0;
+  let capturedBuildOptions = null;
+  const { createSummaryService } = require('../../src/main/summary-service');
+  const { createAiAddonCancelErrorStandalone } = require('../../src/main/ai-addon-ipc');
+  const { EventEmitter } = require('node:events');
+  const os = require('node:os');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'summary-exit-gate-'));
+  const transcriptPath = path.join(tmpDir, 'meeting.md');
+  fs.writeFileSync(transcriptPath, 'Hello team\n', 'utf8');
+  const sourceHash = `sha256:${require('node:crypto').createHash('sha256').update('Hello team\n', 'utf8').digest('hex')}`;
+  const handlers = {};
+  const service = createSummaryService({
+    app: { getPath: () => tmpDir },
+    path,
+    fs,
+    pythonConfig: { backendPath: tmpDir },
+    spawnTrackedPython: (args) => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => {};
+      process.nextTick(() => {
+        if (args.includes('get')) {
+          proc.stdout.emit('data', JSON.stringify({ id: 'm-1', transcriptPath, ai: {} }));
+        } else {
+          proc.stdout.emit('data', JSON.stringify({ id: 'm-1', ai: { summary: { status: 'completed' } } }));
+        }
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+    spawnSummaryPython: () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => {};
+      process.nextTick(() => {
+        fs.writeFileSync(`${transcriptPath.replace(/\.md$/, '')}.${Date.now()}-${process.pid}-1.summary.json.tmp`, '{}');
+        proc.emit('close', 1);
+      });
+      return proc;
+    },
+    ensureSummaryProcessExited: async () => {
+      exitWaitCalls += 1;
+    },
+    getBackendModuleArgs: (mod, args = []) => ['-m', mod, ...args],
+    enqueueAiComputeAction: (fn) => fn(),
+    createAiAddonCancelError: createAiAddonCancelErrorStandalone,
+    getAiAddonRuntimeOptions: () => ({}),
+    buildSummaryArgs: (opts) => {
+      capturedBuildOptions = opts;
+      return ['-m', 'summaries.summary_runner', '--output-json', opts.outputJson, '--output-markdown', opts.outputMarkdown];
+    },
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      let stderr = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      python.stderr.on('data', (data) => { stderr += data.toString(); });
+      return {
+        getStdout: () => stdout,
+        getStderr: () => stderr,
+        assertStdoutWithinLimit() {},
+      };
+    },
+    sendToRenderer: () => {},
+    appendSpawnLogBuffer: (acc, chunk) => acc + chunk.toString(),
+    appendSpawnJsonStdout: (acc, chunk) => acc + chunk.toString(),
+    assertTrustedRendererSender: () => {},
+    assertSafeExistingTranscriptPath: (p) => p,
+    assertSafeExistingSegmentsPath: (p) => p,
+    terminateProcessBestEffort: () => {},
+    summarizeSummaryValidationError: (msg) => msg || 'failed',
+    platform: 'darwin',
+    arch: 'arm64',
+    checkAiAddonSetupStatus: async () => ({
+      features: {
+        summary: {
+          status: 'ready',
+          setupComplete: true,
+          modelId: 'qwen3.5-9b-q4-k-m',
+          artifactId: 'art',
+          runtimeCache: { runtimeDir: path.join(tmpDir, 'runtime'), runtimeArtifact: { id: 'rt' } },
+        },
+      },
+    }),
+    getSummaryArtifactForPlatform: () => ({ modelId: 'qwen3.5-9b-q4-k-m', modelLabel: 'Qwen 9B', inference: { contextTokens: 32768, family: 'qwen' } }),
+    getSummaryArtifactPath: () => path.join(tmpDir, 'model.gguf'),
+    getSummaryRuntimeDir: () => path.join(tmpDir, 'runtime'),
+  });
+  service.registerIpc({ handle: (ch, fn) => { handlers[ch] = fn; } });
+  await assert.rejects(
+    () => handlers['generate-summary']({}, { meetingId: 'm-1', transcriptLanguage: 'en', sourceTranscriptHash: sourceHash }),
+  );
+  assert.equal(exitWaitCalls, 1);
+  assert.deepEqual(capturedBuildOptions.inferenceDescriptor, { contextTokens: 32768, family: 'qwen' });
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });

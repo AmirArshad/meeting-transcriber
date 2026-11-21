@@ -682,7 +682,7 @@ test('F2: generate-summary enters metadata before update-ai; quit abort cannot k
       generatedAt: new Date().toISOString(),
       ...summaryConfirmation(transcriptPath),
       language: 'en', languageSource: 'userConfirmed',
-      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'qwen-language-v2',
+      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'summary-language-v3',
     },
     summary: { overview: 'ok' },
   };
