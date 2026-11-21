@@ -27,6 +27,7 @@ from meetings import normalization as meeting_norm
 from meetings import paths as meeting_paths
 from meetings import scan_import as meeting_scan
 from meetings import store as meeting_store
+from meetings.speaker_names import normalize_speaker_names
 from transcription import captions as transcript_captions
 
 
@@ -930,6 +931,9 @@ class MeetingManager:
         *,
         title: Optional[str] = None,
         tag=_UNSET,
+        speaker_names=_UNSET,
+        expected_source_transcript_hash=None,
+        expected_transcription_attempt_id=None,
     ) -> Optional[Dict]:
         """
         Update editable fields on a meeting (display title and/or canonical tag).
@@ -947,6 +951,7 @@ class MeetingManager:
             Updated meeting dict, or None if the meeting was not found.
         """
         normalized_tag = _UNSET if tag is _UNSET else meeting_norm.normalize_recording_tag(tag, strict=True)
+        names_patch = _UNSET if speaker_names is _UNSET else normalize_speaker_names(speaker_names, strict=True)
 
         with self._metadata_guard():
             meetings = self._list_meetings_locked()
@@ -955,7 +960,35 @@ class MeetingManager:
             if not meeting:
                 return None
 
+            if names_patch is not _UNSET and expected_transcription_attempt_id is not None:
+                result = meeting.get('transcriptionResult')
+                actual_attempt_id = result.get('attemptId', '') if isinstance(result, dict) else ''
+                if actual_attempt_id != expected_transcription_attempt_id:
+                    raise ValueError('STALE_SOURCE_TRANSCRIPT')
+
+            if names_patch is not _UNSET and expected_source_transcript_hash is not None:
+                raw_path = meeting.get('transcriptPath')
+                path = self._resolve_accessible_recordings_file(Path(str(raw_path)), allowed_suffixes=('.md',), must_exist=True, label='transcript') if raw_path else None
+                actual_hash = transcript_captions.hash_transcript_text(self._read_transcript_text(path)) if path else ''
+                if actual_hash != expected_source_transcript_hash:
+                    raise ValueError('STALE_SOURCE_TRANSCRIPT')
+
             changed = False
+            if names_patch is not _UNSET:
+                ai = dict(meeting.get('ai') or {})
+                diarization = dict(ai.get('diarization') or {})
+                old_names = normalize_speaker_names(diarization.get('speakerNames'))
+                names = {key: value for key, value in old_names.items() if value}
+                for key, value in names_patch.items():
+                    if value:
+                        names[key] = value
+                    else:
+                        names.pop(key, None)
+                if names != old_names:
+                    diarization['speakerNames'] = names
+                    ai['diarization'] = diarization
+                    meeting['ai'] = ai
+                    changed = True
             if title is not None:
                 clean = title.strip()
                 if clean and clean != meeting.get('title'):
@@ -1336,6 +1369,14 @@ class MeetingManager:
                     and normalized.get('status') != 'completed'
                 ):
                     normalized['segmentsPath'] = None
+                if feature == 'diarization' and 'speakerNames' in normalized:
+                    names = {k: v for k, v in normalize_speaker_names(existing_feature.get('speakerNames')).items() if v}
+                    for key, name in normalized['speakerNames'].items():
+                        if name:
+                            names[key] = name
+                        else:
+                            names.pop(key, None)
+                    normalized['speakerNames'] = names
                 merged = {**existing_feature, **normalized}
                 if ai.get(feature) != merged:
                     ai[feature] = merged
@@ -1441,6 +1482,9 @@ def main():
     update_parser.add_argument('--title', help='New display title')
     update_parser.add_argument('--tag', help='Canonical recording tag')
     update_parser.add_argument('--clear-tag', action='store_true', help='Clear recording tag')
+    update_parser.add_argument('--speaker-names-json', help='Speaker name patch as JSON')
+    update_parser.add_argument('--expected-source-transcript-hash', help='Reject speaker edits for a replaced transcript')
+    update_parser.add_argument('--expected-transcription-attempt-id', help='Reject speaker edits for a replaced transcription attempt')
 
     update_transcription_parser = subparsers.add_parser('update-transcription', help='Update transcription metadata for a meeting')
     update_transcription_parser.add_argument('id', help='Meeting ID')
@@ -1539,7 +1583,8 @@ def main():
     elif args.command == 'update':
         tag_arg = None if args.clear_tag else (args.tag if args.tag is not None else _UNSET)
         try:
-            meeting = manager.update_meeting(args.id, title=args.title, tag=tag_arg)
+            names_arg = json.loads(args.speaker_names_json) if args.speaker_names_json is not None else _UNSET
+            meeting = manager.update_meeting(args.id, title=args.title, tag=tag_arg, speaker_names=names_arg, expected_source_transcript_hash=args.expected_source_transcript_hash, expected_transcription_attempt_id=args.expected_transcription_attempt_id)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             sys.exit(1)

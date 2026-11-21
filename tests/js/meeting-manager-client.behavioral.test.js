@@ -573,4 +573,30 @@ test('addMeetingToHistory and update-meeting validate and forward --tag / --clea
     /Unsupported recording tag/,
   );
   assert.equal(spawnedArgs.length, 6);
+
+  const expectedSourceTranscriptHash = `sha256:${'e'.repeat(64)}`;
+  await handlers['update-meeting']({}, {
+    meetingId: 'meeting-1',
+    updates: {
+      tag: 'interview',
+      speakerNames: { 'Speaker 1': '  Ada* ', SPEAKER_03: '' },
+      expectedSourceTranscriptHash,
+      expectedTranscriptionAttemptId: '',
+    },
+  });
+  assert.deepEqual(spawnedArgs[6].slice(5), [
+    '--tag', 'interview',
+    '--speaker-names-json', '{"Speaker 1":"Ada","SPEAKER_03":""}',
+    '--expected-source-transcript-hash', expectedSourceTranscriptHash,
+    '--expected-transcription-attempt-id=',
+  ]);
+  await assert.rejects(
+    handlers['update-meeting']({}, { meetingId: 'meeting-1', updates: { speakerNames: { Unknown: 'Ada' } } }),
+    /Invalid speaker names/,
+  );
+  await assert.rejects(
+    handlers['update-meeting']({}, { meetingId: 'meeting-1', updates: { speakerNames: { 'Speaker 1': 'Ada' } } }),
+    /require the current transcript/,
+  );
+  assert.equal(spawnedArgs.length, 7);
 });

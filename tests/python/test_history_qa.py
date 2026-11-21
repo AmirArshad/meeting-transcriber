@@ -1099,6 +1099,7 @@ def test_neighbor_timestamp_excerpt_preservation_and_multispeaker_overview_token
     assert ev["speaker"] == "Bob"
     assert "DuckDB" in ev["excerpt"]
     assert "[Alice]:" in ev["text"]
+    assert "\n[Bob]: We chose DuckDB" in ev["text"]
     assert "[Charlie]:" in ev["text"]
 
     # 2. Multi-speaker overview merges alternating turns and respects token_cap sampling.
@@ -1217,3 +1218,15 @@ def test_match_entities_preserves_repeated_words_and_plural_tag_aliases():
         ('consultations', 'appointment'), ('brainstorms', 'brainstorm'), ('rehearsals', 'music'),
     ]:
         assert expected in match_entities(question, headers)['meetingIds']
+
+
+def test_generic_speaker_labels_do_not_match_speaker_questions():
+    from backend.history_qa.retrieval import match_entities
+
+    headers = [
+        {'meetingId': 'generic', 'title': 'Untitled', 'speakers': ['SPEAKER_00', 'Speaker 1']},
+        {'meetingId': 'named', 'title': 'Untitled', 'speakers': ['Alice']},
+        {'meetingId': 'generic-title', 'title': 'Speaker', 'speakers': []},
+    ]
+    assert match_entities('What did the speaker say?', headers)['meetingIds'] == []
+    assert match_entities('What did Alice say?', headers)['matchedSpeakers'] == ['Alice']

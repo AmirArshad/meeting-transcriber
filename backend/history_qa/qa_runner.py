@@ -213,6 +213,7 @@ def build_qa_messages(
             "3. Format cleanly with concise Markdown headings, bullet lists, or GFM tables when helpful.",
             "4. Place inline square-bracket citations like [E1] or [E1] [E2] at the end of EVERY factual paragraph, bullet point, blockquote, and table data row. [E1]..[En] numbering applies specifically to the current turn's `Evidence passages` list (never earlier turns). (Headings, table header/separator rows, and short colon-terminated lead-in lines before a list or table do not need citations.)",
             "5. NEVER invent facts, decisions, numbers, quotes, recording names, speakers, or timestamps not present in the evidence.",
+            "For transcript attribution, the Speaker label in the passage header identifies who said the following words. A per-excerpt speaker label takes precedence for its excerpt. A name spoken in the passage may refer to somebody else. If saved summary attribution differs, use the transcript's current speaker label.",
             "6. Only set insufficientEvidence to true when none of the retrieved passages address the question at all.",
             "7. Respond ONLY with a valid JSON object matching this exact schema (no prose outside JSON, no markdown code fences):",
             '{"answerMarkdown": "<Markdown answer with inline [Ek] citations>", "citedEvidenceIds": ["E1"], "insufficientEvidence": false}',

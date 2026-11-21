@@ -118,6 +118,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getMeeting: (meetingId) => ipcRenderer.invoke('get-meeting', meetingId),
   deleteMeeting: (meetingId) => ipcRenderer.invoke('delete-meeting', meetingId),
   addMeeting: (meetingData) => ipcRenderer.invoke('add-meeting', meetingData),
+  // Speaker-name patches carry the transcript hash and, when available, the attempt ID.
   updateMeeting: (meetingId, updates) => ipcRenderer.invoke('update-meeting', { meetingId, updates }),
   updateMeetingAi: (meetingId, updates) => ipcRenderer.invoke('update-meeting-ai', { meetingId, updates }),
   saveTranscriptFile: (options) => ipcRenderer.invoke('save-transcript-file', options),

@@ -729,3 +729,47 @@ def test_invalid_tags_rejected_even_without_query_tokens(tmp_path):
         )
         assert proc.returncode != 0
         assert 'Invalid recording tag' in proc.stderr
+
+
+def test_speaker_name_overlay_reindexes_captions_and_markdown(tmp_path):
+    rec_dir = tmp_path / 'recordings'
+    index_path = tmp_path / 'search' / 'history-index.sqlite'
+    for meeting_id, cues in [('timed', [{'id': 1, 'startMs': 0, 'endMs': 1000, 'speaker': 'Speaker 1', 'text': 'Hello there'}]), ('untimed', None)]:
+        _seed_meeting(rec_dir, meeting_id=meeting_id, title=meeting_id, date_iso='2026-11-10', transcript_md='# Transcript\n\n**Speaker 1:** Hello there', cues=cues)
+    sync_history_index(rec_dir, index_path)
+    manager = MeetingManager(str(rec_dir))
+    for meeting_id in ('timed', 'untimed'):
+        manager.update_meeting(meeting_id, speaker_names={'Speaker 1': 'Alice'})
+    stats = sync_history_index(rec_dir, index_path)
+    assert stats['syncedMeetings'] == 2
+    results = search_history_index(rec_dir, index_path, query='Alice')
+    assert results['matchedMeetingCount'] == 2
+    manager.update_meeting('timed', speaker_names={'Speaker 1': 'Bob'})
+    assert sync_history_index(rec_dir, index_path)['syncedMeetings'] == 1
+    assert search_history_index(rec_dir, index_path, query='Bob')['matchedMeetingCount'] == 1
+
+
+def test_mixed_markdown_speaker_boundaries_overlays_and_highlighting(tmp_path):
+    rec_dir = tmp_path / 'recordings'
+    index_path = tmp_path / 'search' / 'history-index.sqlite'
+    _seed_meeting(rec_dir, meeting_id='mixed', title='Mixed', date_iso='2026-11-10', transcript_md=(
+        '**Speaker 1:** Before timing\n'
+        '[00:01 - 00:03] **speaker 1:** Timed words\n'
+        '[00:04 - 00:05] **Speaker 1:**\n'
+        '**Speaker 2:** After timing\n'
+        '[00:06 - 00:07] speaker_00: Final words\n'
+        '[00:08 - 00:09]\n'
+        '**Speaker 1:** Untimed after a bare timestamp\n'
+    ))
+    manager = MeetingManager(str(rec_dir))
+    manager.update_meeting('mixed', speaker_names={'Speaker 1': 'Alice', 'Speaker 2': 'Bob', 'SPEAKER_00': 'Carol'})
+    sync_history_index(rec_dir, index_path)
+    with sqlite3.connect(index_path) as conn:
+        rows = conn.execute("SELECT speaker, text, start_ms FROM passages WHERE kind='transcript' ORDER BY seq_index").fetchall()
+    assert rows == [('Alice', 'Before timing', None), ('Alice', 'Timed words', 1000),
+                    ('Bob', 'After timing', None), ('Carol', 'Final words', 6000),
+                    ('Alice', 'Untimed after a bare timestamp', None)]
+    hit = search_history_index(rec_dir, index_path, query='Bob')['meetings'][0]['bestPassage']
+    assert hit['snippetParts'][0] == {'text': 'Bob', 'match': True}
+    assert hit['snippetParts'][1] == {'text': ': ', 'match': False}
+    assert 'After timing' in hit['excerpt']

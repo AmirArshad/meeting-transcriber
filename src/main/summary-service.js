@@ -398,6 +398,7 @@ function createSummaryService(deps) {
         ? [previousSummaryMetadata.jsonPath, previousSummaryMetadata.markdownPath].filter(Boolean)
         : [];
       const diarizationMetadata = meeting.ai && meeting.ai.diarization;
+      const speakerNames = { ...(diarizationMetadata?.speakerNames || {}) };
       const speakerMetadataPath = diarizationMetadata
         && diarizationMetadata.status === 'completed'
         && diarizationMetadata.segmentsPath;
@@ -502,6 +503,7 @@ function createSummaryService(deps) {
           outputJson: outputJsonTemp,
           outputMarkdown: outputMarkdownTemp,
           speakersJsonPath,
+          speakerNames,
           profile: profile || 'balanced',
           modelLabel: artifact.modelLabel || artifact.modelId,
           modelId: selectedModelId,
@@ -642,6 +644,7 @@ function createSummaryService(deps) {
               ...(templateVersion ? { templateVersion } : {}),
               generatedAt: result.metadata.generatedAt,
               sourceTranscriptHash: result.metadata.sourceTranscriptHash,
+              speakerNamesHash: result.metadata.speakerNamesHash || '',
               jsonPath: outputJson,
               markdownPath: outputMarkdown,
               error: null,

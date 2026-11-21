@@ -717,3 +717,35 @@ test('re-clicking the selected History row does not close an in-progress title e
     titleEditorOpen: false,
   }), false);
 });
+
+test('parses custom bold speaker headings and optionally resolves canonical labels', () => {
+  const { parseTranscriptMarkdownSegments } = require('../../src/renderer/history-detail-helpers');
+  const source = '**[00:01 - 00:02]**\n**Speaker 1:** Hello\n\n**[00:03 - 00:04]**\n**Dr. Lee:** Hi';
+  const segments = parseTranscriptMarkdownSegments(source, { 'Speaker 1': 'Alice' });
+  assert.deepEqual(segments.map(({ speaker, text }) => ({ speaker, text })), [{ speaker: 'Alice', text: 'Hello' }, { speaker: 'Dr. Lee', text: 'Hi' }]);
+});
+
+test('untimed canonical speaker paragraphs remain available alongside timed segments', () => {
+  const { parseTranscriptMarkdownSegments } = require('../../src/renderer/history-detail-helpers');
+  const segments = parseTranscriptMarkdownSegments('**[00:01 - 00:02]** **Speaker 1:** Timed\n\n**Speaker 2:** Untimed\ncontinues here\n\n**SPEAKER_03:** Another');
+  assert.deepEqual(segments, [
+    { start: '00:01', end: '00:02', speaker: 'Speaker 1', text: 'Timed' },
+    { start: null, end: null, speaker: 'Speaker 2', text: 'Untimed continues here' },
+    { start: null, end: null, speaker: 'SPEAKER_03', text: 'Another' },
+  ]);
+});
+
+
+test('transcript parsing preserves custom names and filters empty headings safely', () => {
+  const names = Object.assign(Object.create({ 'Speaker 1': 'Inherited' }), { 'SPEAKER_00': ' Alice* ' });
+  assert.deepEqual(parseTranscriptMarkdownSegments('[00:01 - 00:03] **Speaker 1:**\n**SPEAKER_00:** Hello\n[00:04 - 00:05] **Alice_Marie_Smith:** Hi\n[00:06 - 00:07] **constructor:** Yes\n**Speaker 2:**', names), [
+    { start: null, end: null, speaker: 'Alice', text: 'Hello' },
+    { start: '00:04', end: '00:05', speaker: 'Alice_Marie_Smith', text: 'Hi' },
+    { start: '00:06', end: '00:07', speaker: 'constructor', text: 'Yes' },
+  ]);
+  assert.equal(parseTranscriptMarkdownSegments('[00:01 - 00:02] **Speaker 1:** Hello', names)[0].speaker, 'Speaker 1');
+  assert.deepEqual(parseTranscriptMarkdownSegments('[00:01 - 00:02] Speech\n**Speaker 2:** More'), [
+    { start: '00:01', end: '00:02', speaker: '', text: 'Speech' },
+    { start: null, end: null, speaker: 'Speaker 2', text: 'More' },
+  ]);
+});

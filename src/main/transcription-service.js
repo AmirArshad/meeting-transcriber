@@ -2043,7 +2043,7 @@ function createTranscriptionService(deps) {
       });
       setActiveQueueMeeting(transcriptionQueueState, null);
       upsertQueueJob(transcriptionQueueState, { meetingId, status: QUEUE_JOB_STATUSES.ready,
-        phase: QUEUE_JOB_PHASES.completed });
+        phase: QUEUE_JOB_PHASES.completed, speakerCount: result.meeting?.ai?.diarization?.speakerCount || 0 });
       publishTranscriptionQueueState();
       return result;
     } catch (error) {
@@ -2060,7 +2060,7 @@ function createTranscriptionService(deps) {
       } else if (completed) {
         if (!isQuitCommitted()) {
           upsertQueueJob(transcriptionQueueState, { meetingId, status: QUEUE_JOB_STATUSES.ready,
-            phase: QUEUE_JOB_PHASES.completed });
+            phase: QUEUE_JOB_PHASES.completed, speakerCount: updatedMeeting?.ai?.diarization?.speakerCount || 0 });
         } else {
           removeQueueJob(transcriptionQueueState, meetingId);
         }
@@ -2657,6 +2657,7 @@ function createTranscriptionService(deps) {
         meetingId,
         status: QUEUE_JOB_STATUSES.ready,
         phase: QUEUE_JOB_PHASES.completed,
+        speakerCount: result.meeting?.ai?.diarization?.speakerCount || 0,
       });
       trimSessionReadyJobs(transcriptionQueueState);
       setActiveQueueMeeting(transcriptionQueueState, null);
@@ -2743,6 +2744,7 @@ function createTranscriptionService(deps) {
             meetingId,
             status: QUEUE_JOB_STATUSES.ready,
             phase: QUEUE_JOB_PHASES.completed,
+            speakerCount: updatedMeeting?.ai?.diarization?.speakerCount || 0,
           });
           publishTranscriptionQueueState();
           return {
@@ -2800,6 +2802,7 @@ function createTranscriptionService(deps) {
           meetingId,
           status: QUEUE_JOB_STATUSES.ready,
           phase: QUEUE_JOB_PHASES.completed,
+          speakerCount: updatedMeeting?.ai?.diarization?.speakerCount || 0,
         });
         publishTranscriptionQueueState();
         return {

@@ -5,6 +5,8 @@ const assert = require('node:assert/strict');
 
 const {
   getMeetingTranscriptionStatusMessage,
+  shouldPromptSpeakerNamesBeforeSummary,
+  haveSummarySpeakerNamesChanged,
   isMeetingTranscriptionRetryable,
   shouldAbortSummaryGenerationAfterPreflight,
 } = require('../../src/renderer/summary-ui-helpers');
@@ -49,4 +51,23 @@ test('shouldAbortSummaryGenerationAfterPreflight keeps a local cancel across sta
     activeMeetingId: 'meeting-1',
     cancelling: false,
   }), false);
+});
+
+
+test('speaker prompt uses canonical samples and existing overrides', () => {
+  const meeting = { ai: { diarization: { speakerNames: { 'Speaker 1': 'Alice' } } } };
+  assert.equal(shouldPromptSpeakerNamesBeforeSummary(meeting, [{ speaker: 'Speaker 1' }]), false);
+  assert.equal(shouldPromptSpeakerNamesBeforeSummary(meeting, [{ speaker: 'Speaker 1' }, { speaker: 'SPEAKER_02' }]), true);
+  assert.equal(shouldPromptSpeakerNamesBeforeSummary(meeting, [{ speaker: 'Unknown' }]), false);
+  assert.equal(shouldPromptSpeakerNamesBeforeSummary(meeting, [null, undefined, { speaker: 'Speaker 1' }]), false);
+  meeting.ai.diarization.speakerNames['Speaker 1'] = ' *--> ';
+  assert.equal(shouldPromptSpeakerNamesBeforeSummary(meeting, [{ speaker: 'Speaker 1' }]), true);
+});
+
+test('completed summary compares snapshot hash with current names', () => {
+  const meeting = { ai: { summary: { status: 'completed', speakerNamesHash: 'sha256:old' } } };
+  assert.equal(haveSummarySpeakerNamesChanged(meeting, 'sha256:old'), false);
+  assert.equal(haveSummarySpeakerNamesChanged(meeting, 'sha256:new'), true);
+  assert.equal(haveSummarySpeakerNamesChanged(meeting), false);
+  assert.equal(haveSummarySpeakerNamesChanged({ ai: { summary: { status: 'completed' } } }, ''), false);
 });

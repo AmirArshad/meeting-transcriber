@@ -10,6 +10,8 @@ Each recording record supports an optional canonical `tag` field (`VALID_RECORDI
 
 Schema-v1 caption timing sidecars store pre-merge fine-grained millisecond cues (and optional word timings) bound to the committed transcript via LF-normalized `sourceTranscriptHash` (`sha256`). Legacy meetings can read `{audioStem}.captions.json`. Transcription attempts prepare `{audioStem}.transcript-{attemptId}.captions.json` alongside their new Markdown and commit both paths in one atomic metadata write. The previous pair remains readable until that write succeeds. Successful commits clean up superseded files, and meeting deletion removes both referenced and legacy captions. Saved Markdown remains the human-readable source of truth. Stale sidecars are rejected so subtitle exporters never fabricate millisecond timings.
 
+Speaker names live in `ai.diarization.speakerNames`, keyed by `Speaker 1` through `Speaker 99` or a two-digit `SPEAKER_XX` ID. A patch merges individual names under the metadata lock. An empty sanitized value clears the name. The same lock checks the expected transcript hash and, when supplied, the committed attempt ID before saving the patch. Saving names preserves the Markdown and all sidecars. Successful re-transcription clears the overlay with the previous diarization metadata. Failed attempts retain it. Public meeting responses expose a derived `speakerNamesHash`. History Search and Chat use it to refresh indexed speaker labels while keeping the original citation timestamps and transcript hash.
+
 Public methods stay instance methods — the tests monkeypatch them as seams.
 
 ### Local audio import commit

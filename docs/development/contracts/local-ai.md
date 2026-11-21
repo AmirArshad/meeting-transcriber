@@ -47,6 +47,7 @@ Settings and user-facing copy refer to the local summary/Q&A add-on as **Summari
 - Transcription metadata records `transcriptionDevice` / `transcriptionComputeType` (`cpu`/`cuda`/`mps`). MLX may report `metal` in result JSON; `meeting_manager` normalizes that alias to `mps`. Guided transcription reports the Whisper runtime separately from `diarization.device` (Speakrs `cuda`/`coreml`, or pyannote `mps`/`cuda`).
 - Add-on caches live under `userData/ai-addons/models/...` so app updates preserve installed artifacts.
 - Stale summaries are detected through `sourceTranscriptHash`. Transcript attempt commit clears obsolete diarization metadata in the same atomic transaction; failed attempts retain prior speaker outputs. Newly persisted speaker sidecars carry `sourceTranscriptHash` for the committed Markdown. Summary loading uses speaker text only when that hash matches; unbound legacy or mismatched sidecars fall back to current Markdown.
+- Summary generation applies a snapshot of the recording's speaker names to the loaded utterances before prompting. Completed summaries record that snapshot's `speakerNamesHash`. A later name edit offers regeneration and preserves the saved summary and its transcript provenance.
 - Summary generation requires a retained, locally checked `transcriptLanguage`
   and matching `sourceTranscriptHash`; meeting language is only a UI hint.
   Successful confirmation prefills an editable dialog only for the unchanged

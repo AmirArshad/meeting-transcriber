@@ -56,9 +56,20 @@ it passes `--language`, `--source-transcript-hash`, `--model-id`, and optional
 `--tag` to the local runner. Successful `ai.summary` metadata may add
 `language`, `languageSource` (`userConfirmed`), `modelId`,
 `languagePolicyVersion`, `tag` (canonical slug or `null` for untagged recordings),
-and `templateVersion`.
+and `templateVersion`. Main passes the recording's speaker-name snapshot to
+the runner for attribution, and completed summary metadata stores
+`speakerNamesHash` alongside the transcript hash.
 Missing fields mean legacy/unconfirmed output. Channel names and preload export
 shape are unchanged.
+
+### Speaker labels
+
+`update-meeting` accepts a per-speaker `speakerNames` patch with
+`expectedSourceTranscriptHash` and optional `expectedTranscriptionAttemptId`.
+An empty attempt ID represents a recording with no committed attempt ID.
+Ready `transcription-queue-state` jobs include `speakerCount` when speaker
+identification found speakers. Transcript exports with a meeting ID apply the
+current speaker names to Markdown, text, and subtitle output.
 
 ### Transcript & subtitle export
 

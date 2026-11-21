@@ -5,6 +5,23 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 
 ## Status
 
+### v3.1 Phase 3 speaker labels · 2026-11-21
+
+Implemented on `feat/v3.1-phase3-speaker-labels` from `e5502d1`.
+History, Activity, and Prepare summary share speaker excerpts and timestamped
+voice previews. Metadata edits preserve the source transcript and its sidecars
+while updating search, Chat attribution, summaries, and exports.
+
+The integrated gate passed on macOS 26.7.3 arm64 with 1,285 JavaScript tests
+passed and 3 skipped, 959 Python tests passed and 10 skipped, and both syntax
+checks passed. An isolated Electron run used the two-speaker fixture and local
+Qwen to verify naming, clearing, preview, search, citation playback, summary
+attribution and rename detection, and Markdown, text, SRT, and WebVTT export.
+The Prepare summary dialog was checked at 320 and 1,200 CSS pixels, including
+missing audio and untimed speaker text. A same-content re-transcription commit
+cleared the overlay and rejected a prior-attempt edit. Windows and Linux
+interactive and packaged acceptance remain open.
+
 ### v3.1 Phase 2 review fixes · 2026-11-21
 
 All 12 review findings are addressed on `feat/v3.1-phase2-tags-templates`.

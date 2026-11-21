@@ -44,7 +44,9 @@
   }
 
   function sanitizeVttVoiceName(speaker) {
-    return String(speaker || '')
+    let clean = String(speaker || '');
+    while (clean.includes('-->')) clean = clean.replace(/-->/g, '');
+    return clean
       .replace(/[<>&\r\n]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
@@ -129,11 +131,36 @@
       const voice = sanitizeVttVoiceName(cue.speaker);
       return voice ? `<v ${voice}>${cue.text}` : cue.text;
     }
-    return `${cue.speaker}: ${cue.text}`;
+    const speaker = cue.speaker.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `${speaker}: ${cue.text}`;
   }
 
-  function serializeCuesToSrt(cues, { includeSpeakers = true } = {}) {
-    const normalized = normalizeSubtitleCues(cues);
+  function normalizeExportSpeakerName(value) {
+    if (typeof value !== 'string') return '';
+    let clean = value.replace(/[\p{C}\p{Zl}\p{Zp}*]/gu, '');
+    while (clean.includes('-->')) clean = clean.replace(/-->/g, '');
+    return Array.from(clean.trim()).slice(0, 64).join('').trim();
+  }
+
+  function applySpeakerNamesToCues(cues, names) {
+    return (Array.isArray(cues) ? cues : []).map((cue) => {
+      if (!cue || typeof cue !== 'object') return cue;
+      const name = names && Object.hasOwn(names, cue.speaker) && names[cue.speaker];
+      const safeName = normalizeExportSpeakerName(name);
+      return safeName ? { ...cue, speaker: safeName } : cue;
+    });
+  }
+
+  function applySpeakerNamesToMarkdown(markdown, names) {
+    return String(markdown || '').replace(/^(\s*(?:(?:\*\*)?\[\d{1,2}:\d{2}(?::\d{2})?\s+-\s+\d{1,2}:\d{2}(?::\d{2})?\](?:\*\*)?\s*)?)\*\*((?:Speaker (?:[1-9]|[1-9]\d)|SPEAKER_\d{2})):\*\*/gm, (match, prefix, speaker) => {
+      const name = names && Object.hasOwn(names, speaker) && names[speaker];
+      const safeName = normalizeExportSpeakerName(name);
+      return safeName ? `${prefix}**${safeName.replace(/([\\`_{}\[\]<>!#~|])/g, '\\$1')}:**` : match;
+    });
+  }
+
+  function serializeCuesToSrt(cues, { includeSpeakers = true, speakerNames = {} } = {}) {
+    const normalized = normalizeSubtitleCues(applySpeakerNamesToCues(cues, speakerNames));
     if (normalized.length === 0) {
       return '';
     }
@@ -147,8 +174,8 @@
     return `${blocks.join('\n\n')}\n`;
   }
 
-  function serializeCuesToVtt(cues, { includeSpeakers = true, useVoiceTags = false } = {}) {
-    const normalized = normalizeSubtitleCues(cues);
+  function serializeCuesToVtt(cues, { includeSpeakers = true, useVoiceTags = false, speakerNames = {} } = {}) {
+    const normalized = normalizeSubtitleCues(applySpeakerNamesToCues(cues, speakerNames));
     if (normalized.length === 0) {
       return 'WEBVTT\n';
     }
@@ -166,7 +193,8 @@
     const lines = String(markdown || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
     const output = [];
 
-    for (const rawLine of lines) {
+    for (const sourceLine of lines) {
+      const rawLine = sourceLine.replace(/^(\s*(?:(?:\*\*)?\[[^\n]+?\](?:\*\*)?\s*)?\*\*)([^*\n]+)(:\*\*)/, (match, prefix, label, suffix) => `${prefix}${label.replace(/\\([\\`_{}\[\]<>!#~|])/g, '$1')}${suffix}`);
       const trimmed = rawLine.trim();
       if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
         continue;
@@ -176,7 +204,7 @@
         output.push(headingMatch[1].trim());
         continue;
       }
-      const tsMatch = /^\*\*\[(\d{1,2}:\d{2}(?::\d{2})?\s+-\s+\d{1,2}:\d{2}(?::\d{2})?)\]\*\*\s*(.*)$/.exec(trimmed);
+      const tsMatch = /^(?:\*\*)?\[(\d{1,2}:\d{2}(?::\d{2})?\s+-\s+\d{1,2}:\d{2}(?::\d{2})?)\](?:\*\*)?\s*(.*)$/.exec(trimmed);
       if (tsMatch) {
         const range = `[${tsMatch[1]}]`;
         const rest = tsMatch[2].replace(/\*\*([^*]+)\*\*/g, '$1').trim();
@@ -380,6 +408,7 @@
     VALID_CAPTION_ENGINES: Array.from(VALID_CAPTION_ENGINES),
     VALID_EXPORT_FORMATS,
     VALID_TIMING_PRECISIONS: Array.from(VALID_TIMING_PRECISIONS),
+    applySpeakerNamesToMarkdown,
     buildExportFormatOptions,
     convertTranscriptMarkdownToPlainText,
     formatSrtTimestamp,
