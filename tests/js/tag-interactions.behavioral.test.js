@@ -66,6 +66,8 @@ function makeElement() {
     appendChild(child) { this.children.push(child); },
     append(...children) { this.children.push(...children); },
     setAttribute() {},
+    contains(child) { return this.children.includes(child); },
+    focus() {},
   };
 }
 
@@ -85,7 +87,7 @@ test('History tag chips including All immediately refresh a pending search', () 
     clearTimeout: (id) => cleared.push(id),
     runHistorySearch: (query) => searches.push([query, context.activeHistoryTagFilter]),
   };
-  loadRendererFunctions(context, [['function renderHistoryTagFilterBar()', '\nfunction updateSummaryTagMismatchBanner(']]);
+  loadRendererFunctions(context, [['function renderHistoryTagFilterBar(', '\nfunction updateSummaryTagMismatchBanner(']]);
   context.renderHistoryTagFilterBar();
   bar.children[0].fire('click');
   context.meetingSearchDebounceTimer = 8;
@@ -120,7 +122,7 @@ test('unsaved scope dates survive tag pills and the tag list toggle', () => {
     clearElement: (element) => { element.children.length = 0; },
   };
   loadRendererFunctions(context, [
-    ['function renderScopePopover()', '\nfunction toggleChatScopePopover('],
+    ['function renderScopePopover(', '\nfunction toggleChatScopePopover('],
     ['function setupChatWorkspace()', '\nsetupChatWorkspace();'],
   ]);
   context.setupChatWorkspace();

@@ -239,7 +239,9 @@ function createAiAddonIpc(deps) {
       platform: process.platform,
       arch: process.arch,
       emitProgress: emitAiAddonProgress,
-      cudaStatus: typeof getCachedCudaStatus === 'function' ? getCachedCudaStatus() : null,
+      cudaStatus: typeof getCachedCudaStatus === 'function'
+        ? (getCachedCudaStatus() ?? getCachedCudaStatus({ allowStale: true }))
+        : null,
       ...extra,
     };
 
@@ -874,7 +876,7 @@ function createAiAddonIpc(deps) {
         fsModule: fs,
       });
 
-      return enqueueAiAddonAction(() => {
+      return enqueueAiAddonAction(async () => {
         assertRemovalCanRun('summary');
         validateSummaryModelRemovalRequest({
           userDataDir: app.getPath('userData'),
@@ -882,10 +884,12 @@ function createAiAddonIpc(deps) {
           replacementModelId: options.replacementModelId,
           fsModule: fs,
         });
-        return enqueueGpuExclusiveRemovalAction(async () => {
+        const deviceMemory = await getSummaryDeviceMemory({ live: false });
+        return enqueueGpuExclusiveRemovalAction(() => {
           return removeSummaryModel(getAiAddonRuntimeOptions({
             modelId: options.modelId,
             replacementModelId: options.replacementModelId,
+            deviceMemory,
           }));
         });
       });
@@ -896,16 +900,18 @@ function createAiAddonIpc(deps) {
       return enqueueAiAddonAction(async () => {
         if (isQuitCommitted()) throw new Error('Cannot change the local model while AvaNevis is quitting.');
         if (!getModelById('summary', options.modelId)) throw new Error('Unknown summary model.');
+        const deviceMemory = await getSummaryDeviceMemory({ live: true });
         const status = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
           summaryModelId: options.modelId,
-          deviceMemory: await getSummaryDeviceMemory({ live: true }),
+          deviceMemory,
         }));
         const model = status.features.summary;
         if (model.modelId !== options.modelId || !model.setupComplete || model.fit?.blocked) {
           throw new Error(model.fit?.reason || model.error || 'Check setup for this model before setting it as the default.');
         }
         if (isQuitCommitted()) throw new Error('Cannot change the local model while AvaNevis is quitting.');
-        return setDefaultSummaryModel(getAiAddonRuntimeOptions({ modelId: options.modelId, fsModule: fs }));
+        setDefaultSummaryModel(getAiAddonRuntimeOptions({ modelId: options.modelId, fsModule: fs }));
+        return checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ deviceMemory }));
       });
     });
   }

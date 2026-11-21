@@ -96,6 +96,7 @@ const prepareSummaryDialogGlobals = {
   AbortController,
   meetingIdsEqual,
   stopSpeakerPreview: null,
+  historySpeakers: null,
 };
 
 function createDialogHarness() {

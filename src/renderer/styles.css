@@ -4742,11 +4742,15 @@ footer {
   border: 0;
 }
 
-.prepare-summary-section legend,
-.prepare-summary-section > label {
+#summary-language-modal .prepare-summary-section legend,
+#summary-language-modal .ai-addon-field > label,
+#summary-language-modal .summary-model-field-header > label {
+  font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
+  letter-spacing: normal;
+  text-transform: none;
 }
 
 .prepare-summary-section legend span,
@@ -6364,19 +6368,6 @@ button.history-transcript-timestamp:focus-visible {
   margin-top: 4px;
 }
 
-.chat-source-tag-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 7px;
-  border-radius: var(--r-pill);
-  border: 1px solid var(--hairline);
-  background: var(--surface-2);
-  color: var(--text-secondary);
-  font-size: 10.5px;
-  font-weight: 500;
-  text-transform: capitalize;
-}
-
 .chat-turn-assistant.is-streaming {
   border-bottom: 0;
 }
@@ -6588,6 +6579,8 @@ button.history-transcript-timestamp:focus-visible {
   left: 0;
   bottom: calc(100% + 10px);
   width: min(360px, 100%);
+  max-height: min(460px, calc(100vh - 220px));
+  overflow-y: auto;
   padding: 12px;
   border-radius: var(--r-md);
   background: var(--surface-2);
@@ -7147,7 +7140,6 @@ button.history-transcript-timestamp:focus-visible {
   display: inline-flex;
   align-items: center;
   padding: 1px 6px;
-  margin-right: 6px;
   border-radius: var(--r-pill);
   border: 1px solid var(--tag-border, var(--hairline));
   background: var(--tag-bg, var(--surface-2));

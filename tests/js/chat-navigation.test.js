@@ -189,7 +189,7 @@ test('renderChatOnboardingAndComposer does not flash onboarding while resetting 
   const onboarding = { hidden: true };
   const sendBtn = { textContent: '', disabled: false, classList: { add() {}, remove() {} } };
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
-  const fnSource = source.slice(source.indexOf('function renderChatOnboardingAndComposer('), source.indexOf('function renderChatThreadSidebar('));
+  const fnSource = source.slice(source.indexOf('function isChatModelEligible('), source.indexOf('function renderChatThreadSidebar('));
   const ctx = vm.createContext({
     document: { getElementById: (id) => (id === 'chat-onboarding-card' ? onboarding : id === 'chat-send-btn' ? sendBtn : null) },
     chatState: {

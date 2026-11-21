@@ -29,6 +29,9 @@ function createHarness({
   meetingTag = null,
   speakerNames = null,
   checkAiAddonSetupStatus,
+  getAiAddonRuntimeOptions = (options) => options,
+  resolveCudaStatusForTranscription,
+  getSummaryDeviceMemory,
   platform = 'win32',
   arch = platform === 'darwin' ? 'arm64' : 'x64',
   enqueueAiComputeAction = (action) => action(),
@@ -119,7 +122,10 @@ function createHarness({
     getBackendModuleArgs: (moduleName, extraArgs = []) => ['-m', moduleName, ...extraArgs],
     enqueueAiComputeAction,
     createAiAddonCancelError: createAiAddonCancelErrorStandalone,
-    getAiAddonRuntimeOptions: () => ({}),
+    getAiAddonRuntimeOptions,
+    resolveCudaStatusForTranscription,
+    getSummaryDeviceMemory,
+    buildSummaryRuntimeEnv: () => ({ LD_LIBRARY_PATH: '/managed/cuda' }),
     buildSummaryArgs: (options) => [
       '-m', 'summaries.summary_runner',
       '--output-json', options.outputJson,
@@ -203,6 +209,43 @@ test('Linux summary generation fails closed when the live CUDA resolver is unava
     harness.handlers['generate-summary']({ sender: {} }, confirmedOptions),
     /live CUDA runtime resolver/,
   );
+});
+
+test('Linux summary admission uses the live CUDA result when the cache is cold', async (t) => {
+  const readyCuda = {
+    statusCode: 'ready', installed: true, deviceAvailable: true, runtimeLoadable: true,
+    missingLibraries: [], matchedProfile: 'cuda12',
+  };
+  const deviceMemory = { totalBytes: 16 * 1024 ** 3 };
+  const checks = [];
+  const harness = createHarness({
+    platform: 'linux',
+    getAiAddonRuntimeOptions: (options) => ({ cudaStatus: null, ...options }),
+    resolveCudaStatusForTranscription: async () => {
+      checks.push('probe');
+      return readyCuda;
+    },
+    getSummaryDeviceMemory: async ({ live }) => {
+      assert.equal(live, true);
+      return deviceMemory;
+    },
+    checkAiAddonSetupStatus: async (options) => {
+      const ready = options.cudaStatus === readyCuda;
+      checks.push(ready ? 'ready' : 'cold');
+      if (ready) assert.equal(options.deviceMemory, deviceMemory);
+      return { features: { summary: {
+        status: ready ? 'ready' : 'unsupported', setupComplete: ready,
+        modelId: 'qwen3.5-9b-q4-k-m', cache: { valid: true }, runtimeCache: { valid: true },
+        fit: { blocked: !ready, reason: 'Runtime setup needed' },
+      } } };
+    },
+  });
+  const userData = path.dirname(harness.recordingsDir);
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(userData, 'ai-addons', 'cuda', 'python'), { recursive: true });
+  await harness.handlers['generate-summary']({ sender: {} }, confirmedOptions);
+  assert.deepEqual(checks, ['cold', 'probe', 'ready']);
+  assert.ok(harness.getSpawnedArgs().some((args) => args.includes('summaries.summary_runner')));
 });
 
 test('failed summary regeneration preserves the previously committed sidecars', async () => {

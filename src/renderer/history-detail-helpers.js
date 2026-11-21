@@ -9,7 +9,7 @@
   const HISTORY_DETAIL_TABS = new Set(['transcript', 'summary']);
   const TRANSCRIPT_TIMESTAMP_LINE_RE = /^(?:\*\*)?\[(\d{1,2}:\d{2}(?::\d{2})?)\s+-\s+(\d{1,2}:\d{2}(?::\d{2})?)\](?:\*\*)?\s*(.*)$/;
   const SPEAKER_PREFIX_RE = /^(Speaker\s+\d+|SPEAKER_\d{2}|Unknown):\s*(.*)$/i;
-  const UNTIMED_SPEAKER_RE = /^\*\*((?:Speaker (?:[1-9]|[1-9]\d)|SPEAKER_\d{2})):\*\*\s*(.*)$/;
+  const UNTIMED_SPEAKER_RE = /^\*\*([^*\n:]{1,64}):\*\*\s*(.*)$/;
 
   function normalizeHistoryDetailTab(tab) {
     const normalized = String(tab || '').trim();
@@ -69,6 +69,7 @@
   function parseTranscriptMarkdownSegments(markdown, speakerNames = {}) {
     const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
     const segments = [];
+    let hasStructuredSegments = false;
     const mappedSpeaker = (speaker) => {
       if (!isCanonicalSpeakerKey(speaker) || !speakerNames || !Object.hasOwn(speakerNames, speaker)) return speaker;
       const name = speakerNames[speaker];
@@ -78,21 +79,24 @@
     for (let index = 0; index < lines.length; index++) {
       const timestampMatch = TRANSCRIPT_TIMESTAMP_LINE_RE.exec(lines[index].trim());
       if (!timestampMatch) {
-        const untimed = UNTIMED_SPEAKER_RE.exec(lines[index].trim());
-        if (!untimed) continue;
-        const textParts = [cleanMarkdownText(untimed[2])];
+        const line = lines[index].trim();
+        if (!line || isMarkdownBoundaryLine(line)) continue;
+        const untimed = UNTIMED_SPEAKER_RE.exec(line);
+        if (untimed) hasStructuredSegments = true;
+        const textParts = [cleanMarkdownText(untimed ? untimed[2] : line)];
         let cursor = index + 1;
         while (cursor < lines.length && lines[cursor].trim() && !isMarkdownBoundaryLine(lines[cursor])
           && !UNTIMED_SPEAKER_RE.test(lines[cursor].trim())) {
           textParts.push(cleanMarkdownText(lines[cursor]));
           cursor += 1;
         }
-        const speaker = untimed[1];
+        const speaker = untimed ? normalizeSpeakerLabel(untimed[1]) : '';
         segments.push({ start: null, end: null, speaker: mappedSpeaker(speaker), text: textParts.filter(Boolean).join(' ') });
         index = cursor - 1;
         continue;
       }
 
+      hasStructuredSegments = true;
       const [, start, end, tail] = timestampMatch;
       const textParts = [];
       let speaker = '';
@@ -137,7 +141,7 @@
       index = cursor - 1;
     }
 
-    return segments.filter((segment) => segment.text);
+    return hasStructuredSegments ? segments.filter((segment) => segment.text) : [];
   }
 
   function featureValidationMessage(feature) {

@@ -148,6 +148,151 @@ function installLoadingStyle() {
   };
 }
 
+async function exerciseSpeakerSave() {
+  const meeting = {
+    id: 'meeting-1', title: 'Calibration', date: '2026-11-20', duration: '0:04',
+    transcript: '[00:00 - 00:02] **Speaker 1:** Approved calibration.\n[00:02 - 00:04] **Speaker 2:** Next steps.',
+    language: 'en', transcriptionStatus: 'completed',
+    ai: { diarization: { status: 'completed', speakerNames: {} } },
+  };
+  const next = { ...meeting, id: 'meeting-2', title: 'Next recording', transcript: '' };
+  const model = {
+    modelId: 'available', modelName: 'Available', installed: true, setupComplete: true, status: 'ready',
+    languagePolicy: { languages: ['en'], names: { en: 'English' } },
+  };
+  const library = { defaultModelId: model.modelId, models: [model] };
+  meetings = [meeting, next];
+  currentMeetingId = meeting.id;
+  summaryGenerationMeetingId = null;
+  summaryGenerationCancelling = false;
+  let saveStarted;
+  let releaseSave;
+  let reads = [];
+  const prepareSave = () => {
+    const started = new Promise((resolve) => { saveStarted = resolve; });
+    const saving = new Promise((resolve) => { releaseSave = resolve; });
+    window.electronAPI.updateMeeting = async (_id, updates) => {
+      saveStarted();
+      await saving;
+      Object.assign(meeting.ai.diarization.speakerNames, updates.speakerNames);
+      return meeting;
+    };
+    return started;
+  };
+  window.electronAPI = {
+    getAiAddonStatus: async () => ({ features: { summary: model }, summaryLibrary: library }),
+    getMeeting: async (id) => {
+      reads.push(id);
+      return id === meeting.id ? meeting : next;
+    },
+  };
+  renderHistorySpeakers(meeting, parseTranscriptMarkdownSegments(meeting.transcript));
+  const nameField = document.getElementById('history-speaker-name-Speaker-1');
+  const started = prepareSave();
+  nameField.focus();
+  nameField.value = 'Maya Chen';
+  nameField.blur();
+  await started;
+  const generating = generateSummaryForMeeting(meeting.id);
+  await settle();
+  const readBeforeSummarySave = reads.length;
+  releaseSave();
+
+  const modal = document.getElementById('summary-language-modal');
+  const deadline = performance.now() + 2000;
+  while (modal.classList.contains('hidden')) {
+    if (performance.now() > deadline) throw new Error('Prepare summary did not open');
+    await settle();
+  }
+  const preparedName = document.getElementById('summary-speaker-name-Speaker-1').value;
+  const labelStyle = (selector) => {
+    const style = getComputedStyle(modal.querySelector(selector));
+    return [style.fontFamily, style.fontSize, style.fontWeight, style.color, style.letterSpacing, style.textTransform];
+  };
+  const sectionStyles = [
+    '#summary-model-field label', 'label[for="summary-transcript-language"]',
+    '#summary-speaker-fieldset legend', '#summary-recording-type > label',
+  ].map(labelStyle);
+  document.getElementById('summary-language-cancel').click();
+  await generating;
+
+  reads = [];
+  const nextSave = prepareSave();
+  const refreshedField = document.getElementById('history-speaker-name-Speaker-1');
+  refreshedField.focus();
+  refreshedField.value = 'Maya Patel';
+  refreshedField.blur();
+  await nextSave;
+  const switching = selectMeeting(next.id);
+  await settle();
+  const selectionBeforeSave = currentMeetingId;
+  const readBeforeSwitchSave = reads.length;
+  releaseSave();
+  await switching;
+  return { readBeforeSummarySave, preparedName, sectionStyles, selectionBeforeSave, readBeforeSwitchSave, selected: currentMeetingId, reads };
+}
+
+function exerciseChatAndTagControls() {
+  meetings = Array.from({ length: 24 }, (_, i) => ({ id: String(i), title: `Recording ${i}`, tag: 'meeting' }));
+  renderHistoryTagFilterBar();
+  const historyTag = () => document.querySelector('#history-tag-filter-bar [data-tag="meeting"]');
+  if (!historyTag()) throw new Error('History tag was not rendered');
+  historyTag().focus();
+  historyTag().click();
+  const historyFocusRestored = historyTag() === document.activeElement && historyTag().getAttribute('aria-pressed') === 'true';
+
+  document.getElementById('history-tab').classList.remove('active');
+  document.getElementById('chat-tab').classList.add('active');
+  const scopeBtn = document.getElementById('chat-scope-btn');
+  scopeBtn.click();
+  document.getElementById('chat-scope-selected-btn').click();
+  document.getElementById('chat-scope-tags-toggle-btn').click();
+  const scopeTag = () => document.querySelector('#chat-scope-tags-row [data-tag="meeting"]');
+  if (!scopeTag()) throw new Error(`Scope tag was not rendered. Popover open: ${chatState.popoverOpen}`);
+  scopeTag().focus();
+  scopeTag().click();
+  const scopeFocusRestored = scopeTag() === document.activeElement && scopeTag().getAttribute('aria-pressed') === 'true';
+  const popover = document.getElementById('chat-scope-popover');
+  const popoverStyle = getComputedStyle(popover);
+  const overflow = {
+    maxHeight: popoverStyle.maxHeight,
+    overflowY: popoverStyle.overflowY,
+    topClipped: Boolean(clippedBy(popover)),
+  };
+  scopeTag().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  const escapeClosesScope = popover.hidden && scopeBtn === document.activeElement && scopeBtn.getAttribute('aria-expanded') === 'false';
+
+  const ready = { modelId: 'ready', modelName: 'Ready', installed: true, setupComplete: true, status: 'ready' };
+  const unavailable = { modelId: 'unavailable', modelName: 'Unavailable', installed: true, status: 'error' };
+  const library = { defaultModelId: ready.modelId, models: [ready, unavailable] };
+  aiAddonStatusSnapshot = { summaryLibrary: library };
+  chatState.eligibility = { eligible: true };
+  chatState.pendingModelId = unavailable.modelId;
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+  const checkEligibility = () => ({
+    sendDisabled: document.getElementById('chat-send-btn').disabled,
+    starterDisabled: [...document.querySelectorAll('.chat-starter-btn')].map((btn) => btn.disabled),
+  });
+  const unavailableControls = checkEligibility();
+  chatState.pendingModelId = ready.modelId;
+  renderChatOnboardingAndComposer();
+  const availableControls = checkEligibility();
+
+  const recoveryCards = [null, 'missing', 'unavailable'].map((modelId) => {
+    chatState.modelState = { status: 'release_error', modelId };
+    renderSummaryModelLibrary(library);
+    const button = [...document.querySelectorAll('#summary-model-library button')].find((el) => el.textContent === 'Free memory');
+    return button?.closest('[data-model-id]')?.dataset.modelId || null;
+  });
+  const chip = document.createElement('span');
+  chip.className = 'chat-source-tag-chip';
+  document.getElementById('chat-messages').appendChild(chip);
+  const chipStyle = getComputedStyle(chip);
+  const sourceChip = { marginRight: chipStyle.marginRight, textTransform: chipStyle.textTransform };
+  return { historyFocusRestored, scopeFocusRestored, escapeClosesScope, overflow, unavailableControls, availableControls, recoveryCards, sourceChip };
+}
+
 function settle() {
   return new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve({
@@ -167,10 +312,14 @@ app.whenReady().then(async () => {
     webPreferences: {
       backgroundThrottling: false,
       contextIsolation: false,
+      preload: path.join(__dirname, 'history-detail-renderer-preload.js'),
     },
   });
   const result = { error: null };
   try {
+    win.webContents.on('console-message', (details) => {
+      if (details.level === 'error') process.stderr.write(`Renderer error: ${details.message}\n`);
+    });
     await win.loadFile(indexHtml);
     win.showInactive();
     const dbg = win.webContents.debugger;
@@ -193,6 +342,9 @@ app.whenReady().then(async () => {
       window.__cancellingStyle = ${cancellingStyle.toString()};
       window.__installLoadingStyle = ${installLoadingStyle.toString()};
       window.__settle = ${settle.toString()};
+      ${settle.toString()}
+      window.__exerciseSpeakerSave = ${exerciseSpeakerSave.toString()};
+      window.__exerciseChatAndTagControls = ${exerciseChatAndTagControls.toString()};
       undefined;
     `, true);
     await win.webContents.executeJavaScript('window.__showHistoryMeeting()', true);
@@ -246,6 +398,17 @@ app.whenReady().then(async () => {
     await setViewport(800, 900);
     result.tallViewport = await win.webContents.executeJavaScript('window.__settle()', true);
     result.tall = await win.webContents.executeJavaScript(`window.__measureHistory(${buttonIds})`, true);
+    const exercise = async (name) => {
+      const result = await win.webContents.executeJavaScript(`
+        Promise.resolve().then(() => window[${JSON.stringify(name)}]()).catch((error) => ({ error: error.stack }))
+      `, true);
+      if (result.error) throw new Error(result.error);
+      return result;
+    };
+    result.speakerSave = await exercise('__exerciseSpeakerSave');
+    await setViewport(1050, 800);
+    await win.webContents.executeJavaScript('window.__settle()', true);
+    result.chatAndTags = await exercise('__exerciseChatAndTagControls');
   } catch (error) {
     result.error = error && error.stack ? error.stack : String(error);
   }

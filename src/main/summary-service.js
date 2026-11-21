@@ -431,30 +431,7 @@ function createSummaryService(deps) {
         },
         action: async (registerProcess) => {
         if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
-        const deviceMemory = await getSummaryDeviceMemory({ live: true });
-        if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
-        const admittedStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
-          verifySelectedSummaryOnly: true,
-          verifyChecksums: true, verifyChecksumsIfChanged: true, summaryModelId: selectedModelId, deviceMemory,
-        }));
-        if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
-        const admittedFit = admittedStatus.features.summary.fit || admittedStatus.summaryLibrary?.models?.find((item) => item.modelId === selectedModelId)?.fit;
-        if (admittedFit?.blocked === true) {
-          throw new Error(admittedFit.reason || 'This model cannot run safely on this device.');
-        }
-        if (getSummaryLanguagePolicy(selectedModelId, platform, arch).version !== languagePolicy.version
-          || !getSummaryLanguagePolicy(selectedModelId, platform, arch).languages.includes(transcriptLanguage)
-          || JSON.stringify(admittedStatus.features.summary.runtimeCache?.runtimeArtifact) !== JSON.stringify(aiStatus.features.summary.runtimeCache?.runtimeArtifact)
-          || admittedStatus.features.summary.runtimeCache?.runtimeDir !== aiStatus.features.summary.runtimeCache?.runtimeDir
-          || admittedStatus.features.summary.modelId !== selectedModelId
-          || admittedStatus.features.summary.artifactId !== aiStatus.features.summary.artifactId
-          || (platform !== 'linux' && (admittedStatus.features.summary.status !== 'ready'
-            || !admittedStatus.features.summary.setupComplete))
-          || (platform === 'linux' && (admittedStatus.features.summary.cache?.valid !== true
-            || admittedStatus.features.summary.runtimeCache?.valid !== true))) {
-          throw new Error('Summary installation changed while queued. Check Settings and retry.');
-        }
-        let summaryEnv = buildClearedHuggingFaceTokenEnv(buildHuggingFaceOfflineEnv());
+        let cudaStatus;
         if (platform === 'linux') {
           if (typeof resolveCudaStatusForTranscription !== 'function') {
             throw new Error('Linux local summaries require the live CUDA runtime resolver.');
@@ -480,7 +457,7 @@ function createSummaryService(deps) {
           if (controller.signal.aborted) {
             throw createAiAddonCancelError('Summary generation was canceled because the app is quitting.');
           }
-          const cudaStatus = await resolveCudaStatusForTranscription({
+          cudaStatus = await resolveCudaStatusForTranscription({
             registerProcess: registerSummaryProcess,
           });
           if (controller.signal.aborted) {
@@ -489,6 +466,33 @@ function createSummaryService(deps) {
           if (!isLinuxCudaStatusReadyForAdmission(cudaStatus)) {
             throw new Error('Linux local summaries require an admitted managed CUDA 12 runtime and NVIDIA GPU.');
           }
+        }
+        const deviceMemory = await getSummaryDeviceMemory({ live: true });
+        if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
+        const admittedStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+          verifySelectedSummaryOnly: true,
+          verifyChecksums: true, verifyChecksumsIfChanged: true, summaryModelId: selectedModelId, deviceMemory,
+          ...(cudaStatus !== undefined ? { cudaStatus } : {}),
+        }));
+        if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
+        const admittedFit = admittedStatus.features.summary.fit || admittedStatus.summaryLibrary?.models?.find((item) => item.modelId === selectedModelId)?.fit;
+        if (admittedFit?.blocked === true) {
+          throw new Error(admittedFit.reason || 'This model cannot run safely on this device.');
+        }
+        if (getSummaryLanguagePolicy(selectedModelId, platform, arch).version !== languagePolicy.version
+          || !getSummaryLanguagePolicy(selectedModelId, platform, arch).languages.includes(transcriptLanguage)
+          || JSON.stringify(admittedStatus.features.summary.runtimeCache?.runtimeArtifact) !== JSON.stringify(aiStatus.features.summary.runtimeCache?.runtimeArtifact)
+          || admittedStatus.features.summary.runtimeCache?.runtimeDir !== aiStatus.features.summary.runtimeCache?.runtimeDir
+          || admittedStatus.features.summary.modelId !== selectedModelId
+          || admittedStatus.features.summary.artifactId !== aiStatus.features.summary.artifactId
+          || (platform !== 'linux' && (admittedStatus.features.summary.status !== 'ready'
+            || !admittedStatus.features.summary.setupComplete))
+          || (platform === 'linux' && (admittedStatus.features.summary.cache?.valid !== true
+            || admittedStatus.features.summary.runtimeCache?.valid !== true))) {
+          throw new Error('Summary installation changed while queued. Check Settings and retry.');
+        }
+        let summaryEnv = buildClearedHuggingFaceTokenEnv(buildHuggingFaceOfflineEnv());
+        if (platform === 'linux') {
           summaryEnv = {
             ...summaryEnv,
             ...buildSummaryRuntimeEnv({

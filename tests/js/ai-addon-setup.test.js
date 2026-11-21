@@ -3654,7 +3654,9 @@ test('summary removal keeps a retry record until shared runtime deletion succeed
     if (!failed && target.includes(path.join('runtimes', 'llama-cpp'))) { failed = true; throw new Error('in use'); }
     return originalRm(target, options);
   };
-  const first = await removeSummaryModel({ userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog });
+  const options = { userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog };
+  await assert.rejects(removeSummaryModel(options), /Could not remove .*Retry removal/);
+  const first = await checkAiAddonSetupStatus(options);
   assert.match(first.summaryLibrary.models.find((model) => model.modelId === 'summary-model').error, /retry removal/i);
   const second = await removeSummaryModel({ userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog });
   assert.equal(second.summaryLibrary.defaultModelId, null);
@@ -3675,11 +3677,31 @@ test('interrupted default removal remembers the replacement and counts residual 
   const originalRm = fsModule.rmSync.bind(fsModule);
   let failed = false;
   fsModule.rmSync = (target, options) => { if (!failed && target.includes(path.join('models', 'summary'))) { failed = true; throw new Error('busy'); } return originalRm(target, options); };
-  const first = await removeSummaryModel({ userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', replacementModelId: 'other-2', fsModule, catalog });
+  const options = { userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog };
+  await assert.rejects(removeSummaryModel({ ...options, replacementModelId: 'other-2' }), /Could not remove .*Retry removal/);
+  const first = await checkAiAddonSetupStatus(options);
+  assert.equal(first.summaryLibrary.defaultModelId, 'other-2');
   assert.equal(first.summaryLibrary.models.find((item) => item.modelId === 'summary-model').removalPending, true);
   assert.equal(first.summaryLibrary.sharedRuntimeBytes, 5);
   const second = await removeSummaryModel({ userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog });
   assert.equal(second.summaryLibrary.defaultModelId, 'other-2');
+});
+
+test('summary removal returns status using supplied Linux CUDA and device memory', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const status = await removeSummaryModel({
+    userDataDir, fsModule, platform: 'linux', arch: 'x64', modelId: 'qwen3.5-4b-q4-k-m',
+    cudaStatus: {
+      statusCode: 'ready', installed: true, deviceAvailable: true, runtimeLoadable: true,
+      missingLibraries: [], matchedProfile: 'cuda12',
+    },
+    deviceMemory: { totalBytes: 16 * 1024 ** 3, availableBytes: 1024 },
+  });
+  const fit = status.summaryLibrary.models.find((model) => model.modelId === 'qwen3.5-9b-q4-k-m').fit;
+  assert.equal(fit.status, 'needs_more_memory');
+  assert.equal(fit.availableMemoryBytes, 1024);
+  assert.equal(status.features.summary.availability.supported, true);
 });
 
 test('runtime peak space uses pinned expanded size with a legacy fallback', () => {

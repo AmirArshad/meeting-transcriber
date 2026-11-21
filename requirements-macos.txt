@@ -15,5 +15,5 @@ filelock>=4.2.12               # Prevent race conditions during model downloads
 # This provides 2-3x realtime performance on Apple Silicon (M1/M2/M3/M4)
 # macOS builds target Apple Silicon only - Intel Macs are not supported
 
-# Patched CA bundle for explicit model/add-on HTTPS downloads (October 2026).
-certifi>=2026.10.23
+# Patched CA bundle for explicit model/add-on HTTPS downloads (November 2026).
+certifi>=2026.11.20

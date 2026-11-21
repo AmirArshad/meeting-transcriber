@@ -1096,10 +1096,11 @@ function validateSummaryModelRemovalRequest({
     throw new Error('Unknown summary model.');
   }
   const pending = manifest.summaryLibrary.models[selectedModelId];
-  const resolvedReplacementId = replacementModelId || pending?.replacementModelId || undefined;
   const alternatives = Object.entries(manifest.summaryLibrary.models)
     .filter(([id, entry]) => id !== selectedModelId && entry.status === 'ready')
     .map(([id]) => id);
+  const savedReplacementId = pending?.replacementModelId;
+  const resolvedReplacementId = replacementModelId || (alternatives.includes(savedReplacementId) ? savedReplacementId : undefined);
   if (manifest.summaryLibrary.defaultModelId === selectedModelId && alternatives.length > 1 && !resolvedReplacementId) {
     throw new Error('Choose a replacement default before removing this model.');
   }
@@ -1117,7 +1118,7 @@ function validateSummaryModelRemovalRequest({
 async function removeSummaryModel({
   userDataDir, platform = process.platform, arch = process.arch, modelId,
   replacementModelId, safeStorage, fsModule = fs, catalog = AI_MODEL_CATALOG,
-  now = () => new Date().toISOString(), emitProgress,
+  now = () => new Date().toISOString(), emitProgress, cudaStatus = null, deviceMemory,
   runExclusiveMutation = async (operation) => operation(),
 } = {}) {
   const validated = validateSummaryModelRemovalRequest({
@@ -1135,6 +1136,13 @@ async function removeSummaryModel({
   entry.removalPending = true;
   entry.replacementModelId = resolvedReplacementId || alternatives[0] || null;
   manifest.summaryLibrary.models[selectedModelId] = entry;
+  if (manifest.summaryLibrary.defaultModelId === selectedModelId) {
+    manifest.summaryLibrary.defaultModelId = entry.replacementModelId;
+    manifest.features.summary = manifest.summaryLibrary.models[entry.replacementModelId] || {
+      status: 'notConfigured', modelId: selectedModelId, artifactId: null,
+      lastValidation: createValidation('notConfigured', 'No default summary model is installed.', now), error: null,
+    };
+  }
   saveAiAddonManifest({ userDataDir, manifest, fsModule, catalog });
   emitSafeProgress(emitProgress, { feature: 'summary', phase: 'removing', message: 'Removing local summary model.', modelId: selectedModelId });
   try {
@@ -1160,16 +1168,15 @@ async function removeSummaryModel({
       }
     });
   } catch (error) {
-    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, summaryModelId: selectedModelId });
+    throw new Error('Could not remove the local summary model. Retry removal in Settings.', { cause: error });
   }
   delete manifest.summaryLibrary.models[selectedModelId];
-  if (manifest.summaryLibrary.defaultModelId === selectedModelId) manifest.summaryLibrary.defaultModelId = resolvedReplacementId || alternatives[0] || null;
   manifest.features.summary = manifest.summaryLibrary.models[manifest.summaryLibrary.defaultModelId] || {
     status: 'notConfigured', modelId: selectedModelId, artifactId: null,
     lastValidation: createValidation('notConfigured', 'Local summary model was removed.', now), error: null,
   };
   saveAiAddonManifest({ userDataDir, manifest, fsModule, catalog });
-  return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+  return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, cudaStatus, deviceMemory });
 }
 
 module.exports = {

@@ -788,7 +788,7 @@ test('failed process exit or blocked live fit prevents a new model load', async 
   assert.equal(h.spawnedServers.length, 0);
 });
 
-test('CLI fallback awaits ensureSummaryProcessExited and unloadModel skips active non-server work', async (t) => {
+test('CLI fallback waits for model exit and Free memory retries an orphan without stopping an active summary', async (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-cli-slot-'));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
   let exitWaits = 0;
@@ -805,6 +805,9 @@ test('CLI fallback awaits ensureSummaryProcessExited and unloadModel skips activ
   assert.ok(exitWaits >= 2);
 
   let raced = false;
+  let activeSummary = true;
+  let terminations = 0;
+  let orphan = createFakeProcess();
   const { createHistoryQaService } = require('../../src/main/history-qa-service');
   const { createChatThreadStore } = require('../../src/main/chat-thread-store');
   const guarded = createHistoryQaService({
@@ -817,14 +820,31 @@ test('CLI fallback awaits ensureSummaryProcessExited and unloadModel skips activ
     collectPythonProcessOutput: () => ({}),
     enqueueAiComputeAction: (fn) => fn(),
     getAiAddonRuntimeOptions: () => ({}),
-    ensureSummaryProcessExited: async () => { raced = true; throw new Error('should not wait'); },
-    hasActiveSummaryProcess: () => true,
+    ensureSummaryProcessExited: async () => {
+      raced = true;
+      if (terminations === 1) throw new Error('exit unconfirmed');
+      orphan = null;
+    },
+    getOutstandingSummaryProcess: () => orphan,
+    hasActiveSummaryGeneration: () => activeSummary,
+    terminateProcessBestEffort: async (proc) => { assert.equal(proc, orphan); terminations += 1; },
     historySearchService: { getGeneration: () => 1, ensureSynced: async () => {}, enqueueOperation: (fn) => fn(), getIndexPath: () => path.join(tmpDir, 'idx.sqlite') },
     chatThreadStore: createChatThreadStore({ app: { getPath: () => tmpDir }, path, fs }),
   });
   const res = await guarded.unloadModel('competing_gpu_work');
   assert.equal(res.alreadyUnloaded, true);
   assert.equal(raced, false);
+  assert.equal(guarded.getModelState().status, 'unloaded');
+
+  activeSummary = false;
+  await assert.rejects(guarded.unloadModel(), /exit unconfirmed/);
+  assert.equal(terminations, 1);
+  assert.equal(guarded.getModelState().status, 'release_error');
+  assert.equal(guarded.getModelState().modelId, null);
+
+  assert.deepEqual(await guarded.unloadModel(), { unloaded: true, alreadyUnloaded: false });
+  assert.equal(terminations, 2);
+  assert.equal(orphan, null);
   assert.equal(guarded.getModelState().status, 'unloaded');
 });
 

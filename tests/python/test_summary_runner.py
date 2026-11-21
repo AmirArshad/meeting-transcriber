@@ -481,3 +481,37 @@ def test_summary_runner_persists_tag_template_metadata_and_defaults_untagged_to_
     md_text = out_md.read_text(encoding='utf-8')
     assert '## Key Findings' in md_text
     assert '**Tag:** Appointment' in md_text
+
+
+def test_plain_and_mixed_transcripts_chunk_without_losing_text(tmp_path):
+    from backend.summaries.summary_pipeline import chunk_transcript, estimate_token_count
+
+    transcript = tmp_path / "meeting.md"
+    sentences = ["Approved calibration today.", "The group agreed to test it tomorrow."]
+    oversized_word = "驗證" * 45
+    transcript.write_text(
+        "# Audio Transcript\n\n" + "\n\n".join([" ".join(sentences * 8), oversized_word]),
+        encoding="utf-8",
+    )
+    segments = load_summary_segments(str(transcript))
+    assert len(segments) == 2
+    assert all(segment["start"] is None and segment["end"] is None for segment in segments)
+    chunks = chunk_transcript(segments, max_tokens=22, prefer_topic_boundaries=False)
+    assert len(chunks) > 2
+    assert all(estimate_token_count(chunk["text"]) == chunk["estimatedTokens"] <= 22 for chunk in chunks)
+    parts = [segment["text"] for chunk in chunks for segment in chunk["segments"]]
+    assert all(part.endswith(".") for part in parts if part.isascii())
+    assert " ".join(part for part in parts if part.isascii()) == " ".join(sentences * 8)
+    assert "".join(part for part in parts if not part.isascii()) == oversized_word
+
+    transcript.write_text(
+        "# Audio Transcript\n\nOpening remarks.\n\n**Dr. Lee:** Discussed quotas.\n"
+        "Followed up on training.\n\nUnattributed next steps.\n\n**Morgan:**",
+        encoding="utf-8",
+    )
+    segments = load_summary_segments(str(transcript))
+    assert [(segment["speaker"], segment["text"]) for segment in segments] == [
+        ("Unknown", "Opening remarks."),
+        ("Dr. Lee", "Discussed quotas. Followed up on training."),
+        ("Unknown", "Unattributed next steps."),
+    ]
