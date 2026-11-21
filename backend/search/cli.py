@@ -34,6 +34,7 @@ def main() -> None:
     search_parser.add_argument("--meeting-id", default=None, help="Optional single meeting ID scope")
     search_parser.add_argument("--date-from", default=None, help="Optional inclusive start ISO date")
     search_parser.add_argument("--date-to", default=None, help="Optional inclusive end ISO date")
+    search_parser.add_argument("--tags", default=None, help="Optional comma-separated recording tag filter")
     search_parser.add_argument("--no-sync", action="store_true", help="Skip incremental sync before query")
 
     args = parser.parse_args()
@@ -47,9 +48,16 @@ def main() -> None:
     elif args.command == "status":
         result = get_history_index_status(recordings_dir, index_path)
     elif args.command == "search":
+        tags = args.tags.split(",") if args.tags is not None else None
         if args.stdin_json:
             options = json.load(sys.stdin)
             args.query = options.get("query", "")
+            if "tags" in options:
+                tags = options["tags"]
+                if tags is None:
+                    raise ValueError("Invalid recording tags in scope filter.")
+                if isinstance(tags, str):
+                    tags = tags.split(",")
         if args.query is None:
             parser.error("search requires --query or --stdin-json")
         result = search_history_index(
@@ -61,6 +69,7 @@ def main() -> None:
             meeting_id=args.meeting_id,
             date_from=args.date_from,
             date_to=args.date_to,
+            tags=tags,
             sync=not args.no_sync,
         )
     else:

@@ -13,6 +13,70 @@ from typing import Dict, Optional
 from common.sensitive_text import redact_sensitive_text
 
 MAX_AI_METADATA_STRING_LENGTH = 300
+VALID_RECORDING_TAGS = (
+    "meeting",
+    "appointment",
+    "call",
+    "interview",
+    "lecture",
+    "podcast",
+    "video",
+    "voice-note",
+    "brainstorm",
+    "music",
+    "other",
+)
+RECORDING_TAG_LABELS: Dict[str, str] = {
+    "meeting": "Meeting",
+    "appointment": "Appointment",
+    "call": "Phone / Support Call",
+    "interview": "Interview",
+    "lecture": "Lecture / Study",
+    "podcast": "Podcast",
+    "video": "Video",
+    "voice-note": "Voice Note",
+    "brainstorm": "Brainstorm",
+    "music": "Music",
+    "other": "Other",
+}
+RECORDING_TAG_ALIASES: Dict[str, str] = {
+    "meeting": "meeting",
+    "meetings": "meeting",
+    "appointment": "appointment",
+    "appointments": "appointment",
+    "consultation": "appointment",
+    "call": "call",
+    "calls": "call",
+    "phone / support call": "call",
+    "phone/support call": "call",
+    "phone call": "call",
+    "support call": "call",
+    "phone-call": "call",
+    "support-call": "call",
+    "interview": "interview",
+    "interviews": "interview",
+    "lecture": "lecture",
+    "lectures": "lecture",
+    "lecture / study": "lecture",
+    "lecture/study": "lecture",
+    "study": "lecture",
+    "class": "lecture",
+    "podcast": "podcast",
+    "podcasts": "podcast",
+    "video": "video",
+    "videos": "video",
+    "voice-note": "voice-note",
+    "voice note": "voice-note",
+    "voice_note": "voice-note",
+    "voicenote": "voice-note",
+    "voice memo": "voice-note",
+    "voice-memo": "voice-note",
+    "brainstorm": "brainstorm",
+    "brainstorming": "brainstorm",
+    "music": "music",
+    "rehearsal": "music",
+    "other": "other",
+}
 VALID_TRANSCRIPTION_STATUSES = {"pending", "failed", "completed"}
 VALID_TRANSCRIPTION_DEVICES = {"cpu", "cuda", "mps"}
 # MLX reports "metal"; meeting metadata stores the Apple GPU as "mps".
@@ -282,9 +346,37 @@ def normalize_transcription_result(value: object, *, attempt_id: Optional[str] =
     return result
 
 
+def normalize_recording_tag(value: object, *, strict: bool = False) -> Optional[str]:
+    """Normalize a recording tag to a canonical slug, or None when unset."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        if strict:
+            raise ValueError("Invalid recording tag.")
+        return None
+    collapsed = re.sub(r"\s+", " ", value).strip().lower()
+    if not collapsed:
+        return None
+    if collapsed in RECORDING_TAG_ALIASES:
+        return RECORDING_TAG_ALIASES[collapsed]
+    hyphenated = re.sub(r"[_\s]+", "-", collapsed)
+    if hyphenated in RECORDING_TAG_ALIASES:
+        return RECORDING_TAG_ALIASES[hyphenated]
+    if strict:
+        raise ValueError(f"Unsupported recording tag: {value}")
+    return None
+
+
+def recording_tag_display_label(value: object) -> str:
+    """Return the English display label for a canonical or aliased tag, or ''."""
+    slug = normalize_recording_tag(value, strict=False)
+    return RECORDING_TAG_LABELS.get(slug, "") if slug else ""
+
+
 def public_transcription_provenance(meeting: Dict) -> Dict:
     """Copy display provenance, dropping malformed values instead of raising."""
     cleaned = dict(meeting)
+    cleaned["tag"] = normalize_recording_tag(meeting.get("tag"), strict=False)
     try:
         cleaned["transcriptionRequest"] = normalize_transcription_request(meeting.get("transcriptionRequest"))
     except (TranscriptionMetadataError, ValueError, TypeError):

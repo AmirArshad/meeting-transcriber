@@ -196,3 +196,38 @@ test('private query is passed on stdin and stale search results are rejected', a
   child.emit('close', 0);
   await assert.rejects(pending, /History changed/);
 });
+
+test('searchHistory forwards normalized tags via --tags and --stdin-json and rejects invalid tags', async (t) => {
+  const tmpDir = makeTempDir();
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const stdinPayloads = [];
+  const { handlers, service, spawned } = makeHarness({
+    userDataDir: tmpDir,
+    spawnImpl(_args, proc) {
+      proc.stdin = {
+        end(value) {
+          stdinPayloads.push(JSON.parse(value));
+        },
+      };
+      setImmediate(() => {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({ matchedMeetingCount: 0, meetings: [] })));
+        proc.emit('close', 0);
+      });
+    },
+  });
+
+  await handlers.get('search-history')({}, { query: 'roadmap', tags: ['Voice Memo', 'call', 'voice-note'] });
+  const tagsIdx = spawned[0].args.indexOf('--tags');
+  assert.notEqual(tagsIdx, -1);
+  assert.equal(spawned[0].args[tagsIdx + 1], 'voice-note,call');
+
+  await service.searchHistory({ query: '-private roadmap', tags: ['Lecture / Study'] });
+  assert.equal(stdinPayloads.at(-1).query, '-private roadmap');
+  assert.deepEqual(stdinPayloads.at(-1).tags, ['lecture']);
+
+  await assert.rejects(
+    () => handlers.get('search-history')({}, { query: 'roadmap', tags: ['invalid-tag'] }),
+    /Unsupported recording tag/,
+  );
+});

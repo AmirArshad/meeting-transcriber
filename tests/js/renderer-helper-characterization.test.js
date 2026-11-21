@@ -49,6 +49,7 @@ const EXPECTED_RENDERER_GLOBALS = [
   'recoveryUiHelpers',
   'updateNotificationHelpers',
   'historyDetailHelpers',
+  'tagHelpers',
   'historySearchHelpers',
   'formatters',
   'summaryUiHelpers',
@@ -80,6 +81,7 @@ const EXPECTED_SCRIPT_ORDER = [
   'recovery-ui-helpers.js',
   'update-notification-helpers.js',
   'history-detail-helpers.js',
+  'tag-helpers.js',
   'history-search-helpers.js',
   'formatters.js',
   'summary-ui-helpers.js',
@@ -362,13 +364,16 @@ test('activateTab synchronizes active navigation styling and accessibility state
     },
   };
 
+  let closedTagPopover = false;
   const activateTab = vm.runInNewContext(`(${appSource.slice(start, end)})`, {
     document,
+    closeActiveTagPopover: () => { closedTagPopover = true; },
     initSettingsTab: async () => {},
     console,
   });
   activateTab('history');
 
+  assert.equal(closedTagPopover, true);
   assert.equal(historyTab.classList.contains('active'), true);
   assert.equal(historyTab.attributes['aria-selected'], 'true');
   assert.equal(recordTab.attributes['aria-selected'], 'false');
@@ -979,4 +984,42 @@ test('removal confirmations and surfaced reasons use disable/enable wording', ()
   const manifestSource = readUtf8(path.join(ROOT, 'src', 'ai-addon', 'manifest-store.js'));
   assert.match(manifestSource, /Disable and remove speaker identification setup, then enable it again\./);
   assert.doesNotMatch(manifestSource, /Remove and reinstall speaker identification setup/);
+});
+
+test('Phase 2 recording tag UI surfaces, CSS rules, and app.js bindings are present', () => {
+  const html = readUtf8(INDEX_HTML);
+  const css = readUtf8(STYLES_CSS);
+  const appSource = readAppSource();
+
+  for (const elementId of [
+    'import-audio-tag',
+    'recording-tag-btn',
+    'recording-tag-popover',
+    'history-tag-filter-bar',
+    'meeting-tag-btn',
+    'meeting-tag-popover',
+    'summary-tag-mismatch-banner',
+    'summary-tag-mismatch-regenerate',
+    'chat-scope-tags-section',
+    'chat-scope-tags-toggle-btn',
+    'chat-scope-tags-row',
+  ]) {
+    assert.ok(html.includes(`id="${elementId}"`), `expected #${elementId} in index.html`);
+  }
+
+  assert.match(appSource, /window\.tagHelpers/);
+  assert.match(appSource, /byId\('tag'\)/);
+  assert.doesNotMatch(appSource, /byId\('import-audio-tag'\)/);
+
+  for (const selector of [
+    '.recording-tag-pill',
+    '.recording-tag-popover',
+    '.history-tag-filter-bar',
+    '.summary-tag-mismatch-banner',
+    '.chat-scope-tag-pill',
+    '.chat-source-tag-chip',
+    '[data-tag="voice-note"]',
+  ]) {
+    assert.ok(css.includes(selector), `expected ${selector} in styles.css`);
+  }
 });

@@ -5,6 +5,7 @@
  */
 
 const crypto = require('crypto');
+const { normalizeTagsFilter } = require('../renderer/tag-helpers');
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_THREAD_TITLE = 'New chat';
@@ -71,6 +72,14 @@ function sanitizeScope(rawScope) {
   if (raw.meetingId != null && (typeof raw.meetingId !== 'string' || !raw.meetingId.trim())) {
     throw new Error('Invalid chat scope meeting ID.');
   }
+  let tags = [];
+  if (raw.tags != null) {
+    try {
+      tags = normalizeTagsFilter(raw.tags);
+    } catch (_error) {
+      throw new Error('Invalid chat scope tags.');
+    }
+  }
   const type = rawType.trim().toLowerCase() === 'all' ? 'all' : 'selected_meetings';
   let meetingIds = [];
   if (type === 'selected_meetings') {
@@ -92,6 +101,7 @@ function sanitizeScope(rawScope) {
     meetingIds,
     dateFrom: sanitizeOptionalIsoDate(raw.dateFrom),
     dateTo: sanitizeOptionalIsoDate(raw.dateTo),
+    tags,
   };
 }
 

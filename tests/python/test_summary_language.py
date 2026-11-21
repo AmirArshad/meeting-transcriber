@@ -263,3 +263,29 @@ def test_localized_markdown_preserves_schema_keys_and_legacy_output():
             assert '**Profile:**' not in markdown
             assert '(owner:' not in markdown
     assert '# Summary' in render_summary_markdown({'summary': 'Legacy overview'})
+
+
+def test_summary_prose_extracts_content_and_excludes_metadata_across_all_tags():
+    from backend.meetings.normalization import VALID_RECORDING_TAGS
+    from backend.summaries.templates import get_template
+
+    for tag in VALID_RECORDING_TAGS:
+        tmpl = get_template(tag)
+        payload = {'summary': f'Overview prose for {tag}.'}
+        expected_prose = [f'Overview prose for {tag}.']
+        for idx, field in enumerate(tmpl['array_fields']):
+            spec = tmpl['field_schemas'][field]
+            item = {}
+            for pkey in spec['prose_keys']:
+                token = f'prose-{tag}-{field}-{pkey}-{idx}'
+                item[pkey] = token
+                expected_prose.append(token)
+            for mkey in spec['metadata_keys']:
+                item[mkey] = ['00:42'] if mkey == 'timestamps' else 'METADATA_SENTINEL_XYZ'
+            payload[field] = [item]
+
+        extracted = summary_prose(payload, tag=tag)
+        for token in expected_prose:
+            assert token in extracted
+        assert 'METADATA_SENTINEL_XYZ' not in extracted
+        assert '00:42' not in extracted

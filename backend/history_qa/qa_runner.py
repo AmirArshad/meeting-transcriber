@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from common.sensitive_text import redact_sensitive_text
+from meetings.normalization import recording_tag_display_label
 from summaries.llama_runtime import resolve_llama_runtime, run_llama_prompt
 
 from .citation_verifier import (
@@ -222,8 +223,9 @@ def build_qa_messages(
     for item in evidence:
         eid = str(item.get("evidenceId") or "")
         title = str(item.get("meetingTitle") or "Untitled recording")
-        tag = str(item.get("tag") or "").strip()
-        tag_label = f" [{tag}]" if tag else ""
+        raw_tag = str(item.get("tag") or "").strip()
+        tag_display = recording_tag_display_label(raw_tag) or raw_tag
+        tag_label = f" [Tag: {tag_display}]" if tag_display else ""
         date = str(item.get("meetingDate") or "")[:10]
         ts = _format_evidence_timestamp(item)
         speaker = str(item.get("speaker") or "").strip()

@@ -6553,3 +6553,444 @@ button.history-transcript-timestamp:focus-visible {
     max-width: 100%;
   }
 }
+
+/* ============================================================================
+   v3.1 Recording Tags System (5 Surfaces + Chat Scope)
+   ============================================================================ */
+
+.recording-header-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.recording-tag-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.recording-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--tag-border, var(--hairline));
+  background: var(--tag-bg, var(--surface-2));
+  color: var(--tag-fg, var(--text-secondary));
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: background-color 0.14s var(--ease-out), border-color 0.14s var(--ease-out), color 0.14s var(--ease-out);
+  white-space: nowrap;
+}
+
+.recording-tag-pill:hover:not(:disabled) {
+  border-color: var(--hairline-strong);
+  color: var(--text-primary);
+}
+
+.recording-tag-pill:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.recording-tag-pill.is-untagged {
+  border-style: dashed;
+  border-color: var(--hairline);
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.recording-tag-pill.is-untagged:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-secondary);
+}
+
+.recording-tag-pill.is-untagged .recording-tag-dot {
+  display: none;
+}
+
+.recording-tag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tag-dot, var(--text-tertiary));
+  flex-shrink: 0;
+}
+
+.recording-tag-caret {
+  font-size: 10px;
+  opacity: 0.7;
+  line-height: 1;
+}
+
+/* Low-saturation editorial tints per canonical tag */
+[data-tag="meeting"] {
+  --tag-dot: #b8a8c9;
+  --tag-bg: rgba(184, 168, 201, 0.12);
+  --tag-border: rgba(184, 168, 201, 0.34);
+  --tag-fg: var(--text-primary);
+}
+[data-tag="appointment"] {
+  --tag-dot: #a8b0c8;
+  --tag-bg: rgba(168, 176, 200, 0.12);
+  --tag-border: rgba(168, 176, 200, 0.34);
+  --tag-fg: var(--text-primary);
+}
+[data-tag="call"] {
+  --tag-dot: #8ba8c4;
+  --tag-bg: rgba(139, 168, 196, 0.12);
+  --tag-border: rgba(139, 168, 196, 0.34);
+  --tag-fg: var(--text-primary);
+}
+[data-tag="interview"] {
+  --tag-dot: #7cb8b2;
+  --tag-bg: rgba(124, 184, 178, 0.12);
+  --tag-border: rgba(124, 184, 178, 0.34);
+  --tag-fg: var(--text-primary);
+}
+[data-tag="lecture"] {
+  --tag-dot: #c3b5db;
+  --tag-bg: rgba(195, 181, 219, 0.12);
+  --tag-border: rgba(195, 181, 219, 0.34);
+  --tag-fg: var(--text-primary);
+}
+[data-tag="podcast"] {
+  --tag-dot: #c49eb8;
+  --tag-bg: rgba(196, 158, 184, 0.12);
+  --tag-border: rgba(196, 158, 184, 0.34);
+  --tag-fg: var(--text-primary);
+}
+[data-tag="video"] {
+  --tag-dot: #98a6d4;
+  --tag-bg: rgba(152, 166, 212, 0.12);
+  --tag-border: rgba(152, 166, 212, 0.34);
+  --tag-fg: var(--text-primary);
+}
+[data-tag="voice-note"] {
+  --tag-dot: #65ad8a;
+  --tag-bg: rgba(101, 173, 138, 0.11);
+  --tag-border: rgba(101, 173, 138, 0.34);
+  --tag-fg: var(--text-primary);
+}
+[data-tag="brainstorm"] {
+  --tag-dot: #88b498;
+  --tag-bg: rgba(136, 180, 152, 0.11);
+  --tag-border: rgba(136, 180, 152, 0.34);
+  --tag-fg: var(--text-primary);
+}
+[data-tag="music"] {
+  --tag-dot: #d2a85c;
+  --tag-bg: rgba(210, 168, 92, 0.11);
+  --tag-border: rgba(210, 168, 92, 0.34);
+  --tag-fg: var(--text-primary);
+}
+[data-tag="other"] {
+  --tag-dot: #838b88;
+  --tag-bg: var(--surface-3);
+  --tag-border: var(--hairline-strong);
+  --tag-fg: var(--text-secondary);
+}
+
+.recording-tag-popover {
+  position: fixed;
+  width: 304px;
+  max-width: min(320px, calc(100vw - 24px));
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: var(--shadow-3);
+  z-index: 40;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.recording-tag-popover[hidden] {
+  display: none;
+}
+
+.recording-tag-option {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s var(--ease-out), border-color 0.12s var(--ease-out), color 0.12s var(--ease-out);
+}
+
+.recording-tag-option:hover,
+.recording-tag-option:focus-visible {
+  outline: none;
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+
+.recording-tag-option:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.recording-tag-option.is-selected {
+  background: var(--tag-bg, var(--accent-soft));
+  border-color: var(--tag-border, var(--accent-line));
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.recording-tag-option-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recording-tag-clear-btn {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  border-top: 1px solid var(--hairline-soft);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.recording-tag-clear-btn:hover,
+.recording-tag-clear-btn:focus-visible {
+  outline: none;
+  background: var(--surface-3);
+  color: var(--text-primary);
+}
+
+.recording-tag-clear-btn:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+/* History Sidebar Tag Filter Strip */
+.history-tag-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px 8px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  flex-shrink: 0;
+}
+
+.history-tag-filter-bar[hidden] {
+  display: none;
+}
+
+.history-tag-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--hairline);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 0.14s var(--ease-out), border-color 0.14s var(--ease-out), color 0.14s var(--ease-out);
+}
+
+.history-tag-filter-chip:hover {
+  border-color: var(--hairline-strong);
+  color: var(--text-primary);
+}
+
+.history-tag-filter-chip:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.history-tag-filter-chip.is-active {
+  background: var(--tag-bg, var(--accent-soft));
+  border-color: var(--tag-border, var(--accent-line));
+  color: var(--text-primary);
+}
+
+.meeting-item-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--tag-border, var(--hairline));
+  background: var(--tag-bg, var(--surface-2));
+  color: var(--tag-fg, var(--text-secondary));
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.meeting-item-tag-pill .recording-tag-dot {
+  width: 5px;
+  height: 5px;
+}
+
+.activity-row-tag-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.activity-tag-btn {
+  padding: 1px 7px;
+  font-size: 10.5px;
+}
+
+/* Summary Tab Non-Blocking Tag-Mismatch Notice */
+.summary-tag-mismatch-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--accent-line);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.summary-tag-mismatch-banner[hidden] {
+  display: none;
+}
+
+.summary-tag-mismatch-text {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+/* Chat Scope Popover Tag Filters */
+.chat-scope-tags-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-scope-tags-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.chat-scope-tags-toggle {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  padding: 0;
+  cursor: pointer;
+}
+
+.chat-scope-tags-toggle:hover,
+.chat-scope-tags-toggle:focus-visible {
+  outline: none;
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+.chat-scope-tags-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.chat-scope-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--hairline);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background-color 0.12s var(--ease-out), border-color 0.12s var(--ease-out), color 0.12s var(--ease-out);
+}
+
+.chat-scope-tag-pill:hover {
+  border-color: var(--hairline-strong);
+  color: var(--text-primary);
+}
+
+.chat-scope-tag-pill:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.chat-scope-tag-pill.is-selected {
+  background: var(--tag-bg, var(--accent-soft));
+  border-color: var(--tag-border, var(--accent-line));
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.chat-source-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin-right: 6px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--tag-border, var(--hairline));
+  background: var(--tag-bg, var(--surface-2));
+  color: var(--tag-fg, var(--text-secondary));
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+@media (max-width: 900px) {
+  .recording-tag-popover {
+    width: min(296px, calc(100vw - 32px));
+  }
+
+  .meeting-meta {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recording-tag-pill,
+  .recording-tag-option,
+  .history-tag-filter-chip,
+  .chat-scope-tag-pill {
+    transition: none;
+  }
+}

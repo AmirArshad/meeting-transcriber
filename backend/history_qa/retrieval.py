@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+from meetings.normalization import normalize_recording_tag, recording_tag_display_label
 from search.history_index import (
     _connect_sqlite,
     _ensure_synced_connection,
@@ -326,15 +327,15 @@ _CONVERSATIONAL_FOLLOW_UP_WORDS = _QUESTION_STOPWORDS | _FOLLOW_UP_CUES | frozen
 )
 
 _TAG_ALIASES: Dict[str, Tuple[str, ...]] = {
-    "appointment": ("appointment", "appointments", "consultation"),
-    "call": ("call", "calls", "phone call", "support call"),
+    "appointment": ("appointment", "appointments", "consultation", "consultations"),
+    "call": ("call", "calls", "phone call", "phone calls", "support call", "support calls"),
     "interview": ("interview", "interviews"),
     "lecture": ("lecture", "lectures", "class", "study"),
     "podcast": ("podcast", "podcasts"),
     "video": ("video", "videos"),
-    "voice-note": ("voice-note", "voice note", "voice memo"),
-    "brainstorm": ("brainstorm", "brainstorming"),
-    "music": ("music", "rehearsal"),
+    "voice-note": ("voice-note", "voice note", "voice notes", "voice memo", "voice memos"),
+    "brainstorm": ("brainstorm", "brainstorms", "brainstorming"),
+    "music": ("music", "rehearsal", "rehearsals"),
 }
 
 _MONTH_MAP = {
@@ -609,7 +610,7 @@ def match_entities(
     headers: Sequence[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Pre-match recording titles, non-generic speaker names, and canonical tags."""
-    q_norm = " ".join(extract_query_tokens(question)).casefold()
+    q_norm = " ".join(re.findall(r"[^\W_]+", str(question or ""), re.UNICODE)).casefold()
     q_tokens = {tok.casefold() for tok in extract_query_tokens(question) if not _is_generic_token(tok)}
     if not q_norm:
         return {
@@ -712,7 +713,7 @@ def match_entities(
 
 def normalize_scope(raw_scope: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if raw_scope is None:
-        return {"type": "all", "meetingIds": None, "dateFrom": None, "dateTo": None}
+        return {"type": "all", "meetingIds": None, "dateFrom": None, "dateTo": None, "tags": []}
 
     if not isinstance(raw_scope, dict):
         raise ValueError("Invalid history scope.")
@@ -736,6 +737,23 @@ def normalize_scope(raw_scope: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if meeting_id is not None and (not isinstance(meeting_id, str) or not meeting_id.strip()):
         raise ValueError("Invalid history scope meeting ID.")
 
+    raw_tags = raw_scope.get("tags")
+    cleaned_tags: List[str] = []
+    if raw_tags is not None:
+        if not isinstance(raw_tags, list):
+            raise ValueError("Invalid history scope tags.")
+        seen_tags = set()
+        for item in raw_tags:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError("Invalid history scope tags.")
+            try:
+                normalized_tag = normalize_recording_tag(item, strict=True)
+            except ValueError as exc:
+                raise ValueError("Invalid history scope tags.") from exc
+            if normalized_tag and normalized_tag not in seen_tags:
+                seen_tags.add(normalized_tag)
+                cleaned_tags.append(normalized_tag)
+
     cleaned_ids: Optional[List[str]] = None
     if scope_type in ("single_meeting", "selected_meetings"):
         ids: List[str] = []
@@ -756,6 +774,7 @@ def normalize_scope(raw_scope: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         "meetingIds": cleaned_ids,
         "dateFrom": date_from,
         "dateTo": date_to,
+        "tags": cleaned_tags,
     }
 
 
@@ -766,6 +785,7 @@ def _count_scoped_meetings(
     meeting_ids: Optional[Sequence[str]],
     date_from: Optional[str],
     date_to: Optional[str],
+    tags: Optional[Sequence[str]] = None,
     conn: Optional[sqlite3.Connection] = None,
 ) -> Tuple[int, int]:
     owned_conn: Optional[sqlite3.Connection] = None
@@ -785,6 +805,7 @@ def _count_scoped_meetings(
             meeting_ids=meeting_ids,
             date_from=date_from,
             date_to=date_to,
+            tags=tags,
         )
         # build_scope_sql_filters emits p.meeting_id for meeting_ids; rewrite alias to m.
         m_clauses = [clause.replace("p.meeting_id", "m.meeting_id") for clause in clauses]
@@ -1055,9 +1076,10 @@ def _uniform_sample(items: List[Dict[str, Any]], cap: int) -> List[Dict[str, Any
 def _estimate_item_tokens(item: Dict[str, Any]) -> int:
     title = str(item.get("meetingTitle") or "Untitled recording").encode("utf-8", errors="replace")[:512].decode("utf-8", errors="ignore")
     speaker = str(item.get("speaker") or "").encode("utf-8", errors="replace")[:512].decode("utf-8", errors="ignore")
-    tag = str(item.get("tag") or "").encode("utf-8", errors="replace")[:64].decode("utf-8", errors="ignore")
+    raw_tag = str(item.get("tag") or "").encode("utf-8", errors="replace")[:64].decode("utf-8", errors="ignore")
+    tag_display = recording_tag_display_label(raw_tag) or raw_tag
     date_str = str(item.get("meetingDate") or "")[:10]
-    tag_part = f" [{tag}]" if tag else ""
+    tag_part = f" [Tag: {tag_display}]" if tag_display else ""
     speaker_part = f", Speaker: {speaker}" if speaker else ""
     overhead = len(
         f"[E10] Recording: {title}{tag_part} ({date_str}, Summary / Untimed{speaker_part})\n\n".encode("utf-8")
@@ -1113,8 +1135,9 @@ def _pack_evidence_items(
         title = str(item.get("meetingTitle") or "Untitled recording").encode("utf-8", errors="replace")[:512].decode("utf-8", errors="ignore")
         speaker = str(item.get("speaker") or "").encode("utf-8", errors="replace")[:512].decode("utf-8", errors="ignore")
         tag = str(item.get("tag") or "").encode("utf-8", errors="replace")[:64].decode("utf-8", errors="ignore")
+        tag_display = recording_tag_display_label(tag) or tag
         date_str = str(item.get("meetingDate") or "")[:10]
-        tag_part = f" [{tag}]" if tag else ""
+        tag_part = f" [Tag: {tag_display}]" if tag_display else ""
         speaker_part = f", Speaker: {speaker}" if speaker else ""
         overhead = len(
             f"[E{len(selected) + 1}] Recording: {title}{tag_part} ({date_str}, Summary / Untimed{speaker_part})\n\n".encode("utf-8")
@@ -1285,6 +1308,7 @@ def retrieve_evidence(
     raw_question = str(question or "").strip()
 
     def _run_with_conn(conn: Optional[sqlite3.Connection]) -> Dict[str, Any]:
+        scoped_tags = normalized_scope["tags"] or None
         scoped_headers: List[Dict[str, Any]] = []
         if conn is not None:
             scoped_headers = list_indexed_meeting_headers(
@@ -1292,6 +1316,7 @@ def retrieve_evidence(
                 meeting_ids=normalized_scope["meetingIds"],
                 date_from=normalized_scope["dateFrom"],
                 date_to=normalized_scope["dateTo"],
+                tags=scoped_tags,
             )
 
         total_indexed, scoped_count = _count_scoped_meetings(
@@ -1300,6 +1325,7 @@ def retrieve_evidence(
             meeting_ids=normalized_scope["meetingIds"],
             date_from=normalized_scope["dateFrom"],
             date_to=normalized_scope["dateTo"],
+            tags=scoped_tags,
             conn=conn,
         )
 
@@ -1475,6 +1501,7 @@ def retrieve_evidence(
             meeting_ids=effective_meeting_ids,
             date_from=eff_from,
             date_to=eff_to,
+            tags=scoped_tags,
             sync=False,
             conn=conn,
         )
@@ -1539,6 +1566,7 @@ def retrieve_evidence(
                     meeting_ids=broader_ids,
                     date_from=eff_from,
                     date_to=eff_to,
+                    tags=scoped_tags,
                     sync=False,
                     conn=conn,
                 )

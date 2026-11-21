@@ -78,6 +78,14 @@ const {
   parseTimestampStringToSeconds,
 } = window.historySearchHelpers;
 const {
+  RECORDING_TAGS,
+  normalizeTag,
+  getTagMeta,
+  getUsedRecordingTags,
+  filterMeetingsByTag,
+  getSummaryTagMismatch,
+} = window.tagHelpers;
+const {
   buildUpdateViewModel,
   renderSafeReleaseNotes,
   shouldAcceptUpdateState,
@@ -290,6 +298,11 @@ let meetingSearchQueryNormalized = '';
 let meetingSearchDebounceTimer = null;
 let meetingSearchResults = null;
 let meetingSearchEpoch = 0;
+let activeHistoryTagFilter = null;
+let selectedRecordingTag = null;
+let activeRecordingTag = null;
+let activeOpenTagPopover = null;
+const meetingTagMutationVersions = new Map();
 let pendingAudioSeekCleanup = null;
 let activeCitationHighlightTimer = null;
 const MEETING_SEARCH_DEBOUNCE_MS = 180;
@@ -390,6 +403,7 @@ async function restoreCurrentHistorySummary(meetingId, message, { isError = fals
   }
 
   if (!meetingIdsEqual(currentMeetingId, meetingId)) return;
+  updateSummaryTagMismatchBanner(fullMeeting);
   if (fullMeeting?.summary) {
     renderSummaryMarkdown(fullMeeting.summary, { stale: fullMeeting.summaryStale });
   } else {
@@ -755,13 +769,28 @@ function createMeetingListItem(meeting) {
   duration.className = 'meeting-item-duration';
   duration.textContent = meeting.duration;
 
+  const tagMeta = getTagMeta(meeting && meeting.tag);
+  const tagPill = tagMeta ? document.createElement('span') : null;
+  if (tagPill) {
+    tagPill.className = 'meeting-item-tag-pill';
+    tagPill.dataset.tag = tagMeta.slug;
+    const dot = document.createElement('span');
+    dot.className = 'recording-tag-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span');
+    label.textContent = tagMeta.shortLabel;
+    tagPill.append(dot, label);
+  }
+
   if (meeting && meeting.transcriptionStatus && meeting.transcriptionStatus !== 'completed') {
     const statusTag = document.createElement('span');
     statusTag.className = 'meeting-item-duration';
     statusTag.textContent = meeting.transcriptionStatus === 'failed' ? 'Transcription failed' : 'Awaiting transcription';
     metaRow.append(date, duration, statusTag);
+    if (tagPill) metaRow.appendChild(tagPill);
   } else {
     metaRow.append(date, duration);
+    if (tagPill) metaRow.appendChild(tagPill);
   }
   info.append(title, metaRow);
   body.appendChild(info);
@@ -888,6 +917,8 @@ function renderActivityList() {
     doc: typeof document !== 'undefined' ? document : null,
   });
 
+  const openActivityMeetingId = activeOpenTagPopover?.activityMeetingId;
+  if (openActivityMeetingId != null) closeActiveTagPopover();
   clearElement(activityListEl);
   if (!rows.length) {
     const empty = document.createElement('p');
@@ -996,6 +1027,55 @@ function renderActivityList() {
       duration.className = 'activity-row-duration';
       duration.textContent = row.durationLabel;
       meta.appendChild(duration);
+    }
+    const rowMeeting = findMeetingById(row.meetingId);
+    if (rowMeeting) {
+      const rowTagAnchor = document.createElement('div');
+      rowTagAnchor.className = 'activity-row-tag-anchor';
+      const rowTagBtn = document.createElement('button');
+      rowTagBtn.type = 'button';
+      rowTagBtn.className = 'recording-tag-pill activity-tag-btn';
+      const rowTagDot = document.createElement('span');
+      rowTagDot.className = 'recording-tag-dot';
+      rowTagDot.setAttribute('aria-hidden', 'true');
+      const rowTagLabel = document.createElement('span');
+      const rowTagCaret = document.createElement('span');
+      rowTagCaret.className = 'recording-tag-caret';
+      rowTagCaret.setAttribute('aria-hidden', 'true');
+      rowTagCaret.textContent = '▾';
+      rowTagBtn.append(rowTagDot, rowTagLabel, rowTagCaret);
+      rowTagBtn.setAttribute('aria-haspopup', 'listbox');
+      rowTagBtn.setAttribute('aria-expanded', 'false');
+      applyTagPillView(rowTagBtn, rowTagLabel, rowMeeting.tag, { untaggedLabel: 'Tag' });
+
+      const rowTagPopover = document.createElement('div');
+      rowTagPopover.className = 'recording-tag-popover';
+      rowTagPopover.setAttribute('role', 'listbox');
+      rowTagPopover.setAttribute('aria-label', `Tag for ${row.title}`);
+      rowTagPopover.hidden = true;
+
+      rowTagBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleTagPickerPopover({
+          triggerBtn: rowTagBtn,
+          popoverEl: rowTagPopover,
+          activityMeetingId: row.meetingId,
+          currentTag: normalizeTag(findMeetingById(row.meetingId)?.tag),
+          onSelect: async (nextTag) => {
+            await commitMeetingTagChange(row.meetingId, nextTag);
+          },
+        });
+      });
+
+      rowTagAnchor.append(rowTagBtn, rowTagPopover);
+      if (openActivityMeetingId != null && meetingIdsEqual(openActivityMeetingId, row.meetingId)) {
+        toggleTagPickerPopover({
+          triggerBtn: rowTagBtn, popoverEl: rowTagPopover, activityMeetingId: row.meetingId,
+          currentTag: normalizeTag(rowMeeting.tag),
+          onSelect: (nextTag) => commitMeetingTagChange(row.meetingId, nextTag),
+        });
+      }
+      meta.appendChild(rowTagAnchor);
     }
     main.appendChild(meta);
     item.appendChild(main);
@@ -1575,6 +1655,8 @@ function applySummaryActionAvailability() {
   const control = getSummaryActionControlState(summary, {
     platformSupportsSummaries: platform === 'win32' || platform === 'darwin',
   });
+  const mismatchButton = document.getElementById('summary-tag-mismatch-regenerate');
+  if (mismatchButton) mismatchButton.disabled = !control.enabled || Boolean(summaryGenerationMeetingId);
   for (const button of getSummaryGenerationButtons()) {
     button.disabled = !control.enabled;
     if (control.title) {
@@ -1586,6 +1668,8 @@ function applySummaryActionAvailability() {
 }
 
 function updateSummaryGenerationButtons() {
+  const mismatchButton = document.getElementById('summary-tag-mismatch-regenerate');
+  if (mismatchButton) mismatchButton.disabled = Boolean(summaryGenerationMeetingId);
   const view = getSummaryGenerationButtonView({
     active: Boolean(summaryGenerationMeetingId),
     cancelling: summaryGenerationCancelling,
@@ -1663,6 +1747,7 @@ function setupHistoryDetailTabs() {
 }
 
 function activateTab(targetTab) {
+  closeActiveTagPopover();
   const tabButtons = document.querySelectorAll('.tab-btn');
   const railButtons = document.querySelectorAll('.rail-btn[data-tab]');
   const tabPanes = document.querySelectorAll('.tab-pane');
@@ -2694,6 +2779,254 @@ async function loadMeetingHistory({ scan = false } = {}) {
   }
 }
 
+function applyTagPillView(btn, labelEl, rawTag, { untaggedLabel = 'Add tag' } = {}) {
+  if (!btn || !labelEl) return;
+  const meta = getTagMeta(rawTag);
+  if (meta) {
+    btn.classList.remove('is-untagged');
+    btn.dataset.tag = meta.slug;
+    labelEl.textContent = meta.label;
+    btn.title = `Tag: ${meta.label}`;
+  } else {
+    btn.classList.add('is-untagged');
+    delete btn.dataset.tag;
+    labelEl.textContent = untaggedLabel;
+    btn.title = 'Add a recording tag';
+  }
+}
+
+function closeActiveTagPopover({ restoreFocus = false } = {}) {
+  if (!activeOpenTagPopover) return;
+  const { triggerBtn, popoverEl } = activeOpenTagPopover;
+  activeOpenTagPopover = null;
+  if (popoverEl) popoverEl.hidden = true;
+  if (triggerBtn) {
+    triggerBtn.setAttribute('aria-expanded', 'false');
+    if (restoreFocus && triggerBtn.isConnected) {
+      triggerBtn.focus({ preventScroll: true });
+    }
+  }
+}
+
+function toggleTagPickerPopover({ triggerBtn, popoverEl, currentTag = null, rightAlign = false, activityMeetingId = null, onSelect }) {
+  if (!triggerBtn || !popoverEl) return;
+  if (activeOpenTagPopover && activeOpenTagPopover.popoverEl === popoverEl && !popoverEl.hidden) {
+    closeActiveTagPopover({ restoreFocus: false });
+    return;
+  }
+  closeActiveTagPopover({ restoreFocus: false });
+
+  clearElement(popoverEl);
+  popoverEl.classList.toggle('is-right-aligned', Boolean(rightAlign));
+
+  const optionButtons = [];
+  for (const tag of RECORDING_TAGS) {
+    const opt = document.createElement('button');
+    opt.type = 'button';
+    opt.className = 'recording-tag-option';
+    opt.dataset.tag = tag.slug;
+    opt.setAttribute('role', 'option');
+    const selected = currentTag === tag.slug;
+    opt.classList.toggle('is-selected', selected);
+    opt.setAttribute('aria-selected', String(selected));
+    const dot = document.createElement('span');
+    dot.className = 'recording-tag-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.className = 'recording-tag-option-label';
+    text.textContent = tag.label;
+    opt.append(dot, text);
+    opt.addEventListener('click', (event) => {
+      event.stopPropagation();
+      closeActiveTagPopover({ restoreFocus: true });
+      void Promise.resolve(onSelect(tag.slug));
+    });
+    popoverEl.appendChild(opt);
+    optionButtons.push(opt);
+  }
+
+  if (currentTag) {
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'recording-tag-clear-btn';
+    clearBtn.setAttribute('role', 'option');
+    clearBtn.setAttribute('aria-selected', 'false');
+    clearBtn.textContent = 'Clear tag';
+    clearBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      closeActiveTagPopover({ restoreFocus: true });
+      void Promise.resolve(onSelect(null));
+    });
+    popoverEl.appendChild(clearBtn);
+    optionButtons.push(clearBtn);
+  }
+
+  popoverEl.onkeydown = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closeActiveTagPopover({ restoreFocus: true });
+      return;
+    }
+    const idx = optionButtons.indexOf(document.activeElement);
+    if (!optionButtons.length) return;
+    let nextIdx = -1;
+    if (event.key === 'ArrowRight') nextIdx = (idx + 1) % optionButtons.length;
+    else if (event.key === 'ArrowLeft') nextIdx = (idx - 1 + optionButtons.length) % optionButtons.length;
+    else if (event.key === 'ArrowDown') nextIdx = Math.min(optionButtons.length - 1, idx < 0 ? 0 : idx + 2);
+    else if (event.key === 'ArrowUp') nextIdx = Math.max(0, idx < 0 ? 0 : idx - 2);
+    else if (event.key === 'Home') nextIdx = 0;
+    else if (event.key === 'End') nextIdx = optionButtons.length - 1;
+    if (nextIdx >= 0) {
+      event.preventDefault();
+      optionButtons[nextIdx]?.focus({ preventScroll: true });
+    }
+  };
+
+  popoverEl.hidden = false;
+  triggerBtn.setAttribute('aria-expanded', 'true');
+  activeOpenTagPopover = { triggerBtn, popoverEl, activityMeetingId };
+  const positionPopover = () => {
+    if (activeOpenTagPopover?.popoverEl !== popoverEl) return;
+    const trigger = triggerBtn.getBoundingClientRect();
+    const popup = popoverEl.getBoundingClientRect();
+    const left = rightAlign ? trigger.right - popup.width : trigger.left;
+    const below = trigger.bottom + 6;
+    const top = below + popup.height <= window.innerHeight - 12 ? below : trigger.top - popup.height - 6;
+    popoverEl.style.left = `${Math.max(12, Math.min(left, window.innerWidth - popup.width - 12))}px`;
+    popoverEl.style.top = `${Math.max(12, Math.min(top, window.innerHeight - popup.height - 12))}px`;
+  };
+  positionPopover();
+  requestAnimationFrame(positionPopover);
+  const initialFocus = optionButtons.find((btn) => btn.classList.contains('is-selected')) || optionButtons[0];
+  requestAnimationFrame(() => {
+    if (activeOpenTagPopover?.popoverEl === popoverEl && initialFocus?.isConnected) {
+      initialFocus.focus({ preventScroll: true });
+    }
+  });
+}
+
+function renderRecordingTagControl() {
+  const btn = document.getElementById('recording-tag-btn');
+  const label = document.getElementById('recording-tag-btn-label');
+  applyTagPillView(btn, label, selectedRecordingTag, { untaggedLabel: 'Add tag' });
+}
+
+function renderHistoryTagFilterBar() {
+  const bar = document.getElementById('history-tag-filter-bar');
+  if (!bar) return;
+
+  const used = getUsedRecordingTags(meetings);
+  if (activeHistoryTagFilter && !used.some((entry) => entry.slug === activeHistoryTagFilter)) {
+    activeHistoryTagFilter = null;
+  }
+
+  if (used.length === 0) {
+    bar.hidden = true;
+    clearElement(bar);
+    return;
+  }
+
+  bar.hidden = false;
+  clearElement(bar);
+
+  const applyFilter = (tag) => {
+    activeHistoryTagFilter = tag;
+    renderHistoryTagFilterBar();
+    if (normalizeHistorySearchQuery(meetingSearchQuery)) {
+      clearTimeout(meetingSearchDebounceTimer);
+      meetingSearchDebounceTimer = null;
+      void runHistorySearch(meetingSearchQuery);
+    } else {
+      renderMeetingList();
+    }
+  };
+
+  const allChip = document.createElement('button');
+  allChip.type = 'button';
+  allChip.className = 'history-tag-filter-chip';
+  allChip.classList.toggle('is-active', !activeHistoryTagFilter);
+  allChip.setAttribute('aria-pressed', String(!activeHistoryTagFilter));
+  allChip.textContent = 'All';
+  allChip.addEventListener('click', () => applyFilter(null));
+  bar.appendChild(allChip);
+
+  for (const tag of used) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'history-tag-filter-chip';
+    chip.dataset.tag = tag.slug;
+    const isActive = activeHistoryTagFilter === tag.slug;
+    chip.classList.toggle('is-active', isActive);
+    chip.setAttribute('aria-pressed', String(isActive));
+    const dot = document.createElement('span');
+    dot.className = 'recording-tag-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.textContent = tag.shortLabel;
+    chip.append(dot, text);
+    chip.addEventListener('click', () => applyFilter(isActive ? null : tag.slug));
+    bar.appendChild(chip);
+  }
+}
+
+function updateSummaryTagMismatchBanner(meeting) {
+  const banner = document.getElementById('summary-tag-mismatch-banner');
+  const textEl = document.getElementById('summary-tag-mismatch-text');
+  const regenBtn = document.getElementById('summary-tag-mismatch-regenerate');
+  if (!banner || !textEl || !regenBtn) return;
+
+  const displayedSummary = document.getElementById('meeting-summary')?.dataset.markdown || '';
+  const mismatch = getSummaryTagMismatch(
+    meeting && typeof meeting.summary !== 'string'
+      ? { ...meeting, summary: displayedSummary }
+      : meeting,
+  );
+  if (!mismatch) {
+    banner.hidden = true;
+    return;
+  }
+
+  textEl.textContent = `Tag changed to ${mismatch.currentLabel}.`;
+  regenBtn.textContent = `Regenerate with ${mismatch.currentLabel} format`;
+  banner.hidden = false;
+}
+
+async function commitMeetingTagChange(meetingId, nextTag) {
+  const targetId = String(meetingId || '');
+  if (!targetId) return;
+  const version = (meetingTagMutationVersions.get(targetId) || 0) + 1;
+  meetingTagMutationVersions.set(targetId, version);
+  try {
+    const updated = await window.electronAPI.updateMeeting(targetId, { tag: nextTag });
+    if (meetingTagMutationVersions.get(targetId) !== version) return;
+    const resolvedTag = updated ? normalizeTag(updated.tag) : normalizeTag(nextTag);
+    const idx = findMeetingIndexById(targetId);
+    const merged = { ...(idx !== -1 ? meetings[idx] : {}), ...updated, tag: resolvedTag };
+    if (idx !== -1) meetings[idx] = merged;
+    if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, targetId)) {
+      currentRecordingMeeting = { ...currentRecordingMeeting, ...updated, tag: resolvedTag };
+    }
+    if (meetingIdsEqual(currentMeetingId, targetId)) {
+      applyTagPillView(document.getElementById('meeting-tag-btn'), document.getElementById('meeting-tag-btn-label'), resolvedTag);
+      updateSummaryTagMismatchBanner(merged);
+    }
+    renderHistoryTagFilterBar();
+    renderMeetingList();
+    renderActivityList();
+    if (meetingSearchQueryNormalized || meetingSearchDebounceTimer) {
+      clearTimeout(meetingSearchDebounceTimer);
+      meetingSearchDebounceTimer = null;
+      void runHistorySearch(meetingSearchQuery);
+    }
+    if (chatState.popoverOpen) renderScopePopover();
+  } catch (error) {
+    if (meetingTagMutationVersions.get(targetId) !== version) return;
+    console.error('Failed to update recording tag:', error);
+    showAppToast(`Could not update tag: ${error.message}`, 'error');
+  }
+}
+
 async function runHistorySearch(rawQuery) {
   const normalized = normalizeHistorySearchQuery(rawQuery);
   meetingSearchQuery = rawQuery || '';
@@ -2712,6 +3045,7 @@ async function runHistorySearch(rawQuery) {
         query: normalized,
         limit: 50,
         maxMatches: 3,
+        ...(activeHistoryTagFilter ? { tags: [activeHistoryTagFilter] } : {}),
       });
       if (epoch !== meetingSearchEpoch) {
         return;
@@ -2735,12 +3069,13 @@ async function runHistorySearch(rawQuery) {
 
 // Render meeting list
 function renderMeetingList() {
+  renderHistoryTagFilterBar();
   const query = meetingSearchQueryNormalized;
   const filtered = !query
-    ? meetings
+    ? filterMeetingsByTag(meetings, activeHistoryTagFilter)
     : (Array.isArray(meetingSearchResults)
-      ? mergeSearchResultsWithMeetings(meetings, { meetings: meetingSearchResults })
-      : fallbackFilterMeetingsByTitle(meetings, query));
+      ? mergeSearchResultsWithMeetings(meetings, { meetings: meetingSearchResults }, { tag: activeHistoryTagFilter })
+      : fallbackFilterMeetingsByTitle(meetings, query, { tag: activeHistoryTagFilter }));
 
   if (filtered.length === 0) {
     setPlaceholder(
@@ -2914,9 +3249,15 @@ async function selectMeeting(meetingId) {
   updateSummaryLanguageCaptions(meeting);
 
   // Show meeting details
+  closeActiveTagPopover({ restoreFocus: false });
   document.getElementById('meeting-title').textContent = meeting.title;
   document.getElementById('meeting-date').textContent = formatDate(meeting.date);
   document.getElementById('meeting-duration').textContent = meeting.duration;
+  applyTagPillView(
+    document.getElementById('meeting-tag-btn'),
+    document.getElementById('meeting-tag-btn-label'),
+    meeting.tag,
+  );
   closeInlineTitleEditor({
     headingId: 'meeting-title',
     editBtnId: 'meeting-title-edit',
@@ -2936,6 +3277,7 @@ async function selectMeeting(meetingId) {
   delete transcriptEl.dataset.markdown;
   clearElement(transcriptEl);
   renderSummaryMarkdown('');
+  updateSummaryTagMismatchBanner(null);
   if (retryBtn) {
     retryBtn.style.display = isMeetingTranscriptionRetryable(meeting) ? 'inline-flex' : 'none';
     retryBtn.disabled = false;
@@ -2964,6 +3306,11 @@ async function refreshMeetingDetails(targetId) {
     if (!fullMeeting || currentMeetingId !== targetId || requestEpoch !== meetingDetailRequestEpoch) {
       return;
     }
+    applyTagPillView(
+      document.getElementById('meeting-tag-btn'),
+      document.getElementById('meeting-tag-btn-label'),
+      fullMeeting.tag,
+    );
     updateSummaryLanguageCaptions(fullMeeting);
     if (retryBtn) {
       retryBtn.style.display = isMeetingTranscriptionRetryable(fullMeeting) ? 'inline-flex' : 'none';
@@ -3021,6 +3368,7 @@ async function refreshMeetingDetails(targetId) {
     } else {
       showSummaryMessage('No summary yet. Click Generate summary once Summaries & Chat is set up in Settings.');
     }
+    updateSummaryTagMismatchBanner(fullMeeting);
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
     if (currentMeetingId === targetId && requestEpoch === meetingDetailRequestEpoch) {
@@ -3337,6 +3685,75 @@ function setupEventListeners() {
   }
 
   setupHistoryDetailTabs();
+
+  const meetingTagBtn = document.getElementById('meeting-tag-btn');
+  const meetingTagPopover = document.getElementById('meeting-tag-popover');
+  if (meetingTagBtn && meetingTagPopover) {
+    meetingTagBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const active = findMeetingById(currentMeetingId);
+      toggleTagPickerPopover({
+        triggerBtn: meetingTagBtn,
+        popoverEl: meetingTagPopover,
+        currentTag: normalizeTag(active && active.tag),
+        onSelect: async (nextTag) => {
+          if (currentMeetingId) {
+            await commitMeetingTagChange(currentMeetingId, nextTag);
+          }
+        },
+      });
+    });
+  }
+
+  const recordingTagBtn = document.getElementById('recording-tag-btn');
+  const recordingTagPopover = document.getElementById('recording-tag-popover');
+  if (recordingTagBtn && recordingTagPopover) {
+    renderRecordingTagControl();
+    recordingTagBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleTagPickerPopover({
+        triggerBtn: recordingTagBtn,
+        popoverEl: recordingTagPopover,
+        currentTag: selectedRecordingTag,
+        rightAlign: true,
+        onSelect: (nextTag) => {
+          selectedRecordingTag = nextTag;
+          if (recordingState !== 'idle') {
+            activeRecordingTag = nextTag;
+          }
+          renderRecordingTagControl();
+        },
+      });
+    });
+  }
+
+  const summaryMismatchRegenBtn = document.getElementById('summary-tag-mismatch-regenerate');
+  if (summaryMismatchRegenBtn) {
+    summaryMismatchRegenBtn.addEventListener('click', () => {
+      if (summaryGenerationMeetingId || summaryMismatchRegenBtn.disabled) return;
+      const targetBtn = document.getElementById('regenerate-summary-btn') || summaryMismatchRegenBtn;
+      void handleSummaryGenerationButtonClick(currentMeetingId, targetBtn);
+    });
+  }
+
+  document.addEventListener('pointerdown', (event) => {
+    if (!activeOpenTagPopover) return;
+    const { triggerBtn, popoverEl } = activeOpenTagPopover;
+    if (popoverEl?.contains(event.target) || triggerBtn?.contains(event.target)) {
+      return;
+    }
+    closeActiveTagPopover({ restoreFocus: false });
+  });
+
+  window.addEventListener('resize', () => closeActiveTagPopover());
+  window.addEventListener('scroll', (event) => {
+    if (activeOpenTagPopover && !activeOpenTagPopover.popoverEl.contains(event.target)) closeActiveTagPopover();
+  }, true);
+  document.addEventListener('focusout', (event) => {
+    if (!activeOpenTagPopover || !event.relatedTarget) return;
+    const { triggerBtn, popoverEl } = activeOpenTagPopover;
+    if (!triggerBtn.contains(event.relatedTarget) && !popoverEl.contains(event.relatedTarget)) closeActiveTagPopover();
+  });
 
   // Meeting search filter
   const searchInput = document.getElementById('meeting-search');
@@ -4187,6 +4604,7 @@ async function startRecording(requestedCaptureMode = 'mic-and-desktop') {
   }
 
   activeCaptureMode = captureMode;
+  activeRecordingTag = selectedRecordingTag;
 
   setRecordingState('starting');
 
@@ -4200,6 +4618,7 @@ async function startRecording(requestedCaptureMode = 'mic-and-desktop') {
   // owned by a newer Start B). Main scopes cancel by generation; mirror that.
   const setIdleIfCurrentStart = () => {
     if (isCurrentStartAttempt()) {
+      activeRecordingTag = null;
       setRecordingState('idle');
     }
   };
@@ -4639,6 +5058,7 @@ async function discardRecording() {
       currentAudioFile = null;
       currentRecordingDurationSeconds = 0;
       activeRecordingTranscriptionSelection = null;
+      activeRecordingTag = null;
       setRecordingState('idle');
       return;
     }
@@ -4949,6 +5369,7 @@ async function generateSummaryForMeeting(meetingId) {
       if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
         updateSummaryLanguageCaptions(fullMeeting);
         renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '', { stale: fullMeeting && fullMeeting.summaryStale });
+        updateSummaryTagMismatchBanner(fullMeeting);
         activateHistoryDetailTab('summary');
       }
     } else if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, normalizedMeetingId)) {
@@ -5011,6 +5432,7 @@ async function transcribeAudio(options = {}) {
   }
 
   try {
+    const capturedTag = activeRecordingTag;
     addLog(`Saving recording and queuing transcription (${language}, ${modelSize})…`);
     addLog(`File: ${currentAudioFile}`);
 
@@ -5019,9 +5441,15 @@ async function transcribeAudio(options = {}) {
       duration: currentRecordingDurationSeconds || 0,
       language,
       modelSize,
+      ...(capturedTag ? { tag: capturedTag } : {}),
       transcriptionErrorNote: stopErrorNote,
       transcriptionSelection: capturedSelection || null,
     });
+    if (!result || result.success !== false || result.meeting || result.pendingMeeting) {
+      activeRecordingTag = null;
+      selectedRecordingTag = null;
+      renderRecordingTagControl();
+    }
 
     if (result && result.success === false) {
       throw Object.assign(new Error(result.error || 'Could not save recording.'), {
@@ -9018,6 +9446,7 @@ function setupAudioImport() {
   const engine = byId('engine');
   const language = byId('language');
   const model = byId('model');
+  const tagSelect = byId('tag');
   const cancel = byId('cancel');
   const submit = byId('submit');
   const retry = byId('retry');
@@ -9075,7 +9504,9 @@ function setupAudioImport() {
     } else { modelCheckEpoch++; }
   }
   async function chooseFile() {
-    const previousDraft = phase === 'error' ? { engine: engine.value, language: language.value, model: model.value } : null;
+    const previousDraft = phase === 'error'
+      ? { engine: engine.value, language: language.value, model: model.value, tag: tagSelect ? tagSelect.value : '' }
+      : null;
     let selected;
     try {
       selected = await window.electronAPI.selectImportAudio();
@@ -9090,6 +9521,19 @@ function setupAudioImport() {
     byId('fields').hidden = false;
     language.replaceChildren(...[...languageSelect.options].map((option) => option.cloneNode(true)));
     model.replaceChildren(...[...modelSelect.options].map((option) => option.cloneNode(true)));
+    if (tagSelect) {
+      const noneOption = document.createElement('option');
+      noneOption.value = '';
+      noneOption.textContent = 'None (untagged)';
+      const tagOptions = RECORDING_TAGS.map((entry) => {
+        const opt = document.createElement('option');
+        opt.value = entry.slug;
+        opt.textContent = entry.label;
+        return opt;
+      });
+      tagSelect.replaceChildren(noneOption, ...tagOptions);
+      tagSelect.value = previousDraft?.tag ?? '';
+    }
     language.value = previousDraft?.language ?? transcriptionEnginePreferences.whisper.language;
     model.value = previousDraft?.model ?? transcriptionEnginePreferences.whisper.modelSize;
     engine.value = previousDraft?.engine ?? transcriptionEnginePreferences.activeEngine;
@@ -9112,8 +9556,16 @@ function setupAudioImport() {
     phase = 'preparing'; byId('fields').hidden = true; submit.hidden = true; retry.hidden = true;
     cancel.textContent = 'Cancel import'; cancel.disabled = false;
     status.textContent = 'Preparing audio…'; cancel.focus();
+    const selectedImportTag = tagSelect && tagSelect.value ? normalizeTag(tagSelect.value) : null;
     let result;
-    try { result = await window.electronAPI.startImportAudio({ language: selection.language, modelSize: selection.modelSize, transcriptionSelection: selection }); }
+    try {
+      result = await window.electronAPI.startImportAudio({
+        language: selection.language,
+        modelSize: selection.modelSize,
+        ...(selectedImportTag ? { tag: selectedImportTag } : {}),
+        transcriptionSelection: selection,
+      });
+    }
     catch (error) { result = { success: false, error: error.message }; }
     if (result?.code === 'IMPORT_CANCELLED') { phase = 'confirm'; close(); return; }
     if (!result?.success && !result?.meeting && !result?.pendingMeeting) {
@@ -9242,7 +9694,7 @@ const chatState = {
   listenersBound: false,
   threads: [],
   activeThread: null,
-  pendingScope: { type: 'all', meetingIds: [], dateFrom: null, dateTo: null },
+  pendingScope: { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] },
   eligibility: null,
   modelState: { status: 'unloaded', modelId: null, modelName: null },
   sending: false,
@@ -9254,6 +9706,7 @@ const chatState = {
   threadFilter: '',
   scopeFilter: '',
   scopeDraft: null,
+  showAllScopeTags: false,
   popoverOpen: false,
   navigation: 0,
   listRequest: 0,
@@ -9305,7 +9758,7 @@ function syncChatProgressBanner() {
 function getCurrentChatScope() {
   return (chatState.activeThread && chatState.activeThread.scope)
     || chatState.pendingScope
-    || { type: 'all', meetingIds: [], dateFrom: null, dateTo: null };
+    || { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] };
 }
 
 function getMeetingsMapById() {
@@ -9355,7 +9808,11 @@ function renderChatOnboardingAndComposer() {
     reasonEl.textContent = `${chatState.eligibility.reason} Keyword search in History still works anytime.`;
   }
 
-  const scopeText = formatChatScopeLabel(getCurrentChatScope(), getMeetingsMapById());
+  const scopeText = formatChatScopeLabel(
+    getCurrentChatScope(),
+    getMeetingsMapById(),
+    (slug) => getTagMeta(slug)?.label || slug,
+  );
   if (headerTitle) {
     headerTitle.textContent = chatState.activeThread ? chatState.activeThread.title : 'Ask your recordings';
   }
@@ -9490,7 +9947,11 @@ function renderChatThreadSidebar() {
 
       const scopeEl = document.createElement('span');
       scopeEl.className = 'chat-thread-item-scope';
-      scopeEl.textContent = formatChatScopeLabel(thread.scope, meetingsById);
+      scopeEl.textContent = formatChatScopeLabel(
+        thread.scope,
+        meetingsById,
+        (slug) => getTagMeta(slug)?.label || slug,
+      );
 
       selectBtn.append(titleEl, scopeEl);
 
@@ -9739,9 +10200,13 @@ function renderChatStream() {
         const metaSpan = document.createElement('span');
         metaSpan.className = 'chat-turn-meta-row';
         if (citation.tag) {
+          const tagMeta = getTagMeta(citation.tag);
           const tagChip = document.createElement('span');
           tagChip.className = 'chat-source-tag-chip';
-          tagChip.textContent = citation.tag;
+          if (tagMeta) {
+            tagChip.dataset.tag = tagMeta.slug;
+          }
+          tagChip.textContent = tagMeta ? tagMeta.label : citation.tag;
           metaSpan.appendChild(tagChip);
         }
         const parts = [];
@@ -9855,6 +10320,7 @@ async function startNewChatThread(scope = null) {
       meetingIds: Array.isArray(scope.meetingIds) ? [...scope.meetingIds] : [],
       dateFrom: scope.dateFrom || null,
       dateTo: scope.dateTo || null,
+      tags: Array.isArray(scope.tags) ? [...scope.tags] : [],
     };
   }
   closeChatMobileSidebar();
@@ -9883,6 +10349,8 @@ function renderScopePopover() {
   const selBtn = document.getElementById('chat-scope-selected-btn');
   const selPanel = document.getElementById('chat-scope-selected-panel');
   const listEl = document.getElementById('chat-scope-meetings-list');
+  const tagsRow = document.getElementById('chat-scope-tags-row');
+  const tagsToggleBtn = document.getElementById('chat-scope-tags-toggle-btn');
   const fromEl = document.getElementById('chat-scope-date-from');
   const toEl = document.getElementById('chat-scope-date-to');
   const draft = chatState.scopeDraft || getCurrentChatScope();
@@ -9892,6 +10360,70 @@ function renderScopePopover() {
   if (selPanel) selPanel.hidden = draft.type !== 'selected_meetings';
   if (fromEl) fromEl.value = draft.dateFrom ? String(draft.dateFrom).slice(0, 10) : '';
   if (toEl) toEl.value = draft.dateTo ? String(draft.dateTo).slice(0, 10) : '';
+
+  if (tagsRow) {
+    clearElement(tagsRow);
+    const usedEntries = getUsedRecordingTags(meetings);
+    const usedSlugs = new Set(usedEntries.map((entry) => entry.slug));
+    const selectedTags = new Set(
+      (Array.isArray(draft.tags) ? draft.tags : [])
+        .map((t) => normalizeTag(t))
+        .filter(Boolean),
+    );
+    const showAll = usedEntries.length === 0 || chatState.showAllScopeTags;
+    const entriesToShow = showAll
+      ? RECORDING_TAGS
+      : RECORDING_TAGS.filter((entry) => usedSlugs.has(entry.slug) || selectedTags.has(entry.slug));
+
+    if (tagsToggleBtn) {
+      tagsToggleBtn.hidden = usedEntries.length === 0 || usedEntries.length >= RECORDING_TAGS.length;
+      tagsToggleBtn.textContent = chatState.showAllScopeTags ? 'Used tags' : 'All 11 types';
+    }
+
+    for (const entry of entriesToShow) {
+      const selected = selectedTags.has(entry.slug);
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = 'chat-scope-tag-pill';
+      pill.dataset.tag = entry.slug;
+      pill.setAttribute('aria-pressed', String(selected));
+      if (selected) {
+        pill.classList.add('is-selected');
+      }
+
+      const dot = document.createElement('span');
+      dot.className = 'recording-tag-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      pill.appendChild(dot);
+      pill.appendChild(document.createTextNode(entry.shortLabel || entry.label));
+
+      pill.addEventListener('click', () => {
+        if (!chatState.scopeDraft) {
+          chatState.scopeDraft = {
+            type: draft.type === 'selected_meetings' ? 'selected_meetings' : 'all',
+            meetingIds: Array.isArray(draft.meetingIds) ? [...draft.meetingIds] : [],
+            dateFrom: draft.dateFrom || null,
+            dateTo: draft.dateTo || null,
+            tags: [...selectedTags],
+          };
+        }
+        const nextSet = new Set(
+          (Array.isArray(chatState.scopeDraft.tags) ? chatState.scopeDraft.tags : [])
+            .map((t) => normalizeTag(t))
+            .filter(Boolean),
+        );
+        if (nextSet.has(entry.slug)) {
+          nextSet.delete(entry.slug);
+        } else {
+          nextSet.add(entry.slug);
+        }
+        chatState.scopeDraft.tags = [...nextSet];
+        renderScopePopover();
+      });
+
+      tagsRow.appendChild(pill);
+    }
+  }
 
   if (listEl) {
     clearElement(listEl);
@@ -9935,11 +10467,13 @@ function toggleChatScopePopover(forceOpen = null) {
   btn.setAttribute('aria-expanded', String(open));
   if (open) {
     const cur = getCurrentChatScope();
+    chatState.showAllScopeTags = false;
     chatState.scopeDraft = {
       type: cur.type === 'selected_meetings' ? 'selected_meetings' : 'all',
       meetingIds: Array.isArray(cur.meetingIds) ? [...cur.meetingIds] : [],
       dateFrom: cur.dateFrom || null,
       dateTo: cur.dateTo || null,
+      tags: Array.isArray(cur.tags) ? [...cur.tags] : [],
     };
     renderScopePopover();
   }
@@ -10054,7 +10588,7 @@ async function openHistoryMeetingInChat(meetingId) {
   const targetId = String(meetingId || '').trim();
   if (!targetId) return;
   const meeting = meetings.find((m) => String(m.id) === targetId);
-  const scope = { type: 'selected_meetings', meetingIds: [targetId], dateFrom: null, dateTo: null };
+  const scope = { type: 'selected_meetings', meetingIds: [targetId], dateFrom: null, dateTo: null, tags: [] };
 
   activateTab('chat');
   const navigation = ++chatState.navigation;
@@ -10068,6 +10602,7 @@ async function openHistoryMeetingInChat(meetingId) {
     && Array.isArray(t.scope.meetingIds)
     && t.scope.meetingIds.length === 1
     && String(t.scope.meetingIds[0]) === targetId
+    && (!Array.isArray(t.scope?.tags) || t.scope.tags.length === 0)
   ));
 
   if (reusable) {
@@ -10165,7 +10700,7 @@ function setupChatWorkspace() {
   }
 
   document.getElementById('chat-new-thread-btn')?.addEventListener('click', () => {
-    void startNewChatThread({ type: 'all', meetingIds: [], dateFrom: null, dateTo: null });
+    void startNewChatThread({ type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] });
   });
 
   document.getElementById('chat-sidebar-toggle')?.addEventListener('click', () => {
@@ -10253,9 +10788,22 @@ function setupChatWorkspace() {
     renderScopePopover();
   });
 
+  for (const [id, field] of [['chat-scope-date-from', 'dateFrom'], ['chat-scope-date-to', 'dateTo']]) {
+    const input = document.getElementById(id);
+    const syncDraft = () => { if (chatState.scopeDraft) chatState.scopeDraft[field] = input.value || null; };
+    input?.addEventListener('input', syncDraft);
+    input?.addEventListener('change', syncDraft);
+  }
+
+  document.getElementById('chat-scope-tags-toggle-btn')?.addEventListener('click', () => {
+    chatState.showAllScopeTags = !chatState.showAllScopeTags;
+    renderScopePopover();
+  });
+
   document.getElementById('chat-scope-clear-btn')?.addEventListener('click', () => {
-    chatState.scopeDraft = { type: 'all', meetingIds: [], dateFrom: null, dateTo: null };
+    chatState.scopeDraft = { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] };
     chatState.scopeFilter = '';
+    chatState.showAllScopeTags = false;
     const filterEl = document.getElementById('chat-scope-meeting-filter');
     if (filterEl) filterEl.value = '';
     renderScopePopover();
@@ -10269,6 +10817,7 @@ function setupChatWorkspace() {
       meetingIds: Array.isArray(chatState.scopeDraft?.meetingIds) ? [...chatState.scopeDraft.meetingIds] : [],
       dateFrom: fromVal || null,
       dateTo: toVal || null,
+      tags: Array.isArray(chatState.scopeDraft?.tags) ? [...chatState.scopeDraft.tags] : [],
     };
     if (chatState.activeThread && window.electronAPI?.updateChatThreadScope) {
       try {

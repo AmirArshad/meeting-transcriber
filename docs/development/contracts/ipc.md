@@ -50,11 +50,15 @@ The native picker returns the basename of one selected MP3, WAV or Opus file. Ma
 
 `generate-summary` requires `{ meetingId, transcriptLanguage,
 sourceTranscriptHash, profile? }`, with optional `modelId` constrained to the
-installed model. Main validates eligibility and the current on-disk transcript;
-it passes `--language`, `--source-transcript-hash` and `--model-id` to the local
-runner. Successful `ai.summary` metadata may add `language`, `languageSource`
-(`userConfirmed`), `modelId`, and `languagePolicyVersion`. Missing fields mean
-legacy/unconfirmed output. Channel names and preload export shape are unchanged.
+installed model. Main validates eligibility and the current on-disk transcript
+and reads the recording's authoritative `tag` from `meeting_manager get`;
+it passes `--language`, `--source-transcript-hash`, `--model-id`, and optional
+`--tag` to the local runner. Successful `ai.summary` metadata may add
+`language`, `languageSource` (`userConfirmed`), `modelId`,
+`languagePolicyVersion`, `tag` (canonical slug or `null` for untagged recordings),
+and `templateVersion`.
+Missing fields mean legacy/unconfirmed output. Channel names and preload export
+shape are unchanged.
 
 ### Transcript & subtitle export
 
@@ -62,7 +66,7 @@ legacy/unconfirmed output. Channel names and preload export shape are unchanged.
 
 ### Local History search & threaded Chat
 
-`history-search-service.js` owns the disposable SQLite FTS5 cache (`userData/search/history-index.sqlite`) and exposes `search-history` (debounced renderer search returning BM25-ranked meetings with highlighted `snippetParts` and `[MM:SS]` timestamp jump coordinates), `rebuild-history-index`, and `get-history-index-status`. `history-qa-service.js` owns `userData/chat/threads.json` (`chat-thread-store.js`) and exposes `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, plus renderer push listeners `onHistoryQaModelState` (`history-qa-model-state`) and `onHistoryQaProgress` (`history-qa-progress`). The renderer renders Chat responses exclusively via bundled offline `marked` + strict-allowlist `DOMPurify` (`src/renderer/markdown-render-helpers.js`) and never sends bearer tokens, ports, or arbitrary file paths over IPC.
+`history-search-service.js` owns the disposable SQLite FTS5 cache (`userData/search/history-index.sqlite`) and exposes `search-history` (debounced renderer search supporting optional `tags` filtering and returning BM25-ranked meetings with highlighted `snippetParts` and `[MM:SS]` timestamp jump coordinates), `rebuild-history-index`, and `get-history-index-status`. `history-qa-service.js` owns `userData/chat/threads.json` (`chat-thread-store.js`, where `scope` supports `{ type, meetingIds, dateFrom, dateTo, tags }`) and exposes `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, plus renderer push listeners `onHistoryQaModelState` (`history-qa-model-state`) and `onHistoryQaProgress` (`history-qa-progress`). Recording creation/update payloads (`add-meeting`, `update-meeting`, `finalize-recording-transcription`, `start-import-audio`) accept optional canonical `tag` values validated symmetrically in main and Python (`meeting_manager.py`). The renderer renders Chat responses exclusively via bundled offline `marked` + strict-allowlist `DOMPurify` (`src/renderer/markdown-render-helpers.js`) and never sends bearer tokens, ports, or arbitrary file paths over IPC.
 
 ### In-app auto-updater
 

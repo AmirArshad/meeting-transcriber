@@ -1114,3 +1114,106 @@ def test_neighbor_timestamp_excerpt_preservation_and_multispeaker_overview_token
     assert any("Alice:" in item["text"] and "Bob:" in item["text"] for item in ov["evidence"] if item["meetingId"] == "m_long_two")
     assert any(item["meetingId"] == "m_short" for item in ov["evidence"])
 
+
+def test_history_qa_scope_tags_and_evidence_headers(tmp_path):
+    from backend.history_qa.retrieval import normalize_scope
+    from backend.history_qa.qa_runner import build_qa_messages
+
+    normalized = normalize_scope({"type": "all", "tags": ["Voice Note", "call", "voice-note"]})
+    assert normalized["tags"] == ["voice-note", "call"]
+
+    with pytest.raises(ValueError, match="Invalid history scope tags"):
+        normalize_scope({"type": "all", "tags": ["nonexistent-tag"]})
+
+    rec_dir = tmp_path / "recordings"
+    index_path = tmp_path / "search" / "history-index.sqlite"
+    _seed_meeting(
+        rec_dir,
+        "m_call",
+        "ISP Support Call",
+        "2026-11-18T10:00:00",
+        "**[00:10 - 00:25]** **Agent:**\nTicket reference #4921 confirmed credit applied.\n",
+    )
+    _seed_meeting(
+        rec_dir,
+        "m_note",
+        "Evening Thought",
+        "2026-11-19T20:00:00",
+        "**[00:05 - 00:20]** **Speaker 1:**\nCredit union transfer reminder for Friday.\n",
+    )
+    metadata = json.loads((rec_dir / "meetings.json").read_text(encoding="utf-8"))
+    metadata[0]["tag"] = "call"
+    metadata[1]["tag"] = None
+    (rec_dir / "meetings.json").write_text(json.dumps(metadata), encoding="utf-8")
+    sync_history_index(rec_dir, index_path)
+
+    # Overview mode restricted by scope.tags
+    ov_call = retrieve_evidence(
+        rec_dir,
+        index_path,
+        question="Summarize recent recordings",
+        scope={"type": "all", "tags": ["call"]},
+    )
+    assert ov_call["searchedMeetingCount"] == 1
+    assert {ev["meetingId"] for ev in ov_call["evidence"]} == {"m_call"}
+    assert ov_call["evidence"][0]["tag"] == "call"
+
+    # Targeted mode restricted by scope.tags
+    targeted_call = retrieve_evidence(
+        rec_dir,
+        index_path,
+        question="What credit was mentioned?",
+        scope={"type": "all", "tags": ["call"]},
+    )
+    assert {ev["meetingId"] for ev in targeted_call["evidence"]} == {"m_call"}
+
+    # build_qa_messages includes [Tag: Phone / Support Call] for tagged evidence and omits for untagged
+    msgs = build_qa_messages(
+        question="What credit was mentioned?",
+        history=[],
+        evidence=[
+            {
+                "evidenceId": "E1",
+                "meetingTitle": "ISP Support Call",
+                "meetingDate": "2026-11-18T10:00:00",
+                "startSec": 10.0,
+                "speaker": "Agent",
+                "kind": "transcript",
+                "tag": "call",
+                "text": "Ticket reference #4921 confirmed credit applied.",
+            },
+            {
+                "evidenceId": "E2",
+                "meetingTitle": "Evening Thought",
+                "meetingDate": "2026-11-19T20:00:00",
+                "startSec": 5.0,
+                "speaker": "Speaker 1",
+                "kind": "transcript",
+                "tag": None,
+                "text": "Credit union transfer reminder.",
+            },
+        ],
+    )
+    user_prompt = msgs[-1]["content"]
+    assert "[Tag: Phone / Support Call]" in user_prompt
+    e2_line = [line for line in user_prompt.splitlines() if line.startswith("[E2]")][0]
+    assert "[Tag:" not in e2_line
+
+
+
+
+def test_match_entities_preserves_repeated_words_and_plural_tag_aliases():
+    from backend.history_qa.retrieval import match_entities
+
+    headers = [{'meetingId': 'voice', 'title': 'Memo', 'tag': 'voice-note'},
+               {'meetingId': 'call', 'title': 'Support', 'tag': 'call'},
+               {'meetingId': 'appointment', 'title': 'Visit', 'tag': 'appointment'},
+               {'meetingId': 'brainstorm', 'title': 'Ideas', 'tag': 'brainstorm'},
+               {'meetingId': 'music', 'title': 'Practice', 'tag': 'music'}]
+    for question, expected in [
+        ('What note did I leave in my voice note?', 'voice'),
+        ('What call details came up in the support call?', 'call'),
+        ('voice notes and voice memos', 'voice'), ('phone calls and support calls', 'call'),
+        ('consultations', 'appointment'), ('brainstorms', 'brainstorm'), ('rehearsals', 'music'),
+    ]:
+        assert expected in match_entities(question, headers)['meetingIds']

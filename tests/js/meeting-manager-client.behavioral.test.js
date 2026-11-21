@@ -495,3 +495,82 @@ test('commitTranscriptionAttempt passes --captions-candidate only when provided'
   assert.notEqual(flagIndex, -1);
   assert.equal(spawnedArgs[1][flagIndex + 1], captionsCandidate);
 });
+
+test('addMeetingToHistory and update-meeting validate and forward --tag / --clear-tag', async () => {
+  const spawnedArgs = [];
+  const client = createMeetingManagerClient({
+    app: { getPath: () => '/tmp/avanevis-test' },
+    path,
+    spawnTrackedPython(args) {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      spawnedArgs.push(args);
+      queueMicrotask(() => {
+        proc.stdout.emit('data', Buffer.from('{"id":"meeting-1","tag":"voice-note"}'));
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+    pythonConfig: { backendPath: '/tmp/backend' },
+    getBackendModuleArgs: (moduleName, args) => [moduleName, ...args],
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      return { getStdout: () => stdout, getStderr: () => '', assertStdoutWithinLimit() {} };
+    },
+    appendSpawnLogBuffer: (buffer, chunk) => buffer + String(chunk),
+    assertTrustedRendererSender() {},
+    sanitizeTranscriptionError: (value) => value,
+    getRecordingsDir: () => '/tmp/avanevis-test/recordings',
+    assertSafeExistingRecordingAudioPath: (value) => value,
+    assertSafeExistingTranscriptPath: (value) => value,
+    validateAiMetadataPaths: (value) => value,
+  });
+  const handlers = {};
+  client.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+
+  await client.addMeetingToHistory({
+    audioPath: '/tmp/avanevis-test/recordings/a.opus',
+    transcriptPath: '/tmp/avanevis-test/recordings/a.md',
+    duration: 12,
+    tag: 'Voice Memo',
+  });
+  const addTagIdx = spawnedArgs[0].indexOf('--tag');
+  assert.notEqual(addTagIdx, -1);
+  assert.equal(spawnedArgs[0][addTagIdx + 1], 'voice-note');
+
+  await assert.rejects(
+    client.addMeetingToHistory({
+      audioPath: '/tmp/avanevis-test/recordings/b.opus',
+      transcriptPath: '/tmp/avanevis-test/recordings/b.md',
+      duration: 12,
+      tag: 'invalid-tag',
+    }),
+    /Unsupported recording tag/,
+  );
+  assert.equal(spawnedArgs.length, 1);
+
+  await handlers['update-meeting']({}, { meetingId: 'meeting-1', updates: { tag: 'Lecture / Study' } });
+  const updTagIdx = spawnedArgs[1].indexOf('--tag');
+  assert.notEqual(updTagIdx, -1);
+  assert.equal(spawnedArgs[1][updTagIdx + 1], 'lecture');
+
+  await handlers['update-meeting']({}, { meetingId: 'meeting-1', updates: { tag: null } });
+  assert.equal(spawnedArgs[2].includes('--clear-tag'), true);
+
+  await handlers['update-meeting']({}, { meetingId: 'meeting-1', updates: { tag: '' } });
+  assert.equal(spawnedArgs[3].includes('--clear-tag'), true);
+
+  await handlers['update-meeting']({}, { meetingId: 'meeting-1', updates: { tag: '   ' } });
+  assert.deepEqual(spawnedArgs[4].slice(-2), ['meeting-1', '--clear-tag']);
+
+  await handlers['update-meeting']({}, { meetingId: 'meeting-1', updates: { title: 'Renamed', tag: undefined } });
+  assert.deepEqual(spawnedArgs[5].slice(3), ['update', 'meeting-1', '--title=Renamed']);
+
+  await assert.rejects(
+    handlers['update-meeting']({}, { meetingId: 'meeting-1', updates: { tag: 'not-a-tag' } }),
+    /Unsupported recording tag/,
+  );
+  assert.equal(spawnedArgs.length, 6);
+});

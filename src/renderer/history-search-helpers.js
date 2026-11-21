@@ -1,11 +1,11 @@
 (function initHistorySearchHelpers(root, factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
+    module.exports = factory(require('./tag-helpers').normalizeTag);
     return;
   }
 
-  root.historySearchHelpers = factory();
-}(typeof globalThis !== 'undefined' ? globalThis : this, function buildHistorySearchHelpers() {
+  root.historySearchHelpers = factory(root.tagHelpers.normalizeTag);
+}(typeof globalThis !== 'undefined' ? globalThis : this, function buildHistorySearchHelpers(normalizeTag) {
   function toFiniteNonNegativeNumber(value) {
     if (value === null || value === undefined || value === '' || typeof value === 'boolean') {
       return null;
@@ -75,7 +75,16 @@
     return safe;
   }
 
-  function mergeSearchResultsWithMeetings(meetings, searchResponse) {
+  function matchesMeetingTag(meeting, tag) {
+    if (!String(tag || '').trim()) {
+      return true;
+    }
+    const canonicalTag = normalizeTag(tag);
+    return canonicalTag !== null && normalizeTag(meeting?.tag) === canonicalTag;
+  }
+
+  function mergeSearchResultsWithMeetings(meetings, searchResponse, options = {}) {
+    const activeTag = options?.tag;
     const byId = new Map();
     for (const meeting of Array.isArray(meetings) ? meetings : []) {
       if (meeting && meeting.id != null) {
@@ -98,7 +107,7 @@
         continue;
       }
       const liveMeeting = byId.get(id);
-      if (!liveMeeting) {
+      if (!liveMeeting || !matchesMeetingTag(liveMeeting, activeTag)) {
         continue;
       }
       seen.add(id);
@@ -115,9 +124,10 @@
     return results;
   }
 
-  function fallbackFilterMeetingsByTitle(meetings, rawQuery) {
+  function fallbackFilterMeetingsByTitle(meetings, rawQuery, options = {}) {
+    const activeTag = options?.tag;
     const normalized = normalizeHistorySearchQuery(rawQuery).toLowerCase();
-    const list = Array.isArray(meetings) ? meetings : [];
+    const list = (Array.isArray(meetings) ? meetings : []).filter((m) => matchesMeetingTag(m, activeTag));
     if (!normalized) {
       return list;
     }

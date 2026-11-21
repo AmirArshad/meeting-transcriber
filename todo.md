@@ -5,6 +5,13 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 
 ## Status
 
+### v3.1 Phase 2 review fixes · 2026-11-21
+
+All 12 review findings are addressed on `feat/v3.1-phase2-tags-templates`.
+The integrated `npm run test:all` exited 0 on macOS with 1,275 JavaScript tests
+passed and 3 skipped, 951 Python tests passed and 10 skipped, and both syntax
+checks passed.
+
 ### v3.0 release plan · 2026-11-20
 
 Phased implementation plan on `release/3.0`: [v3.0.0 release plan](docs/superpowers/plans/2026-11-20-v3.0-release-plan.md) · [v3.0 qualification record](docs/development/V3_0_QUALIFICATION.md).

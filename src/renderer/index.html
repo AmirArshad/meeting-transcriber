@@ -44,6 +44,12 @@
                 </div>
               </div>
               <p id="import-audio-english" class="setting-description" hidden>Language: English only</p>
+              <div class="ai-addon-field">
+                <label for="import-audio-tag">Recording tag (optional)</label>
+                <select id="import-audio-tag" class="device-select">
+                  <option value="">None (untagged)</option>
+                </select>
+              </div>
             </div>
             <p id="import-audio-status" role="status" aria-live="polite"></p>
           </div>
@@ -705,9 +711,33 @@
             <section class="card recording-section">
               <div class="recording-header">
                 <h2>Record Audio</h2>
-                <div class="recording-status">
-                  <div class="status-indicator" id="status-indicator"></div>
-                  <span id="status-text">Ready</span>
+                <div class="recording-header-right">
+                  <div class="recording-tag-anchor">
+                    <button
+                      type="button"
+                      id="recording-tag-btn"
+                      class="recording-tag-pill is-untagged"
+                      aria-haspopup="listbox"
+                      aria-expanded="false"
+                      aria-controls="recording-tag-popover"
+                      title="Optional recording tag"
+                    >
+                      <span class="recording-tag-dot" aria-hidden="true"></span>
+                      <span id="recording-tag-btn-label">Add tag</span>
+                      <span class="recording-tag-caret" aria-hidden="true">▾</span>
+                    </button>
+                    <div
+                      id="recording-tag-popover"
+                      class="recording-tag-popover"
+                      role="listbox"
+                      aria-label="Choose recording tag"
+                      hidden
+                    ></div>
+                  </div>
+                  <div class="recording-status">
+                    <div class="status-indicator" id="status-indicator"></div>
+                    <span id="status-text">Ready</span>
+                  </div>
                 </div>
               </div>
 
@@ -906,6 +936,14 @@
                   />
                 </div>
 
+                <div
+                  id="history-tag-filter-bar"
+                  class="history-tag-filter-bar"
+                  role="group"
+                  aria-label="Filter recordings by tag"
+                  hidden
+                ></div>
+
                 <div class="selection-toolbar" id="selection-toolbar" role="toolbar" aria-label="Bulk actions">
                   <span class="selection-count">
                     <span id="selection-count-text">0 selected</span>
@@ -975,6 +1013,29 @@
                           <span id="meeting-date"></span>
                           <span class="meta-separator">&middot;</span>
                           <span id="meeting-duration"></span>
+                          <span class="meta-separator">&middot;</span>
+                          <div class="recording-tag-anchor">
+                            <button
+                              type="button"
+                              id="meeting-tag-btn"
+                              class="recording-tag-pill is-untagged"
+                              aria-haspopup="listbox"
+                              aria-expanded="false"
+                              aria-controls="meeting-tag-popover"
+                              title="Set recording tag"
+                            >
+                              <span class="recording-tag-dot" aria-hidden="true"></span>
+                              <span id="meeting-tag-btn-label">Add tag</span>
+                              <span class="recording-tag-caret" aria-hidden="true">▾</span>
+                            </button>
+                            <div
+                              id="meeting-tag-popover"
+                              class="recording-tag-popover"
+                              role="listbox"
+                              aria-label="Choose recording tag"
+                              hidden
+                            ></div>
+                          </div>
                         </div>
                       </div>
                       <div class="meeting-detail-actions" role="group" aria-label="Recording actions">
@@ -1127,6 +1188,22 @@
                         </div>
                       </div>
                       <div
+                        id="summary-tag-mismatch-banner"
+                        class="summary-tag-mismatch-banner"
+                        role="status"
+                        aria-live="polite"
+                        hidden
+                      >
+                        <span id="summary-tag-mismatch-text" class="summary-tag-mismatch-text"></span>
+                        <button
+                          type="button"
+                          id="summary-tag-mismatch-regenerate"
+                          class="btn btn-small btn-secondary"
+                        >
+                          Regenerate
+                        </button>
+                      </div>
+                      <div
                         class="meeting-summary markdown-body"
                         id="meeting-summary"
                       >
@@ -1275,6 +1352,20 @@
                         aria-label="Filter recordings"
                       />
                       <div id="chat-scope-meetings-list" class="chat-scope-meetings-list"></div>
+                    </div>
+                    <div class="chat-scope-tags-section" id="chat-scope-tags-section">
+                      <div class="chat-scope-tags-header">
+                        <span>Filter by tag</span>
+                        <button type="button" id="chat-scope-tags-toggle-btn" class="chat-scope-tags-toggle" hidden>
+                          All 11 types
+                        </button>
+                      </div>
+                      <div
+                        id="chat-scope-tags-row"
+                        class="chat-scope-tags-row"
+                        role="group"
+                        aria-label="Filter chat by recording tags"
+                      ></div>
                     </div>
                     <div class="chat-scope-dates-row">
                       <label>
@@ -1820,6 +1911,7 @@
     <script src="recovery-ui-helpers.js"></script>
     <script src="update-notification-helpers.js"></script>
     <script src="history-detail-helpers.js"></script>
+    <script src="tag-helpers.js"></script>
     <script src="history-search-helpers.js"></script>
     <script src="formatters.js"></script>
     <script src="summary-ui-helpers.js"></script>
