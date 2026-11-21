@@ -980,7 +980,18 @@ test('ai-addon-ipc checks live VRAM, pre-validates removal, awaits process exit 
   assert.equal(memoryCalls.at(-1)?.live, true);
 
   // validateSummaryRuntimeSmoke awaits ensureSummaryProcessExited().
-  await svc.validateSummaryRuntimeSmoke({ modelId: 'qwen3.5-9b-q4-k-m', runtimeArtifact: { executableName: 'llama-cli' } });
+  const smokeRuntimeDir = path.join(tmpDir, 'smoke-runtime');
+  fs.mkdirSync(path.join(smokeRuntimeDir, 'extract'), { recursive: true });
+  fs.writeFileSync(path.join(smokeRuntimeDir, 'extract', 'llama-cli'), 'fixture');
+  for (const library of ['cublas', 'cudnn']) {
+    fs.mkdirSync(path.join(tmpDir, 'ai-addons', 'cuda', 'python', 'nvidia', library, 'lib'), { recursive: true });
+  }
+  await svc.validateSummaryRuntimeSmoke({
+    modelId: 'qwen3.5-9b-q4-k-m',
+    runtimeArtifact: { executableName: 'llama-cli' },
+    runtimeDir: smokeRuntimeDir,
+    cudaStatus: { statusCode: 'ready', installed: true, deviceAvailable: true, runtimeLoadable: true, missingLibraries: [], matchedProfile: 'cuda12' },
+  });
   assert.equal(exitWaits, 1);
 
   // validate-summary-model cancel returns status snapshot (not { canceled: true }) and uses live memory.
