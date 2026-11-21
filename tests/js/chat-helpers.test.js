@@ -6,12 +6,16 @@ const { spawn } = require('node:child_process');
 const path = require('node:path');
 
 const {
+  buildAssistantNoticeView,
   buildModelMemoryPillView,
   buildStarterPrompts,
   filterChatThreads,
   formatChatScopeLabel,
   groupThreadsByRecency,
   isCitedMeetingAvailable,
+  isScopeFiltered,
+  resolveNoticeActionScope,
+  shouldShowChatProgressBanner,
 } = require('../../src/renderer/chat-helpers');
 
 function electronFixtureArgs(fixturePath) {
@@ -210,4 +214,80 @@ test('recency uses calendar dates across daylight saving changes', () => {
   } finally {
     if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous;
   }
+});
+
+
+test('isScopeFiltered and buildAssistantNoticeView produce honest recovery actions across all three failure states', () => {
+  assert.equal(isScopeFiltered({ type: 'all' }), false);
+  assert.equal(isScopeFiltered({ type: 'selected_meetings', meetingIds: ['m1'] }), true);
+  assert.equal(isScopeFiltered({ type: 'all', dateFrom: '2026-09-05' }), true);
+
+  assert.equal(buildAssistantNoticeView({ status: 'answered', content: 'Ok' }), null);
+
+  const noMatch = buildAssistantNoticeView(
+    { status: 'no_matching_excerpts', searchedMeetingCount: 2, detectedDateFilter: '2026-09-05' },
+    { type: 'selected_meetings', meetingIds: ['m1', 'm2'], dateFrom: '2026-09-01' },
+  );
+  assert.equal(noMatch.variant, 'no_matching_excerpts');
+  assert.match(noMatch.title, /2026-09-05/);
+  assert.deepEqual(noMatch.actions.map((a) => a.id), ['search_all', 'reset_filters']);
+  assert.equal(noMatch.showInspectedSources, false);
+
+  const insufficient = buildAssistantNoticeView(
+    { status: 'insufficient_evidence', searchedMeetingCount: 3, evidenceCount: 4, inspectedSources: [{ meetingId: 'm1' }] },
+    { type: 'all' },
+  );
+  assert.equal(insufficient.variant, 'insufficient_evidence');
+  assert.match(insufficient.title, /Found 4 matching passages/);
+  assert.deepEqual(insufficient.actions.map((a) => a.id), ['retry']);
+  assert.equal(insufficient.showInspectedSources, true);
+
+  const verFail = buildAssistantNoticeView(
+    { status: 'verification_failed', inspectedSources: [{ meetingId: 'm1' }] },
+    { type: 'selected_meetings', meetingIds: ['m1'] },
+  );
+  assert.equal(verFail.variant, 'verification_failed');
+  assert.deepEqual(verFail.actions.map((a) => a.id), ['retry', 'search_all']);
+  assert.equal(verFail.showInspectedSources, true);
+
+  // Unfiltered "All recordings" notice copy stays accurate across all 3 no_matching_excerpts variants.
+  const unfilteredDefault = buildAssistantNoticeView(
+    { status: 'no_matching_excerpts', searchedMeetingCount: 5 },
+    { type: 'all' },
+  );
+  assert.equal(unfilteredDefault.title, 'No matching passages found across your recordings.');
+
+  const unfilteredDate = buildAssistantNoticeView(
+    { status: 'no_matching_excerpts', searchedMeetingCount: 5, detectedDateFilter: '2026-09-05' },
+    { type: 'all' },
+  );
+  assert.equal(unfilteredDate.title, 'No recordings matched "2026-09-05".');
+
+  const unfilteredEmpty = buildAssistantNoticeView(
+    { status: 'no_matching_excerpts', searchedMeetingCount: 0 },
+    { type: 'all' },
+  );
+  assert.equal(unfilteredEmpty.title, 'No indexed recordings are available yet.');
+});
+
+test('shouldShowChatProgressBanner and resolveNoticeActionScope handle post-stream phases and empty selected reset', () => {
+  assert.equal(shouldShowChatProgressBanner({ sendVisible: false, streamingDraft: '', progress: { phase: 'verifying' } }), false);
+  assert.equal(shouldShowChatProgressBanner({ sendVisible: true, streamingDraft: 'Partial draft', progress: { phase: 'streaming' } }), false);
+  assert.equal(shouldShowChatProgressBanner({ sendVisible: true, streamingDraft: 'Partial draft', progress: { phase: 'verifying' } }), true);
+  assert.equal(shouldShowChatProgressBanner({ sendVisible: true, streamingDraft: 'Partial draft', progress: { phase: 'citation-repair' } }), true);
+  assert.equal(shouldShowChatProgressBanner({ sendVisible: true, streamingDraft: 'Partial draft', progress: { phase: 'json-repair' } }), true);
+
+  assert.deepEqual(
+    resolveNoticeActionScope('reset_filters', { type: 'selected_meetings', meetingIds: [], dateFrom: '2026-09-01', dateTo: '2026-09-30' }),
+    { type: 'all', meetingIds: [], dateFrom: null, dateTo: null },
+  );
+  assert.deepEqual(
+    resolveNoticeActionScope('reset_filters', { type: 'selected_meetings', meetingIds: ['m1'], dateFrom: '2026-09-01' }),
+    { type: 'selected_meetings', meetingIds: ['m1'], dateFrom: null, dateTo: null },
+  );
+  assert.deepEqual(
+    resolveNoticeActionScope('search_all', { type: 'selected_meetings', meetingIds: ['m1'] }),
+    { type: 'all', meetingIds: [], dateFrom: null, dateTo: null },
+  );
+  assert.equal(resolveNoticeActionScope('retry', { type: 'all' }), null);
 });

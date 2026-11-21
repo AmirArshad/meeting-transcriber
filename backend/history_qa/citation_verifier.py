@@ -10,20 +10,48 @@ INSUFFICIENT_EVIDENCE_MESSAGE = (
     "Not enough matching information in the selected transcripts "
     "or summaries to answer that."
 )
+NO_MATCHING_EXCERPTS_MESSAGE = (
+    "No matching excerpts were found in the selected recordings for that question."
+)
+VERIFICATION_FAILED_MESSAGE = (
+    "The local model returned a response whose citations could not be verified "
+    "against the retrieved transcripts."
+)
 JSON_REPAIR_BYTE_CAP = 12_000
 
 _THINK_BLOCK_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
 _UNCLOSED_THINK_RE = re.compile(r"<think>[\s\S]*$", re.IGNORECASE)
+_GEMMA_THOUGHT_BLOCK_RE = re.compile(
+    r"<\|channel>thought[\s\S]*?<channel\|>",
+    re.IGNORECASE,
+)
+_UNCLOSED_GEMMA_THOUGHT_RE = re.compile(
+    r"<\|channel>thought[\s\S]*$",
+    re.IGNORECASE,
+)
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$", re.IGNORECASE)
-_EVIDENCE_GROUP_RE = re.compile(r"\[((?:E\d+)(?:\s*,\s*E\d+)+)\]")
+_EVIDENCE_GROUP_RE = re.compile(r"\[((?:E\d+)(?:\s*[,;/]\s*E\d+)+)\]")
 _SINGLE_EVIDENCE_RE = re.compile(r"\[(E\d+)\]")
+
+_ATX_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}(?:\s+.*|\s*)$")
+_HR_RE = re.compile(r"^\s*([-*_])(?:\s*\1){2,}\s*$")
+_FENCE_LINE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+_LIST_ITEM_START_RE = re.compile(r"^\s*(?:[-+*]|\d+[.)])\s+")
+_BLOCKQUOTE_LINE_RE = re.compile(r"^\s*>")
+_TABLE_SEP_MULTI_RE = re.compile(
+    r"^\s*\|?\s*:?-{1,}:?\s*(?:\|\s*:?-{1,}:?\s*)+\|?\s*$"
+)
+_TABLE_SEP_SINGLE_RE = re.compile(r"^\s*\|\s*:?-{1,}:?\s*\|\s*$")
+_BOLD_LEAD_IN_RE = re.compile(r"^\*\*[^*\n]{1,120}\*\*:?$")
 
 
 def strip_model_artifacts(raw_text: Any) -> str:
-    """Remove Qwen/llama <think> blocks and outer Markdown code fences."""
+    """Remove Qwen/Gemma reasoning blocks and outer Markdown code fences."""
     cleaned = str(raw_text or "").strip()
     cleaned = _THINK_BLOCK_RE.sub("", cleaned)
-    cleaned = _UNCLOSED_THINK_RE.sub("", cleaned).strip()
+    cleaned = _UNCLOSED_THINK_RE.sub("", cleaned)
+    cleaned = _GEMMA_THOUGHT_BLOCK_RE.sub("", cleaned)
+    cleaned = _UNCLOSED_GEMMA_THOUGHT_RE.sub("", cleaned).strip()
     fence_match = _CODE_FENCE_RE.match(cleaned)
     if fence_match:
         cleaned = fence_match.group(1).strip()
@@ -81,10 +109,6 @@ def parse_qa_json(raw_text: Any) -> Optional[Dict[str, Any]]:
 
 def _normalize_inline_citations(markdown: str, valid_ids: set[str]) -> Tuple[str, List[str]]:
     """Expand multi-ID groups `[E1, E2]` -> `[E1] [E2]` and strip unverified `[Ek]`."""
-    expanded = _EVIDENCE_GROUP_RE.sub(
-        lambda m: " ".join(f"[{tok.strip()}]" for tok in m.group(1).split(",")),
-        markdown,
-    )
     found_valid: List[str] = []
 
     def replace_marker(match: re.Match[str]) -> str:
@@ -95,12 +119,203 @@ def _normalize_inline_citations(markdown: str, valid_ids: set[str]) -> Tuple[str
             return f"[{eid}]"
         return ""
 
-    sanitized = _SINGLE_EVIDENCE_RE.sub(replace_marker, expanded)
-    # Collapse leftover extra spaces before punctuation when hallucinated markers were stripped.
-    sanitized = re.sub(r"[ \t]+([.,;:!?])", r"\1", sanitized)
-    sanitized = re.sub(r"[ \t]{2,}", " ", sanitized)
-    sanitized = "\n".join(line.rstrip() for line in sanitized.splitlines()).strip()
-    return sanitized, found_valid
+    out_lines: List[str] = []
+    close_fence_re: Optional[re.Pattern[str]] = None
+    for line in str(markdown or "").splitlines():
+        if close_fence_re is not None:
+            out_lines.append(line)
+            if close_fence_re.match(line):
+                close_fence_re = None
+            continue
+
+        fence_match = _FENCE_LINE_RE.match(line)
+        if fence_match:
+            fence_char = fence_match.group(1)[0]
+            fence_len = len(fence_match.group(1))
+            close_fence_re = re.compile(rf"^\s{{0,3}}{re.escape(fence_char)}{{{fence_len},}}\s*$")
+            out_lines.append(line)
+            continue
+
+        expanded = _EVIDENCE_GROUP_RE.sub(
+            lambda m: " ".join(
+                f"[{tok.strip()}]"
+                for tok in re.split(r"\s*[,;/]\s*", m.group(1))
+                if tok.strip()
+            ),
+            line,
+        )
+        sanitized_line = _SINGLE_EVIDENCE_RE.sub(replace_marker, expanded)
+        # Collapse leftover extra spaces before punctuation or between inline words without altering leading indentation.
+        sanitized_line = re.sub(r"(?<=\S)[ \t]+([.,;:!?])", r"\1", sanitized_line)
+        sanitized_line = re.sub(r"(?<=\S)[ \t]{2,}", " ", sanitized_line)
+        out_lines.append(sanitized_line.rstrip())
+
+    while out_lines and not out_lines[0].strip():
+        out_lines.pop(0)
+    while out_lines and not out_lines[-1].strip():
+        out_lines.pop()
+
+    return "\n".join(out_lines), found_valid
+
+
+def _is_table_separator(line: str) -> bool:
+    return not _HR_RE.match(line) and bool(_TABLE_SEP_MULTI_RE.match(line) or _TABLE_SEP_SINGLE_RE.match(line))
+
+
+def _is_lead_in_line(text: str) -> bool:
+    stripped = str(text or "").strip()
+    if not stripped or _SINGLE_EVIDENCE_RE.search(stripped):
+        return False
+    without_trailing_markup = re.sub(r"[*_~`]+$", "", stripped)
+    if without_trailing_markup.endswith(":") and len(stripped) <= 200:
+        return True
+    return bool(_BOLD_LEAD_IN_RE.match(stripped))
+
+
+def _is_pipe_row(line: str) -> bool:
+    stripped = line.strip()
+    return "|" in stripped and not _ATX_HEADING_RE.match(stripped) and not _LIST_ITEM_START_RE.match(stripped)
+
+
+def _block_has_factual_text(text: str) -> bool:
+    stripped = _SINGLE_EVIDENCE_RE.sub("", text)
+    return bool(re.search(r"\w", stripped, re.UNICODE))
+
+
+def _parse_markdown_blocks(markdown: str) -> List[Dict[str, str]]:
+    """Parse Markdown into logical structural and factual blocks."""
+    lines = markdown.splitlines()
+    blocks: List[Dict[str, str]] = []
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped:
+            i += 1
+            continue
+
+        # 1. Fenced code block
+        fence_match = _FENCE_LINE_RE.match(line)
+        if fence_match:
+            fence_char = fence_match.group(1)[0]
+            fence_len = len(fence_match.group(1))
+            code_lines = [line]
+            i += 1
+            close_re = re.compile(rf"^\s{{0,3}}{re.escape(fence_char)}{{{fence_len},}}\s*$")
+            while i < n:
+                code_lines.append(lines[i])
+                if close_re.match(lines[i]):
+                    i += 1
+                    break
+                i += 1
+            blocks.append({"type": "code", "text": "\n".join(code_lines)})
+            continue
+
+        # 2. Horizontal rule
+        if _HR_RE.match(line):
+            blocks.append({"type": "hr", "text": stripped})
+            i += 1
+            continue
+
+        # 3. ATX heading
+        if _ATX_HEADING_RE.match(line):
+            blocks.append({"type": "heading", "text": stripped})
+            i += 1
+            continue
+
+        # 4. GFM table (header row followed by separator row)
+        if i + 1 < n and _is_pipe_row(line) and _is_table_separator(lines[i + 1]):
+            blocks.append({"type": "table_header", "text": line})
+            blocks.append({"type": "table_sep", "text": lines[i + 1]})
+            i += 2
+            while i < n:
+                row_line = lines[i]
+                row_stripped = row_line.strip()
+                if (
+                    not row_stripped
+                    or _FENCE_LINE_RE.match(row_line)
+                    or _ATX_HEADING_RE.match(row_line)
+                    or _HR_RE.match(row_line)
+                    or _LIST_ITEM_START_RE.match(row_line)
+                    or _BLOCKQUOTE_LINE_RE.match(row_line)
+                    or "|" not in row_stripped
+                ):
+                    break
+                blocks.append({"type": "table_row", "text": row_line})
+                i += 1
+            continue
+
+        # 5. List item (ordered or unordered) with indented continuation lines
+        if _LIST_ITEM_START_RE.match(line):
+            item_lines = [line]
+            i += 1
+            while i < n:
+                cont = lines[i]
+                cont_stripped = cont.strip()
+                if (
+                    not cont_stripped
+                    or _FENCE_LINE_RE.match(cont)
+                    or _ATX_HEADING_RE.match(cont)
+                    or _HR_RE.match(cont)
+                    or _LIST_ITEM_START_RE.match(cont)
+                    or _BLOCKQUOTE_LINE_RE.match(cont)
+                ):
+                    break
+                if i + 1 < n and _is_pipe_row(cont) and _is_table_separator(lines[i + 1]):
+                    break
+                item_lines.append(cont)
+                i += 1
+            blocks.append({"type": "list_item", "text": "\n".join(item_lines)})
+            continue
+
+        # 6. Blockquote (split on blank blockquote lines)
+        if _BLOCKQUOTE_LINE_RE.match(line):
+            quote_lines: List[str] = []
+            while i < n and _BLOCKQUOTE_LINE_RE.match(lines[i]):
+                inner = re.sub(r"^\s*>\s?", "", lines[i]).strip()
+                if not inner:
+                    if quote_lines:
+                        blocks.append({"type": "blockquote", "text": "\n".join(quote_lines)})
+                        quote_lines = []
+                    i += 1
+                    continue
+                quote_lines.append(inner)
+                i += 1
+            if quote_lines:
+                blocks.append({"type": "blockquote", "text": "\n".join(quote_lines)})
+            continue
+
+        # 7. Paragraph (contiguous plain lines)
+        para_lines = [line]
+        i += 1
+        while i < n:
+            nxt = lines[i]
+            nxt_stripped = nxt.strip()
+            if (
+                not nxt_stripped
+                or _FENCE_LINE_RE.match(nxt)
+                or _ATX_HEADING_RE.match(nxt)
+                or _HR_RE.match(nxt)
+                or _LIST_ITEM_START_RE.match(nxt)
+                or _BLOCKQUOTE_LINE_RE.match(nxt)
+            ):
+                break
+            if i + 1 < n and _is_pipe_row(nxt) and _is_table_separator(lines[i + 1]):
+                break
+            para_lines.append(nxt)
+            i += 1
+
+        last_stripped = para_lines[-1].strip()
+        if _is_lead_in_line(last_stripped):
+            if len(para_lines) > 1:
+                blocks.append({"type": "paragraph", "text": "\n".join(para_lines[:-1])})
+            blocks.append({"type": "lead_in_candidate", "text": last_stripped})
+        else:
+            blocks.append({"type": "paragraph", "text": "\n".join(para_lines)})
+
+    return blocks
 
 
 def verify_grounded_response(
@@ -121,9 +336,10 @@ def verify_grounded_response(
         return {
             "ok": True,
             "needsRepair": False,
-            "status": "insufficient_evidence",
-            "answerMarkdown": INSUFFICIENT_EVIDENCE_MESSAGE,
+            "status": "no_matching_excerpts",
+            "answerMarkdown": NO_MATCHING_EXCERPTS_MESSAGE,
             "citations": [],
+            "reason": "no_matching_excerpts",
         }
 
     parsed = parse_qa_json(raw_text)
@@ -131,7 +347,7 @@ def verify_grounded_response(
         return {
             "ok": False,
             "needsRepair": True,
-            "status": "error",
+            "status": "verification_failed",
             "answerMarkdown": "",
             "citations": [],
             "reason": "malformed_json",
@@ -157,51 +373,77 @@ def verify_grounded_response(
         }
 
     cleaned_answer, inline_valid_ids = _normalize_inline_citations(raw_answer, set(evidence_map))
+    blocks = _parse_markdown_blocks(cleaned_answer)
 
-    # Check each sentence or Markdown line independently. This establishes only
-    # marker placement, not whether a passage actually entails the statement.
     has_content = False
     unsupported = False
-    for line in cleaned_answer.splitlines():
-        line = line.strip()
-        line = re.sub(r"^(?:>\s*)*(?:[-+*]\s+|\d+[.)]\s+)", "", line)
-        if not line:
+    exempt_types = {"heading", "table_header", "table_sep", "hr", "code"}
+
+    for idx, block in enumerate(blocks):
+        btype = block["type"]
+        if btype in exempt_types:
             continue
-        # Do not split decimal points, initials, or common abbreviations.
-        boundaries = []
-        for match in re.finditer(r"[.!?]+(?=\s|$)", line):
-            prefix = line[:match.start()]
-            token = re.search(r"(?:[A-Za-z]\.)*[A-Za-z]+$", prefix)
-            abbreviation = token and (len(token.group()) == 1 or re.fullmatch(r"(?:[A-Za-z]\.)+[A-Za-z]", token.group()) or token.group().lower() in {
-                "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e"
-            })
-            if match.group() == "." and abbreviation:
-                continue
-            boundaries.append(match.end())
-        start = 0
-        segments = []
-        for end in boundaries:
-            # A marker immediately following punctuation belongs to that sentence.
-            suffix = re.match(r"(?:\s*\[E\d+\])+", line[end:])
-            if suffix:
-                end += suffix.end()
-            if end > start:
-                segments.append(line[start:end])
-                start = end
-        segments.append(line[start:])
-        for segment in segments:
-            content = _SINGLE_EVIDENCE_RE.sub("", segment)
-            # Markdown syntax and punctuation alone do not constitute an answer.
-            if not re.search(r"\w", content, re.UNICODE):
-                continue
-            has_content = True
-            if not _SINGLE_EVIDENCE_RE.search(segment):
-                unsupported = True
-    if not inline_valid_ids or not has_content or unsupported:
+
+        if btype == "lead_in_candidate":
+            next_block = blocks[idx + 1] if idx + 1 < len(blocks) else None
+            if next_block and next_block["type"] in ("list_item", "table_header", "table_row"):
+                # Exempt short lead-in lines immediately preceding a cited list or table.
+                has_following_citation = False
+                for follow in blocks[idx + 1 :]:
+                    if follow["type"] in ("list_item", "table_row"):
+                        if _SINGLE_EVIDENCE_RE.search(follow["text"]):
+                            has_following_citation = True
+                            break
+                    elif follow["type"] in ("table_header", "table_sep"):
+                        continue
+                    else:
+                        break
+                if has_following_citation:
+                    continue
+            btype = "paragraph"
+
+        if btype == "list_item" and "\n" not in block["text"].strip() and not _SINGLE_EVIDENCE_RE.search(block["text"]):
+            item_body = _LIST_ITEM_START_RE.sub("", block["text"].strip(), count=1).strip()
+            if _is_lead_in_line(item_body):
+                has_following_citation = False
+                for follow in blocks[idx + 1 :]:
+                    if follow["type"] == "list_item":
+                        if _SINGLE_EVIDENCE_RE.search(follow["text"]):
+                            has_following_citation = True
+                            break
+                    else:
+                        break
+                if has_following_citation:
+                    continue
+
+        if not _block_has_factual_text(block["text"]):
+            continue
+
+        has_content = True
+        if not _SINGLE_EVIDENCE_RE.search(block["text"]):
+            unsupported = True
+            break
+
+    if not has_content:
         return {
-            "ok": True, "needsRepair": False, "status": "insufficient_evidence",
-            "answerMarkdown": INSUFFICIENT_EVIDENCE_MESSAGE, "citations": [],
+            "ok": False,
+            "needsRepair": True,
+            "status": "verification_failed",
+            "answerMarkdown": "",
+            "citations": [],
+            "reason": "empty_answer",
         }
+
+    if not inline_valid_ids or unsupported:
+        return {
+            "ok": False,
+            "needsRepair": True,
+            "status": "verification_failed",
+            "answerMarkdown": "",
+            "citations": [],
+            "reason": "missing_citations",
+        }
+
     ordered_valid_ids = inline_valid_ids
 
     citations: List[Dict[str, Any]] = []
@@ -216,6 +458,8 @@ def verify_grounded_response(
                 "startSec": ev.get("startSec"),
                 "endSec": ev.get("endSec"),
                 "speaker": ev.get("speaker") or "",
+                "tag": ev.get("tag") or "",
+                "kind": ev.get("kind") or "",
                 "excerpt": ev.get("excerpt") or "",
                 "sourceTranscriptHash": ev.get("sourceTranscriptHash") or "",
             }
@@ -230,23 +474,48 @@ def verify_grounded_response(
     }
 
 
-def build_repair_prompt(raw_output: Any, evidence_items: Sequence[Dict[str, Any]]) -> str:
-    """Build a bounded single-retry JSON-repair user message (max 12 KB quoted output)."""
-    valid_ids = ", ".join(str(item["evidenceId"]) for item in evidence_items if item.get("evidenceId"))
-    clipped = (
-        str(raw_output or "")
+def clip_repair_output(raw_output: Any) -> str:
+    """Strip reasoning artifacts and clip invalid output to the 12 KB UTF-8 repair budget."""
+    cleaned = strip_model_artifacts(raw_output)
+    source = cleaned if cleaned else str(raw_output or "")
+    return (
+        source
         .encode("utf-8", errors="ignore")[:JSON_REPAIR_BYTE_CAP]
         .decode("utf-8", errors="ignore")
     )
-    return "\n\n".join(
-        [
-            "Your previous answer was not valid JSON.",
-            "Return ONLY a valid JSON object matching this exact schema (no markdown fences, no commentary):",
-            '{"answerMarkdown": "<concise Markdown answer citing [E1] etc.>", "citedEvidenceIds": ["E1"], "insufficientEvidence": false}',
-            f"Valid evidence IDs: {valid_ids or 'none'}",
-            "If the evidence does not clearly support an answer, return:",
-            '{"answerMarkdown": "", "citedEvidenceIds": [], "insufficientEvidence": true}',
-            "Previous malformed output:",
-            clipped,
-        ]
-    )
+
+
+def build_repair_prompt(
+    raw_output: Any,
+    evidence_items: Sequence[Dict[str, Any]],
+    *,
+    reason: str = "malformed_json",
+    include_previous_output: bool = True,
+) -> str:
+    """Build a bounded single-retry JSON/citation-repair user message (max 12 KB quoted output)."""
+    valid_ids = ", ".join(str(item["evidenceId"]) for item in evidence_items if item.get("evidenceId"))
+    if reason == "missing_citations":
+        header = (
+            "Your previous JSON answer omitted valid inline [Ek] citation markers on one or more "
+            "factual paragraphs, bullet items, or table rows (or cited invalid IDs)."
+        )
+        guidance = (
+            "Rewrite the answer so EVERY factual paragraph, bullet point, blockquote, and table data row "
+            "includes at least one valid inline citation like [E1] or [E1] [E2]. "
+            "(Markdown headings, table header/separator rows, and short colon lead-in lines do not need citations.)"
+        )
+    else:
+        header = "Your previous answer was not valid JSON."
+        guidance = "Return ONLY a valid JSON object matching this exact schema (no markdown fences, no commentary):"
+
+    parts = [
+        header,
+        guidance,
+        '{"answerMarkdown": "<concise Markdown answer citing [E1] etc.>", "citedEvidenceIds": ["E1"], "insufficientEvidence": false}',
+        f"Valid evidence IDs: {valid_ids or 'none'}",
+        "If the evidence does not clearly support an answer, return:",
+        '{"answerMarkdown": "", "citedEvidenceIds": [], "insufficientEvidence": true}',
+    ]
+    if include_previous_output:
+        parts.extend(["Previous output:", clip_repair_output(raw_output)])
+    return "\n\n".join(parts)

@@ -371,13 +371,117 @@ def test_date_range_scope_and_cli_json_roundtrip(tmp_path):
 def test_unbound_summary_is_not_indexed(tmp_path):
     rec_dir = tmp_path / 'recordings'
     index_path = tmp_path / 'search' / 'history-index.sqlite'
-    _seed_meeting(rec_dir, meeting_id='m1', title='Meeting', date_iso='2026-11-10',
-                  transcript_md='ordinary transcript', summary_md='secretunboundsummary')
+    _seed_meeting(
+        rec_dir,
+        meeting_id='m_mismatched',
+        title='Mismatched',
+        date_iso='2026-11-10',
+        transcript_md='ordinary transcript',
+        summary_md='secretmismatchedsummary',
+        summary_hash_override='sha256:badhash',
+    )
+    _seed_meeting(
+        rec_dir,
+        meeting_id='m_incomplete',
+        title='Incomplete',
+        date_iso='2026-11-10',
+        transcript_md='ordinary transcript',
+        summary_md='secretincompletesummary',
+    )
+    _seed_meeting(
+        rec_dir,
+        meeting_id='m_legacy_completed',
+        title='Legacy Completed',
+        date_iso='2026-11-10',
+        transcript_md='ordinary transcript',
+        summary_md='secretlegacysummary',
+    )
     metadata = json.loads((rec_dir / 'meetings.json').read_text())
-    del metadata[0]['ai']['summary']['sourceTranscriptHash']
+    del metadata[1]['ai']['summary']['sourceTranscriptHash']
+    metadata[1]['ai']['summary']['status'] = 'failed'
+    del metadata[2]['ai']['summary']['sourceTranscriptHash']
     (rec_dir / 'meetings.json').write_text(json.dumps(metadata))
-    result = search_history_index(rec_dir, index_path, query='secretunboundsummary')
-    assert result['matchedMeetingCount'] == 0
+
+    assert search_history_index(rec_dir, index_path, query='secretmismatchedsummary')['matchedMeetingCount'] == 0
+    assert search_history_index(rec_dir, index_path, query='secretincompletesummary')['matchedMeetingCount'] == 0
+    legacy_res = search_history_index(rec_dir, index_path, query='secretlegacysummary')
+    assert [m['meetingId'] for m in legacy_res['meetings']] == ['m_legacy_completed']
+    assert legacy_res['meetings'][0]['bestPassage']['kind'] == 'summary'
+
+
+def test_schema_v2_rebuild_from_v1_untimed_speakers_and_tag_sync(tmp_path):
+    rec_dir = tmp_path / 'recordings'
+    index_path = tmp_path / 'search' / 'history-index.sqlite'
+    _seed_meeting(
+        rec_dir,
+        meeting_id='m_untimed_spk',
+        title='Untimed Sync',
+        date_iso='2026-11-19T09:00:00',
+        transcript_md=(
+            '# Audio Transcript\n\n'
+            '**Alice:** Welcome everyone to the quarterly planning session.\n\n'
+            '**Bob:** Let us review the shipping checklist next.\n'
+        ),
+    )
+
+    # Seed an obsolete v1 SQLite database missing tag & speaker_names_hash columns.
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(index_path))
+    conn.executescript(
+        """
+        CREATE TABLE index_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO index_meta (key, value) VALUES ('schema_version', '1');
+        CREATE TABLE indexed_meetings (
+            meeting_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            date_iso TEXT NOT NULL,
+            duration_sec REAL NOT NULL,
+            language TEXT NOT NULL,
+            transcript_hash TEXT NOT NULL,
+            summary_hash TEXT NOT NULL,
+            captions_hash TEXT NOT NULL,
+            title_hash TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE passages (
+            passage_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            meeting_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            seq_index INTEGER NOT NULL,
+            start_ms INTEGER,
+            end_ms INTEGER,
+            title TEXT NOT NULL,
+            speaker TEXT NOT NULL,
+            text TEXT NOT NULL,
+            source_transcript_hash TEXT NOT NULL
+        );
+        CREATE VIRTUAL TABLE passages_fts USING fts5(title, speaker, text, content='passages', content_rowid='passage_id');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    stats = sync_history_index(rec_dir, index_path)
+    assert stats['rebuilt'] is True
+    assert stats['schemaVersion'] == '2'
+    assert INDEX_SCHEMA_VERSION == '2'
+
+    res = search_history_index(rec_dir, index_path, query='quarterly planning')
+    assert res['matchedMeetingCount'] == 1
+    assert res['meetings'][0]['bestPassage']['speaker'] == 'Alice'
+
+    # Updating tag in meetings.json incrementally re-syncs without full rebuild.
+    metadata = json.loads((rec_dir / 'meetings.json').read_text())
+    metadata[0]['tag'] = 'interview'
+    (rec_dir / 'meetings.json').write_text(json.dumps(metadata))
+
+    inc_stats = sync_history_index(rec_dir, index_path)
+    assert inc_stats['rebuilt'] is False
+    assert inc_stats['syncedMeetings'] == 1
+
+    res_tagged = search_history_index(rec_dir, index_path, query='shipping checklist')
+    assert res_tagged['meetings'][0]['tag'] == 'interview'
+    assert res_tagged['meetings'][0]['bestPassage']['speaker'] == 'Bob'
 
 
 def test_rebuild_refuses_live_wal_reader(tmp_path):
@@ -408,3 +512,89 @@ def test_cli_reads_leading_hyphen_query_from_stdin(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)['query'] == '-private'
+
+
+def test_untimed_speaker_persists_across_blank_lines_and_superseded_legacy_summary_excluded(tmp_path):
+    rec_dir = tmp_path / "recordings"
+    index_path = tmp_path / "search" / "history-index.sqlite"
+
+    # 1. Untimed multi-paragraph speaker persistence across blank lines, reset on heading / ---.
+    _seed_meeting(
+        rec_dir,
+        meeting_id="m_untimed_multi",
+        title="Untimed Multi-Para",
+        date_iso="2026-11-20T10:00:00",
+        transcript_md=(
+            "# Audio Transcript\n\n"
+            "**Alice:** First paragraph by Alice about onboarding.\n\n"
+            "Second paragraph continuing Alice thoughts on quotas.\n\n"
+            "---\n\n"
+            "Third paragraph after divider with no speaker.\n"
+        ),
+    )
+
+    # 2. Legacy completed summary without sourceTranscriptHash must be rejected when transcript was superseded.
+    _seed_meeting(
+        rec_dir,
+        meeting_id="m_superseded_attempt",
+        title="Retranscribed Attempt",
+        date_iso="2026-11-20T11:00:00",
+        transcript_md="Fresh transcript body.",
+        summary_md="# Summary\n\nStaleAttemptSummarySecret from old transcription.\n",
+    )
+    _seed_meeting(
+        rec_dir,
+        meeting_id="m_superseded_path",
+        title="Retranscribed Path",
+        date_iso="2026-11-20T12:00:00",
+        transcript_md="Fresh transcript body.",
+        summary_md="# Summary\n\nStalePathSummarySecret from old transcription.\n",
+    )
+    metadata = json.loads((rec_dir / "meetings.json").read_text(encoding="utf-8"))
+    for row in metadata:
+        if row["id"] == "m_superseded_attempt":
+            del row["ai"]["summary"]["sourceTranscriptHash"]
+            row["transcriptionResult"] = {
+                "schemaVersion": 1,
+                "attemptId": "11111111-1111-4111-8111-111111111111",
+                "engine": "whisper",
+                "modelSize": "small",
+                "language": "en",
+                "device": "cpu",
+                "computeType": "int8",
+                "artifactRevision": None,
+                "transcriptHash": None,
+            }
+        elif row["id"] == "m_superseded_path":
+            del row["ai"]["summary"]["sourceTranscriptHash"]
+            old_path = Path(row["transcriptPath"])
+            new_path = rec_dir / "m_superseded_path.transcript-att3.md"
+            new_path.write_text(old_path.read_text(encoding="utf-8"), encoding="utf-8")
+            row["transcriptPath"] = str(new_path)
+    (rec_dir / "meetings.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    sync_history_index(rec_dir, index_path)
+
+    from backend.search.history_index import list_indexed_meeting_headers
+
+    conn = sqlite3.connect(str(index_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT speaker, text FROM passages WHERE meeting_id = 'm_untimed_multi' AND kind = 'transcript' ORDER BY seq_index"
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0]["speaker"] == "Alice"
+        assert "First paragraph" in rows[0]["text"] and "Second paragraph" in rows[0]["text"]
+        assert rows[1]["speaker"] == ""
+        assert "Third paragraph" in rows[1]["text"]
+
+        headers = list_indexed_meeting_headers(conn, meeting_ids=["m_untimed_multi"])
+        assert len(headers) == 1
+        assert headers[0]["speakers"] == ["Alice"]
+    finally:
+        conn.close()
+
+    assert search_history_index(rec_dir, index_path, query="StaleAttemptSummarySecret")["matchedMeetingCount"] == 0
+    assert search_history_index(rec_dir, index_path, query="StalePathSummarySecret")["matchedMeetingCount"] == 0
+

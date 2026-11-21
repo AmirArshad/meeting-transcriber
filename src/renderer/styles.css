@@ -6141,14 +6141,99 @@ button.history-transcript-timestamp:focus-visible {
   border-color: var(--accent-line);
 }
 
-.chat-insufficient-callout {
-  padding: 11px 14px;
+.chat-insufficient-callout,
+.chat-status-callout {
+  padding: 12px 14px;
   border-radius: var(--r-sm);
   background: var(--amber-soft);
   border: 1px solid rgba(210, 168, 92, 0.38);
   color: #f3d79e;
   font-size: 13px;
   line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-status-callout.is-no_matching_excerpts {
+  background: var(--surface-2);
+  border-color: var(--hairline-strong);
+  color: var(--text-primary);
+}
+
+.chat-status-callout.is-insufficient_evidence {
+  background: var(--amber-soft);
+  border-color: rgba(210, 168, 92, 0.38);
+  color: #f3d79e;
+}
+
+.chat-status-callout.is-verification_failed {
+  background: rgba(223, 107, 107, 0.12);
+  border-color: rgba(223, 107, 107, 0.4);
+  color: #f4b6b6;
+}
+
+.chat-callout-title {
+  margin: 0;
+  font-weight: 500;
+}
+
+.chat-callout-detail {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.chat-callout-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.chat-source-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--hairline);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.chat-turn-assistant.is-streaming {
+  border-bottom: 0;
+}
+
+.chat-turn-assistant.is-streaming .chat-markdown::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 1em;
+  margin-left: 4px;
+  vertical-align: -2px;
+  border-radius: 2px;
+  background: var(--accent);
+  animation: chat-stream-pulse 1s ease-in-out infinite;
+}
+
+@keyframes chat-stream-pulse {
+  0%, 100% { opacity: 0.9; }
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-turn-assistant.is-streaming .chat-markdown::after {
+    animation: none;
+    opacity: 0.7;
+  }
+
+  .chat-progress-spinner {
+    animation: none;
+  }
 }
 
 .chat-turn-meta-row {

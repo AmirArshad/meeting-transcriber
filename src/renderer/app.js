@@ -145,11 +145,14 @@ const {
   renderGroundedMarkdown,
 } = window.markdownRenderHelpers;
 const {
+  buildAssistantNoticeView,
   buildModelMemoryPillView,
   buildStarterPrompts,
   filterChatThreads,
   formatChatScopeLabel,
   groupThreadsByRecency,
+  resolveNoticeActionScope,
+  shouldShowChatProgressBanner,
 } = window.chatHelpers;
 
 // UI Elements
@@ -9243,7 +9246,9 @@ const chatState = {
   eligibility: null,
   modelState: { status: 'unloaded', modelId: null, modelName: null },
   sending: false,
+  noticeActionPending: false,
   optimisticQuestion: null,
+  streamingDraft: '',
   progress: null,
   editingThreadId: null,
   threadFilter: '',
@@ -9279,6 +9284,22 @@ function chatThreadDetailPending() {
 
 function chatSendVisible() {
   return chatState.sending && chatState.sendingKey === chatState.draftKey;
+}
+
+function syncChatProgressBanner() {
+  const progressBanner = document.getElementById('chat-progress-banner');
+  const progressText = document.getElementById('chat-progress-text');
+  if (!progressBanner || !progressText) return;
+  const showBanner = shouldShowChatProgressBanner({
+    sendVisible: chatSendVisible(),
+    streamingDraft: chatState.streamingDraft,
+    progress: chatState.progress,
+  });
+  progressBanner.hidden = !showBanner;
+  if (showBanner) {
+    progressText.textContent = (chatState.progress && chatState.progress.message)
+      || 'Searching your transcripts…';
+  }
 }
 
 function getCurrentChatScope() {
@@ -9520,8 +9541,6 @@ function renderChatStream() {
   const emptyState = document.getElementById('chat-empty-state');
   const starterGrid = document.getElementById('chat-starter-prompts');
   const messagesEl = document.getElementById('chat-messages');
-  const progressBanner = document.getElementById('chat-progress-banner');
-  const progressText = document.getElementById('chat-progress-text');
   const scrollContainer = document.getElementById('chat-stream-scroll');
   if (!messagesEl) return;
 
@@ -9567,7 +9586,64 @@ function renderChatStream() {
     messagesEl.appendChild(wrap);
   };
 
-  for (const msg of threadMessages) {
+  const findPrecedingUserQuestion = (idx) => {
+    for (let j = idx - 1; j >= 0; j -= 1) {
+      if (threadMessages[j]?.role === 'user' && threadMessages[j]?.content) {
+        return String(threadMessages[j].content);
+      }
+    }
+    return '';
+  };
+
+  const handleNoticeAction = async (actionId, precedingQuestion) => {
+    if (!precedingQuestion || chatState.sending || chatState.noticeActionPending || chatThreadDetailPending()) {
+      return;
+    }
+    if (chatState.popoverOpen) {
+      toggleChatScopePopover(false);
+    }
+    const navigation = chatState.navigation;
+    const nextScope = resolveNoticeActionScope(actionId, getCurrentChatScope());
+    if (nextScope) {
+      if (chatState.activeThread && window.electronAPI?.updateChatThreadScope) {
+        let updated = false;
+        chatState.noticeActionPending = true;
+        renderChatStream();
+        try {
+          const res = await window.electronAPI.updateChatThreadScope(chatState.activeThread.id, nextScope);
+          if (navigation !== chatState.navigation) {
+            void refreshChatThreadList();
+            return;
+          }
+          if (res && res.thread) {
+            chatState.activeThread = res.thread;
+          }
+          updated = true;
+        } catch (error) {
+          if (navigation === chatState.navigation) {
+            showAppToast(`Could not update scope: ${error.message}`, 'error');
+          }
+        } finally {
+          chatState.noticeActionPending = false;
+        }
+        if (!updated) {
+          if (navigation === chatState.navigation) {
+            renderChatStream();
+          }
+          return;
+        }
+      } else {
+        chatState.pendingScope = nextScope;
+      }
+    }
+    if (navigation !== chatState.navigation) {
+      return;
+    }
+    await sendChatQuestionText(precedingQuestion, { overrideScope: nextScope });
+  };
+
+  for (let msgIdx = 0; msgIdx < threadMessages.length; msgIdx += 1) {
+    const msg = threadMessages[msgIdx];
     if (msg.role === 'user') {
       renderUserTurn(msg.content);
       continue;
@@ -9576,10 +9652,41 @@ function renderChatStream() {
     const wrap = document.createElement('article');
     wrap.className = 'chat-turn-assistant';
 
-    if (msg.status === 'insufficient_evidence') {
+    const notice = buildAssistantNoticeView(msg, getCurrentChatScope());
+    if (notice) {
       const callout = document.createElement('div');
-      callout.className = 'chat-insufficient-callout';
-      callout.textContent = msg.content || 'Not enough matching transcript text in the selected recordings to answer that.';
+      callout.className = `chat-status-callout is-${notice.variant}`;
+
+      const titleEl = document.createElement('p');
+      titleEl.className = 'chat-callout-title';
+      titleEl.textContent = notice.title;
+      callout.appendChild(titleEl);
+
+      if (notice.detail) {
+        const detailEl = document.createElement('p');
+        detailEl.className = 'chat-callout-detail';
+        detailEl.textContent = notice.detail;
+        callout.appendChild(detailEl);
+      }
+
+      const precedingQuestion = findPrecedingUserQuestion(msgIdx);
+      if (precedingQuestion && Array.isArray(notice.actions) && notice.actions.length > 0) {
+        const actionsRow = document.createElement('div');
+        actionsRow.className = 'chat-callout-actions';
+        for (const action of notice.actions) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-small btn-secondary chat-callout-action-btn';
+          btn.textContent = action.label;
+          btn.disabled = chatState.sending || chatState.noticeActionPending || chatThreadDetailPending();
+          btn.addEventListener('click', () => {
+            void handleNoticeAction(action.id, precedingQuestion);
+          });
+          actionsRow.appendChild(btn);
+        }
+        callout.appendChild(actionsRow);
+      }
+
       wrap.appendChild(callout);
     } else {
       const prose = document.createElement('div');
@@ -9594,17 +9701,25 @@ function renderChatStream() {
     }
 
     const citations = Array.isArray(msg.citations) ? msg.citations : [];
-    if (citations.length > 0) {
+    const inspectedSources = citations.length === 0
+      && notice?.showInspectedSources
+      && Array.isArray(msg.inspectedSources)
+      ? msg.inspectedSources
+      : [];
+    const drawerSources = citations.length > 0 ? citations : inspectedSources;
+    if (drawerSources.length > 0) {
       const details = document.createElement('details');
       details.className = 'chat-sources-drawer';
 
       const summary = document.createElement('summary');
-      summary.textContent = `Sources (${citations.length})`;
+      summary.textContent = citations.length > 0
+        ? `Sources (${citations.length})`
+        : `Sources inspected (${inspectedSources.length})`;
       details.appendChild(summary);
 
       const list = document.createElement('div');
       list.className = 'chat-sources-list';
-      for (const citation of citations) {
+      for (const citation of drawerSources) {
         const item = document.createElement('div');
         item.className = 'chat-source-item';
 
@@ -9623,10 +9738,18 @@ function renderChatStream() {
 
         const metaSpan = document.createElement('span');
         metaSpan.className = 'chat-turn-meta-row';
+        if (citation.tag) {
+          const tagChip = document.createElement('span');
+          tagChip.className = 'chat-source-tag-chip';
+          tagChip.textContent = citation.tag;
+          metaSpan.appendChild(tagChip);
+        }
         const parts = [];
         if (citation.speaker) parts.push(citation.speaker);
         if (citation.meetingDate) parts.push(formatDate(citation.meetingDate));
-        metaSpan.textContent = parts.join(' · ');
+        if (parts.length > 0) {
+          metaSpan.appendChild(document.createTextNode(parts.join(' · ')));
+        }
         head.appendChild(metaSpan);
 
         const excerpt = document.createElement('p');
@@ -9652,15 +9775,23 @@ function renderChatStream() {
 
   if (chatSendVisible() && chatState.optimisticQuestion) {
     renderUserTurn(chatState.optimisticQuestion);
-  }
-
-  if (progressBanner && progressText) {
-    progressBanner.hidden = !chatSendVisible();
-    if (chatSendVisible()) {
-      progressText.textContent = (chatState.progress && chatState.progress.message)
-        || 'Searching your transcripts…';
+    if (chatState.streamingDraft) {
+      const streamWrap = document.createElement('article');
+      streamWrap.className = 'chat-turn-assistant is-streaming';
+      const streamBody = document.createElement('div');
+      streamBody.id = 'chat-streaming-draft-body';
+      streamBody.className = 'chat-markdown';
+      renderGroundedMarkdown(streamBody, chatState.streamingDraft, [], {
+        markedLib: window.marked,
+        domPurifyLib: window.DOMPurify,
+        documentObj: document,
+      });
+      streamWrap.appendChild(streamBody);
+      messagesEl.appendChild(streamWrap);
     }
   }
+
+  syncChatProgressBanner();
 
   if (scrollContainer && hasMessages) {
     requestAnimationFrame(() => {
@@ -9818,6 +9949,77 @@ function closeChatMobileSidebar() {
   document.getElementById('chat-tab')?.classList.remove('is-sidebar-drawer-open');
 }
 
+async function sendChatQuestionText(rawQuestion, { overrideScope = null, restoreInputOnError = false } = {}) {
+  if (chatState.sending || chatState.noticeActionPending || chatThreadDetailPending()) {
+    return;
+  }
+  const question = String(rawQuestion || '').replace(/\s+/g, ' ').trim();
+  if (!question) {
+    return;
+  }
+
+  if (chatState.eligibility && chatState.eligibility.eligible === false) {
+    openSettingsAtAiAddons();
+    return;
+  }
+
+  const input = document.getElementById('chat-input');
+  const navigation = chatState.navigation;
+  const originKey = chatState.draftKey;
+  const originThreadId = chatState.activeThread?.id || null;
+  const scope = overrideScope || getCurrentChatScope();
+  chatState.sending = true;
+  chatState.sendingKey = originKey;
+  chatState.optimisticQuestion = question;
+  chatState.streamingDraft = '';
+  chatState.progress = { phase: 'retrieving', message: 'Searching your transcripts…' };
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+
+  try {
+    const res = await window.electronAPI.askHistory({ threadId: originThreadId, question, scope });
+    if (res && res.thread) {
+      const threadKey = `thread:${res.thread.id}`;
+      if (originKey !== threadKey) {
+        const draft = chatState.draftKey === originKey && input ? input.value : chatState.drafts.get(originKey);
+        if (draft) chatState.drafts.set(threadKey, draft);
+        if (chatState.draftKey === originKey) chatState.draftKey = threadKey;
+        if (chatState.newDraftKey === originKey) chatState.newDraftKey = `new:${++chatState.nextDraft}`;
+      }
+      if (navigation === chatState.navigation) chatState.activeThread = res.thread;
+    }
+    chatState.optimisticQuestion = null;
+    chatState.streamingDraft = '';
+    try {
+      await refreshChatThreadList();
+    } catch (error) {
+      showAppToast(`Could not refresh chats: ${error.message}`, 'error');
+    }
+  } catch (error) {
+    chatState.optimisticQuestion = null;
+    chatState.streamingDraft = '';
+    if (restoreInputOnError && input) {
+      const currentDraft = chatState.draftKey === originKey ? input.value : (chatState.drafts.get(originKey) || '');
+      const restored = currentDraft ? `${question}\n${currentDraft}` : question;
+      chatState.drafts.set(originKey, restored);
+      if (chatState.draftKey === originKey) {
+        input.value = restored;
+        autoResizeChatInput();
+      }
+    }
+    const isCancelled = error && (error.code === 'HISTORY_QA_CANCELLED' || /stopped|canceled/i.test(error.message || ''));
+    showAppToast(isCancelled ? 'Response generation stopped.' : (error?.message || 'Could not generate local answer.'), isCancelled ? 'info' : 'error');
+  } finally {
+    chatState.sending = false;
+    chatState.sendingKey = null;
+    chatState.streamingDraft = '';
+    chatState.progress = null;
+    renderChatOnboardingAndComposer();
+    renderChatStream();
+    if (navigation === chatState.navigation && input) input.focus();
+  }
+}
+
 async function sendCurrentChatQuestion() {
   if (chatState.sending) {
     try {
@@ -9841,57 +10043,11 @@ async function sendCurrentChatQuestion() {
     return;
   }
 
-  const navigation = chatState.navigation;
   const originKey = chatState.draftKey;
-  const originThreadId = chatState.activeThread?.id || null;
-  const scope = getCurrentChatScope();
   input.value = '';
   chatState.drafts.set(originKey, '');
   autoResizeChatInput();
-  chatState.sending = true;
-  chatState.sendingKey = originKey;
-  chatState.optimisticQuestion = question;
-  chatState.progress = { phase: 'retrieving', message: 'Searching your transcripts…' };
-  renderChatOnboardingAndComposer();
-  renderChatStream();
-
-  try {
-    const res = await window.electronAPI.askHistory({ threadId: originThreadId, question, scope });
-    if (res && res.thread) {
-      const threadKey = `thread:${res.thread.id}`;
-      if (originKey !== threadKey) {
-        const draft = chatState.draftKey === originKey ? input.value : chatState.drafts.get(originKey);
-        if (draft) chatState.drafts.set(threadKey, draft);
-        if (chatState.draftKey === originKey) chatState.draftKey = threadKey;
-        if (chatState.newDraftKey === originKey) chatState.newDraftKey = `new:${++chatState.nextDraft}`;
-      }
-      if (navigation === chatState.navigation) chatState.activeThread = res.thread;
-    }
-    chatState.optimisticQuestion = null;
-    try {
-      await refreshChatThreadList();
-    } catch (error) {
-      showAppToast(`Could not refresh chats: ${error.message}`, 'error');
-    }
-  } catch (error) {
-    chatState.optimisticQuestion = null;
-    const currentDraft = chatState.draftKey === originKey ? input.value : (chatState.drafts.get(originKey) || '');
-    const restored = currentDraft ? `${question}\n${currentDraft}` : question;
-    chatState.drafts.set(originKey, restored);
-    if (chatState.draftKey === originKey) {
-      input.value = restored;
-      autoResizeChatInput();
-    }
-    const isCancelled = error && (error.code === 'HISTORY_QA_CANCELLED' || /stopped|canceled/i.test(error.message || ''));
-    showAppToast(isCancelled ? 'Response generation stopped.' : (error?.message || 'Could not generate local answer.'), isCancelled ? 'info' : 'error');
-  } finally {
-    chatState.sending = false;
-    chatState.sendingKey = null;
-    chatState.progress = null;
-    renderChatOnboardingAndComposer();
-    renderChatStream();
-    if (navigation === chatState.navigation) input.focus();
-  }
+  await sendChatQuestionText(question, { restoreInputOnError: true });
 }
 
 async function openHistoryMeetingInChat(meetingId) {
@@ -9970,12 +10126,40 @@ function setupChatWorkspace() {
 
   if (window.electronAPI && typeof window.electronAPI.onHistoryQaProgress === 'function') {
     registerCleanup(window.electronAPI.onHistoryQaProgress((progress) => {
-      if (progress) {
-        chatState.progress = progress;
-        const textEl = document.getElementById('chat-progress-text');
-        if (textEl && chatState.sending && progress.message) {
-          textEl.textContent = progress.message;
+      if (!progress || !chatState.sending) {
+        return;
+      }
+      if (progress.threadId && chatState.activeThread?.id && progress.threadId !== chatState.activeThread.id) {
+        return;
+      }
+      chatState.progress = progress;
+      if (typeof progress.draftMarkdown === 'string' && progress.draftMarkdown) {
+        const hadDraft = Boolean(chatState.streamingDraft);
+        chatState.streamingDraft = progress.draftMarkdown;
+        if (!chatSendVisible()) {
+          return;
         }
+        if (!hadDraft) {
+          renderChatStream();
+        } else {
+          const draftEl = document.getElementById('chat-streaming-draft-body');
+          if (draftEl) {
+            renderGroundedMarkdown(draftEl, chatState.streamingDraft, [], {
+              markedLib: window.marked,
+              domPurifyLib: window.DOMPurify,
+              documentObj: document,
+            });
+            syncChatProgressBanner();
+            const scrollContainer = document.getElementById('chat-stream-scroll');
+            if (scrollContainer) {
+              scrollContainer.scrollTop = scrollContainer.scrollHeight;
+            }
+          } else {
+            renderChatStream();
+          }
+        }
+      } else if (chatSendVisible()) {
+        syncChatProgressBanner();
       }
     }));
   }

@@ -119,6 +119,8 @@ function sanitizeCitation(raw) {
     startSec: Number.isFinite(startSecNum) && startSecNum >= 0 ? startSecNum : null,
     endSec: Number.isFinite(endSecNum) && endSecNum >= 0 ? endSecNum : null,
     speaker: String(raw.speaker || '').slice(0, 120),
+    tag: String(raw.tag || '').trim().slice(0, 40),
+    kind: raw.kind === 'summary' || raw.kind === 'transcript' ? raw.kind : '',
     excerpt: String(raw.excerpt || '').slice(0, 500),
     sourceTranscriptHash: String(raw.sourceTranscriptHash || '').slice(0, 128),
   };
@@ -136,7 +138,14 @@ function sanitizeMessage(raw) {
     createdAt: sanitizeOptionalIsoDate(raw.createdAt) || nowIso(),
   };
   if (role === 'assistant') {
-    const allowedStatuses = new Set(['answered', 'insufficient_evidence', 'error', 'cancelled']);
+    const allowedStatuses = new Set([
+      'answered',
+      'no_matching_excerpts',
+      'insufficient_evidence',
+      'verification_failed',
+      'error',
+      'cancelled',
+    ]);
     entry.status = allowedStatuses.has(raw.status) ? raw.status : 'answered';
     entry.citations = Array.isArray(raw.citations)
       ? raw.citations.map(sanitizeCitation).filter(Boolean)
@@ -147,6 +156,18 @@ function sanitizeMessage(raw) {
     entry.evidenceCount = Number.isFinite(Number(raw.evidenceCount))
       ? Math.max(0, Math.floor(Number(raw.evidenceCount)))
       : 0;
+    if (typeof raw.failureReason === 'string' && raw.failureReason.trim()) {
+      entry.failureReason = raw.failureReason.trim().slice(0, 80);
+    }
+    if (typeof raw.detectedDateFilter === 'string' && raw.detectedDateFilter.trim()) {
+      entry.detectedDateFilter = raw.detectedDateFilter.trim().slice(0, 64);
+    }
+    if (raw.retrievalMode === 'overview' || raw.retrievalMode === 'targeted') {
+      entry.retrievalMode = raw.retrievalMode;
+    }
+    if (Array.isArray(raw.inspectedSources) && raw.inspectedSources.length > 0) {
+      entry.inspectedSources = raw.inspectedSources.map(sanitizeCitation).filter(Boolean).slice(0, 8);
+    }
   }
   return entry;
 }
@@ -383,6 +404,10 @@ function createChatThreadStore(deps) {
       citations = [],
       searchedMeetingCount = 0,
       evidenceCount = 0,
+      failureReason = null,
+      detectedDateFilter = null,
+      retrievalMode = null,
+      inspectedSources = [],
       scope = null,
     },
     { beforeCommit = null } = {},
@@ -411,6 +436,10 @@ function createChatThreadStore(deps) {
         citations,
         searchedMeetingCount,
         evidenceCount,
+        failureReason,
+        detectedDateFilter,
+        retrievalMode,
+        inspectedSources,
       });
       thread.messages.push(userMessage, assistantMessage);
       if (thread.title === DEFAULT_THREAD_TITLE && userMessage.content) {

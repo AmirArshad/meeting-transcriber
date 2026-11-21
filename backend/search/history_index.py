@@ -22,7 +22,7 @@ from meeting_manager import MeetingManager
 from summaries import summary_pipeline
 from transcription import captions as transcript_captions
 
-INDEX_SCHEMA_VERSION = "1"
+INDEX_SCHEMA_VERSION = "2"
 TOKENIZER_SPEC = "porter unicode61 remove_diacritics 2"
 SNIPPET_START = "\x01"
 SNIPPET_END = "\x02"
@@ -363,16 +363,20 @@ def _chunk_plain_paragraphs(
 ) -> List[Dict[str, Any]]:
     """Split untimed Markdown/text into bounded passages while skipping header boilerplate."""
     lines = str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    paragraphs: List[str] = []
+    paragraphs: List[Tuple[str, str]] = []
     current_lines: List[str] = []
+    current_speaker = ""
     in_header_preamble = True
 
-    def flush_para() -> None:
+    def flush_para(*, reset_speaker: bool = False) -> None:
+        nonlocal current_speaker
         if current_lines:
             joined = _clean_inline(" ".join(current_lines))
             if joined:
-                paragraphs.append(joined)
+                paragraphs.append((current_speaker, joined))
             current_lines.clear()
+        if reset_speaker:
+            current_speaker = ""
 
     for raw_line in lines:
         stripped = raw_line.strip()
@@ -382,44 +386,61 @@ def _chunk_plain_paragraphs(
         if in_header_preamble and _SUMMARY_META_LINE_RE.match(stripped):
             continue
         if stripped in ("---", "***", "___"):
-            flush_para()
+            flush_para(reset_speaker=True)
             continue
         if stripped.startswith("## ") and stripped[3:].strip().lower() == "transcript":
             in_header_preamble = False
-            flush_para()
+            flush_para(reset_speaker=True)
             continue
         in_header_preamble = False
         if stripped.startswith("#"):
-            flush_para()
+            flush_para(reset_speaker=True)
             heading_text = _clean_inline(re.sub(r"^#{1,6}\s+", "", stripped))
             if heading_text:
                 current_lines.append(heading_text)
             continue
-        cleaned_line = _clean_inline(re.sub(r"^[-*]\s+", "", stripped))
+
+        line_body = re.sub(r"^[-*]\s+", "", stripped)
+        if kind == "transcript":
+            detected_speaker, speaker_text = _split_markdown_speaker_prefix(line_body)
+            if detected_speaker:
+                if current_lines and current_speaker != detected_speaker:
+                    flush_para()
+                current_speaker = detected_speaker
+                if speaker_text:
+                    current_lines.append(speaker_text)
+                continue
+
+        cleaned_line = _clean_inline(line_body)
         if cleaned_line:
             current_lines.append(cleaned_line)
-    flush_para()
+    flush_para(reset_speaker=True)
 
     chunks: List[Dict[str, Any]] = []
     buf: List[str] = []
     buf_len = 0
+    buf_speaker = ""
 
     def flush_chunk() -> None:
-        nonlocal buf, buf_len
+        nonlocal buf, buf_len, buf_speaker
         if buf:
             chunks.append(
                 {
                     "kind": kind,
                     "start_ms": None,
                     "end_ms": None,
-                    "speaker": "",
+                    "speaker": buf_speaker,
                     "text": " ".join(buf).strip(),
                 }
             )
             buf = []
             buf_len = 0
+            buf_speaker = ""
 
-    for para in paragraphs:
+    for speaker, para in paragraphs:
+        if buf and speaker != buf_speaker:
+            flush_chunk()
+
         if len(para) > max_chars:
             flush_chunk()
             for idx in range(0, len(para), max_chars):
@@ -430,7 +451,7 @@ def _chunk_plain_paragraphs(
                             "kind": kind,
                             "start_ms": None,
                             "end_ms": None,
-                            "speaker": "",
+                            "speaker": speaker,
                             "text": piece,
                         }
                     )
@@ -438,6 +459,8 @@ def _chunk_plain_paragraphs(
 
         if buf and buf_len + 1 + len(para) > max_chars:
             flush_chunk()
+        if not buf:
+            buf_speaker = speaker
         buf.append(para)
         buf_len += (1 if buf_len else 0) + len(para)
 
@@ -579,12 +602,22 @@ def _resolve_meeting_summary_text(
     summary_meta = (meeting.get("ai") or {}).get("summary")
     if not isinstance(summary_meta, dict):
         return "", ""
-    if summary_meta.get("status") not in (None, "completed"):
+    status = summary_meta.get("status")
+    if status not in (None, "completed"):
         return "", ""
 
-    expected_hash = summary_meta.get("sourceTranscriptHash")
-    if not expected_hash or expected_hash != transcript_hash:
-        return "", ""
+    expected_hash = str(summary_meta.get("sourceTranscriptHash") or "").strip()
+    if expected_hash:
+        if expected_hash != transcript_hash:
+            return "", ""
+    else:
+        if status != "completed":
+            return "", ""
+        transcription_result = meeting.get("transcriptionResult")
+        has_attempt_id = isinstance(transcription_result, dict) and bool(transcription_result.get("attemptId"))
+        has_attempt_path = ".transcript-" in Path(str(meeting.get("transcriptPath") or "")).name
+        if has_attempt_id or has_attempt_path:
+            return "", ""
 
     summary_path = summary_meta.get("markdownPath")
     if not summary_path:
@@ -632,6 +665,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             date_iso TEXT NOT NULL,
             duration_sec REAL NOT NULL,
             language TEXT NOT NULL,
+            tag TEXT NOT NULL DEFAULT '',
+            speaker_names_hash TEXT NOT NULL DEFAULT '',
             transcript_hash TEXT NOT NULL,
             summary_hash TEXT NOT NULL,
             captions_hash TEXT NOT NULL,
@@ -711,6 +746,12 @@ def _schema_is_valid(conn: sqlite3.Connection) -> bool:
         ).fetchone()
         if not row or row["value"] != INDEX_SCHEMA_VERSION:
             return False
+        cols = {
+            str(info["name"])
+            for info in conn.execute("PRAGMA table_info(indexed_meetings)").fetchall()
+        }
+        if not {"tag", "speaker_names_hash"}.issubset(cols):
+            return False
         conn.execute("SELECT count(*) FROM passages_fts").fetchone()
         return True
     except sqlite3.DatabaseError as error:
@@ -739,9 +780,19 @@ def _extract_meeting_snapshot(
     date_iso = _clean_inline(meeting.get("date") or "")
     duration_sec = _parse_duration_seconds(meeting)
     language = _clean_inline(meeting.get("language") or "")
+    tag = _clean_inline(meeting.get("tag") or "").lower()
+    diarization_meta = (meeting.get("ai") or {}).get("diarization")
+    speaker_names = diarization_meta.get("speakerNames") if isinstance(diarization_meta, dict) else None
+    speaker_names_hash = (
+        transcript_captions.hash_transcript_text(
+            json.dumps(speaker_names, sort_keys=True, ensure_ascii=False)
+        )
+        if isinstance(speaker_names, dict) and speaker_names
+        else ""
+    )
     status = str(meeting.get("transcriptionStatus") or "completed").strip().lower()
     title_hash = transcript_captions.hash_transcript_text(
-        f"{title}|{date_iso}|{language}|{status}"
+        f"{title}|{date_iso}|{language}|{status}|{tag}|{speaker_names_hash}"
     )
 
     transcript_text = ""
@@ -776,6 +827,8 @@ def _extract_meeting_snapshot(
         "date_iso": date_iso,
         "duration_sec": duration_sec,
         "language": language,
+        "tag": tag,
+        "speaker_names_hash": speaker_names_hash,
         "transcript_hash": transcript_hash,
         "summary_hash": summary_hash,
         "captions_hash": captions_hash,
@@ -857,7 +910,7 @@ def _sync_connection(conn: sqlite3.Connection, recordings_dir: Path) -> Dict[str
     existing_rows = {
         row["meeting_id"]: dict(row)
         for row in conn.execute(
-            "SELECT meeting_id, transcript_hash, summary_hash, captions_hash, title_hash FROM indexed_meetings"
+            "SELECT meeting_id, transcript_hash, summary_hash, captions_hash, title_hash, tag, speaker_names_hash FROM indexed_meetings"
         ).fetchall()
     }
 
@@ -888,6 +941,8 @@ def _sync_connection(conn: sqlite3.Connection, recordings_dir: Path) -> Dict[str
                 and prev["transcript_hash"] == snap["transcript_hash"]
                 and prev["captions_hash"] == snap["captions_hash"]
                 and prev["summary_hash"] == snap["summary_hash"]
+                and prev["tag"] == snap["tag"]
+                and prev["speaker_names_hash"] == snap["speaker_names_hash"]
             ):
                 continue
 
@@ -897,8 +952,9 @@ def _sync_connection(conn: sqlite3.Connection, recordings_dir: Path) -> Dict[str
                 """
                 INSERT OR REPLACE INTO indexed_meetings (
                     meeting_id, title, date_iso, duration_sec, language,
+                    tag, speaker_names_hash,
                     transcript_hash, summary_hash, captions_hash, title_hash, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     mid,
@@ -906,6 +962,8 @@ def _sync_connection(conn: sqlite3.Connection, recordings_dir: Path) -> Dict[str
                     snap["date_iso"],
                     snap["duration_sec"],
                     snap["language"],
+                    snap["tag"],
+                    snap["speaker_names_hash"],
                     snap["transcript_hash"],
                     snap["summary_hash"],
                     snap["captions_hash"],
@@ -1218,6 +1276,7 @@ def _format_passage_hit(
         "snippetParts": parts,
         "rank": float(row["rank_score"]),
         "matchedBody": bool(has_body_match or body_token_match),
+        "sourceTranscriptHash": str(row["source_transcript_hash"] or ""),
     }
 
 
@@ -1261,6 +1320,7 @@ def _query_passages(
                     m.date_iso AS meeting_date,
                     m.language AS meeting_language,
                     m.duration_sec AS meeting_duration_sec,
+                    m.tag AS meeting_tag,
                     bm25(passages_fts, 4.0, 1.5, 1.0) AS rank_score,
                     snippet(passages_fts, 0, '{SNIPPET_START}', '{SNIPPET_END}', '…', 20) AS title_snippet,
                     snippet(passages_fts, 1, '{SNIPPET_START}', '{SNIPPET_END}', '…', 20) AS speaker_snippet,
@@ -1301,6 +1361,7 @@ def _query_passages(
                 meeting_date,
                 meeting_language,
                 meeting_duration_sec,
+                meeting_tag,
                 rank_score,
                 title_snippet,
                 speaker_snippet,
@@ -1357,6 +1418,7 @@ def _query_passages(
                     m.date_iso AS meeting_date,
                     m.language AS meeting_language,
                     m.duration_sec AS meeting_duration_sec,
+                    m.tag AS meeting_tag,
                     (CASE WHEN p.kind = 'transcript' THEN -2.0 WHEN p.kind = 'summary' THEN -1.5 ELSE -1.0 END) AS rank_score,
                     '' AS title_snippet,
                     '' AS speaker_snippet,
@@ -1394,6 +1456,7 @@ def _query_passages(
                 meeting_date,
                 meeting_language,
                 meeting_duration_sec,
+                meeting_tag,
                 rank_score,
                 title_snippet,
                 speaker_snippet,
@@ -1427,6 +1490,7 @@ def search_history_index(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     sync: bool = True,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> Dict[str, Any]:
     """Search meeting titles, transcripts, speakers, and summaries via SQLite FTS5."""
     rec_dir = Path(recordings_dir)
@@ -1442,7 +1506,9 @@ def search_history_index(
     tokens = extract_query_tokens(raw_query)
     if not tokens:
         total = 0
-        if sync:
+        if conn is not None:
+            total = int(conn.execute("SELECT COUNT(*) FROM indexed_meetings").fetchone()[0])
+        elif sync:
             stats = sync_history_index(rec_dir, target)
             total = int(stats.get("totalMeetings") or 0)
         elif target.exists():
@@ -1456,12 +1522,12 @@ def search_history_index(
             "meetings": [],
         }
 
-    def run_search(conn: sqlite3.Connection) -> Dict[str, Any]:
-        total_meetings = conn.execute("SELECT COUNT(*) FROM indexed_meetings").fetchone()[0]
+    def run_search(active_conn: sqlite3.Connection) -> Dict[str, Any]:
+        total_meetings = active_conn.execute("SELECT COUNT(*) FROM indexed_meetings").fetchone()[0]
         capped_matches = max(1, int(max_matches_per_meeting))
         row_limit = max(1, int(limit)) * capped_matches
         rows, matched_tokens = _query_passages(
-            conn,
+            active_conn,
             raw_query=raw_query,
             meeting_ids=scoped_ids,
             date_from=date_from,
@@ -1483,6 +1549,7 @@ def search_history_index(
                     "date": row["meeting_date"],
                     "language": row["meeting_language"],
                     "durationSeconds": float(row["meeting_duration_sec"] or 0.0),
+                    "tag": str(row["meeting_tag"] or ""),
                     "score": hit["rank"],
                     "bestPassage": hit,
                     "matches": [hit],
@@ -1507,18 +1574,201 @@ def search_history_index(
             "meetings": meetings_out,
         }
 
-    conn, _stats = _ensure_synced_connection(rec_dir, target, perform_sync=sync)
+    if conn is not None:
+        return run_search(conn)
+
+    owned_conn, _stats = _ensure_synced_connection(rec_dir, target, perform_sync=sync)
     try:
         try:
-            return run_search(conn)
+            return run_search(owned_conn)
         except sqlite3.DatabaseError as error:
             _raise_if_busy(error)
-            conn.close()
+            owned_conn.close()
             rebuild_history_index(rec_dir, target)
-            conn = _connect_sqlite(target)
-            return run_search(conn)
+            owned_conn = _connect_sqlite(target)
+            return run_search(owned_conn)
     finally:
         try:
-            conn.close()
+            owned_conn.close()
         except Exception:
             pass
+
+
+def list_indexed_meeting_headers(
+    conn: sqlite3.Connection,
+    *,
+    meeting_ids: Optional[Sequence[str]] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return lightweight metadata headers and distinct speakers for scoped indexed meetings."""
+    if meeting_ids is not None:
+        cleaned_ids = [str(mid).strip() for mid in meeting_ids if str(mid or "").strip()]
+        if not cleaned_ids:
+            return []
+    clauses, params = build_scope_sql_filters(
+        meeting_ids=meeting_ids,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    m_clauses = [clause.replace("p.meeting_id", "m.meeting_id") for clause in clauses]
+    where_sql = f"WHERE {' AND '.join(m_clauses)}" if m_clauses else ""
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            m.meeting_id,
+            m.title,
+            m.date_iso,
+            m.duration_sec,
+            m.language,
+            m.tag,
+            m.transcript_hash,
+            (CASE WHEN m.summary_hash != '' THEN 1 ELSE 0 END) AS has_summary
+        FROM indexed_meetings m
+        {where_sql}
+        ORDER BY m.date_iso DESC, m.meeting_id DESC
+        """,
+        params,
+    ).fetchall()
+    if not rows:
+        return []
+
+    speaker_clauses = [*m_clauses, "p.speaker != ''"]
+    speaker_where_sql = f"WHERE {' AND '.join(speaker_clauses)}"
+    speaker_rows = conn.execute(
+        f"""
+        SELECT DISTINCT p.meeting_id, p.speaker
+        FROM passages p
+        JOIN indexed_meetings m ON m.meeting_id = p.meeting_id
+        {speaker_where_sql}
+        """,
+        params,
+    ).fetchall()
+    speakers_by_meeting: Dict[str, List[str]] = {}
+    for srow in speaker_rows:
+        mid = str(srow["meeting_id"])
+        spk = str(srow["speaker"] or "").strip()
+        if spk:
+            speakers_by_meeting.setdefault(mid, []).append(spk)
+
+    return [
+        {
+            "meetingId": str(row["meeting_id"]),
+            "title": str(row["title"] or "Untitled recording"),
+            "date": str(row["date_iso"] or ""),
+            "durationSeconds": float(row["duration_sec"] or 0.0),
+            "language": str(row["language"] or ""),
+            "tag": str(row["tag"] or ""),
+            "transcriptHash": str(row["transcript_hash"] or ""),
+            "hasSummary": bool(row["has_summary"]),
+            "speakers": speakers_by_meeting.get(str(row["meeting_id"]), []),
+        }
+        for row in rows
+    ]
+
+
+def _row_to_passage_record(row: sqlite3.Row) -> Dict[str, Any]:
+    start_ms = row["start_ms"]
+    end_ms = row["end_ms"]
+    text = str(row["text"] or "").strip()
+    return {
+        "passageId": int(row["passage_id"]),
+        "meetingId": str(row["meeting_id"]),
+        "meetingTitle": str(row["meeting_title"] or "Untitled recording"),
+        "meetingDate": str(row["meeting_date"] or ""),
+        "tag": str(row["meeting_tag"] or ""),
+        "kind": str(row["kind"] or "transcript"),
+        "seqIndex": int(row["seq_index"]),
+        "startMs": int(start_ms) if start_ms is not None else None,
+        "endMs": int(end_ms) if end_ms is not None else None,
+        "startSec": round(start_ms / 1000.0, 3) if start_ms is not None else None,
+        "endSec": round(end_ms / 1000.0, 3) if end_ms is not None else None,
+        "speaker": str(row["speaker"] or ""),
+        "text": text,
+        "excerpt": text if len(text) <= 220 else f"{text[:219]}…",
+        "sourceTranscriptHash": str(row["source_transcript_hash"] or ""),
+    }
+
+
+def fetch_meeting_passages(
+    conn: sqlite3.Connection,
+    meeting_ids: Sequence[str],
+    *,
+    kinds: Optional[Sequence[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Fetch passages for specific meeting IDs in deterministic chronological order."""
+    clean_ids = [str(mid).strip() for mid in meeting_ids if str(mid or "").strip()]
+    if not clean_ids:
+        return []
+    id_placeholders = ", ".join("?" for _ in clean_ids)
+    clauses = [f"p.meeting_id IN ({id_placeholders})"]
+    params: List[Any] = list(clean_ids)
+    if kinds:
+        clean_kinds = [str(k).strip() for k in kinds if str(k or "").strip()]
+        if clean_kinds:
+            kind_placeholders = ", ".join("?" for _ in clean_kinds)
+            clauses.append(f"p.kind IN ({kind_placeholders})")
+            params.extend(clean_kinds)
+    where_sql = " AND ".join(clauses)
+    rows = conn.execute(
+        f"""
+        SELECT
+            p.passage_id,
+            p.meeting_id,
+            p.kind,
+            p.seq_index,
+            p.start_ms,
+            p.end_ms,
+            p.speaker,
+            p.text,
+            p.source_transcript_hash,
+            m.title AS meeting_title,
+            m.date_iso AS meeting_date,
+            m.tag AS meeting_tag
+        FROM passages p
+        JOIN indexed_meetings m ON m.meeting_id = p.meeting_id
+        WHERE {where_sql}
+        ORDER BY p.meeting_id ASC, p.seq_index ASC
+        """,
+        params,
+    ).fetchall()
+    return [_row_to_passage_record(row) for row in rows]
+
+
+def fetch_neighbor_passages(
+    conn: sqlite3.Connection,
+    meeting_id: str,
+    seq_indices: Sequence[int],
+) -> List[Dict[str, Any]]:
+    """Fetch adjacent transcript passages for k+-1 context expansion."""
+    clean_id = str(meeting_id or "").strip()
+    clean_seqs = sorted({int(idx) for idx in seq_indices if int(idx) >= 1})
+    if not clean_id or not clean_seqs:
+        return []
+    placeholders = ", ".join("?" for _ in clean_seqs)
+    rows = conn.execute(
+        f"""
+        SELECT
+            p.passage_id,
+            p.meeting_id,
+            p.kind,
+            p.seq_index,
+            p.start_ms,
+            p.end_ms,
+            p.speaker,
+            p.text,
+            p.source_transcript_hash,
+            m.title AS meeting_title,
+            m.date_iso AS meeting_date,
+            m.tag AS meeting_tag
+        FROM passages p
+        JOIN indexed_meetings m ON m.meeting_id = p.meeting_id
+        WHERE p.meeting_id = ?
+          AND p.kind = 'transcript'
+          AND p.seq_index IN ({placeholders})
+        ORDER BY p.seq_index ASC
+        """,
+        [clean_id, *clean_seqs],
+    ).fetchall()
+    return [_row_to_passage_record(row) for row in rows]

@@ -167,12 +167,156 @@
     return (Array.isArray(meetings) ? meetings : []).some((m) => m && String(m.id) === targetId);
   }
 
+  function isScopeFiltered(scope) {
+    if (!scope || typeof scope !== 'object') {
+      return false;
+    }
+    if (scope.type === 'selected_meetings') {
+      return true;
+    }
+    if (scope.dateFrom || scope.dateTo) {
+      return true;
+    }
+    if (Array.isArray(scope.tags) && scope.tags.length > 0) {
+      return true;
+    }
+    return false;
+  }
+
+  function buildAssistantNoticeView(message, scope = null) {
+    const status = String(message?.status || '').trim();
+    if (!['no_matching_excerpts', 'insufficient_evidence', 'verification_failed'].includes(status)) {
+      return null;
+    }
+
+    const searchedCount = Number.isFinite(Number(message?.searchedMeetingCount))
+      ? Math.max(0, Math.floor(Number(message.searchedMeetingCount)))
+      : 0;
+    const evidenceCount = Number.isFinite(Number(message?.evidenceCount))
+      ? Math.max(0, Math.floor(Number(message.evidenceCount)))
+      : 0;
+    const detectedDateFilter = String(message?.detectedDateFilter || '').trim();
+    const filtered = isScopeFiltered(scope);
+    const hasInspectedSources = Array.isArray(message?.inspectedSources) && message.inspectedSources.length > 0;
+    const searchedLabel = `Searched ${searchedCount} recording${searchedCount === 1 ? '' : 's'}`;
+
+    if (status === 'no_matching_excerpts') {
+      let title = filtered
+        ? 'No matching passages found in the selected recordings.'
+        : 'No matching passages found across your recordings.';
+      if (searchedCount === 0) {
+        title = filtered
+          ? 'No indexed recordings match the current filter.'
+          : 'No indexed recordings are available yet.';
+      } else if (detectedDateFilter) {
+        title = filtered
+          ? `No transcripts matched "${detectedDateFilter}" in the current filter.`
+          : `No recordings matched "${detectedDateFilter}".`;
+      }
+      const detailParts = [searchedLabel];
+      if (detectedDateFilter) {
+        detailParts.push(`Date filter parsed: ${detectedDateFilter}`);
+      }
+      const actions = [];
+      if (filtered && scope?.type === 'selected_meetings') {
+        actions.push({ id: 'search_all', label: 'Search all recordings' });
+      }
+      if (filtered && (scope?.dateFrom || scope?.dateTo || (Array.isArray(scope?.tags) && scope.tags.length > 0))) {
+        actions.push({ id: 'reset_filters', label: 'Reset filters' });
+      }
+      if (!filtered) {
+        actions.push({ id: 'retry', label: 'Retry' });
+      }
+      return {
+        variant: 'no_matching_excerpts',
+        title,
+        detail: detailParts.join(' · '),
+        actions,
+        showInspectedSources: false,
+      };
+    }
+
+    if (status === 'verification_failed') {
+      const actions = [{ id: 'retry', label: 'Retry' }];
+      if (filtered) {
+        actions.push({ id: 'search_all', label: 'Search all recordings' });
+      }
+      return {
+        variant: 'verification_failed',
+        title: 'The local model returned an unverified format.',
+        detail: 'Citation checks rejected the output so ungrounded claims are never shown.',
+        actions,
+        showInspectedSources: hasInspectedSources,
+      };
+    }
+
+    // insufficient_evidence
+    const title = evidenceCount > 0
+      ? `Found ${evidenceCount} matching passage${evidenceCount === 1 ? '' : 's'}, but they don't answer that specific question.`
+      : (message?.content || 'Not enough matching information in the selected transcripts or summaries to answer that.');
+    const detailParts = [];
+    if (searchedCount > 0) {
+      detailParts.push(searchedLabel);
+    }
+    if (detectedDateFilter) {
+      detailParts.push(`Date filter parsed: ${detectedDateFilter}`);
+    }
+    const actions = [];
+    if (filtered) {
+      actions.push({ id: 'search_all', label: 'Search all recordings' });
+    }
+    actions.push({ id: 'retry', label: 'Retry' });
+    return {
+      variant: 'insufficient_evidence',
+      title,
+      detail: detailParts.join(' · '),
+      actions,
+      showInspectedSources: hasInspectedSources,
+    };
+  }
+
+  const POST_STREAM_BANNER_PHASES = new Set(['verifying', 'citation-repair', 'json-repair']);
+
+  function shouldShowChatProgressBanner({ sendVisible, streamingDraft, progress } = {}) {
+    if (!sendVisible) {
+      return false;
+    }
+    const phase = String(progress?.phase || '').trim().toLowerCase();
+    if (POST_STREAM_BANNER_PHASES.has(phase)) {
+      return true;
+    }
+    return !streamingDraft;
+  }
+
+  function resolveNoticeActionScope(actionId, currentScope = null) {
+    if (actionId === 'search_all') {
+      return { type: 'all', meetingIds: [], dateFrom: null, dateTo: null };
+    }
+    if (actionId === 'reset_filters') {
+      const meetingIds = Array.isArray(currentScope?.meetingIds)
+        ? currentScope.meetingIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const keepSelected = currentScope?.type === 'selected_meetings' && meetingIds.length > 0;
+      return {
+        type: keepSelected ? 'selected_meetings' : 'all',
+        meetingIds: keepSelected ? meetingIds : [],
+        dateFrom: null,
+        dateTo: null,
+      };
+    }
+    return null;
+  }
+
   return {
+    buildAssistantNoticeView,
     buildModelMemoryPillView,
     buildStarterPrompts,
     filterChatThreads,
     formatChatScopeLabel,
     groupThreadsByRecency,
     isCitedMeetingAvailable,
+    isScopeFiltered,
+    resolveNoticeActionScope,
+    shouldShowChatProgressBanner,
   };
 }));

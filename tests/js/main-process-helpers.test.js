@@ -626,6 +626,25 @@ test('parseAiBackendProgressLine returns redacted progress events only', () => {
   });
   assert.equal(parseAiBackendProgressLine('not json', 'diarization'), null);
   assert.equal(parseAiBackendProgressLine('{"type":"progress","feature":"summary"}', 'diarization'), null);
+
+  const qaEvent = parseAiBackendProgressLine(JSON.stringify({
+    type: 'progress',
+    feature: 'history-qa',
+    phase: 'streaming',
+    message: 'Writing answer locally…',
+    percent: 65,
+    draftMarkdown: 'Line 1\nBearer secret123',
+  }), 'history-qa');
+  assert.equal(qaEvent.draftMarkdown, 'Line 1\nBearer [redacted-token]');
+
+  const summaryWithDraft = parseAiBackendProgressLine(JSON.stringify({
+    type: 'progress',
+    feature: 'summary',
+    phase: 'generating',
+    message: 'Working…',
+    draftMarkdown: 'should not be exposed',
+  }), 'summary');
+  assert.equal(summaryWithDraft.draftMarkdown, undefined);
 });
 
 

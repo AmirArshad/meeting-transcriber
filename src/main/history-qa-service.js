@@ -369,6 +369,9 @@ function createHistoryQaService(deps) {
       phase: String(payload.phase || 'status'),
       message: redactSensitiveText(String(payload.message || '')).slice(0, 300),
       ...(Number.isFinite(payload.percent) ? { percent: payload.percent } : {}),
+      ...(typeof payload.draftMarkdown === 'string' && payload.draftMarkdown
+        ? { draftMarkdown: redactSensitiveText(payload.draftMarkdown).slice(0, 16000) }
+        : {}),
     });
   }
 
@@ -871,12 +874,20 @@ function createHistoryQaService(deps) {
       }
 
       const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+      let settled = false;
+      let timedOut = false;
       let stderrRemainder = '';
       if (emitProgressEvents && python.stderr && typeof python.stderr.on === 'function') {
         python.stderr.on('data', (chunk) => {
+          if (settled || timedOut || registrar.isCancelled()) {
+            return;
+          }
           const split = splitBufferedLines(String(chunk), stderrRemainder);
           stderrRemainder = split.remainder;
           for (const line of split.lines) {
+            if (settled || timedOut || registrar.isCancelled()) {
+              return;
+            }
             const parsed = parseAiBackendProgressLine(line, 'history-qa');
             if (parsed) {
               emitQaProgress({
@@ -884,14 +895,13 @@ function createHistoryQaService(deps) {
                 phase: parsed.phase,
                 message: parsed.message,
                 percent: parsed.percent,
+                ...(parsed.draftMarkdown ? { draftMarkdown: parsed.draftMarkdown } : {}),
               });
             }
           }
         });
       }
 
-      let settled = false;
-      let timedOut = false;
       const finish = (cb, val) => {
         if (settled) {
           return;
@@ -1023,6 +1033,55 @@ function createHistoryQaService(deps) {
         checkCurrent();
         if (historySearchService.getGeneration() !== generation) throw new Error('History changed while answering; please retry.');
       };
+      const existingMessages = Array.isArray(thread.messages) ? thread.messages : [];
+      let lastCitedMeetingIds = [];
+      let lastQuestion = '';
+      let lastAnsweredIdx = -1;
+      for (let i = existingMessages.length - 1; i >= 0; i -= 1) {
+        const msg = existingMessages[i];
+        if (msg.role === 'assistant' && msg.status === 'answered') {
+          lastAnsweredIdx = i;
+          if (Array.isArray(msg.citations) && msg.citations.length > 0) {
+            lastCitedMeetingIds = [...new Set(msg.citations.map((c) => c.meetingId).filter(Boolean))];
+          }
+          break;
+        }
+      }
+      if (lastAnsweredIdx !== -1) {
+        for (let i = lastAnsweredIdx - 1; i >= 0; i -= 1) {
+          const msg = existingMessages[i];
+          if (msg.role === 'user' && msg.content) {
+            lastQuestion = String(msg.content);
+            break;
+          }
+        }
+        if (lastCitedMeetingIds.length === 0) {
+          for (let i = lastAnsweredIdx - 1; i >= 0; i -= 1) {
+            const msg = existingMessages[i];
+            if (
+              msg.role === 'assistant'
+              && msg.status === 'answered'
+              && Array.isArray(msg.citations)
+              && msg.citations.length > 0
+            ) {
+              lastCitedMeetingIds = [...new Set(msg.citations.map((c) => c.meetingId).filter(Boolean))];
+              break;
+            }
+          }
+        }
+      } else {
+        for (let i = existingMessages.length - 1; i >= 0; i -= 1) {
+          const msg = existingMessages[i];
+          if (msg.role === 'user' && msg.content) {
+            lastQuestion = String(msg.content);
+            break;
+          }
+        }
+      }
+      const threadContext = (lastCitedMeetingIds.length > 0 || lastQuestion)
+        ? { lastCitedMeetingIds, lastQuestion }
+        : null;
+
       const runRetrieval = () => runPythonStdinJson({
         moduleName: 'history_qa.retrieval',
         args: [
@@ -1035,6 +1094,7 @@ function createHistoryQaService(deps) {
         payload: {
           question,
           scope: effectiveScope,
+          ...(threadContext ? { threadContext } : {}),
           sync: false,
         },
         timeoutMs: retrievalTimeoutMs,
@@ -1051,17 +1111,28 @@ function createHistoryQaService(deps) {
 
       const evidence = Array.isArray(retrieval.evidence) ? retrieval.evidence : [];
       const searchedMeetingCount = Number(retrieval.searchedMeetingCount) || 0;
+      const detectedDateFilter = typeof retrieval.detectedDateFilter === 'string'
+        ? retrieval.detectedDateFilter
+        : '';
+      const retrievalMode = typeof retrieval.retrievalMode === 'string'
+        ? retrieval.retrievalMode
+        : '';
 
       // Zero-hit preflight gate: NEVER acquire compute queue or allocate VRAM!
       if (evidence.length === 0) {
         assertFresh();
-      const persisted = await chatThreadStore.appendTurn(thread.id, {
+        const noMatchAnswer = searchedMeetingCount === 0
+          ? 'No indexed recordings match the selected filter yet.'
+          : (detectedDateFilter
+            ? `No matching excerpts were found for ${detectedDateFilter} in the selected recordings.`
+            : 'No matching excerpts were found in the selected recordings for that question.');
+        const persisted = await chatThreadStore.appendTurn(thread.id, {
           question,
-          status: 'insufficient_evidence',
-          answerMarkdown:
-            searchedMeetingCount === 0
-              ? 'No indexed recordings match the selected filter yet.'
-              : 'No matching excerpts were found in the selected recordings for that question.',
+          status: 'no_matching_excerpts',
+          failureReason: 'no_matching_excerpts',
+          detectedDateFilter: detectedDateFilter || null,
+          retrievalMode: retrievalMode || null,
+          answerMarkdown: noMatchAnswer,
           citations: [],
           searchedMeetingCount,
           evidenceCount: 0,
@@ -1076,7 +1147,10 @@ function createHistoryQaService(deps) {
         });
         return {
           ...persisted,
-          status: 'insufficient_evidence',
+          status: 'no_matching_excerpts',
+          failureReason: 'no_matching_excerpts',
+          detectedDateFilter: detectedDateFilter || null,
+          retrievalMode: retrievalMode || null,
           modelLoaded: isModelLoaded(),
           searchedMeetingCount,
           evidenceCount: 0,
@@ -1096,15 +1170,28 @@ function createHistoryQaService(deps) {
       });
 
       const queueRunner = runQueuedCompute || ((action) => enqueueAiComputeAction(() => enqueueGpuResourceActionForQa(action)));
-      const evidenceIds = new Set(evidence.map((item) => item.meetingId));
+      const scopedSelectedIds = effectiveScope && effectiveScope.type === 'selected_meetings'
+        ? new Set((effectiveScope.meetingIds || []).map(String))
+        : null;
       const historyTurns = [];
-      const messages = Array.isArray(thread.messages) ? thread.messages : [];
-      for (let i = 0; i + 1 < messages.length; i += 2) {
-        const user = messages[i];
-        const assistant = messages[i + 1];
-        if (user.role === 'user' && assistant.role === 'assistant'
-            && Array.isArray(assistant.citations) && assistant.citations.length > 0
-            && assistant.citations.every((citation) => evidenceIds.has(citation.meetingId))) {
+      for (let i = 0; i + 1 < existingMessages.length; i += 2) {
+        const user = existingMessages[i];
+        const assistant = existingMessages[i + 1];
+        if (
+          user.role === 'user'
+          && assistant.role === 'assistant'
+          && assistant.status === 'answered'
+          && user.content
+          && assistant.content
+        ) {
+          if (
+            scopedSelectedIds
+            && Array.isArray(assistant.citations)
+            && assistant.citations.length > 0
+            && !assistant.citations.every((citation) => scopedSelectedIds.has(String(citation.meetingId)))
+          ) {
+            continue;
+          }
           historyTurns.push({ role: 'user', content: user.content }, { role: 'assistant', content: assistant.content });
         }
       }
@@ -1244,7 +1331,10 @@ function createHistoryQaService(deps) {
                   evidence,
                   history: historyTurns,
                   searchedMeetingCount,
+                  detectedDateFilter,
+                  retrievalMode,
                   executionMode,
+                  stream: executionMode === 'server',
                   ...(executionMode === 'server' ? { serverUrl, serverToken } : { runtimeDir, modelPath }),
                 },
                 env: runnerEnv,
@@ -1273,11 +1363,20 @@ function createHistoryQaService(deps) {
       })), controller.signal);
 
       assertFresh();
+      const finalStatus = qaResult.status || 'answered';
+      const finalFailureReason = qaResult.failureReason || null;
+      const finalDateFilter = qaResult.detectedDateFilter || detectedDateFilter || null;
+      const finalRetrievalMode = qaResult.retrievalMode || retrievalMode || null;
+      const finalInspectedSources = Array.isArray(qaResult.inspectedSources) ? qaResult.inspectedSources : [];
       const persisted = await chatThreadStore.appendTurn(thread.id, {
         question,
-        status: qaResult.status || 'answered',
+        status: finalStatus,
+        failureReason: finalFailureReason,
+        detectedDateFilter: finalDateFilter,
+        retrievalMode: finalRetrievalMode,
         answerMarkdown: qaResult.answerMarkdown || '',
         citations: Array.isArray(qaResult.citations) ? qaResult.citations : [],
+        inspectedSources: finalInspectedSources,
         searchedMeetingCount: Number(qaResult.searchedMeetingCount) || searchedMeetingCount,
         evidenceCount: Number(qaResult.evidenceCount) || evidence.length,
         scope: options.scope || null,
@@ -1293,7 +1392,10 @@ function createHistoryQaService(deps) {
 
       return {
         ...persisted,
-        status: qaResult.status || 'answered',
+        status: finalStatus,
+        failureReason: finalFailureReason,
+        detectedDateFilter: finalDateFilter,
+        retrievalMode: finalRetrievalMode,
         modelLoaded: isModelLoaded(),
         searchedMeetingCount: Number(qaResult.searchedMeetingCount) || searchedMeetingCount,
         evidenceCount: Number(qaResult.evidenceCount) || evidence.length,
