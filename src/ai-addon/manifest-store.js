@@ -1690,6 +1690,26 @@ function isPinnedByteSize(value) {
   return Number.isSafeInteger(Number(value)) && Number(value) > 0;
 }
 
+function validateBundledLinuxSummaryCuda(runtimeArtifact) {
+  const cudaArchive = runtimeArtifact.artifacts.find((archive) => archive.kind === 'cuda-runtime-archive');
+  if (!cudaArchive?.dynamicLibraryDir || !Array.isArray(cudaArchive.requiredFiles)) {
+    return 'Linux summary runtime must include a pinned CUDA 12.8 archive.';
+  }
+  const libraries = runtimeArtifact.requiredDynamicLibraries;
+  for (const fileName of ['libcudart.so.12', 'libcublas.so.12', 'libcublasLt.so.12']) {
+    const relativePath = `${cudaArchive.dynamicLibraryDir}/${fileName}`;
+    if (!libraries.some((library) => library.fileName === fileName
+      && library.source === 'summary-runtime' && library.relativePath === relativePath)
+      || !cudaArchive.requiredFiles.some((file) => file.path === relativePath)) {
+      return `Linux summary runtime must declare and pin its bundled CUDA dependency: ${fileName}`;
+    }
+  }
+  if (!libraries.some((library) => library.fileName === 'libcuda.so.1' && library.source === 'nvidia-driver')) {
+    return 'Linux summary runtime must declare its NVIDIA driver dependency.';
+  }
+  return null;
+}
+
 function validateSummaryRuntimeArtifact(runtimeArtifact) {
   if (!runtimeArtifact) {
     return 'Pinned llama.cpp runtime artifact is not configured for this platform.';
@@ -1704,26 +1724,33 @@ function validateSummaryRuntimeArtifact(runtimeArtifact) {
     if (runtimeArtifact.arch !== 'x64' || runtimeArtifact.acceleration !== 'cuda' || runtimeArtifact.cudaMajor !== 12) {
       return 'Linux summary runtime must be pinned for x86_64 CUDA 12.';
     }
-    const requiresNccl = runtimeArtifact.repository === 'ai-dock/llama.cpp-cuda'
-      || (Array.isArray(runtimeArtifact.requiredDynamicLibraries)
-        && runtimeArtifact.requiredDynamicLibraries.some((library) => library.fileName === 'libnccl.so.2'));
-    if (requiresNccl) {
+    const libraries = runtimeArtifact.requiredDynamicLibraries;
+    if (!Array.isArray(libraries) || libraries.length === 0
+      || libraries.some((library) => !library?.fileName || !library.source)) {
+      return 'Linux summary runtime must declare its required shared-library dependencies.';
+    }
+    const auditedRuntime = AI_MODEL_CATALOG.summary.b12631RuntimeArtifacts['linux-x64'];
+    const usesAuditedClosure = runtimeArtifact.id === auditedRuntime.id
+      && runtimeArtifact.repository === auditedRuntime.repository
+      && runtimeArtifact.version === auditedRuntime.version
+      && runtimeArtifact.commit === auditedRuntime.commit;
+    if (usesAuditedClosure) {
+      if (libraries.some((library) => library.fileName === 'libnccl.so.2')) {
+        return 'The audited Linux summary runtime does not use NCCL.';
+      }
+      const error = validateBundledLinuxSummaryCuda(runtimeArtifact);
+      if (error) return error;
+    } else {
       if (!runtimeArtifact.artifacts.some((archive) => archive.kind === 'nccl-wheel')) {
         return 'Linux summary runtime must include a pinned NCCL CUDA 12 dependency.';
       }
-      if (!Array.isArray(runtimeArtifact.requiredDynamicLibraries)
-        || !runtimeArtifact.requiredDynamicLibraries.some((library) => library.fileName === 'libnccl.so.2')) {
+      if (!libraries.some((library) => library.fileName === 'libnccl.so.2')) {
         return 'Linux summary runtime must declare its NCCL shared-library dependency.';
       }
-    } else if (!Array.isArray(runtimeArtifact.requiredDynamicLibraries) || runtimeArtifact.requiredDynamicLibraries.length === 0) {
-      return 'Linux summary runtime must declare its required shared-library dependencies.';
     }
     const pinnedRuntimeFiles = getSummaryRuntimeRequiredFiles(runtimeArtifact);
     const managedLibraries = new Map(getLinuxCudaRequiredLibraries().map((library) => [library.fileName, library]));
-    for (const library of runtimeArtifact.requiredDynamicLibraries) {
-      if (!library || !library.fileName || !library.source) {
-        return 'Linux summary runtime dependency metadata is incomplete.';
-      }
+    for (const library of libraries) {
       if (library.source === 'summary-runtime') {
         if (!library.relativePath) {
           return 'Linux summary runtime dependency metadata is incomplete.';

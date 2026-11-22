@@ -325,7 +325,15 @@ const DIARIZATION_DEPENDENCY_ARTIFACTS = deepFreeze({
   },
 });
 
-const GEMMA_LLAMA_CPP_RUNTIME = deepFreeze({
+const LEGACY_GEMMA_LLAMA_CPP_RUNTIME = deepFreeze({
+  runtime: 'llama.cpp',
+  version: 'b12606',
+  repository: 'ggml-org/llama.cpp',
+  commit: 'e412c6f468b7b9e0f16f2540244236f8ad68e9ae',
+  releaseUrl: 'https://github.com/ggml-org/llama.cpp/releases/tag/b12606',
+});
+
+const B12631_LLAMA_CPP_RUNTIME = deepFreeze({
   runtime: 'llama.cpp',
   version: 'b12631',
   repository: 'ggml-org/llama.cpp',
@@ -333,36 +341,40 @@ const GEMMA_LLAMA_CPP_RUNTIME = deepFreeze({
   releaseUrl: 'https://github.com/ggml-org/llama.cpp/releases/tag/b12631',
 });
 
-function gemmaRuntimeArchive(fileName, sizeBytes, sha256, expandedBytes) {
+function llamaRuntimeArchive(fileName, sizeBytes, sha256, expandedBytes, downloadUrl) {
   return {
-    fileName, sizeBytes, sha256, expandedBytes,
+    fileName, sizeBytes, sha256, expandedBytes, downloadUrl,
     archiveFormat: fileName.endsWith('.zip') ? 'zip' : 'tar.gz',
-    downloadUrl: `https://github.com/ggml-org/llama.cpp/releases/download/b12631/${fileName}`,
   };
 }
 
-const GEMMA_SUMMARY_RUNTIME_ARTIFACTS = deepFreeze({
+function b12631RuntimeArchive(assetId, fileName, sizeBytes, sha256, expandedBytes) {
+  return llamaRuntimeArchive(fileName, sizeBytes, sha256, expandedBytes,
+    `https://api.github.com/repos/ggml-org/llama.cpp/releases/assets/${assetId}`);
+}
+
+const B12631_SUMMARY_RUNTIME_ARTIFACTS = deepFreeze({
   'win32-x64': {
-    ...SUMMARY_RUNTIME_ARTIFACTS['win32-x64'], ...GEMMA_LLAMA_CPP_RUNTIME,
+    ...SUMMARY_RUNTIME_ARTIFACTS['win32-x64'], ...B12631_LLAMA_CPP_RUNTIME,
     id: 'llama-cpp-b12631-win32-x64-cuda-12.4',
     label: 'llama.cpp b12631 for Windows CUDA 12.4',
     artifacts: [
-      gemmaRuntimeArchive('llama-b12631-bin-win-cuda-12.4-x64.zip', 357975625, '2c0a950896f370185f704ef0bc4085278462c444049c47158007af870515aef5', 833394973),
-      gemmaRuntimeArchive('cudart-llama-bin-win-cuda-12.4-x64.zip', 391443627, '8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6', 574138880),
+      b12631RuntimeArchive(778480590, 'llama-b12631-bin-win-cuda-12.4-x64.zip', 357975625, '2c0a950896f370185f704ef0bc4085278462c444049c47158007af870515aef5', 833394973),
+      b12631RuntimeArchive(778477150, 'cudart-llama-bin-win-cuda-12.4-x64.zip', 391443627, '8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6', 574138880),
     ],
   },
   'darwin-arm64': {
-    ...SUMMARY_RUNTIME_ARTIFACTS['darwin-arm64'], ...GEMMA_LLAMA_CPP_RUNTIME,
+    ...SUMMARY_RUNTIME_ARTIFACTS['darwin-arm64'], ...B12631_LLAMA_CPP_RUNTIME,
     id: 'llama-cpp-b12631-darwin-arm64-metal',
     label: 'llama.cpp b12631 for macOS Metal',
     artifacts: [
-      gemmaRuntimeArchive('llama-b12631-bin-macos-arm64.tar.gz', 16599970, '8de65a20e743b27405f05e6f89c636b879fd040fdd2c9abd4730fc0632ca49a5', 42656342),
+      b12631RuntimeArchive(778478489, 'llama-b12631-bin-macos-arm64.tar.gz', 16599970, '8de65a20e743b27405f05e6f89c636b879fd040fdd2c9abd4730fc0632ca49a5', 42656342),
     ],
   },
   'linux-x64': {
     id: 'llama-cpp-b12631-linux-x64-cuda-12.8',
     label: 'llama.cpp b12631 for Linux CUDA 12.8',
-    ...GEMMA_LLAMA_CPP_RUNTIME,
+    ...B12631_LLAMA_CPP_RUNTIME,
     platform: 'linux',
     arch: 'x64',
     acceleration: 'cuda',
@@ -372,9 +384,9 @@ const GEMMA_SUMMARY_RUNTIME_ARTIFACTS = deepFreeze({
     artifacts: [
       {
         id: 'ggml-llama-cpp-b12631-linux-x64-cuda-12.8',
-        ...gemmaRuntimeArchive('llama-b12631-bin-ubuntu-cuda-12.8-x64.tar.gz', 220074287, '7d5cbac777defa888ed81bd7095da5d8eff780538254faed50ab4303eeaa7408', 281493150),
+        ...b12631RuntimeArchive(778478682, 'llama-b12631-bin-ubuntu-cuda-12.8-x64.tar.gz', 220074287, '7d5cbac777defa888ed81bd7095da5d8eff780538254faed50ab4303eeaa7408', 281493150),
         license: 'MIT',
-        licenseUrl: 'https://github.com/ggml-org/llama.cpp/blob/master/LICENSE',
+        licenseUrl: `https://github.com/ggml-org/llama.cpp/blob/${B12631_LLAMA_CPP_RUNTIME.commit}/LICENSE`,
         architecture: 'x64',
         cudaMajor: 12,
         requiredFiles: [
@@ -415,7 +427,7 @@ const GEMMA_SUMMARY_RUNTIME_ARTIFACTS = deepFreeze({
       {
         id: 'ggml-llama-cpp-b12631-cudart-linux-x64-cuda-12.8',
         kind: 'cuda-runtime-archive',
-        ...gemmaRuntimeArchive('cudart-llama-b12631-bin-ubuntu-cuda-12.8-x64.tar.gz', 594376039, '5e921d59295bc67642055b73d348a6c488e375a910185523bf89fca9fb795cc6', 868893264),
+        ...b12631RuntimeArchive(778475193, 'cudart-llama-b12631-bin-ubuntu-cuda-12.8-x64.tar.gz', 594376039, '5e921d59295bc67642055b73d348a6c488e375a910185523bf89fca9fb795cc6', 868893264),
         architecture: 'x64',
         cudaMajor: 12,
         dynamicLibraryDir: 'cudart-llama-b12631-bin-ubuntu-cuda-12.8-x64',
@@ -445,6 +457,29 @@ const GEMMA_SUMMARY_RUNTIME_ARTIFACTS = deepFreeze({
     ],
     validationStatus: 'ready',
   },
+});
+
+const GEMMA_SUMMARY_RUNTIME_ARTIFACTS = deepFreeze({
+  'win32-x64': {
+    ...SUMMARY_RUNTIME_ARTIFACTS['win32-x64'], ...LEGACY_GEMMA_LLAMA_CPP_RUNTIME,
+    id: 'llama-cpp-b12606-win32-x64-cuda-12.4',
+    label: 'llama.cpp b12606 for Windows CUDA 12.4',
+    artifacts: [
+      llamaRuntimeArchive('llama-b12606-bin-win-cuda-12.4-x64.zip', 357938811, '23d08378e6771e5a4b8daf139d6ee53191d0ab2acd2cf7777ae9cefc74c9d958', 833257245,
+        'https://github.com/ggml-org/llama.cpp/releases/download/b12606/llama-b12606-bin-win-cuda-12.4-x64.zip'),
+      { ...SUMMARY_RUNTIME_ARTIFACTS['win32-x64'].artifacts[1], expandedBytes: 574138880 },
+    ],
+  },
+  'darwin-arm64': {
+    ...SUMMARY_RUNTIME_ARTIFACTS['darwin-arm64'], ...LEGACY_GEMMA_LLAMA_CPP_RUNTIME,
+    id: 'llama-cpp-b12606-darwin-arm64-metal',
+    label: 'llama.cpp b12606 for macOS Metal',
+    artifacts: [
+      llamaRuntimeArchive('llama-b12606-bin-macos-arm64.tar.gz', 16576375, '8d277d8a1289202e0553cf6489801303624973807ae6d07c666a61ea70a0e1c4', 42612678,
+        'https://github.com/ggml-org/llama.cpp/releases/download/b12606/llama-b12606-bin-macos-arm64.tar.gz'),
+    ],
+  },
+  'linux-x64': B12631_SUMMARY_RUNTIME_ARTIFACTS['linux-x64'],
 });
 
 function buildHuggingFaceModelSource({ repo, revision, fileName, sha256, sizeBytes }) {
@@ -506,7 +541,7 @@ function buildSummaryArtifact({ modelId, label, runtimeArchitecture }) {
     validationStatus,
     llamaCpp: {
       ...(runtimeArchitecture === 'gemma4' || runtimeArchitecture === 'inkling2_loop'
-        ? GEMMA_LLAMA_CPP_RUNTIME
+        ? B12631_LLAMA_CPP_RUNTIME
         : PINNED_LLAMA_CPP_RUNTIME),
       validationStatus: 'ready',
     },
@@ -659,6 +694,7 @@ const AI_MODEL_CATALOG = deepFreeze({
     defaultModelId: DEFAULT_SUMMARY_MODEL_ID,
     runtimeArtifacts: SUMMARY_RUNTIME_ARTIFACTS,
     gemmaRuntimeArtifacts: GEMMA_SUMMARY_RUNTIME_ARTIFACTS,
+    b12631RuntimeArtifacts: B12631_SUMMARY_RUNTIME_ARTIFACTS,
     models: [
       {
         id: DEFAULT_SUMMARY_MODEL_ID,
@@ -721,7 +757,7 @@ const AI_MODEL_CATALOG = deepFreeze({
         memoryGuidance: { gpu: 24, unified: 32, minRuntimeBytes: 19217088512 },
         family: 'Inkling 2',
         runtime: 'llama.cpp',
-        runtimeCatalog: 'gemma',
+        runtimeCatalog: 'b12631',
         inference: {
           contextTokens: 32768,
           family: 'inkling',
@@ -833,6 +869,16 @@ function getSummaryArtifactForPlatform(modelId, platform = process.platform, arc
     return null;
   }
 
+  const gemmaRuntime = model.runtimeCatalog === 'gemma' && catalog.summary.gemmaRuntimeArtifacts?.[platformKey];
+  const llamaCpp = gemmaRuntime ? {
+    runtime: gemmaRuntime.runtime,
+    version: gemmaRuntime.version,
+    repository: gemmaRuntime.repository,
+    commit: gemmaRuntime.commit,
+    releaseUrl: gemmaRuntime.releaseUrl,
+    validationStatus: gemmaRuntime.validationStatus,
+  } : artifact.llamaCpp || null;
+
   return {
     modelId: model.id,
     modelLabel: model.label,
@@ -844,7 +890,7 @@ function getSummaryArtifactForPlatform(modelId, platform = process.platform, arc
     estimatedSizeBytes: artifact.estimatedSizeBytes || null,
     source: platformArtifact.source || artifact.source || null,
     validationStatus: platformArtifact.validationStatus || artifact.validationStatus || null,
-    llamaCpp: artifact.llamaCpp || null,
+    llamaCpp,
     platform: platformArtifact.platform || platform,
     arch: platformArtifact.arch || arch,
     acceleration: platformArtifact.acceleration || null,
@@ -859,9 +905,12 @@ function getSummaryArtifactForPlatform(modelId, platform = process.platform, arc
 function getSummaryRuntimeArtifactForPlatform(platform = process.platform, arch = process.arch, catalog = AI_MODEL_CATALOG, modelId) {
   const model = modelId && getModelById('summary', modelId, catalog);
   if (model?.supportedPlatforms && model.supportedPlatforms[platform]?.status !== 'enabled') return null;
-  const runtimeArtifacts = model?.runtimeCatalog === 'gemma'
-    ? catalog.summary.gemmaRuntimeArtifacts
-    : catalog?.summary?.runtimeArtifacts || SUMMARY_RUNTIME_ARTIFACTS;
+  let runtimeArtifacts = catalog?.summary?.runtimeArtifacts || SUMMARY_RUNTIME_ARTIFACTS;
+  if (model?.runtimeCatalog === 'gemma') {
+    runtimeArtifacts = catalog.summary.gemmaRuntimeArtifacts;
+  } else if (model?.runtimeCatalog === 'b12631') {
+    runtimeArtifacts = catalog.summary.b12631RuntimeArtifacts;
+  }
   const runtimeArtifact = runtimeArtifacts?.[`${platform}-${arch}`];
   if (!runtimeArtifact) {
     return null;

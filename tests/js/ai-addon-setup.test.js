@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
+const os = require('node:os');
 const { execFileSync } = require('node:child_process');
 const https = require('node:https');
 const { PassThrough } = require('node:stream');
@@ -434,6 +435,8 @@ test('progress events preserve bounded byte counters', () => {
 
 test('download URL validation allows configured HTTPS hosts and expected redirects', () => {
   assert.equal(isAllowedDownloadUrl('https://github.com/ggml-org/llama.cpp/releases/download/b9173/runtime.zip'), true);
+  assert.equal(isAllowedDownloadUrl('https://api.github.com/repos/ggml-org/llama.cpp/releases/assets/778478489'), true);
+  assert.equal(isAllowedDownloadUrl('https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/b12631'), false);
   assert.equal(isAllowedDownloadUrl('https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-models-5d24ffe-r1/speakrs-models-5d24ffe-win32-x64-cuda.tar.gz'), true);
   assert.equal(isAllowedDownloadUrl('https://objects.githubusercontent.com/github-production-release-asset-2e65be/runtime.zip'), true);
   assert.equal(isAllowedDownloadUrl('https://release-assets.githubusercontent.com/github-production-release-asset/runtime.tar.gz'), true);
@@ -451,6 +454,34 @@ test('download URL validation allows configured HTTPS hosts and expected redirec
   assert.equal(isAllowedDownloadUrl('https://example.test/model.gguf'), false);
   assert.equal(isAllowedDownloadUrl('https://evil.hf.co/model.gguf'), false);
   assert.equal(isAllowedDownloadUrl('https://attacker.huggingface.co/model.gguf'), false);
+});
+
+test('downloadFile requests GitHub asset bytes and follows the allowlisted CDN redirect', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-release-asset-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const destinationPath = path.join(directory, 'runtime.tar.gz');
+  const assetUrl = 'https://api.github.com/repos/ggml-org/llama.cpp/releases/assets/778478489';
+  const cdnUrl = 'https://release-assets.githubusercontent.com/runtime.tar.gz';
+  const requests = [];
+  t.mock.method(https, 'get', (url, options, callback) => {
+    const isAssetRequest = url.href === assetUrl;
+    const response = new PassThrough();
+    response.statusCode = isAssetRequest ? 302 : 200;
+    response.headers = isAssetRequest ? { location: cdnUrl } : { 'content-length': '3' };
+    requests.push([url.href, options?.headers]);
+    process.nextTick(() => {
+      (callback || options)(response);
+      response.end(isAssetRequest ? undefined : 'abc');
+    });
+    return { setTimeout() {}, on() {}, destroy() {} };
+  });
+
+  await downloadFile({ url: assetUrl, destinationPath, expectedSizeBytes: 3 });
+  assert.deepEqual(requests, [
+    [assetUrl, { Accept: 'application/octet-stream', 'User-Agent': 'AvaNevis' }],
+    [cdnUrl, undefined],
+  ]);
+  assert.equal(fs.readFileSync(destinationPath, 'utf8'), 'abc');
 });
 
 test('downloadFile removes partial destination when request fails', async () => {
@@ -3965,17 +3996,47 @@ test('setupSummaryModel uses getDeviceMemory for pre-check when static deviceMem
   assert.equal(downloads, 0);
 });
 
-test('validateSummaryRuntimeArtifact accepts unified llama.cpp b12631 runtimes across all platforms', () => {
+test('validateSummaryRuntimeArtifact accepts qualified and candidate runtime pins', () => {
   const { validateSummaryRuntimeArtifact } = require('../../src/ai-addon/manifest-store');
   const { AI_MODEL_CATALOG } = require('../../src/ai-addon-state');
   for (const [platform, arch] of [['darwin', 'arm64'], ['win32', 'x64'], ['linux', 'x64']]) {
     const runtime = getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, 'gemma-4-e4b');
-    assert.equal(runtime.version, 'b12631');
     assert.equal(validateSummaryRuntimeArtifact(runtime), null);
+    const candidate = AI_MODEL_CATALOG.summary.b12631RuntimeArtifacts[`${platform}-${arch}`];
+    assert.equal(candidate.version, 'b12631');
+    assert.equal(validateSummaryRuntimeArtifact(candidate), null);
+    for (const archive of candidate.artifacts) {
+      assert.match(archive.downloadUrl, /^https:\/\/api\.github\.com\/repos\/ggml-org\/llama\.cpp\/releases\/assets\/\d+$/);
+    }
   }
   const legacyLinux = getSummaryRuntimeArtifactForPlatform('linux', 'x64', AI_MODEL_CATALOG, 'qwen3.5-9b-q4-k-m');
   assert.equal(validateSummaryRuntimeArtifact(legacyLinux), null);
-  const missingNccl = JSON.parse(JSON.stringify(legacyLinux));
+  const missingNccl = structuredClone(legacyLinux);
   missingNccl.artifacts = missingNccl.artifacts.filter((archive) => archive.kind !== 'nccl-wheel');
   assert.match(validateSummaryRuntimeArtifact(missingNccl), /NCCL/);
+});
+
+test('validateSummaryRuntimeArtifact requires the audited Linux CUDA archive and library closure', () => {
+  const { validateSummaryRuntimeArtifact } = require('../../src/ai-addon/manifest-store');
+  const candidate = getSummaryRuntimeArtifactForPlatform('linux', 'x64', undefined, 'gemma-4-e4b');
+
+  const missingArchive = structuredClone(candidate);
+  missingArchive.artifacts = missingArchive.artifacts.filter((archive) => archive.kind !== 'cuda-runtime-archive');
+  missingArchive.requiredDynamicLibraries = [{ fileName: 'libm.so.6', source: 'system' }];
+  assert.match(validateSummaryRuntimeArtifact(missingArchive), /CUDA 12\.8 archive/);
+
+  const missingPin = structuredClone(candidate);
+  const cudaArchive = missingPin.artifacts.find((archive) => archive.kind === 'cuda-runtime-archive');
+  cudaArchive.requiredFiles = cudaArchive.requiredFiles.filter((file) => !file.path.endsWith('/libcublasLt.so.12'));
+  assert.match(validateSummaryRuntimeArtifact(missingPin), /libcublasLt\.so\.12/);
+
+  const wrongSource = structuredClone(candidate);
+  wrongSource.requiredDynamicLibraries.find((library) => library.fileName === 'libcudart.so.12').source = 'system';
+  assert.match(validateSummaryRuntimeArtifact(wrongSource), /libcudart\.so\.12/);
+
+  const missingDriver = structuredClone(candidate);
+  missingDriver.requiredDynamicLibraries = missingDriver.requiredDynamicLibraries.filter((library) => library.source !== 'nvidia-driver');
+  assert.match(validateSummaryRuntimeArtifact(missingDriver), /NVIDIA driver/);
+
+  assert.match(validateSummaryRuntimeArtifact({ ...candidate, commit: '0'.repeat(40) }), /NCCL/);
 });
