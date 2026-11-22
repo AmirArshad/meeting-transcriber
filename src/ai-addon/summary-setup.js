@@ -366,6 +366,7 @@ async function validateSummaryModel({
   cancelSignal,
   cudaStatus,
   deviceMemory,
+  getDeviceMemory = null,
   runExclusiveMutation = async (operation) => operation(),
 } = {}) {
   if (modelId && !catalog.summary.models.some((model) => model.id === modelId)) throw new Error('Unknown summary model.');
@@ -471,6 +472,10 @@ async function validateSummaryModel({
     percent: status === 'ready' ? 100 : undefined,
   });
 
+  const finalDeviceMemory = typeof getDeviceMemory === 'function'
+    ? await getDeviceMemory()
+    : deviceMemory;
+
   return checkAiAddonSetupStatus({
     userDataDir,
     platform,
@@ -482,7 +487,7 @@ async function validateSummaryModel({
     verifySelectedSummaryOnly: true,
     cudaStatus,
     summaryModelId: getSummaryStatusTargetModelId({ userDataDir, selectedModelId, fsModule, catalog }),
-    deviceMemory,
+    deviceMemory: finalDeviceMemory,
   });
 }
 
@@ -506,6 +511,7 @@ async function setupSummaryModel({
   cancelSignal,
   cudaStatus,
   deviceMemory,
+  getDeviceMemory = null,
   runExclusiveMutation = async (operation) => operation(),
 } = {}) {
   if (modelId && !catalog.summary.models.some((model) => model.id === modelId)) throw new Error('Unknown summary model.');
@@ -517,7 +523,13 @@ async function setupSummaryModel({
   const availability = getSummaryAvailability(platform, arch, { cudaStatus });
   const artifactError = availability.supported ? validatePinnedSummarySetup({ artifact, runtimeArtifact }) : availability.reason;
   const model = catalog.summary.models.find((item) => item.id === selectedModelId);
-  const fit = getSummaryModelFit({ model, artifact, availability, runtimeArtifact, deviceMemory, platform });
+  const initialDeviceMemory = deviceMemory !== undefined
+    ? deviceMemory
+    : (typeof getDeviceMemory === 'function' ? await getDeviceMemory() : undefined);
+  const readLatestDeviceMemory = async () => (
+    typeof getDeviceMemory === 'function' ? await getDeviceMemory() : initialDeviceMemory
+  );
+  const fit = getSummaryModelFit({ model, artifact, availability, runtimeArtifact, deviceMemory: initialDeviceMemory, platform });
   if (fit.blocked) throw new Error(fit.reason || 'This device cannot safely run the selected summary model.');
 
   emitSafeProgress(emitProgress, {
@@ -553,7 +565,7 @@ async function setupSummaryModel({
       fsModule,
       catalog,
       cudaStatus,
-      deviceMemory,
+      deviceMemory: initialDeviceMemory,
       summaryModelId: getSummaryStatusTargetModelId({ userDataDir, selectedModelId, fsModule, catalog }),
     });
   }
@@ -677,7 +689,8 @@ async function setupSummaryModel({
         runtimeValidator,
         cancelSignal,
         cudaStatus,
-        deviceMemory,
+        deviceMemory: initialDeviceMemory,
+        getDeviceMemory,
         runExclusiveMutation,
       });
     } catch (validationError) {
@@ -707,7 +720,7 @@ async function setupSummaryModel({
           fsModule,
           catalog,
           cudaStatus,
-          deviceMemory,
+          deviceMemory: await readLatestDeviceMemory(),
           summaryModelId: getSummaryStatusTargetModelId({ userDataDir, selectedModelId, fsModule, catalog }),
         });
       }
@@ -784,7 +797,7 @@ async function setupSummaryModel({
           fsModule,
           catalog,
           cudaStatus,
-          deviceMemory,
+          deviceMemory: await readLatestDeviceMemory(),
           summaryModelId: getSummaryStatusTargetModelId({ userDataDir, selectedModelId, fsModule, catalog }),
         });
       }
@@ -813,7 +826,7 @@ async function setupSummaryModel({
         fsModule,
         catalog,
         cudaStatus,
-        deviceMemory,
+        deviceMemory: await readLatestDeviceMemory(),
         summaryModelId: getSummaryStatusTargetModelId({ userDataDir, selectedModelId, fsModule, catalog }),
       });
     }
@@ -888,7 +901,7 @@ async function setupSummaryModel({
           fsModule,
           catalog,
           cudaStatus,
-          deviceMemory,
+          deviceMemory: await readLatestDeviceMemory(),
           summaryModelId: getSummaryStatusTargetModelId({ userDataDir, selectedModelId, fsModule, catalog }),
         });
       }
@@ -917,7 +930,7 @@ async function setupSummaryModel({
         fsModule,
         catalog,
         cudaStatus,
-        deviceMemory,
+        deviceMemory: await readLatestDeviceMemory(),
         summaryModelId: getSummaryStatusTargetModelId({ userDataDir, selectedModelId, fsModule, catalog }),
       });
     }
@@ -961,7 +974,7 @@ async function setupSummaryModel({
         fsModule,
         catalog,
         cudaStatus,
-        deviceMemory,
+        deviceMemory: await readLatestDeviceMemory(),
         summaryModelId: getSummaryStatusTargetModelId({ userDataDir, selectedModelId, fsModule, catalog }),
       });
     }
@@ -1008,7 +1021,7 @@ async function setupSummaryModel({
         fsModule,
         catalog,
         cudaStatus,
-        deviceMemory,
+        deviceMemory: await readLatestDeviceMemory(),
         summaryModelId: getSummaryStatusTargetModelId({ userDataDir, selectedModelId, fsModule, catalog }),
       });
     }
@@ -1034,7 +1047,8 @@ async function setupSummaryModel({
       runtimeValidator,
       cancelSignal,
       cudaStatus,
-      deviceMemory,
+      deviceMemory: initialDeviceMemory,
+      getDeviceMemory,
       runExclusiveMutation,
     });
   } catch (validationError) {
@@ -1075,7 +1089,7 @@ async function setupSummaryModel({
         fsModule,
         catalog,
         cudaStatus,
-        deviceMemory,
+        deviceMemory: await readLatestDeviceMemory(),
         summaryModelId: getSummaryStatusTargetModelId({ userDataDir, selectedModelId, fsModule, catalog }),
       });
     }

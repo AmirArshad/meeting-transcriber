@@ -906,6 +906,7 @@ aiAddonIpc = createAiAddonIpc({
   resolveCudaStatusForTranscription,
   getSummaryDeviceMemory,
   getResidentSummaryModelState: () => historyQaService?.getModelState(),
+  releaseSummaryModel,
   runExclusiveSummaryMutation: enqueueGpuResourceActionWithUnload,
   buildSummaryArgs,
   summarizeDiarizationError,

@@ -3863,3 +3863,104 @@ test('verified shared runtime cleans up unreferenced legacy private runtime dire
   assert.equal(fsModule.existsSync(legacyRuntime), false);
   assert.equal(fsModule.existsSync(path.join(sharedRuntime, 'extract', 'llama-cli.exe')), true);
 });
+
+test('setupSummaryModel hands off fresh post-unload deviceMemory to final validateSummaryModel status', async () => {
+  const GiB = 1024 ** 3;
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  const userDataDir = '/tmp/AvaNevis';
+  let modelUnloaded = false;
+  let memoryReads = 0;
+
+  const status = await setupSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    fsModule,
+    catalog,
+    deviceMemory: { totalBytes: 12 * GiB, availableBytes: 5 * GiB },
+    getDeviceMemory: async () => {
+      memoryReads += 1;
+      return modelUnloaded
+        ? { totalBytes: 12 * GiB, availableBytes: 11 * GiB }
+        : { totalBytes: 12 * GiB, availableBytes: 5 * GiB };
+    },
+    downloader: async ({ url, destinationPath }) => {
+      fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n');
+    },
+    extractor: async (_archive, extractDir) => {
+      fsModule.writeFileSync(path.join(extractDir, 'llama-cli.exe'), 'bin');
+    },
+    runExclusiveMutation: async (operation) => {
+      modelUnloaded = true;
+      return operation();
+    },
+    runtimeValidator: async () => ({ ok: true }),
+  });
+
+  assert.equal(status.features.summary.status, 'ready');
+  assert.equal(memoryReads, 1);
+  const entry = status.summaryLibrary.models.find((item) => item.modelId === 'summary-model');
+  assert.equal(entry.fit.availableMemoryBytes, 11 * GiB);
+});
+
+test('validateSummaryModel re-reads fresh deviceMemory after runtimeValidator finishes', async () => {
+  const GiB = 1024 ** 3;
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  const userDataDir = '/tmp/AvaNevis';
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  fsModule.writeFileSync(getSummaryArtifactPath(userDataDir, artifact), 'checksum target\n');
+  const runtimeExecutable = getSummaryRuntimeExecutablePath(userDataDir, artifact, catalog.summary.runtimeArtifacts['win32-x64']);
+  fsModule.writeFileSync(runtimeExecutable, 'bin');
+
+  let validated = false;
+  const status = await validateSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    fsModule,
+    catalog,
+    deviceMemory: { totalBytes: 12 * GiB, availableBytes: 2 * GiB },
+    getDeviceMemory: async () => (
+      validated
+        ? { totalBytes: 12 * GiB, availableBytes: 11 * GiB }
+        : { totalBytes: 12 * GiB, availableBytes: 2 * GiB }
+    ),
+    runtimeValidator: async () => {
+      validated = true;
+      return { ok: true };
+    },
+  });
+
+  assert.equal(status.features.summary.status, 'ready');
+  assert.equal(status.features.summary.fit.availableMemoryBytes, 11 * GiB);
+});
+
+test('setupSummaryModel uses getDeviceMemory for pre-check when static deviceMemory is omitted', async () => {
+  const GiB = 1024 ** 3;
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  catalog.summary.models[0].artifact.estimatedSizeBytes = 6 * GiB;
+  catalog.summary.models[0].artifact.platformArtifacts['win32-x64'].estimatedSizeBytes = 6 * GiB;
+  let downloads = 0;
+
+  await assert.rejects(
+    setupSummaryModel({
+      userDataDir: '/tmp/AvaNevis',
+      platform: 'win32',
+      arch: 'x64',
+      modelId: 'summary-model',
+      fsModule,
+      catalog,
+      getDeviceMemory: async () => ({ totalBytes: 4 * GiB, availableBytes: 3 * GiB }),
+      downloader: async () => {
+        downloads += 1;
+      },
+    }),
+    /more graphics memory/i,
+  );
+  assert.equal(downloads, 0);
+});
