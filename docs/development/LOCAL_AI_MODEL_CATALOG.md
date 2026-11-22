@@ -48,34 +48,40 @@ official ggml-org instruction-tuned `Q4_0` weights and a 32,768-token context.
 The pinned upstream repositories publish that quantization, with download sizes
 of 4,590,807,392 and 7,219,673,216 bytes respectively. Only text weights are used.
 
-Gemma uses `b12606` on macOS arm64 and Windows x64 CUDA and the ai-dock CUDA
-12.8 x64 `v1.0.0` build on Linux. Qwen retains its qualified runtime pins
-while the library shares each runtime version among compatible models. Existing
-private runtimes remain readable until verified adoption. Check the hardware
-results and remaining gates in the [v3.1 qualification record](V3_1_QUALIFICATION.md).
+Gemma 4 E4B and 12B use the unified official `ggml-org/llama.cpp` `b12631`
+runtime across macOS arm64 Metal, Windows x64 CUDA 12.4, and Linux x64 CUDA
+12.8. Qwen3.5 retains its qualified runtime pins (`b9173` on Windows/macOS,
+ai-dock `v0.3.0` on Linux) for zero-redownload continuity while the library
+shares each runtime version among compatible models. Existing private runtimes
+remain readable until verified adoption. Check the hardware results and
+remaining gates in the [v3.1 qualification record](V3_1_QUALIFICATION.md) and
+[v3.2 qualification record](V3_2_QUALIFICATION.md).
 
-Inkling 2 Mini uses the official ggml-org `IQ4_NL` pin. Each platform gate
-requires a distributable runtime that includes both initial support and the
-loop-layer scale fix, plus native validation with the pinned 32,768-token context.
-The newest numbered release checked, `b12608`, predates the fix. Apple Silicon
-source-build evidence and the separate Windows and Linux CUDA blockers are in
-the [v3.1 qualification record](V3_1_QUALIFICATION.md). Working-memory figures
-remain planning estimates until measured on representative supported hosts.
+Inkling 2 Mini uses the official ggml-org `IQ4_NL` pin and is wired to the
+shared `b12631` runtime (20 commits ahead of the loop-layer scale fix
+`690b87d8`) with 32,768-token context and non-thinking CLI settings. Each
+platform gate (`win32`, `darwin`, `linux`) stays `gated` until native 32k
+Inkling 2 Mini setup, Chat, and summary qualification is recorded in the
+[v3.2 qualification record](V3_2_QUALIFICATION.md) on a 24+ GiB GPU or 32+ GiB
+Apple Silicon host. Working-memory figures remain planning estimates until
+measured on representative supported hosts.
 
 ### Linux Qwen and Gemma 4 summary runtime pins
 
-The active Linux Qwen summary lane uses the catalog entry
+The active Linux Qwen3.5 summary lane uses the catalog entry
 `llama-cpp-v0.3.0-linux-x64-cuda-12.8`: ai-dock's MIT llama.cpp v0.3.0
-CUDA 12.8 amd64 release, and the Linux Gemma 4 lane uses
-`llama-cpp-v1.0.0-linux-x64-cuda-12.8` (ai-dock's v1.0.0 CUDA 12.8 amd64
-release), both paired with the pinned NVIDIA CUDA runtime and NCCL wheels.
+CUDA 12.8 amd64 release paired with the pinned NVIDIA CUDA runtime and NCCL
+wheels (`nvidia/nccl/lib/LICENSE.txt`). The Linux Gemma 4 and v3.2 shared
+summary lane uses `llama-cpp-b12631-linux-x64-cuda-12.8`: official
+`ggml-org/llama.cpp` `b12631` Ubuntu CUDA 12.8 x64 paired with its official
+`cudart-llama-b12631-bin-ubuntu-cuda-12.8-x64.tar.gz` archive (`libcudart.so.12`,
+`libcublas.so.12`, `libcublasLt.so.12`; no NCCL dependency).
 The release archives, wheel sizes, SHA-256 values, extracted regular-file pins,
-and license links live in `src/ai-addon-state.js` and the v2.9 / v3.1
-qualification records. The NCCL wheel's applicable notice is
-`nvidia/nccl/lib/LICENSE.txt`. NCCL is kept with the summary runtime rather than broadened into the
-Task 2 transcription runtime catalog. Linux status stays `unsupported` unless
-the managed CUDA 12 admission, all local artifact checks, and native hardware
-qualification pass.
+and license links live in `src/ai-addon-state.js` and the v2.9 / v3.1 / v3.2
+qualification records. NCCL is kept only with the legacy ai-dock Qwen3.5 runtime
+rather than broadened into the Task 2 transcription runtime catalog. Linux
+status stays `unsupported` unless the managed CUDA 12 admission, all local
+artifact checks, and native hardware qualification pass.
 
 ## Runtime Cache Locations
 

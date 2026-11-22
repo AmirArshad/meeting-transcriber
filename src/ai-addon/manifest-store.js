@@ -1704,12 +1704,19 @@ function validateSummaryRuntimeArtifact(runtimeArtifact) {
     if (runtimeArtifact.arch !== 'x64' || runtimeArtifact.acceleration !== 'cuda' || runtimeArtifact.cudaMajor !== 12) {
       return 'Linux summary runtime must be pinned for x86_64 CUDA 12.';
     }
-    if (!runtimeArtifact.artifacts.some((archive) => archive.kind === 'nccl-wheel')) {
-      return 'Linux summary runtime must include a pinned NCCL CUDA 12 dependency.';
-    }
-    if (!Array.isArray(runtimeArtifact.requiredDynamicLibraries)
-      || !runtimeArtifact.requiredDynamicLibraries.some((library) => library.fileName === 'libnccl.so.2')) {
-      return 'Linux summary runtime must declare its NCCL shared-library dependency.';
+    const requiresNccl = runtimeArtifact.repository === 'ai-dock/llama.cpp-cuda'
+      || (Array.isArray(runtimeArtifact.requiredDynamicLibraries)
+        && runtimeArtifact.requiredDynamicLibraries.some((library) => library.fileName === 'libnccl.so.2'));
+    if (requiresNccl) {
+      if (!runtimeArtifact.artifacts.some((archive) => archive.kind === 'nccl-wheel')) {
+        return 'Linux summary runtime must include a pinned NCCL CUDA 12 dependency.';
+      }
+      if (!Array.isArray(runtimeArtifact.requiredDynamicLibraries)
+        || !runtimeArtifact.requiredDynamicLibraries.some((library) => library.fileName === 'libnccl.so.2')) {
+        return 'Linux summary runtime must declare its NCCL shared-library dependency.';
+      }
+    } else if (!Array.isArray(runtimeArtifact.requiredDynamicLibraries) || runtimeArtifact.requiredDynamicLibraries.length === 0) {
+      return 'Linux summary runtime must declare its required shared-library dependencies.';
     }
     const pinnedRuntimeFiles = getSummaryRuntimeRequiredFiles(runtimeArtifact);
     const managedLibraries = new Map(getLinuxCudaRequiredLibraries().map((library) => [library.fileName, library]));

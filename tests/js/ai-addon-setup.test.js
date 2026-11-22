@@ -3964,3 +3964,18 @@ test('setupSummaryModel uses getDeviceMemory for pre-check when static deviceMem
   );
   assert.equal(downloads, 0);
 });
+
+test('validateSummaryRuntimeArtifact accepts unified llama.cpp b12631 runtimes across all platforms', () => {
+  const { validateSummaryRuntimeArtifact } = require('../../src/ai-addon/manifest-store');
+  const { AI_MODEL_CATALOG } = require('../../src/ai-addon-state');
+  for (const [platform, arch] of [['darwin', 'arm64'], ['win32', 'x64'], ['linux', 'x64']]) {
+    const runtime = getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, 'gemma-4-e4b');
+    assert.equal(runtime.version, 'b12631');
+    assert.equal(validateSummaryRuntimeArtifact(runtime), null);
+  }
+  const legacyLinux = getSummaryRuntimeArtifactForPlatform('linux', 'x64', AI_MODEL_CATALOG, 'qwen3.5-9b-q4-k-m');
+  assert.equal(validateSummaryRuntimeArtifact(legacyLinux), null);
+  const missingNccl = JSON.parse(JSON.stringify(legacyLinux));
+  missingNccl.artifacts = missingNccl.artifacts.filter((archive) => archive.kind !== 'nccl-wheel');
+  assert.match(validateSummaryRuntimeArtifact(missingNccl), /NCCL/);
+});
