@@ -32,6 +32,7 @@ _UNCLOSED_GEMMA_THOUGHT_RE = re.compile(
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$", re.IGNORECASE)
 _EVIDENCE_GROUP_RE = re.compile(r"\[((?:E\d+)(?:\s*[,;/]\s*E\d+)+)\]")
 _SINGLE_EVIDENCE_RE = re.compile(r"\[(E\d+)\]")
+_CITATION_CLUSTER_RE = re.compile(r"\[E\d+\](?:[ \t]*\[E\d+\])+")
 
 _ATX_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}(?:\s+.*|\s*)$")
 _HR_RE = re.compile(r"^\s*([-*_])(?:\s*\1){2,}\s*$")
@@ -45,17 +46,54 @@ _TABLE_SEP_SINGLE_RE = re.compile(r"^\s*\|\s*:?-{1,}:?\s*\|\s*$")
 _BOLD_LEAD_IN_RE = re.compile(r"^\*\*[^*\n]{1,120}\*\*:?$")
 
 
-def strip_model_artifacts(raw_text: Any) -> str:
-    """Remove Qwen/Gemma reasoning blocks and outer Markdown code fences."""
+def strip_reasoning_blocks(raw_text: Any) -> str:
+    """Remove Qwen/Gemma reasoning blocks while preserving Markdown content and fences."""
     cleaned = str(raw_text or "").strip()
     cleaned = _THINK_BLOCK_RE.sub("", cleaned)
     cleaned = _UNCLOSED_THINK_RE.sub("", cleaned)
     cleaned = _GEMMA_THOUGHT_BLOCK_RE.sub("", cleaned)
     cleaned = _UNCLOSED_GEMMA_THOUGHT_RE.sub("", cleaned).strip()
+    return cleaned
+
+
+def strip_model_artifacts(raw_text: Any) -> str:
+    """Remove Qwen/Gemma reasoning blocks and outer Markdown code fences."""
+    cleaned = strip_reasoning_blocks(raw_text)
     fence_match = _CODE_FENCE_RE.match(cleaned)
     if fence_match:
         cleaned = fence_match.group(1).strip()
     return cleaned
+
+
+def strip_stray_evidence_markers(markdown: Any) -> str:
+    """Strip all [Ek] and grouped [E1, E2] markers cleanly while preserving Markdown structure."""
+    out_lines: List[str] = []
+    close_fence_re: Optional[re.Pattern[str]] = None
+    for line in str(markdown or "").splitlines():
+        if close_fence_re is not None and close_fence_re.match(line):
+            close_fence_re = None
+            out_lines.append(line)
+            continue
+
+        fence_match = _FENCE_LINE_RE.match(line) if close_fence_re is None else None
+        if fence_match:
+            fence_char = fence_match.group(1)[0]
+            fence_len = len(fence_match.group(1))
+            close_fence_re = re.compile(rf"^\s{{0,3}}{re.escape(fence_char)}{{{fence_len},}}\s*$")
+
+        sanitized_line = _EVIDENCE_GROUP_RE.sub("", line)
+        sanitized_line = _SINGLE_EVIDENCE_RE.sub("", sanitized_line)
+        if close_fence_re is None:
+            sanitized_line = re.sub(r"(?<=\S)[ \t]+([.,;:!?])", r"\1", sanitized_line)
+            sanitized_line = re.sub(r"(?<=\S)[ \t]{2,}", " ", sanitized_line).rstrip()
+        out_lines.append(sanitized_line)
+
+    return "\n".join(out_lines).strip()
+
+
+def _dedupe_citation_cluster(match: re.Match[str]) -> str:
+    ids = _SINGLE_EVIDENCE_RE.findall(match.group(0))
+    return " ".join(f"[{eid}]" for eid in dict.fromkeys(ids))
 
 
 def _extract_balanced_json_object(text: str) -> Optional[str]:
@@ -139,6 +177,7 @@ def _normalize_inline_citations(markdown: str, valid_ids: set[str]) -> Tuple[str
 
         sanitized_line = _SINGLE_EVIDENCE_RE.sub(replace_marker, expanded)
         if close_fence_re is None:
+            sanitized_line = _CITATION_CLUSTER_RE.sub(_dedupe_citation_cluster, sanitized_line)
             # Collapse spaces left by removed citations without changing indentation.
             sanitized_line = re.sub(r"(?<=\S)[ \t]+([.,;:!?])", r"\1", sanitized_line)
             sanitized_line = re.sub(r"(?<=\S)[ \t]{2,}", " ", sanitized_line).rstrip()
@@ -343,11 +382,12 @@ def verify_grounded_response(
         }
 
     if bool(parsed.get("insufficientEvidence")):
+        raw_explanation = strip_stray_evidence_markers(str(parsed.get("answerMarkdown") or "").strip())
         return {
             "ok": True,
             "needsRepair": False,
             "status": "insufficient_evidence",
-            "answerMarkdown": INSUFFICIENT_EVIDENCE_MESSAGE,
+            "answerMarkdown": raw_explanation or INSUFFICIENT_EVIDENCE_MESSAGE,
             "citations": [],
         }
 
@@ -465,6 +505,27 @@ def verify_grounded_response(
         "status": "answered",
         "answerMarkdown": cleaned_answer,
         "citations": citations,
+    }
+
+
+def verify_general_response(raw_text: Any) -> Dict[str, Any]:
+    """Sanitize general-chat Markdown output (no recordings attached, zero citations)."""
+    cleaned = strip_stray_evidence_markers(strip_reasoning_blocks(raw_text))
+    if not cleaned:
+        return {
+            "ok": False,
+            "needsRepair": False,
+            "status": "verification_failed",
+            "answerMarkdown": "",
+            "citations": [],
+            "reason": "empty_answer",
+        }
+    return {
+        "ok": True,
+        "needsRepair": False,
+        "status": "answered",
+        "answerMarkdown": cleaned,
+        "citations": [],
     }
 
 

@@ -1008,3 +1008,145 @@ test('ai-addon-ipc checks live VRAM, pre-validates removal, awaits process exit 
   assert.equal(canceledStatus.canceled, undefined);
   assert.ok(memoryCalls.some((c) => c.live === true));
 });
+
+test('general chat (scope.type = none) bypasses FTS5/zero-hit gate, enforces CUDA gate, passes contextTokens, and isolates history across mode switches', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-qa-general-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const runnerPayloads = [];
+  let turn = 0;
+  const h = makeQaHarness({
+    tmpDir,
+    onQaRunnerPayload(payload, proc) {
+      runnerPayloads.push(payload);
+      turn += 1;
+      if (payload.chatMode === 'general') {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({
+          status: 'answered',
+          chatMode: 'general',
+          answerMarkdown: `General answer ${turn}.`,
+          citations: [{ evidenceId: 'E1', meetingId: 'should-be-dropped' }],
+          searchedMeetingCount: 99,
+          evidenceCount: 99,
+        })));
+      } else {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({
+          status: 'answered',
+          chatMode: 'grounded',
+          retrievalMode: 'direct_full',
+          answerMarkdown: `Grounded answer ${turn} [E1].`,
+          citations: payload.evidence,
+          searchedMeetingCount: 1,
+          evidenceCount: payload.evidence.length,
+        })));
+      }
+      proc.emit('close', 0);
+    },
+  });
+
+  // 1. General chat with 0 indexed recordings / 0 evidence bypasses FTS5 sync and retrieval completely.
+  h.setRetrievalEvidence([], 0);
+  const gen1 = await h.handlers.get('ask-history')({}, {
+    question: 'Explain closures in JavaScript',
+    scope: { type: 'none' },
+  });
+  assert.equal(gen1.status, 'answered');
+  assert.equal(gen1.chatMode, 'general');
+  assert.equal(gen1.searchedMeetingCount, 0);
+  assert.equal(gen1.evidenceCount, 0);
+  assert.deepEqual(gen1.assistantMessage.citations, []);
+  assert.equal(gen1.assistantMessage.chatMode, 'general');
+  assert.equal(h.getSyncCalls(), 0);
+  assert.equal(h.spawnedPython.filter((e) => e.args.includes('history_qa.retrieval')).length, 0);
+  assert.equal(runnerPayloads[0].chatMode, 'general');
+  assert.equal(runnerPayloads[0].contextTokens, 32768);
+  assert.deepEqual(runnerPayloads[0].evidence, []);
+  assert.deepEqual(runnerPayloads[0].history, []);
+  assert.equal(
+    h.events.some((e) => e.channel === 'history-qa-progress' && e.payload.phase === 'retrieving'),
+    false,
+  );
+
+  // 2. Follow-up in general mode carries prior general turn cleanly.
+  const gen2 = await h.handlers.get('ask-history')({}, {
+    threadId: gen1.thread.id,
+    question: 'Give a short example',
+  });
+  assert.equal(gen2.chatMode, 'general');
+  assert.equal(h.getSyncCalls(), 0);
+  assert.equal(runnerPayloads[1].chatMode, 'general');
+  assert.equal(runnerPayloads[1].history.length, 2);
+  assert.equal(runnerPayloads[1].history[0].content, 'Explain closures in JavaScript');
+
+  // 3. Switching thread to grounded mode isolates prior general turns from history and retrieval context.
+  h.setRetrievalEvidence([
+    {
+      evidenceId: 'E1',
+      meetingId: 'm1',
+      meetingTitle: 'Launch Sync',
+      meetingDate: '2026-11-18T10:00:00',
+      startSec: 65,
+      endSec: 80,
+      speaker: 'Alice',
+      passageKey: 'm1:3',
+      kind: 'transcript',
+      excerpt: 'Beta launches December 4.',
+      text: 'Beta launches December 4.',
+      sourceTranscriptHash: 'sha256:123',
+    },
+  ], 1);
+  const gr1 = await h.handlers.get('ask-history')({}, {
+    threadId: gen1.thread.id,
+    question: 'When does beta launch?',
+    scope: { type: 'all' },
+  });
+  assert.equal(gr1.chatMode, 'grounded');
+  assert.equal(gr1.assistantMessage.chatMode, 'grounded');
+  assert.equal(gr1.assistantMessage.retrievalMode, 'direct_full');
+  assert.equal(h.getSyncCalls(), 1);
+  assert.equal(runnerPayloads[2].chatMode, 'grounded');
+  assert.deepEqual(runnerPayloads[2].history, []);
+  const retrievalSpawns = () => h.spawnedPython.filter((e) => e.args.includes('history_qa.retrieval'));
+  const firstGroundedRetrieval = JSON.parse(retrievalSpawns()[0].proc._stdinText);
+  assert.equal(firstGroundedRetrieval.contextTokens, 32768);
+  assert.equal(firstGroundedRetrieval.threadContext, undefined);
+  assert.equal(firstGroundedRetrieval.priorTurnContext, undefined);
+
+  // 4. Second grounded turn passes priorTurnContext (passageKey, speaker, summary) and grounded history.
+  const gr2 = await h.handlers.get('ask-history')({}, {
+    threadId: gen1.thread.id,
+    question: 'What else did she say?',
+  });
+  assert.equal(gr2.chatMode, 'grounded');
+  assert.equal(runnerPayloads[3].history.length, 2);
+  const secondGroundedRetrieval = JSON.parse(retrievalSpawns()[1].proc._stdinText);
+  assert.deepEqual(secondGroundedRetrieval.priorTurnContext, {
+    lastQuestion: 'When does beta launch?',
+    lastCitedMeetingIds: ['m1'],
+    lastCitedPassageKeys: ['m1:3'],
+    speakers: ['Alice'],
+    lastAssistantSummary: 'Grounded answer 3.',
+  });
+
+  // 5. Switching back to scope.type = none clears grounded history from the prompt and skips retrieval again.
+  const gen3 = await h.handlers.get('ask-history')({}, {
+    threadId: gen1.thread.id,
+    question: 'Write a haiku about snow',
+    scope: { type: 'none' },
+  });
+  assert.equal(gen3.chatMode, 'general');
+  assert.equal(h.getSyncCalls(), 2);
+  assert.equal(retrievalSpawns().length, 2);
+  assert.equal(runnerPayloads[4].chatMode, 'general');
+  assert.deepEqual(runnerPayloads[4].history, []);
+
+  // 6. General chat still fails closed on Linux when CUDA 12 runtime is not ready.
+  const tmpNoCuda = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-qa-gen-nocuda-'));
+  t.after(() => fs.rmSync(tmpNoCuda, { recursive: true, force: true }));
+  const badCuda = makeQaHarness({ tmpDir: tmpNoCuda, cudaReady: false });
+  await assert.rejects(
+    () => badCuda.handlers.get('ask-history')({}, { question: 'Hello', scope: { type: 'none' } }),
+    /CUDA 12 runtime/,
+  );
+  assert.equal(badCuda.spawnedServers.length, 0);
+});

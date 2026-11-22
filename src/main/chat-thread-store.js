@@ -58,7 +58,8 @@ function sanitizeScope(rawScope) {
     throw new Error('Missing chat scope type.');
   }
   const rawType = raw.type === undefined ? 'all' : raw.type;
-  if (typeof rawType !== 'string' || !['all', 'selected_meetings', 'single_meeting'].includes(rawType.trim().toLowerCase())) {
+  const normalizedRawType = typeof rawType === 'string' ? rawType.trim().toLowerCase() : '';
+  if (!['all', 'selected_meetings', 'single_meeting', 'none'].includes(normalizedRawType)) {
     throw new Error('Invalid chat scope type.');
   }
   for (const key of ['dateFrom', 'dateTo']) {
@@ -80,7 +81,16 @@ function sanitizeScope(rawScope) {
       throw new Error('Invalid chat scope tags.');
     }
   }
-  const type = rawType.trim().toLowerCase() === 'all' ? 'all' : 'selected_meetings';
+  if (normalizedRawType === 'none') {
+    return {
+      type: 'none',
+      meetingIds: [],
+      dateFrom: null,
+      dateTo: null,
+      tags: [],
+    };
+  }
+  const type = normalizedRawType === 'all' ? 'all' : 'selected_meetings';
   let meetingIds = [];
   if (type === 'selected_meetings') {
     const candidates = Array.isArray(raw.meetingIds) ? [...raw.meetingIds] : [];
@@ -131,6 +141,9 @@ function sanitizeCitation(raw) {
     speaker: String(raw.speaker || '').slice(0, 120),
     tag: String(raw.tag || '').trim().slice(0, 40),
     kind: raw.kind === 'summary' || raw.kind === 'transcript' ? raw.kind : '',
+    ...(typeof raw.passageKey === 'string' && raw.passageKey.trim()
+      ? { passageKey: raw.passageKey.trim().slice(0, 160) }
+      : {}),
     excerpt: String(raw.excerpt || '').slice(0, 500),
     sourceTranscriptHash: String(raw.sourceTranscriptHash || '').slice(0, 128),
   };
@@ -174,7 +187,10 @@ function sanitizeMessage(raw) {
     if (typeof raw.detectedDateFilter === 'string' && raw.detectedDateFilter.trim()) {
       entry.detectedDateFilter = raw.detectedDateFilter.trim().slice(0, 64);
     }
-    if (raw.retrievalMode === 'overview' || raw.retrievalMode === 'targeted') {
+    if (raw.chatMode === 'general' || raw.chatMode === 'grounded') {
+      entry.chatMode = raw.chatMode;
+    }
+    if (raw.retrievalMode === 'direct_full' || raw.retrievalMode === 'overview' || raw.retrievalMode === 'targeted') {
       entry.retrievalMode = raw.retrievalMode;
     }
     if (Array.isArray(raw.inspectedSources) && raw.inspectedSources.length > 0) {
@@ -436,6 +452,7 @@ function createChatThreadStore(deps) {
       evidenceCount = 0,
       failureReason = null,
       detectedDateFilter = null,
+      chatMode = null,
       retrievalMode = null,
       inspectedSources = [],
       modelId = null,
@@ -470,6 +487,7 @@ function createChatThreadStore(deps) {
         evidenceCount,
         failureReason,
         detectedDateFilter,
+        chatMode,
         retrievalMode,
         inspectedSources,
         modelId,

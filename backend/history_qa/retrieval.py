@@ -743,7 +743,12 @@ def normalize_scope(raw_scope: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if "type" not in raw_scope and ("meetingIds" in raw_scope or "meetingId" in raw_scope):
         raise ValueError("Missing history scope type.")
     scope_type = raw_scope.get("type", "all")
-    if not isinstance(scope_type, str) or scope_type.strip().lower() not in ("all", "single_meeting", "selected_meetings"):
+    if not isinstance(scope_type, str) or scope_type.strip().lower() not in (
+        "all",
+        "single_meeting",
+        "selected_meetings",
+        "none",
+    ):
         raise ValueError("Invalid history scope type.")
     scope_type = scope_type.strip().lower()
     date_pattern = r"\d{4}-\d{2}-\d{2}(?:[T\s]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z?)?"
@@ -776,6 +781,15 @@ def normalize_scope(raw_scope: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             if normalized_tag and normalized_tag not in seen_tags:
                 seen_tags.add(normalized_tag)
                 cleaned_tags.append(normalized_tag)
+
+    if scope_type == "none":
+        return {
+            "type": "none",
+            "meetingIds": [],
+            "dateFrom": None,
+            "dateTo": None,
+            "tags": [],
+        }
 
     cleaned_ids: Optional[List[str]] = None
     if scope_type in ("single_meeting", "selected_meetings"):
@@ -1301,6 +1315,19 @@ def retrieve_evidence(
     idx_path = Path(index_path)
     normalized_scope = normalize_scope(scope)
     raw_question = str(question or "").strip()
+    if normalized_scope["type"] == "none":
+        return {
+            "question": raw_question,
+            "retrievalQuery": "",
+            "queryTokens": [],
+            "retrievalMode": "none",
+            "detectedDateFilter": "",
+            "matchedEntities": {"titles": [], "speakers": [], "tags": []},
+            "totalIndexedMeetings": 0,
+            "searchedMeetingCount": 0,
+            "matchedMeetingCount": 0,
+            "evidence": [],
+        }
     raw_query_tokens = extract_query_tokens(raw_question)
     block_limit = max(0, int(max_evidence_blocks)) if max_evidence_blocks is not None else None
 
