@@ -7,13 +7,21 @@ See the [release notes](docs/releases/v3.1.0.md) and [qualification record](docs
 
 ### v3.2.0 release plan · 2026-11-22
 
-Planned on `release/3.2` (not yet cut): [v3.2.0 release plan](docs/superpowers/plans/2026-11-22-v3.2-release-plan.md). Addresses post-v3.1.0 field feedback across hardware fit, Chat context/citations/general mode, speaker samples, summary format selection, unified `llama.cpp >= b12631` runtime (unblocking Inkling 2 Mini on all 3 platforms), Bonsai 2 & peer models, and Electron/dependency updates:
+Planned on `release/3.2` (not yet cut): [v3.2.0 release plan](docs/superpowers/plans/2026-11-22-v3.2-release-plan.md). Delivered via **10 micro-slices across 3 integration checkpoints** (Waves A–C) to keep diffs ~120–400 lines, optimize review/build token budgets across Antigravity (`Neon`/`Argon`/`Terra`) and Codex (`Sol`) via `t3code`, and batch full-suite runs to checkpoints:
 
-- [ ] **Phase 1 — Device compatibility, VRAM calibration & unload-before-install:** Fix `getSummaryModelFit` (`likely_fits` / `tight` / `needs_more_memory` / `unknown` separation, nominal-tier tolerance for 12 GB GPUs reporting `12,282 MiB`, hardened Linux `nvidia-smi` probing), recalibrate `gemma-4-12b` to 12 GB VRAM / 16 GB unified, prompt to unload a resident Chat model before downloading/switching models (`unloadLoadedModel: true` + `SUMMARY_MODEL_LOADED_IN_MEMORY`), and clear stale device-check state on unload.
-- [ ] **Phase 2 — Chat context router, precise citations & general chat mode:** Implement 3-tier context routing (direct full-transcript fit for single/small scopes within 32k context, conversation-aware two-stage retrieval consuming `lastQuestion` + fixed stopwords/follow-up expansion, and rolling history compaction), keep timestamp-granular evidence units with `Title · Summary` pill labels, and add `scope.type = 'none'` (**General chat / Clear recording context**) plus helpful grounded synthesis with immutable citation guardrails.
-- [ ] **Phase 3 — Speaker voice samples & always-available Summary format picker:** Select ≥5-second speaker audio samples (falling back to the longest timed segment) with a subtle `"Sample"` caption below the preview button in History & Prepare summary; always show the **Summary format** dropdown in `#summary-language-modal` (pre-selected from `meeting.tag`, overridable for tagged & untagged recordings) and persist decoupled `ai.summary.template` without spurious tag-mismatch banners.
-- [ ] **Phase 4 — Unified `llama.cpp >= b12631` runtime, Inkling 2 Mini unblock & Bonsai 2 / peer models:** Pin official `ggml-org/llama.cpp >= b12631` archives across macOS arm64, Windows CUDA 12.4, and Linux CUDA 12.8 (`llama-b12631-bin-ubuntu-cuda-12.8-x64.tar.gz` + `cudart`), qualify & unblock **Inkling 2 Mini** (Chat + English summary flags), and add **Bonsai 2** (`27B` & `9B` `Q2_0`, Apache 2.0) plus curated mainstream peers (**Gemma 4 26B-A4B**, **Qwen 3.8 27B**, **Ministral 3 14B**, evaluating **Qwen 3.6 35B-A3B**).
-- [ ] **Phase 5 — Electron 46, FFmpeg, Python/Rust sweep & v3.2.0 qualification:** Migrate Electron `46.0.0-alpha.11` → stable `46.x` (re-verifying Linux `safeStorage` `v11`/`v12` vs `v10` fixed-key rejection + cross-platform token migration), recheck matched FFmpeg `> 8.1.2`, qualify held Python/Rust dependencies (`onnxruntime`, `ctranslate2`, `pyobjc`, `speakrs`), record native evidence in `docs/development/V3_2_QUALIFICATION.md`, and cut `v3.2.0`.
+- [ ] **Wave A (Slices A1–A4 → Checkpoint 1):**
+  - [ ] **A1** — ≥5 s speaker audio samples + `"Sample"` caption below preview buttons (`#8`, `#9`).
+  - [ ] **A2** — Always-available Summary format dropdown + decoupled `ai.summary.template` persistence (`#10`).
+  - [ ] **A3** — Device compatibility fit states (`likely_fits`/`tight`/`unknown`), Gemma 4 12B 12 GB calibration with nominal-tier tolerance (`12,282 MiB`), and hardened Linux `nvidia-smi` probe (`#1`, `#2`).
+  - [ ] **A4** — Unload-before-download confirmation prompt (`unloadLoadedModel: true` + `SUMMARY_MODEL_LOADED_IN_MEMORY`) and unload UI state sync (`#6`).
+- [ ] **Wave B (Slices B1–B3 → Checkpoint 2):**
+  - [ ] **B1** — Python 3-tier Chat context router (direct full-transcript fit, `lastQuestion` follow-up resolution, adaptive caps, rolling compaction) + granular timestamp chunks (`#3`, `#4`, `#11`).
+  - [ ] **B2** — General chat mode backend (`scope.type = 'none'`), fail-closed verifier guardrails, and helpful grounded `insufficient_evidence` handling (`#5`, `#11`).
+  - [ ] **B3** — Chat renderer UI (`General chat`, Clear recording context, `Title · Summary` pills, notice recovery buttons) (`#5`, `#11`).
+- [ ] **Wave C (Slices C1–C3 → Checkpoint 3 & Release Cut):**
+  - [ ] **C1** — Unified `ggml-org/llama.cpp >= b12631` runtime across macOS arm64, Windows CUDA 12.4, and Linux CUDA 12.8 + **Inkling 2 Mini** qualification & unblock.
+  - [ ] **C2** — Add **Bonsai 2** (`27B` & `9B` `Q2_0`, Apache 2.0) + curated mainstream peers (**Gemma 4 26B-A4B**, **Qwen 3.8 27B**, **Ministral 3 14B**, evaluating **Qwen 3.6 35B-A3B**) (`#7`).
+  - [ ] **C3** — Electron `46.x` stable migration (`safeStorage` verification), FFmpeg recheck, held Python/Rust sweeps (`onnxruntime`, `ctranslate2`, `pyobjc`, `speakrs`), `V3_2_QUALIFICATION.md`, and `v3.2.0` release cut.
 
 ### v3.1.0 release cut · 2026-11-22
 
