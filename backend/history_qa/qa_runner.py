@@ -65,7 +65,9 @@ def emit_progress(
     if percent is not None:
         event["percent"] = max(0, min(100, int(percent)))
     if isinstance(draft_markdown, str) and draft_markdown:
-        event["draftMarkdown"] = redact_sensitive_text(draft_markdown)[:MAX_DRAFT_PREVIEW_CHARS]
+        event["draftMarkdown"] = redact_sensitive_text(
+            draft_markdown, max_length=MAX_DRAFT_PREVIEW_CHARS, preserve_whitespace=True
+        )
     print(json.dumps(event, ensure_ascii=False), file=sys.stderr, flush=True)
 
 
@@ -552,7 +554,7 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "status": verified["status"],
-        "answerMarkdown": redact_sensitive_text(verified["answerMarkdown"]),
+        "answerMarkdown": redact_sensitive_text(verified["answerMarkdown"], max_length=0, preserve_whitespace=True),
         "citations": verified["citations"],
         "detectedDateFilter": detected_date_filter,
         "retrievalMode": retrieval_mode,

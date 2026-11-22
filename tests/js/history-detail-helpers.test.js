@@ -119,7 +119,7 @@ test('setup messages explain graceful degradation paths', () => {
   );
   assert.match(
     getDiarizationSetupMessage({ status: 'notConfigured' }),
-    /supported platforms/i,
+    /Enable speaker identification to add speaker labels/i,
   );
   const runtimeFailure = getDiarizationSetupMessage({
     status: 'error',

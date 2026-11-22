@@ -913,7 +913,7 @@ def test_repair_prompt_strips_thoughts_and_stream_hides_citations_and_redacts_fi
             else:
                 content = json.dumps(
                     {
-                        "answerMarkdown": "Token hf_secret_token_12345 was mentioned [E1].",
+                        "answerMarkdown": "## Notes\n\n" + ("Token hf_secret_token_12345 was mentioned [E1].\n\n" * 10),
                         "citedEvidenceIds": ["E1"],
                         "insufficientEvidence": False,
                     }
@@ -942,6 +942,9 @@ def test_repair_prompt_strips_thoughts_and_stream_hides_citations_and_redacts_fi
         assert res["status"] == "answered"
         assert "hf_secret_token_12345" not in res["answerMarkdown"]
         assert "[redacted-token]" in res["answerMarkdown"]
+        assert res["answerMarkdown"].startswith("## Notes\n\n")
+        assert len(res["answerMarkdown"]) > 300
+        assert res["answerMarkdown"].count("[E1]") == 10
         repair_msgs = seen_bodies[1]["messages"]
         assert repair_msgs[-2]["role"] == "assistant"
         assert repair_msgs[-2]["content"] == "MARKER_UNPARSED_DRAFT"
@@ -949,6 +952,17 @@ def test_repair_prompt_strips_thoughts_and_stream_hides_citations_and_redacts_fi
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_streaming_draft_preserves_markdown_and_redacts_secrets(capsys):
+    from backend.history_qa.qa_runner import emit_progress
+
+    draft = "## Notes\n\n" + ("- Token hf_secret_token_12345 [E1].\n" * 20)
+    emit_progress("generating", "Working", draft_markdown=draft)
+    event = json.loads(capsys.readouterr().err)
+    assert event["draftMarkdown"].startswith("## Notes\n\n- Token [redacted-token]")
+    assert len(event["draftMarkdown"]) > 300
+    assert "hf_secret_token_12345" not in event["draftMarkdown"]
 
 
 def test_starter_prompts_four_plus_meetings_followups_of_date_and_corrupt_recovery(tmp_path):

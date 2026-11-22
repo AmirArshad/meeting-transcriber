@@ -5,6 +5,10 @@ See the [release notes](docs/releases/v2.12.0.md) and [qualification record](doc
 
 ## Status
 
+### v3.1 Windows 11 partial qualification · 2026-11-22
+
+On `release/3.1` `1749a04` plus the fixes described in the qualification record, the full suite, unsigned Windows installer build, packaged CUDA/CPU Whisper, mixed WASAPI capture, DPAPI migration, Speakrs setup and Qwen 9B/4B desktop smokes passed. Live Chat exposed and drove a fix for answer truncation and flattened Markdown; a misleading speaker setup message was also corrected. The full Windows and cross-platform release gates remain open; see the [qualification record](docs/development/V3_1_QUALIFICATION.md#windows-11-partial-qualification-2026-11-2122) for scope and limits.
+
 ### v3.1 Phase 5 dependency sweep & macOS qualification · 2026-11-21
 
 Phase 5 dependency upgrades, security audits, and macOS arm64 host qualification

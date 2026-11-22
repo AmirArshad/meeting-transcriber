@@ -196,6 +196,9 @@
     if (status === 'unsupported') {
       return reason || 'Speaker identification is not supported on this platform.';
     }
+    if (status === 'notConfigured') {
+      return reason || 'Enable speaker identification to add speaker labels to new transcripts.';
+    }
     if (status === 'needsAccount') {
       return 'Enter your Hugging Face token and accept the pyannote model terms before enabling Pyannote.';
     }
