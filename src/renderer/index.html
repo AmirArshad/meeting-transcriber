@@ -1348,9 +1348,9 @@
                   </section>
 
                   <div class="chat-empty-state" id="chat-empty-state">
-                    <p class="chat-empty-kicker">Local only · Linked to timestamps</p>
-                    <h3>Ask about your recordings</h3>
-                    <p class="chat-empty-subtitle">
+                    <p class="chat-empty-kicker" id="chat-empty-kicker">Local only · Linked to timestamps</p>
+                    <h3 id="chat-empty-heading">Ask about your recordings</h3>
+                    <p class="chat-empty-subtitle" id="chat-empty-subtitle">
                       Answers use only your saved transcripts and link directly to matching timestamps. The local model loads on demand and can be unloaded anytime to free memory.
                     </p>
                     <div class="chat-starter-grid" id="chat-starter-prompts"></div>
@@ -1371,7 +1371,11 @@
                     <div class="chat-scope-mode-row">
                       <button type="button" id="chat-scope-all-btn" class="btn btn-small">All recordings</button>
                       <button type="button" id="chat-scope-selected-btn" class="btn btn-small">Select recordings…</button>
+                      <button type="button" id="chat-scope-none-btn" class="btn btn-small">No recordings (General chat)</button>
                     </div>
+                    <p id="chat-scope-none-note" class="chat-scope-none-note" hidden>
+                      No recordings will be searched. Answers use your local model’s general knowledge with no recording citations.
+                    </p>
                     <div id="chat-scope-selected-panel" class="chat-scope-selected-panel" hidden>
                       <input
                         type="search"
@@ -1396,7 +1400,7 @@
                         aria-label="Filter chat by recording tags"
                       ></div>
                     </div>
-                    <div class="chat-scope-dates-row">
+                    <div class="chat-scope-dates-row" id="chat-scope-dates-row">
                       <label>
                         <span>From</span>
                         <input type="date" id="chat-scope-date-from" />
@@ -1407,6 +1411,7 @@
                       </label>
                     </div>
                     <div class="chat-scope-popover-actions">
+                      <button type="button" id="chat-scope-clear-context-btn" class="btn btn-small btn-secondary chat-scope-clear-context-btn">Clear recording context</button>
                       <button type="button" id="chat-scope-clear-btn" class="btn btn-small btn-secondary">Reset</button>
                       <button type="button" id="chat-scope-apply-btn" class="btn btn-small btn-primary">Apply scope</button>
                     </div>

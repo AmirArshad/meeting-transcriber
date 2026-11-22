@@ -111,6 +111,9 @@
 
   function formatChatScopeLabel(scope, meetingsById = null, tagLabelResolver = null) {
     const normalized = scope && typeof scope === 'object' ? scope : { type: 'all' };
+    if (normalized.type === 'none') {
+      return 'General chat · No recordings';
+    }
     const dateSuffix = formatDateWindowSuffix(normalized);
     const tagSuffix = formatTagScopeSuffix(normalized, tagLabelResolver);
     let base = 'All recordings';
@@ -180,6 +183,13 @@
   }
 
   function buildStarterPrompts(meetings, scope = null) {
+    if (scope?.type === 'none') {
+      return [
+        'Help me outline an agenda for my next meeting.',
+        'Draft a concise follow-up email after a project sync.',
+        'Brainstorm 5 questions to ask in a technical interview.',
+      ];
+    }
     const scopedIds = Array.isArray(scope?.meetingIds) ? scope.meetingIds.filter(Boolean) : [];
     const list = Array.isArray(meetings) ? meetings : [];
     if (scope?.type === 'selected_meetings' && scopedIds.length === 1) {
@@ -212,7 +222,7 @@
   }
 
   function isScopeFiltered(scope) {
-    if (!scope || typeof scope !== 'object') {
+    if (!scope || typeof scope !== 'object' || scope.type === 'none') {
       return false;
     }
     if (scope.type === 'selected_meetings') {
@@ -243,6 +253,7 @@
     const filtered = isScopeFiltered(scope);
     const hasInspectedSources = Array.isArray(message?.inspectedSources) && message.inspectedSources.length > 0;
     const searchedLabel = `Searched ${searchedCount} recording${searchedCount === 1 ? '' : 's'}`;
+    const canAskWithoutRecordings = scope?.type !== 'none';
 
     if (status === 'no_matching_excerpts') {
       let title = filtered
@@ -268,12 +279,16 @@
       if (filtered && (scope?.dateFrom || scope?.dateTo || (Array.isArray(scope?.tags) && scope.tags.length > 0))) {
         actions.push({ id: 'reset_filters', label: 'Reset filters' });
       }
+      if (canAskWithoutRecordings) {
+        actions.push({ id: 'ask_without_recordings', label: 'Ask without recordings' });
+      }
       if (!filtered) {
         actions.push({ id: 'retry', label: 'Retry' });
       }
       return {
         variant: 'no_matching_excerpts',
         title,
+        explanation: '',
         detail: detailParts.join(' · '),
         actions,
         showInspectedSources: false,
@@ -288,6 +303,7 @@
       return {
         variant: 'verification_failed',
         title: 'Could not verify sources for this answer.',
+        explanation: '',
         detail: 'AvaNevis skipped this reply because it could not match it to your transcripts. Try again.',
         actions,
         showInspectedSources: hasInspectedSources,
@@ -295,9 +311,11 @@
     }
 
     // insufficient_evidence
+    const messageContent = String(message?.content || '').trim();
     const title = evidenceCount > 0
       ? `Found ${evidenceCount} matching passage${evidenceCount === 1 ? '' : 's'}, but they don't answer that specific question.`
-      : (message?.content || 'Not enough matching information in the selected transcripts or summaries to answer that.');
+      : (messageContent || 'Not enough matching information in the selected transcripts or summaries to answer that.');
+    const explanation = evidenceCount > 0 ? messageContent : '';
     const detailParts = [];
     if (searchedCount > 0) {
       detailParts.push(searchedLabel);
@@ -309,14 +327,44 @@
     if (filtered) {
       actions.push({ id: 'search_all', label: 'Search all recordings' });
     }
+    if (canAskWithoutRecordings) {
+      actions.push({ id: 'ask_without_recordings', label: 'Ask without recordings' });
+    }
     actions.push({ id: 'retry', label: 'Retry' });
     return {
       variant: 'insufficient_evidence',
       title,
+      explanation,
       detail: detailParts.join(' · '),
       actions,
       showInspectedSources: hasInspectedSources,
     };
+  }
+
+  function formatAssistantTurnMeta(message, modelNameResolver = null) {
+    if (!message || typeof message !== 'object') {
+      return '';
+    }
+    const metaParts = [];
+    const modelLabel = message.modelName
+      || (message.modelId && typeof modelNameResolver === 'function' ? modelNameResolver(message.modelId) : message.modelId)
+      || '';
+    if (modelLabel) {
+      metaParts.push(String(modelLabel).trim());
+    }
+    const searchedNum = Number(message.searchedMeetingCount);
+    const hasSearched = Number.isFinite(searchedNum) && searchedNum > 0;
+    if (message.chatMode === 'general') {
+      metaParts.push('General chat (no recordings)');
+      return metaParts.filter(Boolean).join(' · ');
+    }
+    if (hasSearched) {
+      const searched = Math.floor(searchedNum);
+      const evidence = Math.max(0, Math.floor(Number(message.evidenceCount) || 0));
+      metaParts.push(`Searched ${searched} recording${searched === 1 ? '' : 's'}`);
+      metaParts.push(`${evidence} matching excerpt${evidence === 1 ? '' : 's'}`);
+    }
+    return metaParts.filter(Boolean).join(' · ');
   }
 
   const POST_STREAM_BANNER_PHASES = new Set(['verifying', 'citation-repair', 'json-repair']);
@@ -335,6 +383,9 @@
   function resolveNoticeActionScope(actionId, currentScope = null) {
     if (actionId === 'search_all') {
       return { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] };
+    }
+    if (actionId === 'ask_without_recordings') {
+      return { type: 'none', meetingIds: [], dateFrom: null, dateTo: null, tags: [] };
     }
     if (actionId === 'reset_filters') {
       const meetingIds = Array.isArray(currentScope?.meetingIds)
@@ -399,6 +450,7 @@
     buildModelMemoryPillView,
     buildStarterPrompts,
     filterChatThreads,
+    formatAssistantTurnMeta,
     formatChatScopeLabel,
     formatScopeMeetingDate,
     formatScopeMeetingDateTooltip,
