@@ -1,6 +1,6 @@
 # AvaNevis 3.2 Local AI Qualification Record
 
-This document records verified runtime artifact digests, Linux ELF dynamic-library closure, and native host checks for AvaNevis 3.2. Platform gates stay closed until matching native hardware evidence is recorded here.
+This document records verified runtime artifact digests, Linux ELF dynamic-library closure, and native host checks for AvaNevis 3.2. On supported platforms, setup and Chat eligibility depend on checks run on each device. Summary languages require separate qualification.
 
 ## Slice C1: Unified `llama.cpp` `b12631` Runtime Pin & Inkling 2 Mini Status (2026-11-22)
 
@@ -9,7 +9,7 @@ This document records verified runtime artifact digests, Linux ELF dynamic-libra
 - **Repository:** `ggml-org/llama.cpp`
 - **Tag:** `b12631` (published `2026-11-22T09:03:19Z`). The [GitHub release API](https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/b12631) reported release ID `454321893` with `immutable: false`.
 - **Commit:** `e300919cc704ddde3a8a8346a8714f57eeeee71b` (20 commits ahead of Inkling loop-layer scale fix `690b87d8`)
-- **Shared runtime catalog:** `B12631_SUMMARY_RUNTIME_ARTIFACTS` in `src/ai-addon-state.js`. Linux Gemma 4 uses the shared catalog, and Inkling 2 Mini references it behind its platform gates. The Windows and macOS builds are candidates for native qualification.
+- **Shared runtime catalog:** `B12631_SUMMARY_RUNTIME_ARTIFACTS` in `src/ai-addon-state.js`. Linux Gemma 4 and Inkling 2 Mini use the shared catalog. The Windows and macOS builds still need maintainer verification.
 
 Downloads use the [numeric GitHub release-asset endpoint](https://docs.github.com/en/rest/releases/assets#get-a-release-asset) with `Accept: application/octet-stream` and GitHub's required user-agent header. Replacing an asset creates a different ID, and deleting the pinned asset makes that download fail. All five assets redirect to the allowlisted `release-assets.githubusercontent.com` CDN. Local `stat` and `sha256sum` results matched the API's exact sizes and published digests for all five files.
 
@@ -48,7 +48,7 @@ Confirmed via `llama-cli --help` and `llama-server --help`:
 ### Platform gates & remaining hardware checks
 
 - **Gemma 4 E4B & 12B:** Linux uses `b12631` with native runtime evidence from the RTX 4070 Gemma 4 12B checks above. macOS arm64 and Windows x64 CUDA retain `b12606` pending native `b12631` setup, Chat, and summary checks at 32k.
-- **Inkling 2 Mini (`inkling-2-mini`):** Catalog entry is wired to the shared `b12631` runtime with `inference: { contextTokens: 32768, family: 'inkling', promptFormat: 'chatml', disableThinking: true, singleTurnOnly: true, reasoningEffort: 'none', reasoningBudget: 0 }`, while **all three platform gates (`win32`, `darwin`, `linux`) remain `gated`** pending native 32k Inkling 2 Mini verification on representative hosts:
+- **Inkling 2 Mini (`inkling-2-mini`):** Catalog entry is wired to the shared `b12631` runtime at 32k with reasoning disabled and a zero reasoning budget. Setup is available on the three supported platforms after local compatibility checks. Maintainer qualification still needs these native runs:
   - **Linux CUDA:** This CachyOS host has 12 GiB VRAM (RTX 4070), below Inkling 2 Mini's 17.6 GB weight / 19.2 GB (`minRuntimeBytes`) footprint; requires a 24+ GiB CUDA host for native 32k Inkling setup, Chat, and English summary qualification.
   - **macOS arm64:** Requires repeating the v3.1 M4 Pro 32k setup, Chat, and English summary deadline-preservation (`"before Tuesday"`) checks using the published `llama-b12631-bin-macos-arm64.tar.gz` archive.
   - **Windows x64 CUDA:** Requires native 32k setup, Chat, and English summary verification on a 24+ GiB Windows CUDA host using `llama-b12631-bin-win-cuda-12.4-x64.zip`.
@@ -88,12 +88,12 @@ Bonsai files and the Ministral file matched their pinned LFS digests.
 |---|---|---:|
 | Bonsai 2 9B | App setup smoke passed with full GPU offload. CLI returned `READY`. General Chat answered `Paris`. Grounded Chat answered `Friday` and the verifier accepted the citation at 45 seconds. | 3,429 MiB allocated by the CLI |
 | Bonsai 2 27B | App setup smoke passed with full GPU offload. CLI returned `READY`. General Chat answered `Paris`. Grounded Chat answered `Friday` and the verifier accepted the citation at 45 seconds. | 9,306 MiB allocated by the CLI |
-| Ministral 3 14B | Setup exhausted VRAM after offloading all 41 layers. Native 32k setup and Chat remain gated. | 7,489.86 MiB weights, then a failed 5,120 MiB context allocation |
+| Ministral 3 14B | 32k setup exhausted VRAM on this host after offloading all 41 layers. | 7,489.86 MiB weights, then a failed 5,120 MiB context allocation |
 
 Both Bonsai models used an authenticated loopback server and returned answers
-without `<think>` output. Linux Chat is enabled for those two models. Windows
-and macOS remain gated. Gemma 4 26B-A4B and Qwen 3.8 27B still need a larger GPU
-or suitable Apple Silicon hardware.
+without `<think>` output. Maintainer verification on Windows and macOS is still
+pending. Gemma 4 26B-A4B and Qwen 3.8 27B still need a larger GPU or suitable
+Apple Silicon hardware for maintainer verification.
 
 Ministral's CLI fallback answered `Paris` at 8,192 context using the native
 GGUF template. The catalog still requires 32,768 context.

@@ -49,6 +49,11 @@ Archive expansion uses measured pin metadata where available. Unqualified workin
 memory estimates are advisory. An unknown reading permits an explicit setup test
 on a supported runtime.
 
+Catalog models with pinned artifacts can use setup and Chat on supported
+platforms after local device and runtime checks. Maintainer hardware results
+record which configurations have been tested. Summary language eligibility
+requires separate qualification.
+
 **Check this device** reads the local machine before download. It probes current
 free GPU memory where the NVIDIA device can be identified and reports host RAM
 separately on discrete GPUs. CUDA memory estimates use model weights and context

@@ -3831,12 +3831,12 @@ test('stale notConfigured entries do not block shared runtime removal or reclaim
   assert.equal(afterRemove.summaryLibrary.sharedRuntimeBytes, 0);
 });
 
-test('getSharedSummaryRuntimeDir returns null for gated artifacts and status walks shared runtimes once', async () => {
+test('getSharedSummaryRuntimeDir handles unsupported architectures and status walks shared runtimes once', async () => {
   const { getSharedSummaryRuntimeDir, buildSummaryRuntimeEnv, getSummaryRuntimeDir } = require('../../src/ai-addon/manifest-store');
   const { AI_MODEL_CATALOG } = require('../../src/ai-addon-state');
   const userDataDir = '/tmp/AvaNevis';
   assert.equal(getSharedSummaryRuntimeDir(userDataDir, null, AI_MODEL_CATALOG), null);
-  assert.equal(getSharedSummaryRuntimeDir(userDataDir, getSummaryArtifactForPlatform('inkling-2-mini', 'win32', 'x64', AI_MODEL_CATALOG), AI_MODEL_CATALOG), null);
+  assert.equal(getSharedSummaryRuntimeDir(userDataDir, getSummaryArtifactForPlatform('inkling-2-mini', 'darwin', 'x64', AI_MODEL_CATALOG), AI_MODEL_CATALOG), null);
 
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });

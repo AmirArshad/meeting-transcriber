@@ -16,11 +16,10 @@ The installed `qwen3.5-9b-q4-k-m` model has bounded local synthetic evidence for
 See [the recorded checks and limits](V2_10_SUMMARY_QUALIFICATION.md).
 `src/summary-language-policy.js` owns eligibility and policy revision
 (`summary-language-v4`); add-on status exposes it without inference or downloads.
-`qwen3.5-4b-q4-k-m` is installable for local Chat. Bonsai 2, Ministral 3 14B,
-Gemma 4 26B-A4B, and Qwen 3.8 27B become available for Chat on each platform
-after native 32k setup and Chat checks. Both Bonsai 2 models are available for
-Linux CUDA Chat. The new peers' summary languages require separate native
-qualification. Gemma 4 E4B and 12B
+`qwen3.5-4b-q4-k-m`, Bonsai 2, Ministral 3 14B, Gemma 4 26B-A4B,
+Qwen 3.8 27B, and Inkling 2 Mini support local Chat after the device passes
+32k setup. Their summary languages require separate native qualification.
+Gemma 4 E4B and 12B
 offer English summaries on Apple Silicon after the [v3.1 checks](V3_1_QUALIFICATION.md).
 Other Gemma language and platform combinations remain gated. Existing platform
 runtime admission still applies.
@@ -33,7 +32,7 @@ language before committing sidecars.
 - Keep AvaNevis local-only: no cloud diarization, cloud summarization, telemetry, or background uploads.
 - Summary model and runtime downloads must be explicit user-triggered setup actions.
 - Speaker diarization setup must be explicit and stays under Electron `userData`. Speakrs 0.7 uses direct model files at an immutable upstream revision; pyannote uses its managed Python dependencies and Hugging Face cache.
-- Speaker diarization is accelerator-only: Windows uses CUDA; macOS uses Apple Silicon CoreML for Speakrs or PyTorch Metal/MPS for pyannote. Linux is Speakrs-only, CUDA-only on x86_64 after the accepted managed CUDA 12 preflight, and has no CPU fallback. Pyannote is not a Linux product option. Linux Summaries & Chat (Qwen3.5 and Gemma 4; Inkling 2 Mini gated) are CUDA-only and remain unavailable unless managed CUDA 12 admission, pinned runtime/model integrity, and platform gates pass. Linux Speakrs 0.7 requires the same live managed CUDA 12 admission before native inference.
+- Speaker diarization is accelerator-only: Windows uses CUDA; macOS uses Apple Silicon CoreML for Speakrs or PyTorch Metal/MPS for pyannote. Linux is Speakrs-only, CUDA-only on x86_64 after the accepted managed CUDA 12 preflight, and has no CPU fallback. Pyannote is not a Linux product option. Linux Summaries & Chat are CUDA-only and require managed CUDA 12 admission and pinned runtime/model integrity checks. Linux Speakrs 0.7 requires the same live managed CUDA 12 admission before native inference.
 - Setup downloads must emit redacted progress, support cancellation, clean partial `.download` files, and preserve any previously valid install when cancellation happens during validation. Redaction must cover bearer tokens, legacy `Authorization: token ...`, `token=` / `access_token=` / `api_key=` query parameters, `X-Api-Key`, and URL credentials.
 - Pin every downloadable summary model and runtime artifact by immutable URL, filename, and SHA-256 checksum.
 - Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from catalog **download-related** keys only (`downloadUrl`, `url`, `indexUrl`, `extraIndexUrls`) plus known GitHub/Hugging Face/PyPI redirect hosts listed explicitly in `DOWNLOAD_REDIRECT_HOSTS` (`src/ai-addon/download-helpers.js`). `licenseUrl` / `releaseUrl` / docs links must not expand the allowlist. Do **not** wildcard `*.hf.co` / `*.huggingface.co`; when HF/Xet rotates CDN subdomains, add the new host to that set. HF-hosted summary models normally download via bundled Python `huggingface_hub` HTTP (bypassing the JS allowlist) and still require pinned SHA-256 verification. Arbitrary HTTPS hosts remain blocked.
@@ -59,8 +58,7 @@ The catalog is organized into three hardware tiers (`Compact`, `Balanced`, and
   `Q4_K_M`, 8,239,067,840 bytes).
 - **High-Capability:** official ggml-org `gemma-4-26b-a4b` (`Q4_0`,
   14,618,145,824 bytes), `qwen3.8-27b` (`unsloth/Qwen3.8-27B-GGUF` `UD-Q4_K_M`,
-  16,564,259,744 bytes), and `inkling-2-mini` (`IQ4_NL`, 17,627,940,768 bytes,
-  platform-gated pending 24+ GiB qualification).
+  16,564,259,744 bytes), and `inkling-2-mini` (`IQ4_NL`, 17,627,940,768 bytes).
 
 Bonsai 2 (`9B` and `27B`) uses stock `Q2_0` on upstream `llama.cpp b12631`.
 Both Bonsai models, `qwen3.8-27b`, and `inkling-2-mini` pass `--reasoning off`
@@ -84,12 +82,10 @@ remaining gates in the [v3.1 qualification record](V3_1_QUALIFICATION.md) and
 
 Inkling 2 Mini uses the official ggml-org `IQ4_NL` pin and is wired to the
 shared `b12631` runtime (20 commits ahead of the loop-layer scale fix
-`690b87d8`) with 32,768-token context and non-thinking CLI settings. Each
-platform gate (`win32`, `darwin`, `linux`) stays `gated` until native 32k
-Inkling 2 Mini setup, Chat, and summary qualification is recorded in the
-[v3.2 qualification record](V3_2_QUALIFICATION.md) on a 24+ GiB GPU or 32+ GiB
-Apple Silicon host. Working-memory figures remain planning estimates until
-measured on representative supported hosts.
+`690b87d8`) with 32,768-token context and non-thinking CLI settings. The memory
+recommendation is 24 GiB VRAM or 32 GiB unified memory. Setup checks the device's
+reported memory and validates full GPU offload at 32k before enabling Chat.
+Working-memory recommendations remain advisory. [v3.2 qualification record](V3_2_QUALIFICATION.md)
 
 ### Linux Qwen and Gemma 4 summary runtime pins
 

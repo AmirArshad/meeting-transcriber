@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { getSummaryModelFit, parseNvidiaMemory } = require('../../src/ai-addon/summary-device-fit');
+const { getModelById, getSummaryArtifactForPlatform, getSummaryRuntimeArtifactForPlatform, getSummaryAvailability } = require('../../src/ai-addon-state');
 
 const MiB = 1024 ** 2;
 const GiB = 1024 ** 3;
@@ -51,6 +52,41 @@ test('measured Linux CUDA allocations raise the estimated VRAM floor', () => {
   assert.equal(assessment.status, 'needs_more_memory');
   assert.equal(assessment.blocked, true);
   assert.equal(fit(device, { gpu: 12, minLinuxCudaRuntimeBytes: 1 }).minimumRuntimeBytes, fit(device).minimumRuntimeBytes);
+});
+
+test('the 48 GiB Apple Silicon fit check admits the peers and Inkling', () => {
+  const platform = 'darwin';
+  const arch = 'arm64';
+  for (const id of ['bonsai-2-9b-q2-0', 'bonsai-2-27b-q2-0', 'ministral-3-14b', 'gemma-4-26b-a4b', 'qwen3.8-27b', 'inkling-2-mini']) {
+    const model = getModelById('summary', id);
+    const assessment = getSummaryModelFit({
+      model,
+      artifact: getSummaryArtifactForPlatform(id, platform, arch),
+      runtimeArtifact: getSummaryRuntimeArtifactForPlatform(platform, arch, undefined, id),
+      availability: getSummaryAvailability(platform, arch),
+      deviceMemory: { totalBytes: 48 * GiB },
+      platform,
+    });
+    assert.equal(assessment.blocked, false, id);
+  }
+});
+
+test('Inkling fit depends on the CUDA device memory', () => {
+  const id = 'inkling-2-mini';
+  const platform = 'linux';
+  const arch = 'x64';
+  const options = {
+    model: getModelById('summary', id),
+    artifact: getSummaryArtifactForPlatform(id, platform, arch),
+    runtimeArtifact: getSummaryRuntimeArtifactForPlatform(platform, arch, undefined, id),
+    availability: { supported: true },
+    platform,
+  };
+  const smaller = getSummaryModelFit({ ...options, deviceMemory: { totalBytes: 12 * GiB } });
+  assert.equal(smaller.status, 'needs_more_memory');
+  assert.equal(smaller.blocked, true);
+  const larger = getSummaryModelFit({ ...options, deviceMemory: { totalBytes: 24 * GiB, availableBytes: 23 * GiB } });
+  assert.equal(larger.blocked, false);
 });
 
 test('a resident model makes low free VRAM conditional on unloading', () => {

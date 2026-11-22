@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { getSummaryLanguagePolicy, getSummaryModelPlatformGates } = require('./summary-language-policy');
+const { getSummaryLanguagePolicy } = require('./summary-language-policy');
 
 const {
   PYANNOTE_DIARIZATION_MODEL_ID,
@@ -614,7 +614,6 @@ function buildSummaryArtifact({ modelId, label, runtimeArchitecture, runtimeCata
 }
 
 function gemmaSummaryModel(id, label, description, memoryGuidance, { tier = 'balanced', runtimeCatalog = 'gemma' } = {}) {
-  const supportedPlatforms = getSummaryModelPlatformGates(id);
   return {
     id, label, description, memoryGuidance,
     tier,
@@ -624,7 +623,6 @@ function gemmaSummaryModel(id, label, description, memoryGuidance, { tier = 'bal
     artifact: buildSummaryArtifact({ modelId: id, label, runtimeArchitecture: 'gemma4', runtimeCatalog }),
     inference: { contextTokens: 32768, family: 'gemma', promptFormat: 'gemma', disableThinking: true, singleTurnOnly: true },
     profiles: SUMMARY_PROFILES.map((profile) => profile.id),
-    ...(supportedPlatforms ? { supportedPlatforms } : {}),
   };
 }
 
@@ -780,7 +778,6 @@ const AI_MODEL_CATALOG = deepFreeze({
         description: 'Compact ternary 9B model for quick questions on lower-memory devices.',
         tier: 'compact',
         memoryGuidance: { gpu: 6, unified: 8, minLinuxCudaRuntimeBytes: 3429 * MiB },
-        supportedPlatforms: getSummaryModelPlatformGates('bonsai-2-9b-q2-0'),
         family: 'Bonsai 2',
         runtime: 'llama.cpp',
         runtimeCatalog: 'b12631',
@@ -810,7 +807,6 @@ const AI_MODEL_CATALOG = deepFreeze({
         description: 'Ternary model for more involved questions and longer recordings.',
         tier: 'balanced',
         memoryGuidance: { gpu: 12, unified: 16, minLinuxCudaRuntimeBytes: 9306 * MiB },
-        supportedPlatforms: getSummaryModelPlatformGates('bonsai-2-27b-q2-0'),
         family: 'Bonsai 2',
         runtime: 'llama.cpp',
         runtimeCatalog: 'b12631',
@@ -838,7 +834,6 @@ const AI_MODEL_CATALOG = deepFreeze({
         description: 'Fast non-reasoning 14B instruction model for crisp answers and recaps.',
         tier: 'balanced',
         memoryGuidance: { gpu: 16, unified: 24 },
-        supportedPlatforms: getSummaryModelPlatformGates('ministral-3-14b'),
         family: 'Ministral 3',
         runtime: 'llama.cpp',
         runtimeCatalog: 'b12631',
@@ -865,7 +860,6 @@ const AI_MODEL_CATALOG = deepFreeze({
         description: 'High-capability 27B hybrid-attention model for demanding analysis on workstation hardware.',
         tier: 'high-capability',
         memoryGuidance: { gpu: 24, unified: 32 },
-        supportedPlatforms: getSummaryModelPlatformGates('qwen3.8-27b'),
         family: 'Qwen3.8',
         runtime: 'llama.cpp',
         runtimeCatalog: 'b12631',
@@ -907,7 +901,6 @@ const AI_MODEL_CATALOG = deepFreeze({
         },
         artifact: buildSummaryArtifact({ modelId: 'inkling-2-mini', label: 'Inkling 2 Mini', runtimeArchitecture: 'inkling2_loop', runtimeCatalog: 'b12631' }),
         profiles: SUMMARY_PROFILES.map((profile) => profile.id),
-        supportedPlatforms: getSummaryModelPlatformGates('inkling-2-mini'),
       },
     ],
   },

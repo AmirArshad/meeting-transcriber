@@ -29,7 +29,7 @@ const {
   resolveModelId,
 } = require('../../src/ai-addon-state');
 
-test('Gemma models share platform-qualified runtimes while Inkling stays gated', () => {
+test('Gemma uses its platform runtimes and Inkling uses the shared b12631 runtime', () => {
   for (const [platform, arch, version] of [['darwin', 'arm64', 'b12606'], ['win32', 'x64', 'b12606'], ['linux', 'x64', 'b12631']]) {
     const e4b = getSummaryArtifactForPlatform('gemma-4-e4b', platform, arch);
     const twelve = getSummaryArtifactForPlatform('gemma-4-12b', platform, arch);
@@ -50,8 +50,10 @@ test('Gemma models share platform-qualified runtimes while Inkling stays gated',
       assert.ok(runtime.artifacts[1].requiredFiles.some((file) => file.path.endsWith('/libcudart.so.12')));
       assert.equal(runtime.requiredDynamicLibraries.some((lib) => lib.fileName === 'libnccl.so.2'), false);
     }
-    assert.equal(getSummaryArtifactForPlatform('inkling-2-mini', platform, arch), null);
-    assert.equal(getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, 'inkling-2-mini'), null);
+    const inklingArtifact = getSummaryArtifactForPlatform('inkling-2-mini', platform, arch);
+    const inklingRuntime = getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, 'inkling-2-mini');
+    assert.equal(inklingRuntime.version, 'b12631');
+    assert.equal(inklingArtifact.llamaCpp.commit, inklingRuntime.commit);
   }
   const inkling = getModelById('summary', 'inkling-2-mini');
   assert.equal(inkling.runtimeCatalog, 'b12631');
@@ -575,7 +577,7 @@ test('Bonsai 2 and v3.2 peer models pin immutable HF artifacts on shared b12631 
       fileName: 'Ternary-Bonsai-2-9B-Q2_0.gguf',
       revision: '82265ccc78ddaac4700286a35e9badcc32376dd9',
       sha256: '1f884aa56aacd2bbbb2e4b7abaead2b1102b74a9c75a23fc33dab916813a384d',
-      reasoningBudget: 0, reasoningEffort: 'none', linuxChatReady: true,
+      reasoningBudget: 0, reasoningEffort: 'none',
     },
     {
       id: 'bonsai-2-27b-q2-0', tier: 'balanced', sizeBytes: 7626008928,
@@ -583,7 +585,7 @@ test('Bonsai 2 and v3.2 peer models pin immutable HF artifacts on shared b12631 
       fileName: 'Ternary-Bonsai-2-27B-Q2_0.gguf',
       revision: '839bd57023c1558945afea70a74fa83c054f35f9',
       sha256: '4f99aed01b8a877e153f9aa6569a4440fe17c59701cc0953e36d7f460549e70e',
-      reasoningBudget: 0, reasoningEffort: 'none', linuxChatReady: true,
+      reasoningBudget: 0, reasoningEffort: 'none',
     },
     {
       id: 'ministral-3-14b', tier: 'balanced', sizeBytes: 8239067840,
@@ -636,16 +638,9 @@ test('Bonsai 2 and v3.2 peer models pin immutable HF artifacts on shared b12631 
     assert.equal(model.artifact.validationStatus, 'ready');
     assert.equal(model.artifact.downloadUrl, `https://huggingface.co/${spec.repo}/resolve/${spec.revision}/${spec.fileName}`);
 
-    const candidateCatalog = {
-      ...AI_MODEL_CATALOG,
-      summary: { ...AI_MODEL_CATALOG.summary, models: [{ ...model, supportedPlatforms: undefined }] },
-    };
     for (const [platform, arch] of [['win32', 'x64'], ['darwin', 'arm64'], ['linux', 'x64']]) {
-      const chatReady = platform === 'linux' && spec.linuxChatReady === true;
-      assert.equal(Boolean(getSummaryArtifactForPlatform(spec.id, platform, arch)), chatReady);
-      assert.equal(Boolean(getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, spec.id)), chatReady);
-      const artifact = getSummaryArtifactForPlatform(spec.id, platform, arch, candidateCatalog);
-      const runtime = getSummaryRuntimeArtifactForPlatform(platform, arch, candidateCatalog, spec.id);
+      const artifact = getSummaryArtifactForPlatform(spec.id, platform, arch);
+      const runtime = getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, spec.id);
       assert.ok(artifact, `${spec.id} artifact must resolve on ${platform}-${arch}`);
       assert.ok(runtime, `${spec.id} runtime must resolve on ${platform}-${arch}`);
       assert.equal(runtime.version, 'b12631');
@@ -653,10 +648,13 @@ test('Bonsai 2 and v3.2 peer models pin immutable HF artifacts on shared b12631 
       assert.equal(artifact.llamaCpp.commit, runtime.commit);
       const policy = getSummaryLanguagePolicy(spec.id, platform, arch);
       assert.equal(policy.version, 'summary-language-v4');
-      assert.equal(policy.chatReady, chatReady);
+      assert.equal(policy.chatReady, true);
       assert.deepEqual(policy.languages, []);
     }
   }
-  assert.equal(getSummaryLanguagePolicy('inkling-2-mini', 'linux', 'x64').chatReady, false);
+  const inklingPolicy = getSummaryLanguagePolicy('inkling-2-mini', 'darwin', 'arm64');
+  assert.equal(inklingPolicy.chatReady, true);
+  assert.deepEqual(inklingPolicy.languages, []);
+  assert.equal(getSummaryLanguagePolicy('inkling-2-mini', 'darwin', 'x64').chatReady, false);
   assert.equal(getSummaryLanguagePolicy('unknown', 'linux', 'x64').chatReady, false);
 });
