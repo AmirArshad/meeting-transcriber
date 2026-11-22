@@ -16,9 +16,11 @@ The installed `qwen3.5-9b-q4-k-m` model has bounded local synthetic evidence for
 See [the recorded checks and limits](V2_10_SUMMARY_QUALIFICATION.md).
 `src/summary-language-policy.js` owns eligibility and policy revision
 (`summary-language-v4`); add-on status exposes it without inference or downloads.
-`qwen3.5-4b-q4-k-m`, `bonsai-2-9b-q2-0`, `bonsai-2-27b-q2-0`, `ministral-3-14b`,
-`gemma-4-26b-a4b`, and `qwen3.8-27b` are installable for local Chat, while their
-summary languages remain gated pending native qualification. Gemma 4 E4B and 12B
+`qwen3.5-4b-q4-k-m` is installable for local Chat. Bonsai 2, Ministral 3 14B,
+Gemma 4 26B-A4B, and Qwen 3.8 27B become available for Chat on each platform
+after native 32k setup and Chat checks. Both Bonsai 2 models are available for
+Linux CUDA Chat. The new peers' summary languages require separate native
+qualification. Gemma 4 E4B and 12B
 offer English summaries on Apple Silicon after the [v3.1 checks](V3_1_QUALIFICATION.md).
 Other Gemma language and platform combinations remain gated. Existing platform
 runtime admission still applies.
@@ -60,12 +62,13 @@ The catalog is organized into three hardware tiers (`Compact`, `Balanced`, and
   16,564,259,744 bytes), and `inkling-2-mini` (`IQ4_NL`, 17,627,940,768 bytes,
   platform-gated pending 24+ GiB qualification).
 
-Bonsai 2 (`9B` and `27B`) uses stock `Q2_0` (which runs on upstream
-`llama.cpp b12631` without a custom Prism ML fork) and sets `--reasoning off`
-plus `--reasoning-budget 0` alongside `qwen3.8-27b` and `inkling-2-mini` so
-structured summaries and Chat JSON never exhaust output tokens inside `<think>`
-blocks. Only text weights are used across all catalog models, with a 32,768-token
-context window.
+Bonsai 2 (`9B` and `27B`) uses stock `Q2_0` on upstream `llama.cpp b12631`.
+Both Bonsai models, `qwen3.8-27b`, and `inkling-2-mini` pass `--reasoning off`
+and `--reasoning-budget 0` to preserve output tokens for structured responses.
+The catalog uses text weights with a 32,768-token context window. Memory tiers
+are advisory, and Linux CUDA fit uses measured allocation floors for both Bonsai
+models. The [qualification record](V3_2_QUALIFICATION.md) lists verified pins,
+measurements and platform checks.
 
 Gemma 4 E4B and 12B use official `ggml-org/llama.cpp` `b12631` on Linux x64
 CUDA 12.8. Gemma 4 E4B and 12B keep `b12606` on macOS arm64 Metal and Windows

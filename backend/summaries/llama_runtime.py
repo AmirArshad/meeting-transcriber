@@ -30,7 +30,9 @@ def apply_inference_descriptor(runtime: Dict[str, Any], descriptor: Optional[Dic
     prompt_format = descriptor.get("promptFormat", "chatml")
     if not isinstance(context, int) or isinstance(context, bool) or not 4096 <= context <= 131072:
         raise ValueError("Invalid inference context budget.")
-    if family not in ("qwen", "gemma", "inkling") or prompt_format not in ("chatml", "gemma"):
+    if (family, prompt_format) not in (
+        ("qwen", "chatml"), ("gemma", "gemma"), ("inkling", "chatml"), ("mistral", "mistral"),
+    ):
         raise ValueError("Unsupported inference format.")
     return {**runtime, "contextTokens": context, "inference": dict(descriptor)}
 

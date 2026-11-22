@@ -20,7 +20,7 @@ Planned on `release/3.2` (not yet cut): [v3.2.0 release plan](docs/superpowers/p
   - [x] **B3** — Chat renderer UI (`General chat`, Clear recording context, `Title · Summary` pills, notice recovery buttons) (`#5`, `#11`).
 - [ ] **Wave C (Slices C1–C3 → Checkpoint 3 & Release Cut):**
   - [ ] **C1** — The shared `b12631` archives are pinned and Linux Gemma 4 uses the CUDA 12.8 build. Native macOS and Windows adoption and **Inkling 2 Mini** qualification are pending. [Qualification record](docs/development/V3_2_QUALIFICATION.md)
-  - [ ] **C2** — Add **Bonsai 2** (`27B` & `9B` `Q2_0`, Apache 2.0) + curated mainstream peers (**Gemma 4 26B-A4B**, **Qwen 3.8 27B**, **Ministral 3 14B**, evaluating **Qwen 3.6 35B-A3B**) (`#7`).
+  - [ ] **C2** — Both **Bonsai 2** sizes are qualified for Linux CUDA Chat. **Ministral 3 14B**, **Gemma 4 26B-A4B**, and **Qwen 3.8 27B** have verified artifact pins and await native setup and Chat qualification. Bonsai Windows/macOS checks and new summary languages remain pending. [Qualification record](docs/development/V3_2_QUALIFICATION.md) (`#7`).
   - [ ] **C3** — Electron `46.x` stable migration (`safeStorage` verification), FFmpeg recheck, held Python/Rust sweeps (`onnxruntime`, `ctranslate2`, `pyobjc`, `speakrs`), `V3_2_QUALIFICATION.md`, and `v3.2.0` release cut.
 
 ### v3.1.0 release cut · 2026-11-22

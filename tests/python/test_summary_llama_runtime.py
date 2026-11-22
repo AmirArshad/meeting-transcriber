@@ -478,3 +478,19 @@ def test_configured_runtime_smoke_uses_full_context_and_single_turn_flags():
     assert args[args.index('--ctx-size') + 1] == '32768'
     assert '--single-turn' in args
     assert '--no-conversation' not in args
+
+
+@pytest.mark.parametrize('family,prompt_format,reasoning_budget', [('qwen', 'chatml', 0), ('mistral', 'mistral', None)])
+def test_peer_setup_smoke_passes_catalog_reasoning_flags(family, prompt_format, reasoning_budget):
+    from backend.summaries.llama_runtime import apply_inference_descriptor
+    runtime = apply_inference_descriptor({
+        'platform': 'linux', 'executable': '/runtime/llama-cli', 'modelPath': '/model.gguf',
+    }, {'contextTokens': 32768, 'family': family, 'promptFormat': prompt_format,
+        'singleTurnOnly': True, 'reasoningBudget': reasoning_budget})
+    args = build_llama_smoke_test_args(runtime, prompt_path='/prompt')
+    assert args[args.index('--ctx-size') + 1] == '32768'
+    assert args[args.index('--reasoning') + 1] == 'off'
+    if reasoning_budget is None:
+        assert '--reasoning-budget' not in args
+    else:
+        assert args[args.index('--reasoning-budget') + 1] == '0'

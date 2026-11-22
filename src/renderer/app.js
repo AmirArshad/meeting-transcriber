@@ -7804,13 +7804,7 @@ function renderSummaryModelLibrary(library) {
     balanced: 'Balanced',
     'high-capability': 'High-Capability',
   };
-  const catalogTierById = new Map(
-    (aiAddonStatusSnapshot?.models?.summary?.models || []).map((entry) => [entry.id, entry.tier || null]),
-  );
-  const resolveModelTier = (model) => {
-    const tier = model?.tier || catalogTierById.get(model?.modelId) || null;
-    return tier && tierLabels[tier] ? tier : null;
-  };
+  const resolveModelTier = (model) => tierOrder.includes(model.tier) ? model.tier : null;
   const renderModelCard = (model, installed) => {
       const card = document.createElement('div');
       const isDefault = model.modelId === library.defaultModelId;

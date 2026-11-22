@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { getSummaryLanguagePolicy } = require('./summary-language-policy');
+const { getSummaryLanguagePolicy, getSummaryModelPlatformGates } = require('./summary-language-policy');
 
 const {
   PYANNOTE_DIARIZATION_MODEL_ID,
@@ -17,6 +17,7 @@ const MANIFEST_VERSION = 1;
 const DEFAULT_SUMMARY_PROFILE = 'balanced';
 const DEFAULT_DIARIZATION_MODEL_ID = SPEAKRS_DIARIZATION_MODEL_ID;
 const DEFAULT_SUMMARY_MODEL_ID = 'qwen3.5-9b-q4-k-m';
+const MiB = 1024 ** 2;
 const DIARIZATION_ENGINE_SET = new Set(SPEAKRS_DIARIZATION_ENGINES);
 
 const AI_ADDON_STATUS_STATES = Object.freeze([
@@ -613,6 +614,7 @@ function buildSummaryArtifact({ modelId, label, runtimeArchitecture, runtimeCata
 }
 
 function gemmaSummaryModel(id, label, description, memoryGuidance, { tier = 'balanced', runtimeCatalog = 'gemma' } = {}) {
+  const supportedPlatforms = getSummaryModelPlatformGates(id);
   return {
     id, label, description, memoryGuidance,
     tier,
@@ -622,6 +624,7 @@ function gemmaSummaryModel(id, label, description, memoryGuidance, { tier = 'bal
     artifact: buildSummaryArtifact({ modelId: id, label, runtimeArchitecture: 'gemma4', runtimeCatalog }),
     inference: { contextTokens: 32768, family: 'gemma', promptFormat: 'gemma', disableThinking: true, singleTurnOnly: true },
     profiles: SUMMARY_PROFILES.map((profile) => profile.id),
+    ...(supportedPlatforms ? { supportedPlatforms } : {}),
   };
 }
 
@@ -776,13 +779,14 @@ const AI_MODEL_CATALOG = deepFreeze({
         label: 'Bonsai 2 9B',
         description: 'Compact ternary 9B model for quick questions on lower-memory devices.',
         tier: 'compact',
-        memoryGuidance: { gpu: 6, unified: 8, minRuntimeBytes: 3489660928 },
+        memoryGuidance: { gpu: 6, unified: 8, minLinuxCudaRuntimeBytes: 3429 * MiB },
+        supportedPlatforms: getSummaryModelPlatformGates('bonsai-2-9b-q2-0'),
         family: 'Bonsai 2',
         runtime: 'llama.cpp',
         runtimeCatalog: 'b12631',
         inference: {
           contextTokens: 32768,
-          family: 'bonsai',
+          family: 'qwen',
           promptFormat: 'chatml',
           architecture: 'qwen35',
           disableThinking: true,
@@ -803,15 +807,16 @@ const AI_MODEL_CATALOG = deepFreeze({
       {
         id: 'bonsai-2-27b-q2-0',
         label: 'Bonsai 2 27B',
-        description: '27B-class ternary model packed into a 12 GB GPU footprint with a compact 32k context cache.',
+        description: 'Ternary model for more involved questions and longer recordings.',
         tier: 'balanced',
-        memoryGuidance: { gpu: 12, unified: 16, minRuntimeBytes: 9126805504 },
+        memoryGuidance: { gpu: 12, unified: 16, minLinuxCudaRuntimeBytes: 9306 * MiB },
+        supportedPlatforms: getSummaryModelPlatformGates('bonsai-2-27b-q2-0'),
         family: 'Bonsai 2',
         runtime: 'llama.cpp',
         runtimeCatalog: 'b12631',
         inference: {
           contextTokens: 32768,
-          family: 'bonsai',
+          family: 'qwen',
           promptFormat: 'chatml',
           architecture: 'qwen35',
           disableThinking: true,
@@ -832,7 +837,8 @@ const AI_MODEL_CATALOG = deepFreeze({
         label: 'Ministral 3 14B',
         description: 'Fast non-reasoning 14B instruction model for crisp answers and recaps.',
         tier: 'balanced',
-        memoryGuidance: { gpu: 12, unified: 16, minRuntimeBytes: 9663676416 },
+        memoryGuidance: { gpu: 16, unified: 24 },
+        supportedPlatforms: getSummaryModelPlatformGates('ministral-3-14b'),
         family: 'Ministral 3',
         runtime: 'llama.cpp',
         runtimeCatalog: 'b12631',
@@ -852,13 +858,14 @@ const AI_MODEL_CATALOG = deepFreeze({
         }),
         profiles: SUMMARY_PROFILES.map((profile) => profile.id),
       },
-      gemmaSummaryModel('gemma-4-26b-a4b', 'Gemma 4 26B-A4B', 'Mixture-of-experts model with fast 4B-active decode for deeper cross-recording questions.', { gpu: 16, unified: 24, minRuntimeBytes: 16106127360 }, { tier: 'high-capability', runtimeCatalog: 'b12631' }),
+      gemmaSummaryModel('gemma-4-26b-a4b', 'Gemma 4 26B-A4B', 'Mixture-of-experts model with fast 4B-active decode for deeper cross-recording questions.', { gpu: 16, unified: 24 }, { tier: 'high-capability', runtimeCatalog: 'b12631' }),
       {
         id: 'qwen3.8-27b',
         label: 'Qwen 3.8 27B',
         description: 'High-capability 27B hybrid-attention model for demanding analysis on workstation hardware.',
         tier: 'high-capability',
-        memoryGuidance: { gpu: 24, unified: 32, minRuntimeBytes: 18253611008 },
+        memoryGuidance: { gpu: 24, unified: 32 },
+        supportedPlatforms: getSummaryModelPlatformGates('qwen3.8-27b'),
         family: 'Qwen3.8',
         runtime: 'llama.cpp',
         runtimeCatalog: 'b12631',
@@ -900,11 +907,7 @@ const AI_MODEL_CATALOG = deepFreeze({
         },
         artifact: buildSummaryArtifact({ modelId: 'inkling-2-mini', label: 'Inkling 2 Mini', runtimeArchitecture: 'inkling2_loop', runtimeCatalog: 'b12631' }),
         profiles: SUMMARY_PROFILES.map((profile) => profile.id),
-        supportedPlatforms: {
-          win32: { status: 'gated', reason: 'Not enabled on Windows yet — llama.cpp b12631 is pinned; awaiting native 32k Windows CUDA verification.' },
-          darwin: { status: 'gated', reason: 'Not enabled on macOS yet — llama.cpp b12631 is pinned; awaiting native 32k Apple Silicon verification.' },
-          linux: { status: 'gated', reason: 'Not enabled on Linux yet — llama.cpp b12631 is verified on CUDA 12.8; awaiting native 32k Inkling 2 Mini verification on a 24+ GiB GPU.' },
-        },
+        supportedPlatforms: getSummaryModelPlatformGates('inkling-2-mini'),
       },
     ],
   },

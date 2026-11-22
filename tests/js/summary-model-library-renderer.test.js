@@ -101,8 +101,8 @@ test('available library cards show plain fit badges and button hierarchy without
     defaultModelId: 'a',
     models: [
       { modelId: 'a', modelName: 'Installed Model', installed: true, setupComplete: true, status: 'ready', installedBytes: 10, fit: { status: 'fits' } },
-      { modelId: 'b', modelName: 'Available Fit', installed: false, setupComplete: false, status: 'notConfigured', downloadBytes: 20, fit: { status: 'fits' } },
-      { modelId: 'c', modelName: 'Gated Model', installed: false, setupComplete: false, status: 'unsupported', downloadBytes: 30, fit: { status: 'unavailable', blocked: true, reason: 'Not available on macOS yet.' } },
+      { modelId: 'b', modelName: 'Available Fit', tier: 'compact', installed: false, setupComplete: false, status: 'notConfigured', downloadBytes: 20, fit: { status: 'fits' } },
+      { modelId: 'c', modelName: 'Gated Model', tier: 'high-capability', installed: false, setupComplete: false, status: 'unsupported', downloadBytes: 30, fit: { status: 'unavailable', blocked: true, reason: 'Not available on macOS yet.' } },
     ],
   });
   const texts = elements.map((el) => el.textContent);
@@ -110,6 +110,7 @@ test('available library cards show plain fit badges and button hierarchy without
   assert.ok(texts.includes('Unavailable'));
   assert.equal(texts.includes('notConfigured'), false);
   assert.equal(texts.includes('unsupported'), false);
+  assert.deepEqual(elements.filter((el) => el.tag === 'h5').map((el) => el.textContent), ['Compact', 'High-Capability']);
   const downloadBtn = elements.find((el) => el.tag === 'button' && el.textContent === 'Download');
   const removeBtn = elements.find((el) => el.tag === 'button' && el.textContent === 'Remove model');
   assert.match(downloadBtn.className, /\bbtn-primary\b/);
