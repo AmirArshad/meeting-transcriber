@@ -10887,7 +10887,7 @@ function autoResizeChatInput() {
   const input = document.getElementById('chat-input');
   if (!input) return;
   input.style.height = 'auto';
-  input.style.height = `${Math.min(160, Math.max(24, input.scrollHeight))}px`;
+  input.style.height = `${Math.min(160, Math.max(34, input.scrollHeight))}px`;
 }
 
 function renderChatModelPill() {
