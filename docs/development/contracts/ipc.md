@@ -81,15 +81,19 @@ current speaker names to Markdown, text, and subtitle output.
 
 ### Local History search & threaded Chat
 
-`history-search-service.js` owns the disposable SQLite FTS5 cache (`userData/search/history-index.sqlite`) and exposes `search-history` (debounced renderer search supporting optional `tags` filtering and returning BM25-ranked meetings with highlighted `snippetParts` and `[MM:SS]` timestamp jump coordinates), `rebuild-history-index`, and `get-history-index-status`. `history-qa-service.js` owns `userData/chat/threads.json` (`chat-thread-store.js`, where `scope` supports `{ type, meetingIds, dateFrom, dateTo, tags }`) and exposes `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, plus renderer push listeners `onHistoryQaModelState` (`history-qa-model-state`) and `onHistoryQaProgress` (`history-qa-progress`). Recording creation/update payloads (`add-meeting`, `update-meeting`, `finalize-recording-transcription`, `start-import-audio`) accept optional canonical `tag` values validated symmetrically in main and Python (`meeting_manager.py`). The renderer renders Chat responses exclusively via bundled offline `marked` + strict-allowlist `DOMPurify` (`src/renderer/markdown-render-helpers.js`) and never sends bearer tokens, ports, or arbitrary file paths over IPC.
+`history-search-service.js` owns the disposable SQLite FTS5 cache (`userData/search/history-index.sqlite`) and exposes `search-history` (debounced renderer search supporting optional `tags` filtering and returning BM25-ranked meetings with highlighted `snippetParts` and `[MM:SS]` timestamp jump coordinates), `rebuild-history-index`, and `get-history-index-status`. `history-qa-service.js` owns `userData/chat/threads.json` (`chat-thread-store.js`, where `scope` supports `{ type, meetingIds, dateFrom, dateTo, tags }` with canonical `type` values `'all'`, `'selected_meetings'`, and `'none'` for General chat without recordings, while corrupt saved scopes still fail closed to `{ type: 'selected_meetings', meetingIds: [] }`) and exposes `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, plus renderer push listeners `onHistoryQaModelState` (`history-qa-model-state`) and `onHistoryQaProgress` (`history-qa-progress`). Assistant messages retain `chatMode` (`'general'` / `'grounded'`) and grounded `retrievalMode` (`'direct_full'` / `'overview'` / `'targeted'`). Recording creation/update payloads (`add-meeting`, `update-meeting`, `finalize-recording-transcription`, `start-import-audio`) accept optional canonical `tag` values validated symmetrically in main and Python (`meeting_manager.py`). The renderer renders Chat responses exclusively via bundled offline `marked` + strict-allowlist `DOMPurify` (`src/renderer/markdown-render-helpers.js`) and never sends bearer tokens, ports, or arbitrary file paths over IPC.
 
 ### Summaries & Chat model library
 
 `get-ai-addon-status` includes `summaryLibrary` with the saved default,
 model-specific installation, fit, language, download and reclaimable storage,
-and total managed/shared storage. `set-default-summary-model` takes `{modelId}`.
-Summary setup, validation and removal take a catalog `modelId`. Removal also
-accepts `replacementModelId` when the default is being removed. Main owns all
+and total managed/shared storage. `set-default-summary-model` takes `{modelId,
+unloadLoadedModel?}`. Summary setup and validation take `{modelId?, profile?,
+unloadLoadedModel?}`; removal takes a catalog `modelId` and also accepts
+`replacementModelId` when the default is being removed. Passing
+`unloadLoadedModel: true` releases any resident local model before live VRAM
+probing; omitting it when free VRAM is blocked solely by AvaNevis's own loaded
+model rejects with structured `SUMMARY_MODEL_LOADED_IN_MEMORY`. Main owns all
 resolved paths and checks readiness before applying a default.
 
 `update-chat-thread-model` takes `{threadId, modelId}`. Null follows the shared

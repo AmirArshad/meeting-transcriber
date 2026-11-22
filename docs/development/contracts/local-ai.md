@@ -52,7 +52,13 @@ on a supported runtime.
 Catalog models with pinned artifacts can use setup and Chat on supported
 platforms after local device and runtime checks. Maintainer hardware results
 record which configurations have been tested. Summary language eligibility
-requires separate qualification.
+requires separate qualification. Unified stock `llama.cpp` `b12631` runtime
+artifacts (`B12631_SUMMARY_RUNTIME_ARTIFACTS` in `src/ai-addon-state.js`) back
+Inkling 2 Mini, Bonsai 2 (`Q2_0`), Linux Gemma 4, and v3.2 peer models; the
+audited Linux CUDA 12.8 `b12631` archive has no `libnccl.so.2` dependency and
+pins `libcudart.so.12`, `libcublas.so.12`, and `libcublasLt.so.12` from the
+official `cudart` archive while preserving the legacy NCCL validator path for
+older runtimes.
 
 **Check this device** reads the local machine before download. It probes current
 free GPU memory where the NVIDIA device can be identified and reports host RAM
@@ -60,12 +66,22 @@ separately on discrete GPUs. CUDA memory estimates use model weights and context
 headroom. A measured Linux CUDA allocation raises that estimate when available.
 Apple Silicon reports one unified pool and uses its measured model
 footprint where available. OS free RAM
-is a snapshot. Discrete-GPU host RAM has no qualified per-model minimum. An
-inconclusive hardware reading leaves explicit setup available. Linux refreshes
-its managed CUDA status on the resource queue for this check. Setup compares
-space on the weights and runtime destination volumes. Installed models need no
-additional download space. **Check setup** runs the installed runtime with a
-short prompt at the selected model's configured context size.
+is a snapshot. Discrete-GPU host RAM has no qualified per-model minimum. Fit
+classification separates `fits`, `likely_fits`, `tight`, `needs_more_memory`,
+`unknown`, `runtime_checking`, `runtime_needed`, and `unavailable`; discrete
+GPU tier checks apply a `0.94` nominal-VRAM tolerance so nominal cards (such as
+12 GiB GPUs reporting `12,282 MiB`) satisfy their nominal recommendation. An
+inconclusive hardware reading (`unknown`) leaves explicit setup available. Linux
+refreshes its managed CUDA status on the resource queue for this check and
+reports resident local-model occupancy so low free VRAM caused by AvaNevis's own
+loaded model is distinguished from hardware insufficiency. `setup-summary-model`,
+`validate-summary-model`, and `set-default-summary-model` accept
+`unloadLoadedModel: true` to release the shared process slot on the resource
+queue before probing live VRAM; without it, a conflict caused solely by a
+resident local model rejects with structured `SUMMARY_MODEL_LOADED_IN_MEMORY`.
+Setup compares space on the weights and runtime destination volumes. Installed
+models need no additional download space. **Check setup** runs the installed
+runtime with a short prompt at the selected model's configured context size.
 
 Opening the summary chooser reads library status. Submission and compute
 admission verify the selected weights and runtime, including when using the
@@ -213,8 +229,8 @@ One main-process queue (`aiComputeActionQueue`, from `src/main/ai-compute-queue.
 ### Local History Q&A lazy session & safety unloads
 
 - **Readiness & Linux fail-closed gate:** History Q&A uses the selected installed model and its pinned `llama.cpp` runtime. On Linux x86_64, both eligibility checks and compute-start admission require the managed CUDA 12 runtime with zero CPU or cloud fallback. Never auto-download add-on files when opening Chat or asking a question.
-- **Zero-VRAM idle & zero-hit preflight:** Neither app startup nor switching to the `Chat` tab starts `llama-server`. Every `ask-history` call first syncs the FTS5 index and runs `backend/history_qa/retrieval.py` *before* acquiring `aiComputeActionQueue`; zero-hit queries fail closed immediately with `no_matching_excerpts` and do not load a model; a previously warm server remains resident until its normal unload.
-- **Loopback `llama-server` + `llama-cli` fallback:** When verified regular-file `llama-server` sits beside `llama-cli` inside `runtimeDir/extract` (and matches pinned Linux size/SHA-256), `history-qa-service.js` starts it lazily on `127.0.0.1` with an ephemeral port reserved on loopback and released before server launch, `--no-webui --parallel 1 --reasoning off`, and a per-launch 256-bit random `LLAMA_API_KEY` env var (never passed in CLI argv, logged, or exposed to the renderer). `backend/history_qa/qa_runner.py` enforces strict `http://127.0.0.1:<port>` loopback validation, bypasses proxies via `urllib.request.ProxyHandler({})`, receives its payload via `--stdin-json`, requests `response_format: {"type": "json_object"}` with bounded SSE `draftMarkdown` streaming over `history-qa-progress`, and passes `citation_verifier.py` fail-closed block-level Markdown verification (with 1 bounded JSON/citation repair pass, returning `verification_failed` if unverified after repair or `insufficient_evidence` when explicitly declined) where citation metadata comes solely from the immutable retrieved evidence map. When `llama-server` is absent or unverified, Q&A falls back cleanly to single-turn `llama-cli`.
+- **Zero-VRAM idle, 3-tier grounded routing & General Chat mode:** Neither app startup nor switching to the `Chat` tab starts `llama-server`. For grounded scopes (`scope.type` `'all'` or `'selected_meetings'`), every `ask-history` call first syncs the FTS5 index and runs `backend/history_qa/retrieval.py` *before* acquiring `aiComputeActionQueue`: small scopes whose timestamped transcripts fit within the model's dynamic token budget route to `direct_full` (chronological full-transcript evidence without brittle keyword filtering), while larger scopes use conversation-aware two-stage retrieval (`targeted`/`overview`) with follow-up entity carry-over, rolling turn compaction, and duration/char-capped granular timestamp blocks; zero-hit grounded queries fail closed immediately with `no_matching_excerpts` and do not load a model (a previously warm server remains resident until its normal unload). For explicit General Chat mode (`scope.type === 'none'`, `chatMode: 'general'`), `ask-history` bypasses FTS5 sync/retrieval and streams plain Markdown directly over the same local loopback server with zero citations (stripping any accidental `[E\d+]` tokens in `citation_verifier.py`). Mode switches enforce a clean conversation-history boundary (`sliceMessagesSinceModeSwitch`) so grounded excerpts and general turns never bleed across modes, and corrupt saved scopes continue to fail closed to `{ type: 'selected_meetings', meetingIds: [] }`.
+- **Loopback `llama-server` + `llama-cli` fallback:** When verified regular-file `llama-server` sits beside `llama-cli` inside `runtimeDir/extract` (and matches pinned Linux size/SHA-256), `history-qa-service.js` starts it lazily on `127.0.0.1` with an ephemeral port reserved on loopback and released before server launch, `--no-webui --parallel 1 --reasoning off` (plus per-model reasoning-budget flags when configured), and a per-launch 256-bit random `LLAMA_API_KEY` env var (never passed in CLI argv, logged, or exposed to the renderer). `backend/history_qa/qa_runner.py` enforces strict `http://127.0.0.1:<port>` loopback validation, bypasses proxies via `urllib.request.ProxyHandler({})`, receives its payload via `--stdin-json`, requests `response_format: {"type": "json_object"}` in grounded mode (or direct Markdown in general mode) with bounded SSE `draftMarkdown` streaming over `history-qa-progress`, and passes `citation_verifier.py` fail-closed block-level Markdown verification (with 1 bounded JSON/citation repair pass, returning `verification_failed` if unverified after repair or preserving the model's concise explanation on `insufficient_evidence`) where citation metadata comes solely from the immutable retrieved evidence map and untimed summary citations render as `Title · Summary`. When `llama-server` is absent or unverified, Q&A falls back cleanly to single-turn `llama-cli`.
 - **Single model process:** A resident Chat server can serve another turn only when its model, artifact and runtime identity match. The shared slot covers the server, CLI Chat, summaries and setup smoke. Main releases the slot before loading another model, testing setup, mutating live add-on files or running a competing GPU job. POSIX release requires the process group to disappear. On Windows the launcher contains the model tree in a named kill-on-close Job Object and a separate probe confirms exit. Failure to confirm release blocks a subsequent load. Manual Free memory, idle unload and quit drain use the same release check.
 
 ### Parakeet allocation failure reporting
