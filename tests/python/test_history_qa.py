@@ -17,7 +17,9 @@ from backend.history_qa.citation_verifier import (
     verify_grounded_response,
 )
 from backend.history_qa.qa_runner import (
+    QAPromptBudget,
     bound_conversation_history,
+    build_qa_messages,
     call_llama_server,
     execute_qa_request,
     extract_partial_answer_markdown,
@@ -27,7 +29,7 @@ from backend.history_qa.retrieval import (
     estimate_token_count,
     retrieve_evidence,
 )
-from backend.search.history_index import sync_history_index
+from backend.search.history_index import search_history_index, sync_history_index
 
 
 def _seed_meeting(recordings_dir: Path, meeting_id: str, title: str, date_iso: str, transcript_md: str) -> None:
@@ -76,12 +78,13 @@ def test_retrieve_evidence_scoping_fail_closed_merge_and_token_budget(tmp_path):
     )
     sync_history_index(rec_dir, index_path)
 
-    # Zero-hit fails closed: never dumps full transcript even when single meeting scoped.
+    # An oversized scope still fails closed when there are no targeted matches.
     zero = retrieve_evidence(
         rec_dir,
         index_path,
         question="What did we say about quantum submarines?",
         scope={"type": "selected_meetings", "meetingIds": ["m1"]},
+        max_evidence_tokens=50,
     )
     assert zero["evidence"] == []
     assert zero["searchedMeetingCount"] == 1
@@ -91,6 +94,7 @@ def test_retrieve_evidence_scoping_fail_closed_merge_and_token_budget(tmp_path):
         rec_dir,
         index_path,
         question="What did Alice say about the beta release?",
+        max_evidence_blocks=1,
     )
     assert len(merged["evidence"]) == 1
     ev = merged["evidence"][0]
@@ -100,14 +104,15 @@ def test_retrieve_evidence_scoping_fail_closed_merge_and_token_budget(tmp_path):
     assert ev["endSec"] == 88.0
     assert "December 4" in ev["text"] and "November 28" in ev["text"]
 
-    # Date filter restricts out-of-range meetings.
+    # Date filter restricts even full-transcript retrieval to in-range meetings.
     scoped_date = retrieve_evidence(
         rec_dir,
         index_path,
         question="hosting disabled",
         scope={"type": "all", "dateFrom": "2026-11-01", "dateTo": "2026-11-12"},
     )
-    assert scoped_date["evidence"] == []
+    assert scoped_date["retrievalMode"] == "direct_full"
+    assert {ev["meetingId"] for ev in scoped_date["evidence"]} == {"m1"}
 
     # Empty selected_meetings list returns 0 hits cleanly.
     empty_scope = retrieve_evidence(
@@ -212,7 +217,7 @@ def test_qa_runner_loopback_validation_proxy_bypass_bearer_and_repair():
 
     assert validate_loopback_server_url("http://127.0.0.1:41234/") == ("http://127.0.0.1:41234", 41234)
 
-    # Conversation history budget trims oldest turns cleanly & starts with 'user'.
+    # Conversation history preserves the recent pair and compacts the earlier pair.
     turns = [
         {"role": "user", "content": "A" * 8000},
         {"role": "assistant", "content": "B" * 8000},
@@ -220,7 +225,9 @@ def test_qa_runner_loopback_validation_proxy_bypass_bearer_and_repair():
         {"role": "assistant", "content": "Recent answer"},
     ]
     bounded = bound_conversation_history(turns, max_tokens=100)
-    assert [t["content"] for t in bounded] == ["Recent question", "Recent answer"]
+    assert bounded[0]["role"] == "context"
+    assert "[Prior Q →" in bounded[0]["content"]
+    assert [t["content"] for t in bounded[1:]] == ["Recent question", "Recent answer"]
 
     seen_requests = []
     call_counter = {"n": 0}
@@ -297,6 +304,7 @@ def test_qa_runner_loopback_validation_proxy_bypass_bearer_and_repair():
         assert seen_requests[0]["auth"] == "Bearer secret-token-xyz"
         assert seen_requests[0]["body"]["chat_template_kwargs"] == {"enable_thinking": False}
         assert seen_requests[0]["body"]["response_format"] == {"type": "json_object"}
+        assert seen_requests[0]["body"]["max_tokens"] == 2048
     finally:
         if old_proxy is None:
             os.environ.pop("HTTP_PROXY", None)
@@ -684,17 +692,17 @@ def test_smart_retrieval_date_disambiguation_boilerplate_demotion_overview_and_f
 
     sync_history_index(rec_dir, index_path)
 
-    # 1. Exact reported failing query: 05/09/2026 disambiguates to 2026-09-05 and routes to overview!
+    # 1. The date disambiguates to 2026-09-05 and the full transcript fits.
     sep_res = retrieve_evidence(
         rec_dir,
         index_path,
         question="what key points came up in the recording from 05/09/2026",
     )
-    assert sep_res["retrievalMode"] == "overview"
+    assert sep_res["retrievalMode"] == "direct_full"
     assert sep_res["detectedDateFilter"] == "2026-09-05"
     assert len(sep_res["evidence"]) >= 2
     assert all(ev["meetingId"] == "m_sep" for ev in sep_res["evidence"])
-    assert sep_res["evidence"][0]["kind"] == "summary"
+    assert all(ev["kind"] == "transcript" for ev in sep_res["evidence"])
     assert any("Linux CUDA check" in ev["text"] for ev in sep_res["evidence"])
 
     # 2. All-recordings targeted query avoids generic "Recording" / "2026" title noise and matches body.
@@ -707,7 +715,7 @@ def test_smart_retrieval_date_disambiguation_boilerplate_demotion_overview_and_f
     assert cuda_res["evidence"]
     assert {ev["meetingId"] for ev in cuda_res["evidence"]} == {"m_sep"}
 
-    # 3. Diversity cap when >4 meetings match in "All recordings" + neighbor k+-1 expansion.
+    # 3. Diversity when >4 recordings match in "All recordings" + separate neighbor evidence.
     div_res = retrieve_evidence(
         rec_dir,
         index_path,
@@ -724,16 +732,16 @@ def test_smart_retrieval_date_disambiguation_boilerplate_demotion_overview_and_f
     )
     assert neighbor_res["retrievalMode"] == "targeted"
     assert neighbor_res["evidence"][0]["meetingId"] == "m_interview"
-    assert "distributed caching" in neighbor_res["evidence"][0]["text"]
-    assert "4ms" in neighbor_res["evidence"][0]["text"]
+    assert any("distributed caching" in ev["text"] for ev in neighbor_res["evidence"][1:])
+    assert any("4ms" in ev["text"] for ev in neighbor_res["evidence"][1:])
 
-    # 4. Entity + tag matching routes pure overview cleanly; follow-up pronoun anchors to prior citation.
+    # 4. Entity/tag matching and follow-up continuity can resolve a direct scope.
     ent_res = retrieve_evidence(
         rec_dir,
         index_path,
         question="Summarize the interview with Elena",
     )
-    assert ent_res["retrievalMode"] == "overview"
+    assert ent_res["retrievalMode"] == "direct_full"
     assert all(ev["meetingId"] == "m_interview" for ev in ent_res["evidence"])
 
     followup_res = retrieve_evidence(
@@ -742,8 +750,311 @@ def test_smart_retrieval_date_disambiguation_boilerplate_demotion_overview_and_f
         question="What else did she say about that?",
         thread_context={"lastCitedMeetingIds": ["m_sep"], "lastQuestion": "What happened on 05/09/2026?"},
     )
-    assert followup_res["retrievalMode"] == "overview"
+    assert followup_res["retrievalMode"] == "direct_full"
     assert all(ev["meetingId"] == "m_sep" for ev in followup_res["evidence"])
+
+
+def test_christopher_follow_up_uses_full_transcript_without_fts(tmp_path, monkeypatch):
+    from backend.history_qa import qa_runner, retrieval
+
+    rec_dir = tmp_path / "recordings"
+    index_path = tmp_path / "index.sqlite"
+    _seed_meeting(
+        rec_dir, "interview", "Planning Interview", "2026-11-18T10:00:00",
+        "**[00:11 - 00:30]** **Dan:**\nChristopher wanted a pilot.\n"
+        "**[00:45 - 01:00]** **Dan:**\nHe proposed starting with the night shift to avoid downtime.\n"
+        "**[01:20 - 01:36]** **Dan:**\nHe asked for a fault report before expanding to other teams.\n",
+    )
+    for idx in range(6):
+        _seed_meeting(
+            rec_dir, f"noise{idx}", f"Unrelated {idx}", "2026-11-19T11:00:00",
+            "**[00:05 - 00:20]** **Alice:**\nRather than wait, go deeper into the lunch menu.\n",
+        )
+    sync_history_index(rec_dir, index_path)
+
+    def unexpected_fts(*args, **kwargs):
+        pytest.fail("Direct fit must bypass FTS")
+
+    monkeypatch.setattr(retrieval, "search_history_index", unexpected_fts)
+    first = retrieve_evidence(
+        rec_dir, index_path, question="What did Christopher want?",
+        scope={"type": "single_meeting", "meetingId": "interview"},
+    )
+    assert first["retrievalMode"] == "direct_full"
+
+    def complete(**kwargs):
+        prompt = kwargs["messages"][-1]["content"]
+        assert "night shift" in prompt and "fault report" in prompt
+        assert "lunch menu" not in prompt
+        assert kwargs["messages"][1]["content"] == "What did Christopher want?"
+        return json.dumps({
+            "answerMarkdown": "He wanted to start with the night shift [E2].\n\nHe asked for a fault report [E3].",
+            "citedEvidenceIds": ["E2", "E3"],
+        })
+
+    monkeypatch.setattr(qa_runner, "call_llama_server", complete)
+    followup = execute_qa_request({
+        "question": "He said more than that go deeper",
+        "recordingsDir": str(rec_dir),
+        "indexPath": str(index_path),
+        "history": [
+            {"role": "user", "content": "What did Christopher want?"},
+            {"role": "assistant", "content": "He wanted a pilot [E1]."},
+        ],
+        "threadContext": {
+            "lastQuestion": "What did Christopher want?",
+            "lastCitedMeetingIds": ["interview"],
+        },
+    })
+    assert followup["status"] == "answered"
+    assert followup["retrievalMode"] == "direct_full"
+    assert [(cite["meetingId"], cite["startSec"]) for cite in followup["citations"]] == [
+        ("interview", 45), ("interview", 80),
+    ]
+
+
+def test_long_follow_up_carries_entity_and_expands_past_cited_passage(tmp_path):
+    rec_dir = tmp_path / "recordings"
+    index_path = tmp_path / "index.sqlite"
+    lines = []
+    for idx in range(70):
+        text = "Christopher requested a pilot." if idx == 10 else f"Detail {idx}: a different rollout step."
+        start, end = idx * 40, idx * 40 + 20
+        lines.append(
+            f"**[{start // 60:02d}:{start % 60:02d} - {end // 60:02d}:{end % 60:02d}]** **Dan:**\n{text}\n"
+        )
+    _seed_meeting(rec_dir, "pilot", "Regional Rollout", "2026-11-18T10:00:00", "".join(lines))
+    _seed_meeting(
+        rec_dir, "noise", "Other Discussion", "2026-11-19T11:00:00",
+        "**[00:05 - 00:20]** **Alice:**\nRather than wait, go to lunch.\n",
+    )
+    sync_history_index(rec_dir, index_path)
+
+    followup = retrieve_evidence(
+        rec_dir, index_path, question="He said more than that go deeper",
+        thread_context={"lastQuestion": "What did Christopher want?"},
+        prior_turn_context={"lastCitedMeetingIds": ["pilot"], "lastCitedPassageKeys": ["pilot:11"]},
+    )
+
+    assert followup["retrievalMode"] == "targeted"
+    assert followup["queryTokens"] == ["Christopher"]
+    assert len(followup["evidence"]) == 48
+    assert {item["meetingId"] for item in followup["evidence"]} == {"pilot"}
+    assert followup["evidence"][0]["passageKey"] != "pilot:11"
+    assert any("Detail 11:" in item["text"] for item in followup["evidence"])
+
+    pronoun = retrieve_evidence(
+        rec_dir, index_path, question="What did he want?",
+        scope={"type": "all", "dateFrom": "2026-11-17"},
+        thread_context={
+            "lastQuestion": "What did Christopher want?",
+            "lastCitedMeetingIds": ["pilot"],
+        },
+    )
+    assert pronoun["queryTokens"] == ["Christopher"]
+    assert {item["meetingId"] for item in pronoun["evidence"]} == {"pilot"}
+
+    fallback = search_history_index(
+        rec_dir, index_path, query="than go Christopher", qa_stopwords={"than", "go"},
+    )
+    assert [meeting["meetingId"] for meeting in fallback["meetings"]] == ["pilot"]
+    literal = search_history_index(rec_dir, index_path, query="than go Christopher")
+    assert {meeting["meetingId"] for meeting in literal["meetings"]} == {"noise", "pilot"}
+
+
+def test_distinct_verse_timestamps_in_evidence_and_prompt(tmp_path):
+    rec_dir = tmp_path / "recordings"
+    index_path = tmp_path / "index.sqlite"
+    verses = [
+        ("00:11", "00:31", "The first verse describes the sunrise."),
+        ("00:45", "01:05", "The second verse describes the railway."),
+        ("01:20", "01:40", "The third verse describes the harbor."),
+    ]
+    _seed_meeting(
+        rec_dir, "song", "Three Verses", "2026-11-18T10:00:00",
+        "".join(
+            f"**[{start} - {end}]** **Singer:**\n{(verse + ' ') * 11}\n"
+            for start, end, verse in verses
+        ),
+    )
+    summary = rec_dir / "song_summary.md"
+    summary.write_text("The chorus repeats the sunrise theme.", encoding="utf-8")
+    meetings_file = rec_dir / "meetings.json"
+    metadata = json.loads(meetings_file.read_text(encoding="utf-8"))
+    metadata[0]["ai"] = {"summary": {"status": "completed", "markdownPath": str(summary)}}
+    meetings_file.write_text(json.dumps(metadata), encoding="utf-8")
+
+    for idx in range(3):
+        _seed_meeting(
+            rec_dir, f"other{idx}", f"Other Recording {idx}", "2026-11-17T10:00:00",
+            "**[00:05 - 00:20]** **Alice:**\nThis recording is unrelated.\n",
+        )
+    for question, scope, mode in (
+        ("Summarize these verses", {"type": "single_meeting", "meetingId": "song"}, "direct_full"),
+        ("Summarize recent recordings", {"type": "all"}, "overview"),
+    ):
+        result = retrieve_evidence(
+            rec_dir, index_path, question=question, scope=scope,
+        )
+        assert result["retrievalMode"] == mode
+        evidence = result["evidence"]
+        assert [(item["evidenceId"], item["startSec"]) for item in evidence if item["meetingId"] == "song"] == [
+            ("E1", 11), ("E2", 45), ("E3", 80),
+        ]
+        messages = build_qa_messages(question=question, evidence=evidence)
+        for idx, (start, _, verse) in enumerate(verses, 1):
+            assert f"[E{idx}] {start}" in messages[-1]["content"]
+            assert verse in evidence[idx - 1]["text"]
+        assert "Cite the specific timestamped [Ek]" in messages[0]["content"]
+
+
+def test_prompt_budget_preserves_recent_pairs_and_clamps_generation():
+    history = []
+    for idx in range(7):
+        history.extend([
+            {"role": "user", "content": f"Question {idx} about deployment"},
+            {
+                "role": "assistant", "content": f"Answer {idx} mentions canaries [E1].",
+                "citations": [{"meetingTitle": f"Rollout {idx}"}],
+            },
+        ])
+    bounded = bound_conversation_history(history)
+    assert "Question 0" in bounded[0]["content"]
+    assert "Rollout 2" in bounded[0]["content"]
+    assert "[E1]" not in bounded[0]["content"]
+    assert [turn["content"] for turn in bounded[1:]] == [turn["content"] for turn in history[-8:]]
+    assert sum(estimate_token_count(turn["content"]) + 12 for turn in bounded) <= 4000
+
+    question = "What changed?"
+    payload = {"modelContextTokens": 3200, "history": history}
+    budget = QAPromptBudget(payload, question)
+    evidence = [{"evidenceId": "E1", "text": "漢字の検証" * 260}]
+    fitted, messages = budget.fit_evidence(evidence)
+    assert fitted == evidence
+    assert all(message["role"] != "context" for message in messages)
+    assert "Earlier conversation for resolving follow-ups" in messages[-1]["content"]
+    generated = budget.generation_tokens(messages)
+    assert 128 <= generated < 2048
+    assert generated + budget.message_tokens(messages) == 3200 - 1024
+    assert 0 < budget.evidence_tokens() < 2048
+
+    # On a 32k model with pre-retrieved evidence + history, fit_evidence preserves full 2048 generation headroom.
+    large_history = [
+        {"role": "user", "content": "Prior question " + ("q" * 6000)},
+        {"role": "assistant", "content": "Prior answer " + ("a" * 6000)},
+    ]
+    budget_32k = QAPromptBudget({"modelContextTokens": 32768, "history": large_history}, "Go deeper")
+    oversized_evidence = [
+        {"evidenceId": f"E{idx}", "text": "x" * 4000}
+        for idx in range(1, 35)
+    ]
+    fitted_32k, messages_32k = budget_32k.fit_evidence(oversized_evidence)
+    assert 0 < len(fitted_32k) < len(oversized_evidence)
+    assert budget_32k.generation_tokens(messages_32k) == 2048
+
+
+def test_direct_fit_merges_short_segments_overview_keeps_needed_summaries_and_stage_b_upgrades(tmp_path):
+    rec_dir = tmp_path / "recordings"
+    index_path = tmp_path / "index.sqlite"
+
+    # 1. >64 short same-speaker segments (~4 min total) merge into granular <=35s/<=550-char direct_full blocks.
+    short_lines = []
+    for idx in range(70):
+        start_s = idx * 4
+        end_s = start_s + 3
+        short_lines.append(
+            f"**[{start_s // 60:02d}:{start_s % 60:02d} - {end_s // 60:02d}:{end_s % 60:02d}]** **Dan:**\n"
+            f"Point {idx} about telemetry.\n"
+        )
+    _seed_meeting(rec_dir, "m_short_many", "Short Memo", "2026-11-20T10:00:00", "".join(short_lines))
+    sync_history_index(rec_dir, index_path)
+
+    direct = retrieve_evidence(
+        rec_dir, index_path, question="Summarize this recording",
+        scope={"type": "selected_meetings", "meetingIds": ["m_short_many"]},
+    )
+    assert direct["retrievalMode"] == "direct_full"
+    assert 1 < len(direct["evidence"]) <= 64
+    assert all(len(ev["text"]) <= 550 for ev in direct["evidence"])
+    assert all((ev["endSec"] - ev["startSec"]) <= 35.0 for ev in direct["evidence"])
+    assert "Point 0" in direct["evidence"][0]["text"]
+    assert "Point 69" in direct["evidence"][-1]["text"]
+
+    # 2. Overview reserves room for summaries of truncated or transcript-absent recordings while omitting redundant ones.
+    long_lines = []
+    for idx in range(75):
+        start_s = idx * 40
+        end_s = start_s + 20
+        long_lines.append(
+            f"**[{start_s // 60:02d}:{start_s % 60:02d} - {end_s // 60:02d}:{end_s % 60:02d}]** **Alice:**\n"
+            f"Long topic {idx}: Christopher reviewed rollout milestone {idx}.\n"
+        )
+    _seed_meeting(rec_dir, "m_long_sum", "Regional Rollout", "2026-11-21T10:00:00", "".join(long_lines))
+    _seed_meeting(rec_dir, "m_sum_only", "Summary Only", "2026-11-22T10:00:00", "# Summary Only\n---\n")
+    meetings_file = rec_dir / "meetings.json"
+    meta = json.loads(meetings_file.read_text(encoding="utf-8"))
+    for entry in meta:
+        if entry["id"] in ("m_short_many", "m_long_sum", "m_sum_only"):
+            sum_path = rec_dir / f"{entry['id']}_summary.md"
+            sum_path.write_text(f"Executive summary for {entry['id']}.", encoding="utf-8")
+            entry["ai"] = {"summary": {"status": "completed", "markdownPath": str(sum_path)}}
+    meetings_file.write_text(json.dumps(meta), encoding="utf-8")
+    sync_history_index(rec_dir, index_path)
+
+    ov = retrieve_evidence(
+        rec_dir, index_path, question="Summarize these recordings",
+        scope={"type": "selected_meetings", "meetingIds": ["m_sum_only", "m_long_sum", "m_short_many"]},
+        max_evidence_blocks=20,
+    )
+    assert ov["retrievalMode"] == "overview"
+    summary_mids = {ev["meetingId"] for ev in ov["evidence"] if ev["kind"] == "summary"}
+    assert "m_sum_only" in summary_mids
+    assert "m_long_sum" in summary_mids
+    assert "m_short_many" not in summary_mids
+
+    # 3. Follow-ups with capitalized topics stay anchored to prior_headers, and title tokens do not leak from lastQuestion.
+    for idx in range(4):
+        _seed_meeting(
+            rec_dir, f"m_other_{idx}", f"Other Sync {idx}", f"2026-11-1{idx}T09:00:00",
+            f"**[00:05 - 00:15]** **Bob:**\nKubernetes cluster node {idx} and generic rollout notes.\n",
+        )
+    sync_history_index(rec_dir, index_path)
+
+    cap_topic = retrieve_evidence(
+        rec_dir, index_path, question="What did she say about Kubernetes?",
+        thread_context={"lastCitedMeetingIds": ["m_other_1"], "lastQuestion": "Tell me about Other Sync 1"},
+    )
+    assert cap_topic["retrievalMode"] == "targeted"
+    assert {ev["meetingId"] for ev in cap_topic["evidence"]} == {"m_other_1"}
+
+    title_in_prior = retrieve_evidence(
+        rec_dir, index_path, question="He said more than that go deeper",
+        thread_context={
+            "lastCitedMeetingIds": ["m_long_sum"],
+            "lastQuestion": "What did Christopher want in Regional Rollout?",
+        },
+    )
+    assert title_in_prior["queryTokens"] == ["Christopher"]
+    assert {ev["meetingId"] for ev in title_in_prior["evidence"]} == {"m_long_sum"}
+
+    lower_in_prior = retrieve_evidence(
+        rec_dir, index_path, question="He said more than that go deeper",
+        thread_context={
+            "lastCitedMeetingIds": ["m_long_sum"],
+            "lastQuestion": "what did christopher want in regional rollout?",
+        },
+    )
+    assert lower_in_prior["queryTokens"] == ["christopher"]
+    assert {ev["meetingId"] for ev in lower_in_prior["evidence"]} == {"m_long_sum"}
+
+    # 4. Stage B upgrades passage budget from 5 to 40 when an "All recordings" query matches only 1 long recording.
+    all_scope_single_match = retrieve_evidence(
+        rec_dir, index_path, question="What did Christopher say about milestone?",
+        scope={"type": "all"},
+    )
+    assert all_scope_single_match["retrievalMode"] == "targeted"
+    assert {ev["meetingId"] for ev in all_scope_single_match["evidence"]} == {"m_long_sum"}
+    assert len(all_scope_single_match["evidence"]) == 40
 
 
 def test_overview_mode_uniformly_samples_long_recording(tmp_path):
@@ -980,7 +1291,7 @@ def test_starter_prompts_four_plus_meetings_followups_of_date_and_corrupt_recove
         )
     sync_history_index(rec_dir, index_path)
 
-    # All 6 starter prompts route to overview even with >= 4 recordings in "All" scope.
+    # Named starter prompts fit directly; broad prompts summarize the latest recordings.
     starter_prompts = [
         'Summarize the main points from "Weekly Sync 1".',
         'What decisions, tasks, or follow-ups came up in "Weekly Sync 1"?',
@@ -989,20 +1300,20 @@ def test_starter_prompts_four_plus_meetings_followups_of_date_and_corrupt_recove
         "List any follow-ups, tasks, or deadlines mentioned recently.",
         "What open questions or issues were raised recently?",
     ]
-    for prompt in starter_prompts:
+    for idx, prompt in enumerate(starter_prompts):
         res = retrieve_evidence(rec_dir, index_path, question=prompt)
-        assert res["retrievalMode"] == "overview", prompt
+        assert res["retrievalMode"] == ("direct_full" if idx < 3 else "overview"), prompt
         assert res["evidence"], prompt
         assert res["matchedMeetingCount"] <= 3
 
-    # Follow-up "what did she decide?" routes to overview anchored to prior cited meeting.
+    # The prior recording anchors the full-transcript follow-up.
     she_decide = retrieve_evidence(
         rec_dir,
         index_path,
         question="what did she decide?",
         thread_context={"lastCitedMeetingIds": ["m_rec_2"], "lastQuestion": "Tell me about sync 2"},
     )
-    assert she_decide["retrievalMode"] == "overview"
+    assert she_decide["retrievalMode"] == "direct_full"
     assert {ev["meetingId"] for ev in she_decide["evidence"]} == {"m_rec_2"}
 
     # Targeted follow-up "What did she say about the budget?" anchors to prior_in_scope first.
@@ -1041,14 +1352,14 @@ def test_starter_prompts_four_plus_meetings_followups_of_date_and_corrupt_recove
     )
     assert zero_followup["evidence"] == []
 
-    # Conversational follow-up phrase that yields 0 hits on prior_in_scope falls back to overview on prior_in_scope.
+    # A conversational follow-up can load the full prior transcript.
     conv_followup = retrieve_evidence(
         rec_dir,
         index_path,
         question="Can you explain that briefly?",
         thread_context={"lastCitedMeetingIds": ["m_rec_2"], "lastQuestion": "Sync 2"},
     )
-    assert conv_followup["retrievalMode"] == "overview"
+    assert conv_followup["retrievalMode"] == "direct_full"
     assert {ev["meetingId"] for ev in conv_followup["evidence"]} == {"m_rec_2"}
 
     # "5th of September 2026" parses via _DMY_MONTH_RE with optional "of".
@@ -1057,7 +1368,7 @@ def test_starter_prompts_four_plus_meetings_followups_of_date_and_corrupt_recove
         index_path,
         question="What happened on the 5th of September 2026?",
     )
-    assert of_date["retrievalMode"] == "overview"
+    assert of_date["retrievalMode"] == "direct_full"
     assert of_date["detectedDateFilter"] == "2026-09-05"
     assert {ev["meetingId"] for ev in of_date["evidence"]} == {"m_rec_1"}
 
@@ -1103,19 +1414,19 @@ def test_neighbor_timestamp_excerpt_preservation_and_multispeaker_overview_token
     _seed_meeting(rec_dir, "m_long_two", "Deep Dive", "2026-11-20T09:00:00", "\n".join(long_lines))
     sync_history_index(rec_dir, index_path)
 
-    # 1. Neighbor k-1 preserves direct hit k's startSec (22.0), speaker (Bob), and excerpt (DuckDB).
-    res = retrieve_evidence(rec_dir, index_path, question="DuckDB")
+    # 1. Neighbors keep their own timestamps and speaker labels.
+    res = retrieve_evidence(rec_dir, index_path, question="DuckDB", max_evidence_blocks=3)
     assert res["retrievalMode"] == "targeted"
-    assert len(res["evidence"]) == 1
+    assert [(ev["startSec"], ev["speaker"]) for ev in res["evidence"]] == [
+        (22.0, "Bob"), (10.0, "Alice"), (36.0, "Charlie"),
+    ]
     ev = res["evidence"][0]
     assert ev["startSec"] == 22.0
     assert ev["speaker"] == "Bob"
     assert "DuckDB" in ev["excerpt"]
-    assert "[Alice]:" in ev["text"]
-    assert "\n[Bob]: We chose DuckDB" in ev["text"]
-    assert "[Charlie]:" in ev["text"]
+    assert ev["text"] == "We chose DuckDB for analytical rollups."
 
-    # 2. Multi-speaker overview merges alternating turns and respects token_cap sampling.
+    # 2. Overview keeps speaker changes separate and respects token-cap sampling.
     ov = retrieve_evidence(
         rec_dir,
         index_path,
@@ -1125,7 +1436,7 @@ def test_neighbor_timestamp_excerpt_preservation_and_multispeaker_overview_token
     )
     assert ov["retrievalMode"] == "overview"
     assert sum(estimate_token_count(item["text"]) for item in ov["evidence"]) <= 1600
-    assert any("Alice:" in item["text"] and "Bob:" in item["text"] for item in ov["evidence"] if item["meetingId"] == "m_long_two")
+    assert {item["speaker"] for item in ov["evidence"] if item["meetingId"] == "m_long_two"} == {"Alice", "Bob"}
     assert any(item["meetingId"] == "m_short" for item in ov["evidence"])
 
 
