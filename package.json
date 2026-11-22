@@ -1,6 +1,6 @@
 {
   "name": "avanevis",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "Local audio recorder and transcriber for microphone, desktop audio, and audio files",
   "main": "src/main.js",
   "scripts": {

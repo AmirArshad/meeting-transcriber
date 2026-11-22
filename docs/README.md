@@ -4,7 +4,7 @@ This directory separates current guides, maintainer references, completed implem
 
 ## Current Release
 
-- [AvaNevis v3.1 qualification record](development/V3_1_QUALIFICATION.md) (in progress on `release/3.1`)
+- [AvaNevis v3.1.0 release notes](releases/v3.1.0.md) and [qualification](development/V3_1_QUALIFICATION.md)
 - [AvaNevis v3.0.0 release notes](releases/v3.0.0.md) and [qualification](development/V3_0_QUALIFICATION.md)
 - [AvaNevis v2.12.0 release notes](releases/v2.12.0.md) and [qualification](development/V2_12_QUALIFICATION.md)
 - [AvaNevis v2.11.0 release notes](releases/v2.11.0.md) and [qualification](development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)

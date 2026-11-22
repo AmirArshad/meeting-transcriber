@@ -1,13 +1,13 @@
 # AvaNevis release status
 
-Latest published version: **[v3.0.0](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v3.0.0)**, November 21, 2026.
-See the [release notes](docs/releases/v3.0.0.md) and [qualification record](docs/development/V3_0_QUALIFICATION.md) for shipped scope and accepted limits.
+Latest published version: **[v3.1.0](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v3.1.0)**, November 22, 2026.
+See the [release notes](docs/releases/v3.1.0.md) and [qualification record](docs/development/V3_1_QUALIFICATION.md) for shipped scope and accepted limits.
 
 ## Status
 
-### v3.1 pre-release polish & documentation sync · 2026-11-22
+### v3.1.0 release cut · 2026-11-22
 
-All five v3.1 implementation phases (Chat reliability & streaming, 11 recording tags & tag-aware summary templates, non-destructive speaker naming with voice previews, multi-model Summaries & Chat library with single-slot memory release, and Phase 5 dependency/security sweep) plus cross-view UI polish (`5103884`) are integrated on `release/3.1`. Repository documentation, contracts, agent rules, and privacy redactions have been synchronized ahead of the `v3.1.0` release cut. Remaining gates before bumping `package.json` to `3.1.0` and tagging `v3.1.0` are tracked in [V3_1_QUALIFICATION.md](docs/development/V3_1_QUALIFICATION.md).
+Version bumped from `3.0.0` to `3.1.0` on `release/3.1` with curated [v3.1.0 release notes](docs/releases/v3.1.0.md), preparing the PR merge into `master` and `v3.1.0` release tag. All five v3.1 phases (streaming grounded Chat & retrieval hardening, 11 recording tags & tag-aware summary templates, non-destructive speaker naming with voice previews, multi-model Summaries & Chat library with single-slot memory release, and Phase 5 dependency/security sweep) plus cross-view UI polish (`5103884`, `14a9a57`) and documentation synchronization (`fec16f1`) are included. Upstream holds remain Electron `46.0.0-alpha.11`, matched FFmpeg `8.1.2`, gated Inkling 2 Mini, and optional unsigned Windows / ad-hoc macOS signing (`vars.REQUIRE_SIGNED_RELEASE` unset/false). Open cross-platform hardware/desktop gates recorded in [V3_1_QUALIFICATION.md](docs/development/V3_1_QUALIFICATION.md) are accepted as documented v3.1.0 limits. Final pre-PR local gates on `release/3.1` (`3.1.0`): `npm run test:all` exit 0 (`JS 1,357 passed, 0 failed, 1 skipped`; `Python 990 passed, 8 skipped`; syntax clean), `python3 scripts/agents/validate_setup.py` exit 0, `npm audit --omit=dev` & `npm audit` (`0 vulnerabilities`), and `npm run legal:release-assets` exit 0 (`avanevis-legal-3.1.0.zip` + `ffmpeg-8.1.2.tar.xz`).
 
 ### v3.1 Windows 11 partial qualification · 2026-11-22
 

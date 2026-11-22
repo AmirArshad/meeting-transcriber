@@ -70,10 +70,13 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ---
 
-## Current release: v3.0.0 (v3.1.0 in development)
+## Current release: v3.1.0
+
+- **v3.1.0 (November 22, 2026)** — Streaming grounded Chat with smart date/entity/tag retrieval, follow-up continuity, and actionable recovery notices; 11 canonical recording tags with dedicated per-tag summary templates; non-destructive inline speaker naming with timestamped voice previews across History, Activity, and Prepare summary; the multi-model Summaries & Chat library (Qwen3.5 9B/4B, Gemma 4 E4B/12B, gated Inkling 2 Mini) with device-fit checks and single-slot memory release; UI polish; and Phase 5 dependency/security updates. See the [v3.1.0 release notes](../releases/v3.1.0.md) and [v3.1 qualification record](../development/V3_1_QUALIFICATION.md).
+
+### Earlier v3.0.0 release
 
 - **v3.0.0 (November 21, 2026)** — Local SQLite FTS5 History search, grounded local Chat with timestamp citations, caption-scale timing sidecars with `.srt`/`.vtt` exports, differential in-app auto-updater, bundled CPython `3.11.18+20261110`, and decoupled recovery locking. See the [v3.0.0 release notes](../releases/v3.0.0.md) and [v3.0 qualification record](../development/V3_0_QUALIFICATION.md).
-- **v3.1.0 (in progress on `release/3.1`)** — Streaming grounded Chat with smart date/entity/tag retrieval, follow-up continuity, and actionable recovery notices; 11 canonical recording tags with dedicated per-tag summary templates; non-destructive inline speaker naming with timestamped voice previews across History, Activity, and Prepare summary; the multi-model Summaries & Chat library (Qwen3.5 9B/4B, Gemma 4 E4B/12B, gated Inkling 2 Mini) with device-fit checks and single-slot memory release; and Phase 5 dependency/security updates. See the [v3.1 qualification record](../development/V3_1_QUALIFICATION.md).
 
 ### Earlier v2.12.0 release
 

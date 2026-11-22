@@ -202,3 +202,14 @@ Host: Windows 11 Pro x64 build 26300, RTX 4070 12 GiB, NVIDIA driver 621.35, Nod
 - Live Chat exposed 300-character truncation and collapsed Markdown in answers and drafts because status-message redaction was reused. The fix preserves full verified answer text and Markdown while retaining secret redaction; focused regressions and the full suite passed. The rebuilt app streamed formatted Markdown and persisted an 834-character answer with 18 line breaks. The speaker setup message for a supported, unconfigured install was also corrected and covered by a focused test.
 
 **Still open:** Windows 10 coverage; disposable-runner installer install/uninstall and signed-release checks; longer capture and natural multi-speaker/audio quality; the full Task 5.4 date/follow-up, legacy, all-tag/template, speaker-name/export and multi-model removal/failure/timeout matrix; and remaining macOS/Linux desktop and hardware gates. This partial evidence does not qualify all Windows configurations or authorize a release cut.
+
+## Release cut (`v3.1.0`, 2026-11-22)
+
+Authorized by the user on 2026-11-22 to bump `package.json` / `package-lock.json` from `3.0.0` to `3.1.0`, publish curated [v3.1.0 release notes](../releases/v3.1.0.md), merge `release/3.1` into `master`, and tag `v3.1.0`.
+
+- **Pre-PR verification on CachyOS Linux (`3.1.0`):**
+  - `npm run test:all`: exit `0` (`JS: 1,357 passed, 0 failed, 1 skipped`; `Python: 990 passed, 8 skipped`; JS and Python syntax clean).
+  - `python3 scripts/agents/validate_setup.py`: exit `0`.
+  - `npm audit --omit=dev` & `npm audit`: `0 vulnerabilities`.
+  - `npm run legal:release-assets`: exit `0` (`avanevis-legal-3.1.0.zip`, `ffmpeg-8.1.2.tar.xz`, and `THIRD_PARTY_NOTICES.md` staged and verified).
+- **Accepted limits & upstream holds:** Electron stays on `46.0.0-alpha.11` (stable 46.x unpublished), FFmpeg stays on matched `8.1.2`, Inkling 2 Mini remains gated pending a published `llama.cpp` release containing the loop-layer scale fix and native qualification, and Windows/macOS code signing & notarization remain optional (`vars.REQUIRE_SIGNED_RELEASE` unset/false). All open hardware/desktop coverage items above (Windows 10, macOS 15, Omarchy-specific hardware checks, interactive Linux desktop/system-package checks, full cross-platform multi-model/Inkling matrix checks, disposable-runner installer install/uninstall verification, and live signed updater verification) are accepted as documented v3.1.0 limits and deferred to post-v3.1 verification.

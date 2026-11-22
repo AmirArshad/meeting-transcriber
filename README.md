@@ -11,7 +11,7 @@
 
 AvaNevis (formerly Meeting Transcriber) is a local audio recorder and transcriber. Capture your microphone, desktop audio, or both at once—or import existing audio files—and transcribe on your device with Whisper or optional NVIDIA Parakeet. Optional local add-ons add speaker labels and recording summaries or transcript chat. No cloud upload, no telemetry, no account.
 
-**Latest published release:** [v3.0.0](docs/releases/v3.0.0.md) adds local History FTS5 search, grounded Chat with timestamp citations, SRT/WebVTT subtitle exports, and an in-app auto-updater. Branch `release/3.1` prepares v3.1 with streaming Chat and improved local retrieval, 11 recording tags with dedicated summary templates, speaker naming with voice previews, a multi-model Summaries & Chat library, and updated dependencies. See the [v3.0 qualification record](docs/development/V3_0_QUALIFICATION.md), [v3.1 qualification record](docs/development/V3_1_QUALIFICATION.md), and [release status](todo.md). Tagged installers are published by the [release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/workflows/build-release.yml).
+**Latest published release:** [v3.1.0](docs/releases/v3.1.0.md) adds streaming grounded Chat with improved local retrieval, 11 recording tags with dedicated summary templates, non-destructive speaker naming with voice previews, a multi-model Summaries & Chat library (Qwen3.5 9B/4B, Gemma 4 E4B/12B; Inkling 2 Mini gated), UI polish, and updated dependencies. See the [v3.1 qualification record](docs/development/V3_1_QUALIFICATION.md) and [release status](todo.md). Tagged installers are published by the [release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/workflows/build-release.yml).
 
 ## Why
 
@@ -240,8 +240,8 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
   - [Local AI model catalog](docs/development/LOCAL_AI_MODEL_CATALOG.md)
   - [v2.9 dependency compatibility and acceptance evidence](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) (historical)
   - [Speakrs soak / benchmarks](docs/development/SPEAKRS_BENCHMARKS.md)
+  - [v3.1.0 release notes](docs/releases/v3.1.0.md) and [qualification record](docs/development/V3_1_QUALIFICATION.md)
   - [v3.0.0 release notes](docs/releases/v3.0.0.md) and [qualification record](docs/development/V3_0_QUALIFICATION.md)
-  - [v3.1 qualification record](docs/development/V3_1_QUALIFICATION.md)
   - [v2.12.0 release notes](docs/releases/v2.12.0.md) and [qualification record](docs/development/V2_12_QUALIFICATION.md)
   - [v2.11.0 release notes](docs/releases/v2.11.0.md) and [qualification record](docs/development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
   - [v2.10.0 release notes](docs/releases/v2.10.0.md)
@@ -269,12 +269,9 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
 
 ## Roadmap (short version)
 
-**In progress (v3.1.0)**
-
-- Streaming grounded Chat with tag/date filters and actionable empty/failure states; 11 recording tags with dedicated summary templates; inline speaker naming with timestamped voice previews; multi-model Summaries & Chat library (Qwen3.5 9B/4B, Gemma 4 E4B/12B, gated Inkling 2 Mini) with single-slot memory release and per-thread/per-run model selection.
-
 **Shipped releases**
 
+- **v3.1.0 (November 2026)** — streaming grounded Chat with tag/date/entity filters and actionable recovery notices, 11 recording tags with dedicated summary templates, non-destructive inline speaker naming with timestamped voice previews, multi-model Summaries & Chat library (Qwen3.5 9B/4B, Gemma 4 E4B/12B, gated Inkling 2 Mini) with single-slot memory release, UI polish, and dependency/security updates. [Release notes](docs/releases/v3.1.0.md).
 - **v3.0.0 (November 2026)** — local SQLite FTS5 History search, grounded Chat with clickable timestamp citations, `.srt`/`.vtt` subtitle exports, differential in-app auto-updater, bundled CPython 3.11.18, and decoupled recovery locking. [Release notes](docs/releases/v3.0.0.md).
 - **v2.12.0 (November 2026)** — local audio import, Activity integration and qualified dependency updates. [Release notes](docs/releases/v2.12.0.md).
 - **v2.11.0 (November 2026)** — native Speakrs 0.7, Electron 46 alpha and asynchronous secure storage. [Release notes](docs/releases/v2.11.0.md).
