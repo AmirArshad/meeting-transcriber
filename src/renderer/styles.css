@@ -6077,6 +6077,12 @@ button.history-transcript-timestamp:focus-visible {
   white-space: nowrap;
 }
 
+.chat-header-scope.is-general-mode {
+  color: var(--amber);
+  background: rgba(235, 180, 90, 0.12);
+  border-color: rgba(235, 180, 90, 0.34);
+}
+
 .chat-header-right {
   display: flex;
   align-items: center;
@@ -6673,6 +6679,15 @@ button.history-transcript-timestamp:focus-visible {
   flex-shrink: 0;
 }
 
+.chat-scope-btn.is-general-mode {
+  border-color: rgba(235, 180, 90, 0.36);
+  color: var(--amber);
+}
+
+.chat-scope-btn.is-general-mode .chat-scope-dot {
+  background: var(--amber);
+}
+
 .chat-input {
   flex: 1;
   min-width: 0;
@@ -6719,17 +6734,36 @@ button.history-transcript-timestamp:focus-visible {
 
 .chat-scope-mode-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .chat-scope-mode-row .btn {
-  flex: 1;
+  flex: 1 1 120px;
 }
 
 .chat-scope-mode-row .btn.is-selected {
   background: var(--accent-soft);
   border-color: var(--accent-line);
   color: var(--accent-strong);
+}
+
+.chat-scope-none-note {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-xs);
+  border: 1px solid rgba(235, 180, 90, 0.28);
+  background: rgba(235, 180, 90, 0.08);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.chat-callout-explanation {
+  margin: 4px 0 6px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-primary);
 }
 
 .chat-scope-selected-panel {
@@ -6841,8 +6875,13 @@ button.history-transcript-timestamp:focus-visible {
 
 .chat-scope-popover-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.chat-scope-clear-context-btn {
+  margin-right: auto;
 }
 
 @media (max-width: 900px) {

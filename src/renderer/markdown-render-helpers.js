@@ -91,7 +91,23 @@
     const title = String(citation && citation.meetingTitle ? citation.meetingTitle : 'Recording').trim() || 'Recording';
     const compactTitle = title.length > 34 ? `${title.slice(0, 33).trimEnd()}…` : title;
     const ts = formatCitationSeconds(citation ? citation.startSec : null);
-    return ts ? `${compactTitle} · ${ts}` : compactTitle;
+    if (ts) {
+      return `${compactTitle} · ${ts}`;
+    }
+    if (citation && String(citation.kind || '').trim().toLowerCase() === 'summary') {
+      return `${compactTitle} · Summary`;
+    }
+    return compactTitle;
+  }
+
+  function getCitationPillKey(citation, evidenceId) {
+    const meetingId = String(citation && citation.meetingId ? citation.meetingId : '').trim();
+    const ts = formatCitationSeconds(citation ? citation.startSec : null);
+    const kind = String(citation && citation.kind ? citation.kind : '').trim().toLowerCase();
+    if (meetingId) {
+      return `${meetingId}|${ts || (kind === 'summary' ? 'summary' : '')}`;
+    }
+    return String(evidenceId || '').trim();
   }
 
   function buildCitationMap(verifiedCitations) {
@@ -175,36 +191,71 @@
 
       const fragment = doc.createDocumentFragment();
       let cursor = 0;
+      let lastPillKey = null;
+      let pendingSeparator = '';
       let match = CITATION_TOKEN_RE.exec(value);
       while (match) {
-        if (match.index > cursor) {
-          fragment.appendChild(doc.createTextNode(value.slice(cursor, match.index)));
+        const between = value.slice(cursor, match.index);
+        if (lastPillKey !== null && /^\s*$/.test(between)) {
+          pendingSeparator += between;
+        } else {
+          if (pendingSeparator) {
+            fragment.appendChild(doc.createTextNode(pendingSeparator));
+            pendingSeparator = '';
+          }
+          if (between) {
+            fragment.appendChild(doc.createTextNode(between));
+          }
+          if (between && /\S/.test(between)) {
+            lastPillKey = null;
+          }
         }
         const evidenceId = match[1];
         const citation = citationMap.get(evidenceId);
         if (citation) {
-          const btn = doc.createElement('button');
-          btn.type = 'button';
-          btn.className = 'chat-citation-pill';
-          btn.dataset.evidenceId = evidenceId;
-          btn.dataset.meetingId = String(citation.meetingId);
-          const formattedTs = formatCitationSeconds(citation.startSec);
-          if (formattedTs) {
-            btn.dataset.startSec = String(citation.startSec);
+          const pillKey = getCitationPillKey(citation, evidenceId);
+          if (pillKey && pillKey === lastPillKey) {
+            pendingSeparator = '';
+          } else {
+            if (pendingSeparator) {
+              fragment.appendChild(doc.createTextNode(pendingSeparator));
+              pendingSeparator = '';
+            }
+            const btn = doc.createElement('button');
+            btn.type = 'button';
+            btn.className = 'chat-citation-pill';
+            btn.dataset.evidenceId = evidenceId;
+            btn.dataset.meetingId = String(citation.meetingId);
+            const formattedTs = formatCitationSeconds(citation.startSec);
+            const isSummary = !formattedTs && String(citation.kind || '').trim().toLowerCase() === 'summary';
+            if (formattedTs) {
+              btn.dataset.startSec = String(citation.startSec);
+            } else if (isSummary) {
+              btn.dataset.kind = 'summary';
+            }
+            const label = formatCitationPillLabel(citation);
+            btn.textContent = label;
+            btn.title = formattedTs
+              ? `Open ${citation.meetingTitle || 'recording'} at ${formattedTs}`
+              : (isSummary
+                ? `Open ${citation.meetingTitle || 'recording'} summary`
+                : `Open ${citation.meetingTitle || 'recording'}`);
+            btn.setAttribute('aria-label', btn.title);
+            if (typeof onCitationClick === 'function') {
+              btn.addEventListener('click', () => onCitationClick(citation, btn));
+            }
+            fragment.appendChild(btn);
+            lastPillKey = pillKey;
           }
-          const label = formatCitationPillLabel(citation);
-          btn.textContent = label;
-          btn.title = formattedTs
-            ? `Open ${citation.meetingTitle || 'recording'} at ${formattedTs}`
-            : `Open ${citation.meetingTitle || 'recording'}`;
-          btn.setAttribute('aria-label', btn.title);
-          if (typeof onCitationClick === 'function') {
-            btn.addEventListener('click', () => onCitationClick(citation, btn));
-          }
-          fragment.appendChild(btn);
         }
         cursor = match.index + match[0].length;
         match = CITATION_TOKEN_RE.exec(value);
+      }
+      if (pendingSeparator) {
+        const trailing = value.slice(cursor);
+        if (trailing && !/^[\s.,;:!?)]/.test(trailing)) {
+          fragment.appendChild(doc.createTextNode(pendingSeparator));
+        }
       }
       if (cursor < value.length) {
         fragment.appendChild(doc.createTextNode(value.slice(cursor)));

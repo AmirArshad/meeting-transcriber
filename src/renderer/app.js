@@ -166,6 +166,7 @@ const {
   buildModelMemoryPillView,
   buildStarterPrompts,
   filterChatThreads,
+  formatAssistantTurnMeta,
   formatChatScopeLabel,
   formatScopeMeetingDate,
   formatScopeMeetingDateTooltip,
@@ -11148,7 +11149,11 @@ function renderChatOnboardingAndComposer() {
   const input = document.getElementById('chat-input');
   const headerTitle = document.getElementById('chat-thread-title');
   const headerScope = document.getElementById('chat-header-scope');
+  const scopeBtn = document.getElementById('chat-scope-btn');
   const scopeLabel = document.getElementById('chat-scope-btn-label');
+  const emptyKicker = document.getElementById('chat-empty-kicker');
+  const emptyHeading = document.getElementById('chat-empty-heading');
+  const emptySubtitle = document.getElementById('chat-empty-subtitle');
 
   renderChatModelChoice();
   const library = summaryLibrary();
@@ -11160,11 +11165,13 @@ function renderChatOnboardingAndComposer() {
     && usableSummaryModels(library).some((model) => model.modelId === library.defaultModelId),
   );
   const eligible = isChatModelEligible(library);
+  const currentScope = getCurrentChatScope();
+  const isGeneralMode = currentScope.type === 'none';
   if (onboarding) {
     onboarding.hidden = eligible || resettingRemovedOverride;
   }
   for (const starter of document.getElementById('chat-starter-prompts')?.children || []) {
-    starter.disabled = !eligible || meetings.length === 0 || chatThreadDetailPending();
+    starter.disabled = !eligible || (!isGeneralMode && meetings.length === 0) || chatThreadDetailPending();
   }
   if (reasonEl) {
     const selected = library?.models?.find((model) => model.modelId === selectedModelId);
@@ -11173,18 +11180,39 @@ function renderChatOnboardingAndComposer() {
   }
 
   const scopeText = formatChatScopeLabel(
-    getCurrentChatScope(),
+    currentScope,
     getMeetingsMapById(),
     (slug) => getTagMeta(slug)?.label || slug,
   );
   if (headerTitle) {
-    headerTitle.textContent = chatState.activeThread ? chatState.activeThread.title : 'Ask your recordings';
+    headerTitle.textContent = chatState.activeThread
+      ? chatState.activeThread.title
+      : (isGeneralMode ? 'General chat' : 'Ask your recordings');
   }
   if (headerScope) {
     headerScope.textContent = scopeText;
+    headerScope.classList.toggle('is-general-mode', isGeneralMode);
+  }
+  if (scopeBtn) {
+    scopeBtn.classList.toggle('is-general-mode', isGeneralMode);
   }
   if (scopeLabel) {
     scopeLabel.textContent = scopeText;
+  }
+  if (emptyKicker) {
+    emptyKicker.textContent = isGeneralMode
+      ? 'Local only · No recordings attached'
+      : 'Local only · Linked to timestamps';
+  }
+  if (emptyHeading) {
+    emptyHeading.textContent = isGeneralMode
+      ? 'General chat'
+      : 'Ask about your recordings';
+  }
+  if (emptySubtitle) {
+    emptySubtitle.textContent = isGeneralMode
+      ? 'Answers use your local model’s general knowledge without searching your recordings or adding citations. Switch scope anytime to ask about your transcripts.'
+      : 'Answers use only your saved transcripts and link directly to matching timestamps. The local model loads on demand and can be unloaded anytime to free memory.';
   }
 
   if (sendBtn) {
@@ -11202,6 +11230,11 @@ function renderChatOnboardingAndComposer() {
   }
   if (input) {
     input.disabled = false;
+    input.placeholder = isGeneralMode ? 'Ask anything (no recordings attached)…' : 'Ask a question…';
+    input.setAttribute(
+      'aria-label',
+      isGeneralMode ? 'Ask a general question without recordings' : 'Ask a question about your recordings',
+    );
   }
 }
 
@@ -11383,13 +11416,15 @@ function renderChatStream() {
   if (!hasMessages && starterGrid) {
     clearElement(starterGrid);
     const eligible = isChatModelEligible();
-    const prompts = buildStarterPrompts(meetings, getCurrentChatScope());
+    const currentScope = getCurrentChatScope();
+    const isGeneralMode = currentScope.type === 'none';
+    const prompts = buildStarterPrompts(meetings, currentScope);
     for (const promptText of prompts) {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'chat-starter-btn';
       btn.textContent = promptText;
-      btn.disabled = !eligible || meetings.length === 0 || chatThreadDetailPending();
+      btn.disabled = !eligible || (!isGeneralMode && meetings.length === 0) || chatThreadDetailPending();
       btn.addEventListener('click', () => {
         const input = document.getElementById('chat-input');
         if (!input) return;
@@ -11487,6 +11522,13 @@ function renderChatStream() {
       titleEl.textContent = notice.title;
       callout.appendChild(titleEl);
 
+      if (notice.explanation) {
+        const explanationEl = document.createElement('p');
+        explanationEl.className = 'chat-callout-explanation';
+        explanationEl.textContent = notice.explanation;
+        callout.appendChild(explanationEl);
+      }
+
       if (notice.detail) {
         const detailEl = document.createElement('p');
         detailEl.className = 'chat-callout-detail';
@@ -11555,9 +11597,12 @@ function renderChatStream() {
         jumpPill.type = 'button';
         jumpPill.className = 'chat-citation-pill';
         const tsLabel = formatJumpTimestamp(citation.startSec);
+        const isSummaryCitation = !tsLabel && String(citation.kind || '').trim().toLowerCase() === 'summary';
         jumpPill.textContent = tsLabel
           ? `${citation.meetingTitle || 'Recording'} · ${tsLabel}`
-          : (citation.meetingTitle || 'Recording');
+          : (isSummaryCitation
+            ? `${citation.meetingTitle || 'Recording'} · Summary`
+            : (citation.meetingTitle || 'Recording'));
         jumpPill.addEventListener('click', () => handleChatCitationClick(citation));
         head.appendChild(jumpPill);
 
@@ -11592,18 +11637,14 @@ function renderChatStream() {
       wrap.appendChild(details);
     }
 
-    const metaParts = [];
-    if (msg.modelId || msg.modelName) {
-      metaParts.push(msg.modelName || summaryModelName(msg.modelId));
-    }
-    if (Number.isFinite(msg.searchedMeetingCount) && msg.searchedMeetingCount > 0) {
-      metaParts.push(`Searched ${msg.searchedMeetingCount} recording${msg.searchedMeetingCount === 1 ? '' : 's'}`);
-      metaParts.push(`${msg.evidenceCount || 0} matching excerpt${(msg.evidenceCount || 0) === 1 ? '' : 's'}`);
-    }
-    if (metaParts.length > 0) {
+    const metaText = formatAssistantTurnMeta(msg, summaryModelName, getCurrentChatScope());
+    if (metaText) {
       const meta = document.createElement('div');
       meta.className = 'chat-turn-meta-row';
-      meta.textContent = metaParts.join(' · ');
+      if (msg.chatMode === 'general') {
+        meta.classList.add('is-general-mode');
+      }
+      meta.textContent = metaText;
       wrap.appendChild(meta);
     }
 
@@ -11687,13 +11728,18 @@ async function startNewChatThread(scope = null) {
   switchChatDraft(chatState.newDraftKey);
   chatState.activeThread = null;
   if (scope && typeof scope === 'object') {
-    chatState.pendingScope = {
-      type: scope.type === 'selected_meetings' ? 'selected_meetings' : 'all',
-      meetingIds: Array.isArray(scope.meetingIds) ? [...scope.meetingIds] : [],
-      dateFrom: scope.dateFrom || null,
-      dateTo: scope.dateTo || null,
-      tags: Array.isArray(scope.tags) ? [...scope.tags] : [],
-    };
+    const normalizedType = scope.type === 'selected_meetings'
+      ? 'selected_meetings'
+      : (scope.type === 'none' ? 'none' : 'all');
+    chatState.pendingScope = normalizedType === 'none'
+      ? { type: 'none', meetingIds: [], dateFrom: null, dateTo: null, tags: [] }
+      : {
+        type: normalizedType,
+        meetingIds: Array.isArray(scope.meetingIds) ? [...scope.meetingIds] : [],
+        dateFrom: scope.dateFrom || null,
+        dateTo: scope.dateTo || null,
+        tags: Array.isArray(scope.tags) ? [...scope.tags] : [],
+      };
   }
   closeChatMobileSidebar();
   renderChatThreadSidebar();
@@ -11719,17 +11765,28 @@ async function deleteChatThreadWithConfirm(threadId, title) {
 function renderScopePopover(focusedTag) {
   const allBtn = document.getElementById('chat-scope-all-btn');
   const selBtn = document.getElementById('chat-scope-selected-btn');
+  const noneBtn = document.getElementById('chat-scope-none-btn');
+  const noneNote = document.getElementById('chat-scope-none-note');
   const selPanel = document.getElementById('chat-scope-selected-panel');
+  const tagsSection = document.getElementById('chat-scope-tags-section');
+  const datesRow = document.getElementById('chat-scope-dates-row');
+  const clearContextBtn = document.getElementById('chat-scope-clear-context-btn');
   const listEl = document.getElementById('chat-scope-meetings-list');
   const tagsRow = document.getElementById('chat-scope-tags-row');
   const tagsToggleBtn = document.getElementById('chat-scope-tags-toggle-btn');
   const fromEl = document.getElementById('chat-scope-date-from');
   const toEl = document.getElementById('chat-scope-date-to');
   const draft = chatState.scopeDraft || getCurrentChatScope();
+  const isNone = draft.type === 'none';
 
-  if (allBtn) allBtn.classList.toggle('is-selected', draft.type !== 'selected_meetings');
+  if (allBtn) allBtn.classList.toggle('is-selected', draft.type === 'all');
   if (selBtn) selBtn.classList.toggle('is-selected', draft.type === 'selected_meetings');
+  if (noneBtn) noneBtn.classList.toggle('is-selected', isNone);
+  if (noneNote) noneNote.hidden = !isNone;
   if (selPanel) selPanel.hidden = draft.type !== 'selected_meetings';
+  if (tagsSection) tagsSection.hidden = isNone;
+  if (datesRow) datesRow.hidden = isNone;
+  if (clearContextBtn) clearContextBtn.hidden = isNone;
   if (fromEl) fromEl.value = draft.dateFrom ? String(draft.dateFrom).slice(0, 10) : '';
   if (toEl) toEl.value = draft.dateTo ? String(draft.dateTo).slice(0, 10) : '';
 
@@ -11858,14 +11915,19 @@ function toggleChatScopePopover(forceOpen = null) {
   btn.setAttribute('aria-expanded', String(open));
   if (open) {
     const cur = getCurrentChatScope();
+    const curType = cur.type === 'selected_meetings'
+      ? 'selected_meetings'
+      : (cur.type === 'none' ? 'none' : 'all');
     chatState.showAllScopeTags = false;
-    chatState.scopeDraft = {
-      type: cur.type === 'selected_meetings' ? 'selected_meetings' : 'all',
-      meetingIds: Array.isArray(cur.meetingIds) ? [...cur.meetingIds] : [],
-      dateFrom: cur.dateFrom || null,
-      dateTo: cur.dateTo || null,
-      tags: Array.isArray(cur.tags) ? [...cur.tags] : [],
-    };
+    chatState.scopeDraft = curType === 'none'
+      ? { type: 'none', meetingIds: [], dateFrom: null, dateTo: null, tags: [] }
+      : {
+        type: curType,
+        meetingIds: Array.isArray(cur.meetingIds) ? [...cur.meetingIds] : [],
+        dateFrom: cur.dateFrom || null,
+        dateTo: cur.dateTo || null,
+        tags: Array.isArray(cur.tags) ? [...cur.tags] : [],
+      };
     renderScopePopover();
   }
 }
@@ -11909,7 +11971,9 @@ async function sendChatQuestionText(rawQuestion, { overrideScope = null, restore
   chatState.sendingKey = originKey;
   chatState.optimisticQuestion = question;
   chatState.streamingDraft = '';
-  chatState.progress = { phase: 'retrieving', message: 'Searching your transcripts…' };
+  chatState.progress = scope.type === 'none'
+    ? { phase: 'generating', message: 'Thinking locally…' }
+    : { phase: 'retrieving', message: 'Searching your transcripts…' };
   renderChatOnboardingAndComposer();
   renderChatStream();
 
@@ -12206,6 +12270,37 @@ function setupChatWorkspace() {
     renderScopePopover();
   });
 
+  document.getElementById('chat-scope-none-btn')?.addEventListener('click', () => {
+    if (!chatState.scopeDraft) return;
+    chatState.scopeDraft = { type: 'none', meetingIds: [], dateFrom: null, dateTo: null, tags: [] };
+    renderScopePopover();
+  });
+
+  const applyChatScope = async (nextScope) => {
+    if (chatState.activeThread && window.electronAPI?.updateChatThreadScope) {
+      try {
+        const navigation = chatState.navigation;
+        const res = await window.electronAPI.updateChatThreadScope(chatState.activeThread.id, nextScope);
+        if (navigation !== chatState.navigation) { void refreshChatThreadList(); return; }
+        if (res && res.thread) {
+          chatState.activeThread = res.thread;
+        }
+        await refreshChatThreadList({ selectThreadId: chatState.activeThread?.id || null });
+      } catch (error) {
+        showAppToast(`Could not update scope: ${error.message}`, 'error');
+      }
+    } else {
+      chatState.pendingScope = nextScope;
+      renderChatOnboardingAndComposer();
+      renderChatStream();
+    }
+    toggleChatScopePopover(false);
+  };
+
+  document.getElementById('chat-scope-clear-context-btn')?.addEventListener('click', async () => {
+    await applyChatScope({ type: 'none', meetingIds: [], dateFrom: null, dateTo: null, tags: [] });
+  });
+
   document.getElementById('chat-scope-meeting-filter')?.addEventListener('input', (e) => {
     chatState.scopeFilter = e.target.value || '';
     renderScopePopover();
@@ -12233,33 +12328,21 @@ function setupChatWorkspace() {
   });
 
   document.getElementById('chat-scope-apply-btn')?.addEventListener('click', async () => {
+    const draftType = chatState.scopeDraft?.type;
+    if (draftType === 'none') {
+      await applyChatScope({ type: 'none', meetingIds: [], dateFrom: null, dateTo: null, tags: [] });
+      return;
+    }
     const fromVal = document.getElementById('chat-scope-date-from')?.value || null;
     const toVal = document.getElementById('chat-scope-date-to')?.value || null;
     const nextScope = {
-      type: chatState.scopeDraft?.type === 'selected_meetings' ? 'selected_meetings' : 'all',
+      type: draftType === 'selected_meetings' ? 'selected_meetings' : 'all',
       meetingIds: Array.isArray(chatState.scopeDraft?.meetingIds) ? [...chatState.scopeDraft.meetingIds] : [],
       dateFrom: fromVal || null,
       dateTo: toVal || null,
       tags: Array.isArray(chatState.scopeDraft?.tags) ? [...chatState.scopeDraft.tags] : [],
     };
-    if (chatState.activeThread && window.electronAPI?.updateChatThreadScope) {
-      try {
-        const navigation = chatState.navigation;
-        const res = await window.electronAPI.updateChatThreadScope(chatState.activeThread.id, nextScope);
-        if (navigation !== chatState.navigation) { void refreshChatThreadList(); return; }
-        if (res && res.thread) {
-          chatState.activeThread = res.thread;
-        }
-        await refreshChatThreadList({ selectThreadId: chatState.activeThread?.id || null });
-      } catch (error) {
-        showAppToast(`Could not update scope: ${error.message}`, 'error');
-      }
-    } else {
-      chatState.pendingScope = nextScope;
-      renderChatOnboardingAndComposer();
-      renderChatStream();
-    }
-    toggleChatScopePopover(false);
+    await applyChatScope(nextScope);
   });
 
   document.addEventListener('keydown', (event) => {

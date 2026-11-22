@@ -10,6 +10,7 @@ const {
   buildModelMemoryPillView,
   buildStarterPrompts,
   filterChatThreads,
+  formatAssistantTurnMeta,
   formatChatScopeLabel,
   formatScopeMeetingDate,
   formatScopeMeetingDateTooltip,
@@ -233,16 +234,23 @@ test('isScopeFiltered and buildAssistantNoticeView produce honest recovery actio
   );
   assert.equal(noMatch.variant, 'no_matching_excerpts');
   assert.match(noMatch.title, /2026-09-05/);
-  assert.deepEqual(noMatch.actions.map((a) => a.id), ['search_all', 'reset_filters']);
+  assert.deepEqual(noMatch.actions.map((a) => a.id), ['search_all', 'reset_filters', 'ask_without_recordings']);
   assert.equal(noMatch.showInspectedSources, false);
 
   const insufficient = buildAssistantNoticeView(
-    { status: 'insufficient_evidence', searchedMeetingCount: 3, evidenceCount: 4, inspectedSources: [{ meetingId: 'm1' }] },
+    {
+      status: 'insufficient_evidence',
+      searchedMeetingCount: 3,
+      evidenceCount: 4,
+      content: 'The recordings mention Q4 milestones, but not the final ship date.',
+      inspectedSources: [{ meetingId: 'm1' }],
+    },
     { type: 'all' },
   );
   assert.equal(insufficient.variant, 'insufficient_evidence');
   assert.match(insufficient.title, /Found 4 matching passages/);
-  assert.deepEqual(insufficient.actions.map((a) => a.id), ['retry']);
+  assert.equal(insufficient.explanation, 'The recordings mention Q4 milestones, but not the final ship date.');
+  assert.deepEqual(insufficient.actions.map((a) => a.id), ['ask_without_recordings', 'retry']);
   assert.equal(insufficient.showInspectedSources, true);
 
   const verFail = buildAssistantNoticeView(
@@ -313,7 +321,44 @@ test('formatChatScopeLabel, isScopeFiltered, and buildAssistantNoticeView suppor
     { status: 'no_matching_excerpts', searchedMeetingCount: 2 },
     { type: 'all', tags: ['call'] },
   );
-  assert.deepEqual(noMatchWithTag.actions.map((a) => a.id), ['reset_filters']);
+  assert.deepEqual(noMatchWithTag.actions.map((a) => a.id), ['reset_filters', 'ask_without_recordings']);
+});
+
+test('general chat mode (scope.type = none) formats scope, starters, notice actions, and turn footer cleanly', () => {
+  assert.equal(formatChatScopeLabel({ type: 'none' }), 'General chat · No recordings');
+  assert.equal(
+    formatChatScopeLabel({ type: 'none', tags: ['call'], dateFrom: '2026-11-01' }),
+    'General chat · No recordings',
+  );
+  assert.equal(isScopeFiltered({ type: 'none' }), false);
+
+  const generalStarters = buildStarterPrompts([], { type: 'none' });
+  assert.equal(generalStarters.length, 3);
+  assert.ok(generalStarters.every((p) => !/Record or import audio first/i.test(p)));
+
+  assert.deepEqual(
+    resolveNoticeActionScope('ask_without_recordings', { type: 'selected_meetings', meetingIds: ['m1'], tags: ['call'] }),
+    { type: 'none', meetingIds: [], dateFrom: null, dateTo: null, tags: [] },
+  );
+
+  const generalFooter = formatAssistantTurnMeta(
+    { chatMode: 'general', modelName: 'Qwen3.5 9B', searchedMeetingCount: 0, evidenceCount: 0 },
+    null,
+    { type: 'none' },
+  );
+  assert.equal(generalFooter, 'Qwen3.5 9B · General chat (no recordings)');
+  assert.doesNotMatch(generalFooter, /Searched/i);
+
+  const generalFooterWithId = formatAssistantTurnMeta(
+    { chatMode: 'general', modelId: 'qwen-9b', searchedMeetingCount: 5 },
+    (id) => (id === 'qwen-9b' ? 'Qwen3.5 9B' : id),
+  );
+  assert.equal(generalFooterWithId, 'Qwen3.5 9B · General chat (no recordings)');
+
+  const groundedFooter = formatAssistantTurnMeta(
+    { chatMode: 'grounded', modelName: 'Qwen3.5 9B', searchedMeetingCount: 2, evidenceCount: 3 },
+  );
+  assert.equal(groundedFooter, 'Qwen3.5 9B · Searched 2 recordings · 3 matching excerpts');
 });
 
 test('formatScopeMeetingDate and formatScopeMeetingDateTooltip format compact and full timestamps safely', () => {
