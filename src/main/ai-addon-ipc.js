@@ -394,20 +394,38 @@ function createAiAddonIpc(deps) {
     }
   }
 
-  async function maybeUnloadResidentSummaryModel(options, { cancelSignal, reason = 'summary_model_setup' } = {}) {
-    if (options?.unloadLoadedModel !== true) return;
+  function assertSummaryModelActionCanRun(cancelSignal) {
     if (isQuitCommitted()) {
-      const error = new Error('Cannot unload the local model while AvaNevis is quitting.');
+      const error = new Error('Cannot change the local model while AvaNevis is quitting.');
       error.code = 'QUIT_IN_PROGRESS';
       throw error;
     }
     if (cancelSignal?.aborted) {
       throw createAiAddonCancelError('Summary model setup was canceled.');
     }
-    await releaseSummaryModel(reason);
-    if (cancelSignal?.aborted) {
-      throw createAiAddonCancelError('Summary model setup was canceled.');
-    }
+  }
+
+  async function readSummaryModelAdmission(options, { cancelSignal, cudaProbeLabel } = {}) {
+    const unloadLoadedModel = options.unloadLoadedModel === true;
+    const read = async () => {
+      assertSummaryModelActionCanRun(cancelSignal);
+      if (unloadLoadedModel) {
+        await releaseSummaryModel('summary_model_setup');
+        assertSummaryModelActionCanRun(cancelSignal);
+      }
+      const cudaStatus = cudaProbeLabel ? await runWallClockComputeAction({
+        timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+        label: cudaProbeLabel,
+        terminateProcess: terminateProcessBestEffort,
+        action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal }),
+      }) : undefined;
+      assertSummaryModelActionCanRun(cancelSignal);
+      const deviceMemory = await getSummaryDeviceMemory({ live: true, fresh: true });
+      assertSummaryModelActionCanRun(cancelSignal);
+      return { cudaStatus, deviceMemory };
+    };
+    // Setup and smoke validation acquire the GPU queue separately.
+    return unloadLoadedModel ? enqueueGpuResourceAction(read) : read();
   }
 
   function assertAddonDiskMutationCanRun(feature, action = 'remove') {
@@ -631,7 +649,13 @@ function createAiAddonIpc(deps) {
       cancelMessage: 'Summary model setup was canceled.',
       action: async () => {
         const platform = process.platform;
-        const deviceMemory = await getSummaryDeviceMemory({ live: true });
+        if (isQuitCommitted() || cancelSignal?.aborted) {
+          throw createAiAddonCancelError('Summary model setup was canceled.');
+        }
+        const deviceMemory = await getSummaryDeviceMemory({ live: true, fresh: true });
+        if (isQuitCommitted() || cancelSignal?.aborted) {
+          throw createAiAddonCancelError('Summary model setup was canceled.');
+        }
         const effectiveCudaStatus = cudaStatus !== undefined
           ? cudaStatus
           : (typeof getCachedCudaStatus === 'function'
@@ -913,18 +937,14 @@ function createAiAddonIpc(deps) {
         if (safeOptions.modelId && !getModelById('summary', safeOptions.modelId)) {
           throw new Error('Unknown summary model.');
         }
-        await maybeUnloadResidentSummaryModel(safeOptions, { cancelSignal, reason: 'summary_model_setup' });
-        const resolvedCudaStatus = await runWallClockComputeAction({
-          timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
-          label: 'Linux CUDA summary admission',
-          terminateProcess: terminateProcessBestEffort,
-          action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal }),
+        const { cudaStatus, deviceMemory } = await readSummaryModelAdmission(safeOptions, {
+          cancelSignal,
+          cudaProbeLabel: 'Linux CUDA summary admission',
         });
-        const deviceMemory = await getSummaryDeviceMemory({ live: true });
         if (safeOptions.unloadLoadedModel !== true) {
           assertNotBlockedByResidentSummaryModel({
             modelId: safeOptions.modelId,
-            cudaStatus: resolvedCudaStatus,
+            cudaStatus,
             deviceMemory,
           });
         }
@@ -936,9 +956,9 @@ function createAiAddonIpc(deps) {
           runtimeValidator: validateSummaryRuntimeSmoke,
           runExclusiveMutation: runExclusiveSummaryMutation,
           deviceMemory,
-          getDeviceMemory: () => getSummaryDeviceMemory({ live: true }),
+          getDeviceMemory: () => getSummaryDeviceMemory({ live: true, fresh: true }),
           cancelSignal,
-          cudaStatus: resolvedCudaStatus,
+          cudaStatus,
         }));
       });
     });
@@ -952,23 +972,20 @@ function createAiAddonIpc(deps) {
       assertTrustedRendererSender(event);
       const safeOptions = options && typeof options === 'object' ? options : {};
       return runCancellableAiAddonSetup('summary', async (cancelSignal) => {
-        let resolvedCudaStatus = null;
+        let admission;
         try {
           if (safeOptions.modelId && !getModelById('summary', safeOptions.modelId)) {
             throw new Error('Unknown summary model.');
           }
-          await maybeUnloadResidentSummaryModel(safeOptions, { cancelSignal, reason: 'summary_model_setup' });
-          resolvedCudaStatus = await runWallClockComputeAction({
-            timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
-            label: 'Linux CUDA summary validation',
-            terminateProcess: terminateProcessBestEffort,
-            action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal }),
+          admission = await readSummaryModelAdmission(safeOptions, {
+            cancelSignal,
+            cudaProbeLabel: 'Linux CUDA summary validation',
           });
-          const deviceMemory = await getSummaryDeviceMemory({ live: true });
+          const { cudaStatus, deviceMemory } = admission;
           if (safeOptions.unloadLoadedModel !== true) {
             assertNotBlockedByResidentSummaryModel({
               modelId: safeOptions.modelId,
-              cudaStatus: resolvedCudaStatus,
+              cudaStatus,
               deviceMemory,
             });
           }
@@ -978,16 +995,19 @@ function createAiAddonIpc(deps) {
             runtimeValidator: validateSummaryRuntimeSmoke,
             runExclusiveMutation: runExclusiveSummaryMutation,
             deviceMemory,
-            getDeviceMemory: () => getSummaryDeviceMemory({ live: true }),
+            getDeviceMemory: () => getSummaryDeviceMemory({ live: true, fresh: true }),
             cancelSignal,
-            cudaStatus: resolvedCudaStatus,
+            cudaStatus,
           }));
         } catch (error) {
+          if (error.code === 'SUMMARY_MODEL_EXIT_UNCONFIRMED' || error.code === 'QUIT_IN_PROGRESS') throw error;
           if (!cancelSignal.aborted && error.code !== AI_ADDON_CANCEL_CODE) throw error;
           emitAiAddonProgress({ feature: 'summary', phase: 'cancelled', modelId: safeOptions.modelId, message: 'Setup check canceled.' });
           return checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
-            deviceMemory: await getSummaryDeviceMemory({ live: true }),
-            cudaStatus: resolvedCudaStatus || getCachedCudaStatus(),
+            deviceMemory: isQuitCommitted() || safeOptions.unloadLoadedModel === true
+              ? admission?.deviceMemory ?? null
+              : await getSummaryDeviceMemory({ live: true, fresh: true }),
+            cudaStatus: admission?.cudaStatus ?? getCachedCudaStatus(),
           }));
         }
       });
@@ -1029,10 +1049,9 @@ function createAiAddonIpc(deps) {
       assertTrustedRendererSender(event);
       const safeOptions = options && typeof options === 'object' ? options : {};
       return enqueueAiAddonAction(async () => {
-        if (isQuitCommitted()) throw new Error('Cannot change the local model while AvaNevis is quitting.');
+        assertSummaryModelActionCanRun();
         if (!getModelById('summary', safeOptions.modelId)) throw new Error('Unknown summary model.');
-        await maybeUnloadResidentSummaryModel(safeOptions, { reason: 'summary_model_setup' });
-        const deviceMemory = await getSummaryDeviceMemory({ live: true });
+        const { deviceMemory } = await readSummaryModelAdmission(safeOptions);
         const status = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
           summaryModelId: safeOptions.modelId,
           deviceMemory,
@@ -1055,7 +1074,7 @@ function createAiAddonIpc(deps) {
         if (model.modelId !== safeOptions.modelId || !model.setupComplete || model.fit?.blocked) {
           throw new Error(model.fit?.reason || model.error || 'Check setup for this model before setting it as the default.');
         }
-        if (isQuitCommitted()) throw new Error('Cannot change the local model while AvaNevis is quitting.');
+        assertSummaryModelActionCanRun();
         setDefaultSummaryModel(getAiAddonRuntimeOptions({ modelId: safeOptions.modelId, fsModule: fs }));
         return checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ deviceMemory }));
       });

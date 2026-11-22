@@ -260,7 +260,12 @@ let summaryDeviceMemorySnapshot = null;
 let summaryDeviceMemoryReadAt = 0;
 let summaryWindowsGpuCompatibility = null;
 
-async function getSummaryDeviceMemory({ live = false } = {}) {
+async function getSummaryDeviceMemory({ live = false, fresh = false } = {}) {
+  if (fresh) {
+    // A shared probe may have sampled VRAM before the model process exited.
+    if (summaryDeviceMemoryProbe) await summaryDeviceMemoryProbe;
+    if (isQuitCommitted()) return null;
+  }
   const systemTotalBytes = os.totalmem();
   // Free memory is a transient, conservative reading (it may exclude reclaimable cache).
   const systemAvailableBytes = live ? os.freemem() : null;

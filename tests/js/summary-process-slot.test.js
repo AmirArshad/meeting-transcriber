@@ -45,15 +45,19 @@ test('a Windows launcher can be replaced only after its named job is released', 
   assert.equal(slot.hasOutstandingProcess(), false);
 });
 
-test('device fit blocks insufficient weight capacity and keeps unmeasured estimates advisory', () => {
+test('device fit blocks low free VRAM and keeps a below-recommended fit advisory', () => {
   const inputs = {
     model: { memoryGuidance: { gpu: 8 } }, artifact: { estimatedSizeBytes: 4 * 1024 ** 3 },
     availability: { supported: true }, runtimeArtifact: {}, platform: 'linux',
   };
   const oneGpu = '0, GPU-a, 6144, 5000';
-  assert.equal(parseNvidiaMemory(`${oneGpu}\n1, GPU-b, 8192, 7000`), null);
+  assert.deepEqual(parseNvidiaMemory(`${oneGpu}\n1, GPU-b, 8192, 7000`), {
+    totalBytes: 8192 * 1024 ** 2,
+    availableBytes: 7000 * 1024 ** 2,
+    multiGpu: true,
+  });
   const fit = getSummaryModelFit({ ...inputs, deviceMemory: parseNvidiaMemory(oneGpu) });
-  assert.equal(fit.status, 'needs_more_memory');
+  assert.equal(fit.status, 'tight');
   assert.equal(fit.blocked, false);
   const blocked = getSummaryModelFit({ ...inputs, deviceMemory: parseNvidiaMemory('0, GPU-a, 8192, 0') });
   assert.equal(blocked.blocked, true);

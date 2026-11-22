@@ -106,7 +106,7 @@ test('available library cards show plain fit badges and button hierarchy without
     ],
   });
   const texts = elements.map((el) => el.textContent);
-  assert.ok(texts.includes('Fits this device'));
+  assert.ok(texts.includes('Verified fit'));
   assert.ok(texts.includes('Unavailable'));
   assert.equal(texts.includes('notConfigured'), false);
   assert.equal(texts.includes('unsupported'), false);

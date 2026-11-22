@@ -9,6 +9,7 @@ const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
 
 const { createAiAddonIpc } = require('../../src/main/ai-addon-ipc');
+const { createAsyncActionQueue } = require('../../src/main/ai-compute-queue');
 const { createSummaryProcessSlot } = require('../../src/main/summary-process-slot');
 
 const GiB = 1024 ** 3;
@@ -266,6 +267,85 @@ test('SUMMARY_MODEL_EXIT_UNCONFIRMED blocks setup, validate, and set-default bef
   });
 });
 
+test('confirmed summary admission waits for active GPU work and holds the queue through the fresh probe', async () => {
+  const gpuQueue = createAsyncActionQueue();
+  const activeJob = Promise.withResolvers();
+  const calls = [];
+  void gpuQueue.enqueue(() => activeJob.promise);
+  const { handlers } = registerHandlers({
+    enqueueGpuResourceAction: gpuQueue.enqueue,
+    releaseSummaryModel: async () => { calls.push('release'); },
+    getSummaryDeviceMemory: async ({ fresh }) => {
+      calls.push(fresh ? 'fresh probe' : 'shared probe');
+      throw new Error('stop after probe');
+    },
+  });
+  const operation = handlers.get('set-default-summary-model')({}, { modelId: 'gemma-4-12b', unloadLoadedModel: true });
+  const result = assert.rejects(operation, /stop after probe/);
+  try {
+    await new Promise(setImmediate);
+    assert.deepEqual(calls, []);
+  } finally {
+    activeJob.resolve();
+    await result;
+  }
+  assert.deepEqual(calls, ['release', 'fresh probe']);
+});
+
+test('validation preserves exit failure on cancel and skips probes if quit commits during release', async () => {
+  const release = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  let quitting = false;
+  let probes = 0;
+  const { handlers } = registerHandlers({
+    isQuitCommitted: () => quitting,
+    releaseSummaryModel: () => {
+      started.resolve();
+      return release.promise;
+    },
+    getSummaryDeviceMemory: async () => { probes += 1; },
+    checkAiAddonSetupStatus: async () => ({}),
+  });
+  const options = { modelId: 'gemma-4-12b', unloadLoadedModel: true };
+  const validation = handlers.get('validate-summary-model')({}, options);
+  await started.promise;
+  await handlers.get('cancel-summary-model-setup')({});
+  const failure = assert.rejects(validation, { code: 'SUMMARY_MODEL_EXIT_UNCONFIRMED' });
+  release.reject(Object.assign(new Error('exit unconfirmed'), { code: 'SUMMARY_MODEL_EXIT_UNCONFIRMED' }));
+  await failure;
+  assert.equal(probes, 0);
+
+  const quitHandlers = registerHandlers({
+    isQuitCommitted: () => quitting,
+    releaseSummaryModel: async () => { quitting = true; },
+    getSummaryDeviceMemory: async () => { probes += 1; },
+  }).handlers;
+  await assert.rejects(quitHandlers.get('set-default-summary-model')({}, options), /quitting/);
+  assert.equal(probes, 0);
+});
+
+test('a fresh VRAM read replaces an in-flight pre-unload probe', async () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '../../src/main.js'), 'utf8');
+  const probes = [];
+  const ctx = vm.createContext({
+    os: { totalmem: () => 0, freemem: () => 0 },
+    process: { platform: 'linux', env: {} },
+    fs: { existsSync: () => true },
+    isQuitCommitted: () => false,
+    parseNvidiaMemory: (availableBytes) => ({ availableBytes }),
+    execFile: (_file, _args, _options, done) => { probes.push(done); },
+  });
+  vm.runInContext(mainSource.slice(mainSource.indexOf('let summaryDeviceMemoryProbe'), mainSource.indexOf('function spawnSummaryPython')), ctx);
+  const stale = ctx.getSummaryDeviceMemory({ live: true });
+  const fresh = ctx.getSummaryDeviceMemory({ live: true, fresh: true });
+  assert.equal(probes.length, 1);
+  probes[0](null, 2 * GiB);
+  assert.equal((await stale).availableBytes, 2 * GiB);
+  assert.equal(probes.length, 2);
+  probes[1](null, 11 * GiB);
+  assert.equal((await fresh).availableBytes, 11 * GiB);
+});
+
 test('quit-drain safety and unknown modelId prevent unloading a resident model', async (t) => {
   await withPlatform('linux', 'x64', async () => {
     const userDataDir = createTempUserData(t);
@@ -358,13 +438,13 @@ test('renderer Settings prompts to unload loaded model, retries on SUMMARY_MODEL
 
   const calls = [];
   const toasts = [];
-  let refreshSettingsCalls = 0;
   let unloadCalls = 0;
   let setupShouldThrowLoadedOnce = false;
   const ctx = vm.createContext({
     document,
     aiAddonDownloadState: { summary: { active: false } },
     aiAddonStatusSnapshot: null,
+    aiAddonStatusRefreshPromise: null,
     chatState: {
       modelState: { status: 'loaded', modelId: 'qwen3.5-9b-q4-k-m', modelName: 'Qwen3.5 9B' },
     },
@@ -372,9 +452,8 @@ test('renderer Settings prompts to unload loaded model, retries on SUMMARY_MODEL
     usableSummaryModels: (lib) => (lib?.models || []).filter((m) => m.installed && m.setupComplete && m.status === 'ready' && m.fit?.blocked !== true),
     setAiAddonProgressState: () => {},
     hideAiAddonProgressSoon: () => {},
-    refreshAiAddonSettings: async () => {
-      refreshSettingsCalls += 1;
-    },
+    updateAiAddonSettings: () => {},
+    updateHomeAiAddonCTA: () => {},
     refreshChatEligibility: async () => {},
     showAppToast: (message, tone) => toasts.push({ message, tone }),
     window: {
@@ -414,6 +493,7 @@ test('renderer Settings prompts to unload loaded model, retries on SUMMARY_MODEL
     appSource.slice(appSource.indexOf('function summaryModelHasFiles('), appSource.indexOf('function chooseSummaryReplacement(')),
     ctx,
   );
+  vm.runInContext(appSource.slice(appSource.indexOf('async function refreshAiAddonSettings('), appSource.indexOf('async function refreshHomeAiAddonPrompt(')), ctx);
 
   const library = {
     defaultModelId: 'qwen3.5-9b-q4-k-m',
@@ -563,6 +643,32 @@ test('renderer Settings prompts to unload loaded model, retries on SUMMARY_MODEL
   assert.equal(unloadCalls, 1);
   assert.equal(vm.runInContext('summaryDeviceCheckSnapshot', ctx), null);
 
+  // Both status requests started before Free memory must lose to the new refresh.
+  const staleCheck = Promise.withResolvers();
+  const staleRefresh = Promise.withResolvers();
+  const freshStatus = { summaryLibrary: { ...library, models: [] } };
+  let settingsReads = 0;
+  ctx.window.electronAPI.getAiAddonStatus = ({ checkDevice }) => {
+    if (checkDevice) return staleCheck.promise;
+    settingsReads += 1;
+    return settingsReads === 1 ? staleRefresh.promise : Promise.resolve(freshStatus);
+  };
+  created.length = 0;
+  ctx.renderSummaryModelLibrary(library);
+  const checking = created.find((el) => el.textContent === 'Check this device').click();
+  const refreshing = ctx.refreshAiAddonSettings();
+  const unloading = created.find((el) => el.textContent === 'Free memory').click();
+  try {
+    await new Promise(setImmediate);
+    assert.equal(settingsReads, 2);
+  } finally {
+    staleCheck.resolve({ summaryLibrary: library });
+    staleRefresh.resolve({ summaryLibrary: library });
+    await Promise.all([checking, refreshing, unloading]);
+  }
+  assert.equal(ctx.aiAddonStatusSnapshot, freshStatus);
+  assert.equal(vm.runInContext('summaryDeviceCheckSnapshot', ctx), null);
+
   // onHistoryQaModelState clears summaryDeviceCheckSnapshot and calls refreshAiAddonSettings on unload transition.
   let modelStateListener = null;
   let chatRefreshCount = 0;
@@ -574,6 +680,8 @@ test('renderer Settings prompts to unload loaded model, retries on SUMMARY_MODEL
       sending: false,
     },
     summaryDeviceCheckSnapshot: new Map([['gemma-4-12b', { fit: { status: 'needs_more_memory' } }]]),
+    summaryDeviceCheckGeneration: 0,
+    aiAddonStatusRefreshPromise: null,
     summaryLibrary: () => library,
     registerCleanup: () => {},
     renderChatModelPill: () => {},
@@ -593,6 +701,10 @@ test('renderer Settings prompts to unload loaded model, retries on SUMMARY_MODEL
   });
   const onStateStart = appSource.indexOf('if (window.electronAPI && typeof window.electronAPI.onHistoryQaModelState');
   const onStateEnd = appSource.indexOf('if (window.electronAPI && typeof window.electronAPI.onHistoryQaProgress', onStateStart);
+  const unloadSyncStart = appSource.indexOf('function onSummaryModelUnloaded(');
+  if (unloadSyncStart !== -1) {
+    vm.runInContext(appSource.slice(unloadSyncStart, appSource.indexOf('async function unloadSummaryModelFromUi(', unloadSyncStart)), chatCtx);
+  }
   vm.runInContext(appSource.slice(onStateStart, onStateEnd), chatCtx);
   assert.equal(typeof modelStateListener, 'function');
 
