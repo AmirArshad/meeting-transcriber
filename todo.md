@@ -14,10 +14,10 @@ Planned on `release/3.2` (not yet cut): [v3.2.0 release plan](docs/superpowers/p
   - [x] **A2** — Always-available Summary format dropdown + decoupled `ai.summary.template` persistence (`#10`).
   - [x] **A3** — Device compatibility fit states (`likely_fits`/`tight`/`unknown`), Gemma 4 12B 12 GB calibration with nominal-tier tolerance (`12,282 MiB`), and hardened Linux `nvidia-smi` probe (`#1`, `#2`).
   - [x] **A4** — Unload-before-download confirmation prompt (`unloadLoadedModel: true` + `SUMMARY_MODEL_LOADED_IN_MEMORY`) and unload UI state sync (`#6`).
-- [ ] **Wave B (Slices B1–B3 → Checkpoint 2):**
-  - [ ] **B1** — Python 3-tier Chat context router (direct full-transcript fit, `lastQuestion` follow-up resolution, adaptive caps, rolling compaction) + granular timestamp chunks (`#3`, `#4`, `#11`).
-  - [ ] **B2** — General chat mode backend (`scope.type = 'none'`), fail-closed verifier guardrails, and helpful grounded `insufficient_evidence` handling (`#5`, `#11`).
-  - [ ] **B3** — Chat renderer UI (`General chat`, Clear recording context, `Title · Summary` pills, notice recovery buttons) (`#5`, `#11`).
+- [x] **Wave B (Slices B1–B3 → Checkpoint 2):** `npm run test:all` exit `0` on `release/3.2` (`1ee861a`: JS `1,389 passed, 0 failed, 1 skipped`; Python `999 passed, 8 skipped`; JS/Python syntax clean).
+  - [x] **B1** — Python 3-tier Chat context router (direct full-transcript fit, `lastQuestion` follow-up resolution, adaptive caps, rolling compaction) + granular timestamp chunks (`#3`, `#4`, `#11`).
+  - [x] **B2** — General chat mode backend (`scope.type = 'none'`), fail-closed verifier guardrails, and helpful grounded `insufficient_evidence` handling (`#5`, `#11`).
+  - [x] **B3** — Chat renderer UI (`General chat`, Clear recording context, `Title · Summary` pills, notice recovery buttons) (`#5`, `#11`).
 - [ ] **Wave C (Slices C1–C3 → Checkpoint 3 & Release Cut):**
   - [ ] **C1** — Unified `ggml-org/llama.cpp >= b12631` runtime across macOS arm64, Windows CUDA 12.4, and Linux CUDA 12.8 + **Inkling 2 Mini** qualification & unblock.
   - [ ] **C2** — Add **Bonsai 2** (`27B` & `9B` `Q2_0`, Apache 2.0) + curated mainstream peers (**Gemma 4 26B-A4B**, **Qwen 3.8 27B**, **Ministral 3 14B**, evaluating **Qwen 3.6 35B-A3B**) (`#7`).
