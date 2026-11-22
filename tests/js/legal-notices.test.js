@@ -25,6 +25,23 @@ test('THIRD_PARTY_NOTICES.md exists and documents key optional models', () => {
   assert.match(contents, /GPL/i);
 });
 
+test('notices and model catalog agree on official and legacy summary runtime licenses', () => {
+  const notices = fs.readFileSync(path.join(repoRoot, 'THIRD_PARTY_NOTICES.md'), 'utf8');
+  const catalog = fs.readFileSync(path.join(repoRoot, 'docs', 'development', 'LOCAL_AI_MODEL_CATALOG.md'), 'utf8');
+  for (const document of [notices, catalog]) {
+    assert.match(document, /ggml-org\/llama\.cpp/);
+    assert.match(document, /official [^\n]*`b12631`/i);
+    assert.match(document, /`cudart-llama-b12631-bin-ubuntu-cuda-12\.8-x64\.tar\.gz`/);
+    assert.match(document, /`cudart-llama-bin-win-cuda-12\.4-x64\.zip`/);
+    assert.match(document, /NVIDIA CUDA Toolkit EULA/);
+  }
+  assert.match(notices, /ai-dock\/llama\.cpp-cuda[^\n]*legacy Linux Qwen3\.5[^\n]*`v0\.3\.0`/);
+  assert.match(notices, /NCCL wheel[^\n]*`nvidia\/nccl\/lib\/LICENSE\.txt`[^\n]*only by the legacy Linux Qwen3\.5/);
+  assert.match(catalog, /Linux Qwen3\.5 summary lane uses[^\n]*\n`llama-cpp-v0\.3\.0-linux-x64-cuda-12\.8`: ai-dock/);
+  assert.match(catalog.replace(/\s+/g, ' '), /NCCL wheel is used only by the legacy Linux Qwen3\.5 summary runtime and carries the NVIDIA Software License Agreement at `nvidia\/nccl\/lib\/LICENSE\.txt`/);
+  assert.match(catalog, /no NCCL dependency/);
+});
+
 test('getLegalNoticesPath prefers packaged resources/legal when present', () => {
   const tempResources = path.join(repoRoot, 'tests', 'fixtures', 'legal-notices-packaged');
   const packagedNotices = path.join(tempResources, 'legal', 'THIRD_PARTY_NOTICES.md');

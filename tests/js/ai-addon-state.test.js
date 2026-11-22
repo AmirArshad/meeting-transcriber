@@ -29,20 +29,37 @@ const {
   resolveModelId,
 } = require('../../src/ai-addon-state');
 
-test('Gemma models share their verified platform runtimes while Inkling stays gated', () => {
-  for (const [platform, arch] of [['darwin', 'arm64'], ['win32', 'x64'], ['linux', 'x64']]) {
+test('Gemma models share platform-qualified runtimes while Inkling stays gated', () => {
+  for (const [platform, arch, version] of [['darwin', 'arm64', 'b12606'], ['win32', 'x64', 'b12606'], ['linux', 'x64', 'b12631']]) {
     const e4b = getSummaryArtifactForPlatform('gemma-4-e4b', platform, arch);
     const twelve = getSummaryArtifactForPlatform('gemma-4-12b', platform, arch);
     assert.equal(e4b.inference.contextTokens, 32768);
     assert.equal(e4b.source.sizeBytes, 4590807392);
     assert.equal(twelve.source.sizeBytes, 7219673216);
     const runtime = getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, e4b.modelId);
+    assert.equal(runtime.version, version);
+    assert.equal(e4b.llamaCpp.version, version);
+    assert.equal(e4b.llamaCpp.commit, runtime.commit);
+    assert.deepEqual(twelve.llamaCpp, e4b.llamaCpp);
+    assert.equal(runtime.repository, 'ggml-org/llama.cpp');
     assert.equal(runtime.id, getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, twelve.modelId).id);
     assert.notEqual(runtime.id, getSummaryRuntimeArtifactForPlatform(platform, arch).id);
-    if (platform === 'linux') assert.ok(runtime.artifacts[0].requiredFiles.some((file) => file.path.endsWith('/llama-server')));
+    if (platform === 'linux') {
+      assert.equal(runtime.id, 'llama-cpp-b12631-linux-x64-cuda-12.8');
+      assert.ok(runtime.artifacts[0].requiredFiles.some((file) => file.path === 'llama-b12631/llama-server'));
+      assert.ok(runtime.artifacts[1].requiredFiles.some((file) => file.path.endsWith('/libcudart.so.12')));
+      assert.equal(runtime.requiredDynamicLibraries.some((lib) => lib.fileName === 'libnccl.so.2'), false);
+    }
     assert.equal(getSummaryArtifactForPlatform('inkling-2-mini', platform, arch), null);
     assert.equal(getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, 'inkling-2-mini'), null);
   }
+  const inkling = getModelById('summary', 'inkling-2-mini');
+  assert.equal(inkling.runtimeCatalog, 'b12631');
+  assert.equal(inkling.artifact.llamaCpp.version, 'b12631');
+  assert.equal(inkling.artifact.llamaCpp.commit, 'e300919cc704ddde3a8a8346a8714f57eeeee71b');
+  assert.equal(inkling.inference.reasoningEffort, 'none');
+  assert.equal(inkling.inference.reasoningBudget, 0);
+  assert.equal(inkling.inference.singleTurnOnly, true);
 });
 
 test('both managed Pyannote environments require the patched certificate bundle', () => {

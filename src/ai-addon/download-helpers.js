@@ -32,6 +32,7 @@ const DOWNLOAD_PROGRESS_INTERVAL_MS = 250;
 const MAX_DOWNLOAD_REDIRECTS = 5;
 
 const LATE_DOWNLOAD_ABORT_CODES = new Set(['ECONNABORTED', 'ECONNRESET']);
+const GITHUB_RELEASE_ASSET_PATH = /^\/repos\/[\w.-]+\/[\w.-]+\/releases\/assets\/[1-9]\d*$/;
 
 // Explicit redirect/CDN hosts for JS downloadFile fallbacks. HF summary models
 // normally use bundled Python huggingface_hub/hf_xet (bypassing this list) and
@@ -121,6 +122,9 @@ async function getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule = 
 function isAllowedDownloadUrl(url) {
   try {
     const parsedUrl = new URL(String(url || ''));
+    if (parsedUrl.hostname === 'api.github.com' && !GITHUB_RELEASE_ASSET_PATH.test(parsedUrl.pathname)) {
+      return false;
+    }
     return parsedUrl.protocol === 'https:' && isAllowedDownloadHost(parsedUrl.hostname);
   } catch (error) {
     return false;
@@ -439,7 +443,7 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
       return true;
     };
 
-    request = client.get(parsedUrl, (response) => {
+    const handleResponse = (response) => {
       responseStream = response;
       if (settled) {
         response.resume();
@@ -501,7 +505,13 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
         file.close(succeed);
       });
       response.pipe(file);
-    });
+    };
+
+    // Request the numbered GitHub asset's bytes. Redirects select headers
+    // again for their own host, so the CDN gets the usual download request.
+    request = parsedUrl.hostname === 'api.github.com'
+      ? client.get(parsedUrl, { headers: { Accept: 'application/octet-stream', 'User-Agent': 'AvaNevis' } }, handleResponse)
+      : client.get(parsedUrl, handleResponse);
 
     request.setTimeout(timeoutMs, () => {
       // Preserve the host-qualified request error message from the error handler.

@@ -19,7 +19,7 @@ Planned on `release/3.2` (not yet cut): [v3.2.0 release plan](docs/superpowers/p
   - [x] **B2** — General chat mode backend (`scope.type = 'none'`), fail-closed verifier guardrails, and helpful grounded `insufficient_evidence` handling (`#5`, `#11`).
   - [x] **B3** — Chat renderer UI (`General chat`, Clear recording context, `Title · Summary` pills, notice recovery buttons) (`#5`, `#11`).
 - [ ] **Wave C (Slices C1–C3 → Checkpoint 3 & Release Cut):**
-  - [ ] **C1** — Unified `ggml-org/llama.cpp >= b12631` runtime across macOS arm64, Windows CUDA 12.4, and Linux CUDA 12.8 + **Inkling 2 Mini** qualification & unblock.
+  - [ ] **C1** — The shared `b12631` archives are pinned and Linux Gemma 4 uses the CUDA 12.8 build. Native macOS and Windows adoption and **Inkling 2 Mini** qualification are pending. [Qualification record](docs/development/V3_2_QUALIFICATION.md)
   - [ ] **C2** — Add **Bonsai 2** (`27B` & `9B` `Q2_0`, Apache 2.0) + curated mainstream peers (**Gemma 4 26B-A4B**, **Qwen 3.8 27B**, **Ministral 3 14B**, evaluating **Qwen 3.6 35B-A3B**) (`#7`).
   - [ ] **C3** — Electron `46.x` stable migration (`safeStorage` verification), FFmpeg recheck, held Python/Rust sweeps (`onnxruntime`, `ctranslate2`, `pyobjc`, `speakrs`), `V3_2_QUALIFICATION.md`, and `v3.2.0` release cut.
 
