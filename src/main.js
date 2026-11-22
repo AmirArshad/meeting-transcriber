@@ -284,7 +284,8 @@ async function getSummaryDeviceMemory({ live = false } = {}) {
     return withSystemMemory({ totalBytes: systemTotalBytes, availableBytes: null });
   }
   if (!live && Date.now() - summaryDeviceMemoryReadAt < 30000) {
-    return withSystemMemory(summaryDeviceMemorySnapshot && { totalBytes: summaryDeviceMemorySnapshot.totalBytes });
+    const snapshot = summaryDeviceMemorySnapshot;
+    return withSystemMemory(snapshot && { ...snapshot, availableBytes: null });
   }
   if (!summaryDeviceMemoryProbe) {
     const candidates = process.platform === 'win32'
@@ -292,8 +293,9 @@ async function getSummaryDeviceMemory({ live = false } = {}) {
         process.env.SystemRoot && path.join(process.env.SystemRoot, 'System32', 'nvidia-smi.exe'),
         process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'NVIDIA Corporation', 'NVSMI', 'nvidia-smi.exe'),
       ]
-      : ['/usr/bin/nvidia-smi'];
-    const executable = candidates.find((candidate) => candidate && fs.existsSync(candidate));
+      : ['/usr/bin/nvidia-smi', '/usr/local/bin/nvidia-smi', '/opt/cuda/bin/nvidia-smi'];
+    const executable = candidates.find((candidate) => candidate && fs.existsSync(candidate))
+      || (process.platform === 'linux' ? 'nvidia-smi' : null);
     if (!executable) {
       summaryDeviceMemorySnapshot = null;
       summaryDeviceMemoryReadAt = Date.now();
@@ -301,16 +303,16 @@ async function getSummaryDeviceMemory({ live = false } = {}) {
     }
     summaryDeviceMemoryProbe = new Promise((resolve) => {
       execFile(executable, ['--query-gpu=index,uuid,memory.total,memory.free', '--format=csv,noheader,nounits'], {
-        timeout: 3000, windowsHide: true,
+        timeout: process.platform === 'linux' ? 10000 : 3000, windowsHide: true,
       }, (error, stdout) => {
         summaryDeviceMemorySnapshot = error ? null : parseNvidiaMemory(stdout, process.env.CUDA_VISIBLE_DEVICES);
-        summaryDeviceMemoryReadAt = Date.now();
+        summaryDeviceMemoryReadAt = summaryDeviceMemorySnapshot || process.platform !== 'linux' ? Date.now() : 0;
         resolve(summaryDeviceMemorySnapshot);
       });
     }).finally(() => { summaryDeviceMemoryProbe = null; });
   }
   const snapshot = await summaryDeviceMemoryProbe;
-  return withSystemMemory(live ? snapshot : snapshot && { totalBytes: snapshot.totalBytes });
+  return withSystemMemory(live || !snapshot ? snapshot : { ...snapshot, availableBytes: null });
 }
 
 function spawnSummaryPython(args, options) {
@@ -903,6 +905,7 @@ aiAddonIpc = createAiAddonIpc({
   getCachedCudaStatus,
   resolveCudaStatusForTranscription,
   getSummaryDeviceMemory,
+  getResidentSummaryModelState: () => historyQaService?.getModelState(),
   runExclusiveSummaryMutation: enqueueGpuResourceActionWithUnload,
   buildSummaryArgs,
   summarizeDiarizationError,

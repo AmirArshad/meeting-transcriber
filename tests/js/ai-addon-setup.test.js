@@ -3704,6 +3704,34 @@ test('summary removal returns status using supplied Linux CUDA and device memory
   assert.equal(status.features.summary.availability.supported, true);
 });
 
+test('Linux device check reports compatible catalog models on nominal 12 GB VRAM', async () => {
+  const MiB = 1024 ** 2;
+  const status = await checkAiAddonSetupStatus({
+    userDataDir: '/tmp/AvaNevis', fsModule: createMemoryFs(), platform: 'linux', arch: 'x64',
+    cudaStatus: {
+      statusCode: 'ready', installed: true, deviceAvailable: true, runtimeLoadable: true,
+      missingLibraries: [], matchedProfile: 'cuda12',
+    },
+    deviceMemory: { totalBytes: 12282 * MiB, availableBytes: 12000 * MiB },
+  });
+  for (const modelId of ['qwen3.5-9b-q4-k-m', 'qwen3.5-4b-q4-k-m', 'gemma-4-e4b', 'gemma-4-12b']) {
+    const { fit } = status.summaryLibrary.models.find((model) => model.modelId === modelId);
+    assert.equal(fit.status, 'likely_fits', modelId);
+    assert.equal(fit.blocked, false, modelId);
+  }
+});
+
+test('cold managed Linux CUDA status reports checking', async () => {
+  const status = await checkAiAddonSetupStatus({
+    userDataDir: '/tmp/AvaNevis', fsModule: createMemoryFs(), platform: 'linux', arch: 'x64',
+    cudaStatus: null,
+    deviceMemory: { cudaStatusPending: true },
+  });
+  const { fit } = status.summaryLibrary.models.find((model) => model.modelId === DEFAULT_SUMMARY_MODEL_ID);
+  assert.equal(fit.status, 'runtime_checking');
+  assert.equal(fit.blocked, true);
+});
+
 test('runtime peak space uses pinned expanded size with a legacy fallback', () => {
   const { getSummaryRuntimePeakBytes } = require('../../src/ai-addon/manifest-store');
   assert.equal(getSummaryRuntimePeakBytes({ artifacts: [{ sizeBytes: 10, expandedBytes: 90 }, { sizeBytes: 20 }] }), 160);

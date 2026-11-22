@@ -7438,7 +7438,16 @@ let summaryDeviceCheckSnapshot = null;
 let summaryDeviceCheckPending = false;
 
 function summaryFitLabel(status) {
-  return ({ fits: 'Fits this device', needs_more_memory: 'May need more memory', runtime_needed: 'Runtime setup needed', unavailable: 'Unavailable on this device', unknown: 'Couldn’t check memory' })[status] || 'Compatibility not checked';
+  return ({
+    fits: 'Verified fit',
+    likely_fits: 'Compatible',
+    tight: 'Tight fit',
+    needs_more_memory: 'Needs more memory',
+    runtime_needed: 'Runtime setup needed',
+    runtime_checking: 'Checking CUDA runtime…',
+    unavailable: 'Unavailable on this device',
+    unknown: 'Couldn’t check memory',
+  })[status] || 'Compatibility not checked';
 }
 
 function summaryDownloadConfirmation(model, library) {
@@ -7496,11 +7505,17 @@ function formatSummaryModelStateBadge(model, { activeModel, progress, removalInc
   }
   if (model.status === 'error') return { text: 'Download failed', tone: 'error' };
   const fitStatus = model.fit?.status;
-  if (fitStatus === 'fits') return { text: 'Fits this device', tone: 'ready' };
-  if (fitStatus === 'needs_more_memory') return { text: model.fit?.blocked ? 'Needs more memory' : 'May need more memory', tone: 'error' };
-  if (fitStatus === 'runtime_needed') return { text: 'Runtime setup needed', tone: 'error' };
+  const fitTone = {
+    fits: 'ready',
+    likely_fits: 'ready',
+    tight: 'warning',
+    needs_more_memory: 'error',
+    runtime_needed: 'error',
+    runtime_checking: 'working',
+    unknown: '',
+  }[fitStatus];
   if (fitStatus === 'unavailable') return { text: 'Unavailable', tone: 'muted' };
-  if (fitStatus === 'unknown') return { text: 'Couldn’t check memory', tone: '' };
+  if (fitTone !== undefined) return { text: summaryFitLabel(fitStatus), tone: fitTone };
   return { text: 'Available', tone: '' };
 }
 
@@ -7737,7 +7752,11 @@ function renderSummaryModelLibrary(library) {
         const measured = (value) => value == null ? 'unknown' : formatBytes(value);
         const recommendation = (value) => value == null ? '' : `, ${formatBytes(value)} recommended`;
         const unified = fit.memoryType === 'unified memory';
-        const memory = `${unified ? 'Unified memory' : 'Graphics memory'} — ${measured(fit.totalMemoryBytes)} total, ${measured(unified ? fit.systemAvailableBytes : fit.availableMemoryBytes)} free${recommendation(fit.workingMemoryBytes)}`;
+        const residentNote = !unified && fit.residentModelId && fit.availableMemoryBytes != null
+          && fit.minimumRuntimeBytes != null && fit.availableMemoryBytes < fit.minimumRuntimeBytes
+          ? ` (${fit.residentModelName || 'A local model'} is loaded. Unloading frees graphics memory.)`
+          : '';
+        const memory = `${unified ? 'Unified memory' : 'Graphics memory'} — ${measured(fit.totalMemoryBytes)} total, ${measured(unified ? fit.systemAvailableBytes : fit.availableMemoryBytes)} free${residentNote}${recommendation(fit.workingMemoryBytes)}`;
         const system = unified ? null : `System RAM — ${measured(fit.systemTotalBytes)} total, ${measured(fit.systemAvailableBytes)} free${fit.systemRecommendedBytes == null ? ', minimum unverified' : recommendation(fit.systemRecommendedBytes)}`;
         let storage = null;
         if (activeStorageFit) {
@@ -7747,7 +7766,8 @@ function renderSummaryModelLibrary(library) {
         }
         const deviceDetails = document.createElement('p');
         deviceDetails.className = 'setting-description summary-library-model-device';
-        deviceDetails.textContent = ['Last device check', memory, system, storage, fit.reason, storageFit.reason].filter(Boolean).join(' · ');
+        const fitLabel = fit.status ? summaryFitLabel(fit.status) : null;
+        deviceDetails.textContent = ['Last device check', fitLabel, memory, system, storage, fit.reason, storageFit.reason].filter(Boolean).join(' · ');
         card.appendChild(deviceDetails);
       }
       if (model.storageFit?.blocked && model.storageFit.reason && model.storageFit.reason !== activeStorageFit?.reason) {
@@ -7761,7 +7781,7 @@ function renderSummaryModelLibrary(library) {
       const showFitNote = Boolean(
         model.fit?.reason && model.fit.reason !== checked?.fit?.reason
         && (
-          model.fit?.blocked === true || ['needs_more_memory', 'runtime_needed', 'unavailable'].includes(fitStatus)
+          model.fit?.blocked === true || fitStatus === 'tight'
           || (!installed && fitStatus === 'unknown')
         ),
       );

@@ -7438,6 +7438,11 @@ button.history-transcript-timestamp:focus-visible {
 }
 
 .summary-library-badge.is-error {
+  color: var(--crimson);
+  border-color: var(--crimson-glow);
+}
+
+.summary-library-badge.is-warning {
   color: var(--amber);
   border-color: rgba(210, 168, 92, 0.4);
 }
