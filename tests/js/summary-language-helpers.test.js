@@ -827,6 +827,7 @@ test('a deferred summary response cannot replace the selected meeting captions o
     historyLanguageCaptionMeeting: null,
     aiAddonStatusSnapshot: null,
     aiAddonStatusRefreshPromise: null,
+    summaryDeviceCheckGeneration: 0,
     aiAddonDownloadState: {
       diarization: { active: false },
       summary: { active: false },

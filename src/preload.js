@@ -186,10 +186,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cancelDiarizationSetup: () => ipcRenderer.invoke('cancel-diarization-setup'),
   validateDiarizationSetup: () => ipcRenderer.invoke('validate-diarization-setup'),
   removeDiarizationSetup: () => ipcRenderer.invoke('remove-diarization-setup'),
+  /**
+   * @param {object} [options]
+   * @param {string} [options.modelId]
+   * @param {string} [options.profile]
+   * @param {boolean} [options.unloadLoadedModel] - Unload any resident local model before checking VRAM and running setup.
+   */
   setupSummaryModel: (options) => ipcRenderer.invoke('setup-summary-model', options),
   cancelSummaryModelSetup: () => ipcRenderer.invoke('cancel-summary-model-setup'),
+  /**
+   * @param {object} [options]
+   * @param {string} [options.modelId]
+   * @param {string} [options.profile]
+   * @param {boolean} [options.unloadLoadedModel] - Unload any resident local model before checking VRAM and validating setup.
+   */
   validateSummaryModel: (options) => ipcRenderer.invoke('validate-summary-model', options),
   removeSummaryModel: (options) => ipcRenderer.invoke('remove-summary-model', options),
+  /**
+   * @param {object} options
+   * @param {string} options.modelId
+   * @param {boolean} [options.unloadLoadedModel] - Unload any resident local model before checking VRAM and changing the default model.
+   */
   setDefaultSummaryModel: (options) => ipcRenderer.invoke('set-default-summary-model', options),
 
   // Event listeners

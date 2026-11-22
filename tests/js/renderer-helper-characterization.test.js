@@ -835,6 +835,7 @@ test('AI status failure renders a single-flight inline retry', async () => {
   const context = {
     aiAddonStatusRefreshPromise: null,
     aiAddonStatusSnapshot: null,
+    summaryDeviceCheckGeneration: 0,
     getAiAddonStatusCalls: 0,
     failNext: true,
     logged: [],

@@ -7436,6 +7436,22 @@ function summaryModelHasFiles(model) {
 
 let summaryDeviceCheckSnapshot = null;
 let summaryDeviceCheckPending = false;
+let summaryDeviceCheckGeneration = 0;
+
+function onSummaryModelUnloaded() {
+  summaryDeviceCheckGeneration += 1;
+  summaryDeviceCheckSnapshot = null;
+  aiAddonStatusRefreshPromise = null;
+}
+
+async function unloadSummaryModelFromUi() {
+  const generation = summaryDeviceCheckGeneration;
+  const result = await window.electronAPI.unloadHistoryQaModel();
+  if (generation !== summaryDeviceCheckGeneration) return false;
+  if (result?.modelState) chatState.modelState = result.modelState;
+  onSummaryModelUnloaded();
+  return true;
+}
 
 function summaryFitLabel(status) {
   return ({
@@ -7624,6 +7640,103 @@ function updateSummaryModelLibraryProgressInPlace(library) {
   }
 }
 
+function parseSummaryModelLoadedInMemoryError(error) {
+  if (!error) return null;
+  if (error.code === 'SUMMARY_MODEL_LOADED_IN_MEMORY') {
+    return {
+      loadedModelId: error.loadedModelId || null,
+      loadedModelName: error.loadedModelName || null,
+    };
+  }
+  const message = typeof error.message === 'string' ? error.message : '';
+  const match = message.match(/\[SUMMARY_MODEL_LOADED_IN_MEMORY(?::([^\]]+))?\]/);
+  if (!match) return null;
+  return {
+    loadedModelId: match[1] || null,
+    loadedModelName: null,
+  };
+}
+
+function isSummaryModelBlockedOnlyByLoadedModel(model) {
+  const modelState = typeof chatState !== 'undefined' ? chatState?.modelState : null;
+  const fit = model?.fit;
+  return Boolean(
+    modelState?.status === 'loaded'
+    && fit?.blocked === true
+    && fit?.status === 'needs_more_memory'
+    && fit?.memoryType !== 'unified memory'
+    && fit?.minimumRuntimeBytes != null
+    && fit?.totalMemoryBytes != null
+    && fit.totalMemoryBytes >= fit.minimumRuntimeBytes
+    && fit?.availableMemoryBytes != null
+    && fit.availableMemoryBytes < fit.minimumRuntimeBytes,
+  );
+}
+
+function confirmUnloadSummaryModel({ loadedModelName, targetModelName }) {
+  return new Promise((resolve) => {
+    const previousFocus = document.activeElement;
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    const dialog = document.createElement('div');
+    dialog.className = 'modal-content';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-labelledby', 'summary-unload-confirm-title');
+    const header = document.createElement('div');
+    header.className = 'modal-header';
+    const heading = document.createElement('h2');
+    heading.id = 'summary-unload-confirm-title';
+    heading.textContent = 'Unload loaded model?';
+    header.appendChild(heading);
+    const body = document.createElement('div');
+    body.className = 'modal-body';
+    const text = document.createElement('p');
+    text.className = 'setting-description';
+    text.textContent = `“${loadedModelName || 'A local model'}” is currently loaded in memory. Unload it to free graphics memory and continue with “${targetModelName || 'this model'}”?`;
+    body.appendChild(text);
+    const actions = document.createElement('div');
+    actions.className = 'modal-actions';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'btn btn-secondary';
+    cancel.textContent = 'Cancel';
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'btn btn-primary';
+    confirmBtn.textContent = 'Unload & Continue';
+    actions.appendChild(cancel);
+    actions.appendChild(confirmBtn);
+    const finish = (value) => {
+      overlay.remove();
+      if (previousFocus?.isConnected) previousFocus.focus();
+      resolve(value);
+    };
+    cancel.onclick = () => finish(false);
+    confirmBtn.onclick = () => finish(true);
+    overlay.onkeydown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        finish(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const controls = [cancel, confirmBtn];
+      const index = controls.indexOf(document.activeElement);
+      if ((event.shiftKey && index <= 0) || (!event.shiftKey && index === controls.length - 1)) {
+        event.preventDefault();
+        controls[event.shiftKey ? controls.length - 1 : 0].focus();
+      }
+    };
+    dialog.appendChild(header);
+    dialog.appendChild(body);
+    dialog.appendChild(actions);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    confirmBtn.focus();
+  });
+}
+
 function renderSummaryModelLibrary(library) {
   const container = document.getElementById('summary-model-library');
   if (!container) return;
@@ -7658,18 +7771,22 @@ function renderSummaryModelLibrary(library) {
   checkDevice.textContent = summaryDeviceCheckPending ? 'Checking device…' : 'Check this device';
   checkDevice.addEventListener('click', async () => {
     if (summaryDeviceCheckPending) return;
+    const generation = summaryDeviceCheckGeneration;
     summaryDeviceCheckPending = true;
     checkDevice.disabled = true;
     checkDevice.textContent = 'Checking device…';
     try {
       const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false, checkDevice: true });
+      if (generation !== summaryDeviceCheckGeneration) return;
       summaryDeviceCheckSnapshot = new Map((status?.summaryLibrary?.models || []).map((model) => [model.modelId, { fit: model.fit, storageFit: model.storageFit }]));
       aiAddonStatusSnapshot = status;
       summaryDeviceCheckPending = false;
       updateAiAddonSettings(status);
       updateHomeAiAddonCTA(status);
     } catch (error) {
-      showAppToast(error.message || 'Could not check this device. Try again.', 'error');
+      if (generation === summaryDeviceCheckGeneration) {
+        showAppToast(error.message || 'Could not check this device. Try again.', 'error');
+      }
     } finally {
       summaryDeviceCheckPending = false;
       const currentButton = document.getElementById('summary-check-device') || checkDevice;
@@ -7685,7 +7802,9 @@ function renderSummaryModelLibrary(library) {
     for (const model of models) {
       const card = document.createElement('div');
       const isDefault = model.modelId === library.defaultModelId;
-      const isUnavailable = !installed && model.fit?.blocked === true;
+      const blockedOnlyByLoadedModel = isSummaryModelBlockedOnlyByLoadedModel(model);
+      const fitBlocked = model.fit?.blocked === true && !blockedOnlyByLoadedModel;
+      const isUnavailable = !installed && fitBlocked;
       card.className = `summary-library-model${isDefault ? ' is-default' : ''}${isUnavailable ? ' is-unavailable' : ''}`;
       if (card.dataset) card.dataset.modelId = model.modelId;
       const header = document.createElement('div'); header.className = 'summary-library-model-header';
@@ -7833,28 +7952,106 @@ function renderSummaryModelLibrary(library) {
         });
         actions.appendChild(button);
       };
+      const resolveLibraryModelName = (id) => (
+        library?.models?.find((item) => item.modelId === id)?.modelName || id || 'A local model'
+      );
       const confirmSetup = async () => {
         if (!window.confirm(summaryDownloadConfirmation(model, library))) return;
-        setAiAddonProgressState('summary', { active: true, terminal: false, modelId: model.modelId, percent: 0, message: 'Preparing setup…' });
-        try { await window.electronAPI.setupSummaryModel({ modelId: model.modelId }); }
-        catch (error) {
-          setAiAddonProgressState('summary', { active: true, terminal: true, modelId: model.modelId, message: error.message || 'Setup failed.' });
-          hideAiAddonProgressSoon('summary', 5000);
-          throw error;
+        let unloadLoadedModel = false;
+        if (chatState.modelState?.status === 'loaded' && chatState.modelState.modelId !== model.modelId) {
+          const loadedModelName = chatState.modelState.modelName || resolveLibraryModelName(chatState.modelState.modelId);
+          const confirmed = await confirmUnloadSummaryModel({
+            loadedModelName,
+            targetModelName: model.modelName,
+          });
+          if (!confirmed) return;
+          unloadLoadedModel = true;
+        }
+        const runSetup = async (shouldUnload) => {
+          setAiAddonProgressState('summary', { active: true, terminal: false, modelId: model.modelId, percent: 0, message: 'Preparing setup…' });
+          try {
+            await window.electronAPI.setupSummaryModel({
+              modelId: model.modelId,
+              ...(shouldUnload ? { unloadLoadedModel: true } : {}),
+            });
+          } catch (error) {
+            const loadedConflict = !shouldUnload ? parseSummaryModelLoadedInMemoryError(error) : null;
+            if (loadedConflict) {
+              setAiAddonProgressState('summary', { active: false, terminal: false, modelId: null, message: '' });
+              const loadedModelName = loadedConflict.loadedModelName
+                || (loadedConflict.loadedModelId ? resolveLibraryModelName(loadedConflict.loadedModelId) : null)
+                || chatState.modelState?.modelName
+                || 'A local model';
+              const confirmed = await confirmUnloadSummaryModel({
+                loadedModelName,
+                targetModelName: model.modelName,
+              });
+              if (!confirmed) return;
+              return runSetup(true);
+            }
+            setAiAddonProgressState('summary', { active: true, terminal: true, modelId: model.modelId, message: error.message || 'Setup failed.' });
+            hideAiAddonProgressSoon('summary', 5000);
+            throw error;
+          }
+        };
+        await runSetup(unloadLoadedModel);
+      };
+      const runWithUnloadPrompt = async ({ requireOtherModel, invoke }) => {
+        let unloadLoadedModel = false;
+        if (chatState.modelState?.status === 'loaded' && (!requireOtherModel || chatState.modelState.modelId !== model.modelId)) {
+          const loadedModelName = chatState.modelState.modelName || resolveLibraryModelName(chatState.modelState.modelId);
+          const confirmed = await confirmUnloadSummaryModel({
+            loadedModelName,
+            targetModelName: model.modelName,
+          });
+          if (!confirmed) return;
+          unloadLoadedModel = true;
+        }
+        try {
+          await invoke(unloadLoadedModel);
+        } catch (error) {
+          const loadedConflict = !unloadLoadedModel ? parseSummaryModelLoadedInMemoryError(error) : null;
+          if (!loadedConflict) throw error;
+          const loadedModelName = loadedConflict.loadedModelName
+            || (loadedConflict.loadedModelId ? resolveLibraryModelName(loadedConflict.loadedModelId) : null)
+            || chatState.modelState?.modelName
+            || 'A local model';
+          const confirmed = await confirmUnloadSummaryModel({
+            loadedModelName,
+            targetModelName: model.modelName,
+          });
+          if (!confirmed) return;
+          await invoke(true);
         }
       };
-      const setupBlocked = model.fit?.blocked === true || model.storageFit?.blocked === true || (!model.storageFit && library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes);
+      const setupBlocked = fitBlocked || model.storageFit?.blocked === true || (!model.storageFit && library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes);
       if (!installed) {
         addAction(model.status === 'error' ? 'Retry download' : 'Download', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
       } else {
         if (!removalIncomplete) {
-          if (model.modelId !== library.defaultModelId) addAction('Set as default', () => window.electronAPI.setDefaultSummaryModel({ modelId: model.modelId }), !usableSummaryModels(library).includes(model), 'secondary');
-          addAction('Check setup', () => window.electronAPI.validateSummaryModel({ modelId: model.modelId }), false, 'secondary');
+          if (model.modelId !== library.defaultModelId) {
+            const canSetAsDefault = usableSummaryModels(library).includes(model)
+              || (model.installed && model.setupComplete && model.status === 'ready' && blockedOnlyByLoadedModel);
+            addAction('Set as default', () => runWithUnloadPrompt({
+              requireOtherModel: false,
+              invoke: (unloadLoadedModel) => window.electronAPI.setDefaultSummaryModel({
+                modelId: model.modelId,
+                ...(unloadLoadedModel ? { unloadLoadedModel: true } : {}),
+              }),
+            }), !canSetAsDefault, 'secondary');
+          }
+          addAction('Check setup', () => runWithUnloadPrompt({
+            requireOtherModel: true,
+            invoke: (unloadLoadedModel) => window.electronAPI.validateSummaryModel({
+              modelId: model.modelId,
+              ...(unloadLoadedModel ? { unloadLoadedModel: true } : {}),
+            }),
+          }), false, 'secondary');
           if (!model.setupComplete && model.status === 'error') addAction('Repair', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
         }
         if ((chatState.modelState.status === 'loaded' && chatState.modelState.modelId === model.modelId)
           || (chatState.modelState.status === 'release_error' && releaseModelId === model.modelId)) {
-          addAction('Free memory', () => window.electronAPI.unloadHistoryQaModel(), false, 'secondary');
+          addAction('Free memory', unloadSummaryModelFromUi, false, 'secondary');
         }
         addAction(removalIncomplete ? 'Retry removal' : 'Remove model', async () => {
           const others = usableSummaryModels(library).filter((item) => item.modelId !== model.modelId);
@@ -8151,9 +8348,11 @@ async function refreshAiAddonSettings() {
     return aiAddonStatusRefreshPromise;
   }
 
+  const generation = summaryDeviceCheckGeneration;
   aiAddonStatusRefreshPromise = (async () => {
     try {
       const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false });
+      if (generation !== summaryDeviceCheckGeneration) return null;
       aiAddonStatusSnapshot = status;
       updateAiAddonSettings(status);
       updateHomeAiAddonCTA(status);
@@ -8163,6 +8362,7 @@ async function refreshAiAddonSettings() {
       }
       return status;
     } catch (error) {
+      if (generation !== summaryDeviceCheckGeneration) return null;
       addLog(`Failed to check AI add-ons: ${error.message}`, 'error');
       setStatusBadge(document.getElementById('ai-addons-status-badge'), 'error');
       updateHomeAiAddonCTA(null);
@@ -8172,7 +8372,7 @@ async function refreshAiAddonSettings() {
       }
       return null;
     } finally {
-      aiAddonStatusRefreshPromise = null;
+      if (generation === summaryDeviceCheckGeneration) aiAddonStatusRefreshPromise = null;
     }
   })();
 
@@ -8180,8 +8380,10 @@ async function refreshAiAddonSettings() {
 }
 
 async function refreshHomeAiAddonPrompt() {
+  const generation = summaryDeviceCheckGeneration;
   try {
     const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false });
+    if (generation !== summaryDeviceCheckGeneration) return null;
     aiAddonStatusSnapshot = status;
     if (typeof renderSummaryModelLibrary === 'function') renderSummaryModelLibrary(status?.summaryLibrary);
     if (typeof renderChatOnboardingAndComposer === 'function') renderChatOnboardingAndComposer();
@@ -8189,6 +8391,7 @@ async function refreshHomeAiAddonPrompt() {
     updateSummaryGenerationButtons();
     return status;
   } catch (error) {
+    if (generation !== summaryDeviceCheckGeneration) return null;
     console.warn('Could not refresh home AI add-on prompt:', error);
     updateHomeAiAddonCTA(null);
     updateSummaryGenerationButtons();
@@ -11857,9 +12060,17 @@ function setupChatWorkspace() {
   if (window.electronAPI && typeof window.electronAPI.onHistoryQaModelState === 'function') {
     registerCleanup(window.electronAPI.onHistoryQaModelState((state) => {
       if (state) {
+        const prevStatus = chatState.modelState?.status;
+        const unloadedFromResident = (prevStatus === 'loaded' || prevStatus === 'unloading' || prevStatus === 'release_error')
+          && state.status === 'unloaded';
         chatState.modelState = state;
+        if (unloadedFromResident) onSummaryModelUnloaded();
         renderChatModelPill();
-        renderSummaryModelLibrary(summaryLibrary());
+        if (unloadedFromResident) {
+          void refreshAiAddonSettings();
+        } else {
+          renderSummaryModelLibrary(summaryLibrary());
+        }
         if (chatState.sending && state.status === 'unloading') {
           chatState.progress = { phase: 'releasing', message: `Releasing ${state.modelName || 'model'}…` };
           syncChatProgressBanner();
@@ -11942,11 +12153,11 @@ function setupChatWorkspace() {
 
   document.getElementById('chat-unload-model-btn')?.addEventListener('click', async () => {
     try {
-      const res = await window.electronAPI.unloadHistoryQaModel();
-      if (res && res.modelState) {
-        chatState.modelState = res.modelState;
+      const needsRefresh = await unloadSummaryModelFromUi();
+      if (needsRefresh) {
+        renderChatModelPill();
+        void refreshAiAddonSettings();
       }
-      renderChatModelPill();
       showAppToast('Local model unloaded from memory.', 'success');
     } catch (error) {
       showAppToast(`Could not unload model: ${error.message}`, 'error');
