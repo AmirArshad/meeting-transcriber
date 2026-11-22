@@ -6081,6 +6081,7 @@ button.history-transcript-timestamp:focus-visible {
   color: var(--amber);
   background: rgba(235, 180, 90, 0.12);
   border-color: rgba(235, 180, 90, 0.34);
+  white-space: normal;
 }
 
 .chat-header-right {
@@ -6528,6 +6529,10 @@ button.history-transcript-timestamp:focus-visible {
   flex-wrap: wrap;
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+.chat-turn-meta-row.is-general-mode {
+  color: var(--amber);
 }
 
 .chat-sources-drawer {

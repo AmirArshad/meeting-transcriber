@@ -10,7 +10,7 @@ const {
   renderGroundedMarkdown,
 } = require('../../src/renderer/markdown-render-helpers');
 
-function createMockDocument() {
+function createMockDocument(fillTemplate = null) {
   class MockNode {
     constructor(nodeType) {
       this.nodeType = nodeType;
@@ -124,6 +124,10 @@ function createMockDocument() {
       // Minimal <p>...</p> parser for unit testing citation upgrading.
       const target = this.tagName === 'TEMPLATE' ? this.content : this;
       target.replaceChildren();
+      if (fillTemplate) {
+        fillTemplate(target, createElement, createTextNode);
+        return;
+      }
       const p = new MockElement('p');
       p.appendChild(new MockText(String(html).replace(/^<p>|<\/p>$/g, '')));
       target.appendChild(p);
@@ -143,27 +147,12 @@ function createMockDocument() {
     }
   }
 
+  const createElement = (tag) => new MockElement(tag);
+  const createTextNode = (text) => new MockText(text);
   return {
-    createElement: (tag) => new MockElement(tag),
-    createTextNode: (text) => new MockText(text),
+    createElement,
+    createTextNode,
     createDocumentFragment: () => new MockFragment(),
-    createTreeWalker(rootNode) {
-      const texts = [];
-      const visit = (node) => {
-        for (const child of node.childNodes) {
-          if (child.nodeType === 3) texts.push(child);
-          else visit(child);
-        }
-      };
-      visit(rootNode);
-      let idx = 0;
-      return {
-        nextNode() {
-          if (idx >= texts.length) return null;
-          return texts[idx++];
-        },
-      };
-    },
   };
 }
 
@@ -250,4 +239,36 @@ test('renderGroundedMarkdown deduplicates adjacent identical citation pills and 
     p.textContent,
     'Verse one Song Demo · 00:11 transitions to verse two Song Demo · 00:45. Repeated later Song Demo · 00:11. Summary says Design Review · Summary.',
   );
+});
+
+
+test('deduplicates across inline formatting and preserves precise timestamps and block boundaries', () => {
+  const doc = createMockDocument((root, element, text) => {
+    const paragraph = element('p');
+    const emphasis = element('strong');
+    emphasis.append(text('[E1]'));
+    paragraph.append(text('[E1] '), emphasis, text(' [E2]'), text(' [E3]'));
+    const code = element('code');
+    code.append(text('[E3]'));
+    paragraph.append(code, text('[E3]'), element('br'), text('[E3]'));
+    const nextParagraph = element('p');
+    nextParagraph.append(text('[E3]'));
+    root.append(paragraph, nextParagraph);
+  });
+  const container = doc.createElement('div');
+  const citations = [11.1, 11.9, '11.9'].map((startSec, i) => ({
+    evidenceId: `E${i + 1}`, meetingId: 'm1', startSec, kind: 'transcript',
+  }));
+
+  renderGroundedMarkdown(container, '[E1] **[E1]** [E2] [E3]`[E3]`[E3]<br>[E3]\n\n[E3]', citations, {
+    markedLib: { parse: (markdown) => markdown },
+    domPurifyLib: { sanitize: (html, config) => { assert.equal(config, STRICT_DOMPURIFY_CONFIG); return html; } },
+    documentObj: doc,
+  });
+
+  assert.deepEqual(container.querySelectorAll('button').map((button) => button.dataset.evidenceId),
+    ['E1', 'E2', 'E3', 'E3', 'E3']);
+  assert.deepEqual(container.querySelectorAll('button').slice(0, 2).map((button) => button.dataset.startSec),
+    ['11.1', '11.9']);
+  assert.equal(container.querySelectorAll('code')[0].textContent, '[E3]');
 });

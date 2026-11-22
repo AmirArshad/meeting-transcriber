@@ -341,7 +341,7 @@
     };
   }
 
-  function formatAssistantTurnMeta(message, modelNameResolver = null, scope = null) {
+  function formatAssistantTurnMeta(message, modelNameResolver = null) {
     if (!message || typeof message !== 'object') {
       return '';
     }
@@ -354,9 +354,7 @@
     }
     const searchedNum = Number(message.searchedMeetingCount);
     const hasSearched = Number.isFinite(searchedNum) && searchedNum > 0;
-    const isGeneral = message.chatMode === 'general'
-      || (!message.chatMode && scope?.type === 'none' && !hasSearched);
-    if (isGeneral) {
+    if (message.chatMode === 'general') {
       metaParts.push('General chat (no recordings)');
       return metaParts.filter(Boolean).join(' · ');
     }

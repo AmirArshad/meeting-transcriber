@@ -343,8 +343,6 @@ test('general chat mode (scope.type = none) formats scope, starters, notice acti
 
   const generalFooter = formatAssistantTurnMeta(
     { chatMode: 'general', modelName: 'Qwen3.5 9B', searchedMeetingCount: 0, evidenceCount: 0 },
-    null,
-    { type: 'none' },
   );
   assert.equal(generalFooter, 'Qwen3.5 9B · General chat (no recordings)');
   assert.doesNotMatch(generalFooter, /Searched/i);
@@ -359,6 +357,10 @@ test('general chat mode (scope.type = none) formats scope, starters, notice acti
     { chatMode: 'grounded', modelName: 'Qwen3.5 9B', searchedMeetingCount: 2, evidenceCount: 3 },
   );
   assert.equal(groundedFooter, 'Qwen3.5 9B · Searched 2 recordings · 3 matching excerpts');
+  assert.equal(
+    formatAssistantTurnMeta({ modelName: 'Qwen3.5 9B', searchedMeetingCount: 0 }),
+    'Qwen3.5 9B',
+  );
 });
 
 test('formatScopeMeetingDate and formatScopeMeetingDateTooltip format compact and full timestamps safely', () => {

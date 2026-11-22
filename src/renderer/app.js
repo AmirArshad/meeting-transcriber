@@ -159,6 +159,8 @@ const {
   buildExportFormatOptions,
 } = window.subtitleExportHelpers;
 const {
+  formatCitationSeconds,
+  isUntimedSummaryCitation,
   renderGroundedMarkdown,
 } = window.markdownRenderHelpers;
 const {
@@ -2177,7 +2179,7 @@ function highlightTranscriptSegmentAtTime(startSec) {
   }, 3600);
 }
 
-async function openMeetingAtTimestamp(meetingId, startSec = null) {
+async function openMeetingAtTimestamp(meetingId, startSec = null, detailTab = 'transcript') {
   const targetId = String(meetingId || '').trim();
   if (!targetId) {
     return false;
@@ -2194,7 +2196,7 @@ async function openMeetingAtTimestamp(meetingId, startSec = null) {
   }
 
   activateTab('history');
-  activateHistoryDetailTab('transcript');
+  activateHistoryDetailTab(detailTab);
 
   if (String(currentMeetingId || '') !== targetId) {
     await selectMeeting(targetId);
@@ -11042,7 +11044,7 @@ const chatState = {
   eligibility: null,
   modelState: { status: 'unloaded', modelId: null, modelName: null },
   sending: false,
-  noticeActionPending: false,
+  scopeUpdatePending: false,
   optimisticQuestion: null,
   streamingDraft: '',
   progress: null,
@@ -11171,7 +11173,8 @@ function renderChatOnboardingAndComposer() {
     onboarding.hidden = eligible || resettingRemovedOverride;
   }
   for (const starter of document.getElementById('chat-starter-prompts')?.children || []) {
-    starter.disabled = !eligible || (!isGeneralMode && meetings.length === 0) || chatThreadDetailPending();
+    starter.disabled = !eligible || (!isGeneralMode && meetings.length === 0)
+      || chatState.scopeUpdatePending || chatThreadDetailPending();
   }
   if (reasonEl) {
     const selected = library?.models?.find((model) => model.modelId === selectedModelId);
@@ -11190,11 +11193,15 @@ function renderChatOnboardingAndComposer() {
       : (isGeneralMode ? 'General chat' : 'Ask your recordings');
   }
   if (headerScope) {
-    headerScope.textContent = scopeText;
+    const generalLabel = 'General chat (no recordings)';
+    headerScope.textContent = isGeneralMode
+      ? (selectedModelId ? `${summaryModelName(selectedModelId, library)} · ${generalLabel}` : generalLabel)
+      : scopeText;
     headerScope.classList.toggle('is-general-mode', isGeneralMode);
   }
   if (scopeBtn) {
     scopeBtn.classList.toggle('is-general-mode', isGeneralMode);
+    scopeBtn.disabled = chatState.sending || chatState.scopeUpdatePending || chatThreadDetailPending();
   }
   if (scopeLabel) {
     scopeLabel.textContent = scopeText;
@@ -11225,7 +11232,7 @@ function renderChatOnboardingAndComposer() {
       sendBtn.textContent = 'Send';
       sendBtn.classList.remove('btn-danger');
       sendBtn.classList.add('btn-primary');
-      sendBtn.disabled = !eligible || chatThreadDetailPending();
+      sendBtn.disabled = !eligible || chatState.scopeUpdatePending || chatThreadDetailPending();
     }
   }
   if (input) {
@@ -11392,7 +11399,11 @@ function handleChatCitationClick(citation) {
   if (!citation || !citation.meetingId) {
     return;
   }
-  void openMeetingAtTimestamp(citation.meetingId, citation.startSec);
+  if (isUntimedSummaryCitation(citation)) {
+    void openMeetingAtTimestamp(citation.meetingId, null, 'summary');
+  } else {
+    void openMeetingAtTimestamp(citation.meetingId, citation.startSec);
+  }
 }
 
 function renderChatStream() {
@@ -11456,49 +11467,14 @@ function renderChatStream() {
   };
 
   const handleNoticeAction = async (actionId, precedingQuestion) => {
-    if (!precedingQuestion || chatState.sending || chatState.noticeActionPending || chatThreadDetailPending()) {
+    if (!precedingQuestion || chatState.sending || chatState.scopeUpdatePending || chatThreadDetailPending()) {
       return;
-    }
-    if (chatState.popoverOpen) {
-      toggleChatScopePopover(false);
     }
     const navigation = chatState.navigation;
     const nextScope = resolveNoticeActionScope(actionId, getCurrentChatScope());
-    if (nextScope) {
-      if (chatState.activeThread && window.electronAPI?.updateChatThreadScope) {
-        let updated = false;
-        chatState.noticeActionPending = true;
-        renderChatStream();
-        try {
-          const res = await window.electronAPI.updateChatThreadScope(chatState.activeThread.id, nextScope);
-          if (navigation !== chatState.navigation) {
-            void refreshChatThreadList();
-            return;
-          }
-          if (res && res.thread) {
-            chatState.activeThread = res.thread;
-          }
-          updated = true;
-        } catch (error) {
-          if (navigation === chatState.navigation) {
-            showAppToast(`Could not update scope: ${error.message}`, 'error');
-          }
-        } finally {
-          chatState.noticeActionPending = false;
-        }
-        if (!updated) {
-          if (navigation === chatState.navigation) {
-            renderChatStream();
-          }
-          return;
-        }
-      } else {
-        chatState.pendingScope = nextScope;
-      }
-    }
-    if (navigation !== chatState.navigation) {
-      return;
-    }
+    if (nextScope && !(await applyChatScope(nextScope))) return;
+    if (navigation !== chatState.navigation) return;
+    if (chatState.popoverOpen) toggleChatScopePopover(false);
     await sendChatQuestionText(precedingQuestion, { overrideScope: nextScope });
   };
 
@@ -11545,7 +11521,7 @@ function renderChatStream() {
           btn.type = 'button';
           btn.className = 'btn btn-small btn-secondary chat-callout-action-btn';
           btn.textContent = action.label;
-          btn.disabled = chatState.sending || chatState.noticeActionPending || chatThreadDetailPending();
+          btn.disabled = chatState.sending || chatState.scopeUpdatePending || chatThreadDetailPending();
           btn.addEventListener('click', () => {
             void handleNoticeAction(action.id, precedingQuestion);
           });
@@ -11596,8 +11572,8 @@ function renderChatStream() {
         const jumpPill = document.createElement('button');
         jumpPill.type = 'button';
         jumpPill.className = 'chat-citation-pill';
-        const tsLabel = formatJumpTimestamp(citation.startSec);
-        const isSummaryCitation = !tsLabel && String(citation.kind || '').trim().toLowerCase() === 'summary';
+        const tsLabel = formatCitationSeconds(citation.startSec);
+        const isSummaryCitation = isUntimedSummaryCitation(citation);
         jumpPill.textContent = tsLabel
           ? `${citation.meetingTitle || 'Recording'} · ${tsLabel}`
           : (isSummaryCitation
@@ -11637,7 +11613,7 @@ function renderChatStream() {
       wrap.appendChild(details);
     }
 
-    const metaText = formatAssistantTurnMeta(msg, summaryModelName, getCurrentChatScope());
+    const metaText = formatAssistantTurnMeta(msg, summaryModelName);
     if (metaText) {
       const meta = document.createElement('div');
       meta.className = 'chat-turn-meta-row';
@@ -11905,6 +11881,40 @@ function renderScopePopover(focusedTag) {
   }
 }
 
+async function applyChatScope(nextScope) {
+  if (chatState.sending || chatState.scopeUpdatePending || chatThreadDetailPending()) return false;
+
+  const navigation = chatState.navigation;
+  toggleChatScopePopover(false);
+  if (!chatState.activeThread) {
+    chatState.pendingScope = nextScope;
+    renderChatOnboardingAndComposer();
+    renderChatStream();
+    return true;
+  }
+
+  chatState.scopeUpdatePending = true;
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+  try {
+    const { thread } = await window.electronAPI.updateChatThreadScope(chatState.activeThread.id, nextScope);
+    if (navigation === chatState.navigation) chatState.activeThread = thread;
+    try {
+      await refreshChatThreadList();
+    } catch (error) {
+      showAppToast(`Could not refresh chats: ${error.message}`, 'error');
+    }
+    return navigation === chatState.navigation;
+  } catch (error) {
+    if (navigation === chatState.navigation) showAppToast(`Could not update scope: ${error.message}`, 'error');
+    return false;
+  } finally {
+    chatState.scopeUpdatePending = false;
+    renderChatOnboardingAndComposer();
+    renderChatStream();
+  }
+}
+
 function toggleChatScopePopover(forceOpen = null) {
   const popover = document.getElementById('chat-scope-popover');
   const btn = document.getElementById('chat-scope-btn');
@@ -11937,7 +11947,7 @@ function closeChatMobileSidebar() {
 }
 
 async function sendChatQuestionText(rawQuestion, { overrideScope = null, restoreInputOnError = false } = {}) {
-  if (chatState.sending || chatState.noticeActionPending || chatThreadDetailPending()) {
+  if (chatState.sending || chatState.scopeUpdatePending || chatThreadDetailPending()) {
     return;
   }
   const question = String(rawQuestion || '').replace(/\s+/g, ' ').trim();
@@ -12037,7 +12047,7 @@ async function sendCurrentChatQuestion() {
     return;
   }
 
-  if (chatThreadDetailPending()) return;
+  if (chatState.scopeUpdatePending || chatThreadDetailPending()) return;
   const input = document.getElementById('chat-input');
   if (!input) return;
   const question = input.value.replace(/\s+/g, ' ').trim();
@@ -12275,27 +12285,6 @@ function setupChatWorkspace() {
     chatState.scopeDraft = { type: 'none', meetingIds: [], dateFrom: null, dateTo: null, tags: [] };
     renderScopePopover();
   });
-
-  const applyChatScope = async (nextScope) => {
-    if (chatState.activeThread && window.electronAPI?.updateChatThreadScope) {
-      try {
-        const navigation = chatState.navigation;
-        const res = await window.electronAPI.updateChatThreadScope(chatState.activeThread.id, nextScope);
-        if (navigation !== chatState.navigation) { void refreshChatThreadList(); return; }
-        if (res && res.thread) {
-          chatState.activeThread = res.thread;
-        }
-        await refreshChatThreadList({ selectThreadId: chatState.activeThread?.id || null });
-      } catch (error) {
-        showAppToast(`Could not update scope: ${error.message}`, 'error');
-      }
-    } else {
-      chatState.pendingScope = nextScope;
-      renderChatOnboardingAndComposer();
-      renderChatStream();
-    }
-    toggleChatScopePopover(false);
-  };
 
   document.getElementById('chat-scope-clear-context-btn')?.addEventListener('click', async () => {
     await applyChatScope({ type: 'none', meetingIds: [], dateFrom: null, dateTo: null, tags: [] });

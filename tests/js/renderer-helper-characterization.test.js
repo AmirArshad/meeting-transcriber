@@ -1026,3 +1026,52 @@ test('Phase 2 recording tag UI surfaces, CSS rules, and app.js bindings are pres
     assert.ok(css.includes(selector), `expected ${selector} in styles.css`);
   }
 });
+
+test('clearing Chat scope blocks competing updates and preserves a draft until the scope is saved', async () => {
+  const source = readAppSource();
+  const chatState = { activeThread: { id: 't1', scope: { type: 'all' } }, navigation: 0 };
+  const input = { value: 'A general question' };
+  const submissions = [];
+  const updates = [];
+  const update = Promise.withResolvers();
+  const context = vm.createContext({
+    chatState,
+    chatThreadDetailPending: () => false,
+    toggleChatScopePopover() {},
+    renderChatOnboardingAndComposer() {},
+    renderChatStream() {},
+    refreshChatThreadList: async () => {},
+    document: { getElementById: () => input },
+    autoResizeChatInput() {},
+    sendChatQuestionText: async (question) => submissions.push([question, chatState.activeThread.scope]),
+    window: {
+      electronAPI: {
+        updateChatThreadScope: (id, scope) => {
+          updates.push([id, scope]);
+          return update.promise;
+        },
+      },
+    },
+  });
+  chatState.drafts = new Map();
+  for (const name of ['applyChatScope', 'sendCurrentChatQuestion']) {
+    const start = source.indexOf(`async function ${name}(`);
+    const end = source.indexOf('\n}\n', start) + 2;
+    vm.runInContext(source.slice(start, end), context);
+  }
+
+  const scope = { type: 'none', meetingIds: [], tags: [], dateFrom: null, dateTo: null };
+  const clearing = context.applyChatScope(scope);
+  assert.equal(chatState.scopeUpdatePending, true);
+  assert.equal(await context.applyChatScope({ type: 'all' }), false);
+  await context.sendCurrentChatQuestion();
+  assert.equal(input.value, 'A general question');
+  assert.equal(submissions.length, 0);
+
+  update.resolve({ thread: { id: 't1', scope } });
+  assert.equal(await clearing, true);
+  assert.equal(chatState.scopeUpdatePending, false);
+  await context.sendCurrentChatQuestion();
+  assert.deepEqual(updates, [['t1', scope]]);
+  assert.deepEqual(submissions, [['A general question', scope]]);
+});
