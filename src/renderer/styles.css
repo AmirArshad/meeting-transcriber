@@ -2456,7 +2456,7 @@ button.history-transcript-speaker:hover {
 .speaker-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  align-items: start;
   column-gap: var(--space-2);
   row-gap: var(--space-1);
   min-width: 0;
@@ -2497,8 +2497,15 @@ button.history-transcript-speaker:hover {
   box-shadow: var(--focus-ring);
 }
 
-.speaker-row .speaker-preview {
+.speaker-preview-control {
   grid-column: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.speaker-row .speaker-preview {
   min-width: 78px;
   height: 32px;
   min-height: 32px;
@@ -2507,6 +2514,14 @@ button.history-transcript-speaker:hover {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   color: var(--accent-strong);
+}
+
+.speaker-preview-label {
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+  user-select: none;
 }
 
 .speaker-excerpt {

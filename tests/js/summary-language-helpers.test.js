@@ -381,17 +381,75 @@ test('speaker preview ignores a queued pause and pre-seek updates, then stops at
   player.dispatchEvent(new Event('pause'));
   resolvePlay();
   await playing;
-  player.currentTime = 11.99;
+  player.currentTime = 12.99;
   player.dispatchEvent(new Event('timeupdate'));
   assert.deepEqual(pressed, [true, false, true]);
-  player.currentTime = 12;
+  player.currentTime = 13;
   player.dispatchEvent(new Event('timeupdate'));
   assert.equal(pressed.at(-1), false);
+
+  pressed.length = 0;
+  context.playSpeakerSample(button, player, { startSec: 10, endSec: 55 }, (value) => pressed.push(value));
+  player.currentTime = 10;
+  const capped = afterSeek();
+  resolvePlay();
+  await capped;
+  player.currentTime = 21.99;
+  player.dispatchEvent(new Event('timeupdate'));
+  assert.deepEqual(pressed, [true]);
+  player.currentTime = 22;
+  player.dispatchEvent(new Event('timeupdate'));
+  assert.deepEqual(pressed, [true, false]);
 
   preview(undefined);
   context.clearHistorySpeakers();
   assert.equal(pressed.at(-1), false);
   assert.equal(context.stopSpeakerPreview, null);
+});
+
+test('buildSpeakerRow wraps the preview button with a Sample label and updated aria-label', () => {
+  const createElement = (tag) => {
+    const attrs = new Map();
+    return {
+      tagName: tag.toUpperCase(),
+      className: '',
+      children: [],
+      attributes: attrs,
+      append(...nodes) { this.children.push(...nodes); },
+      appendChild(node) { this.children.push(node); return node; },
+      setAttribute(name, value) { attrs.set(name, String(value)); },
+      getAttribute(name) { return attrs.get(name) ?? null; },
+      addEventListener() {},
+    };
+  };
+  const player = Object.assign(new EventTarget(), {
+    error: null,
+    getAttribute: (name) => (name === 'src' ? 'file:///recording.opus' : null),
+  });
+  const context = loadRendererFunctions({
+    document: { createElement },
+    formatJumpTimestamp: (sec) => `00:${String(sec).padStart(2, '0')}`,
+    playSpeakerSample() {},
+  }, 'buildSpeakerRow');
+  const { row } = context.buildSpeakerRow(
+    'history',
+    { speaker: 'Speaker 1', excerpt: 'Hello there', startSec: 12, endSec: 18 },
+    {},
+    player,
+    new AbortController().signal,
+  );
+  const control = row.children.find((child) => child.className === 'speaker-preview-control');
+  assert.ok(control);
+  assert.equal(control.children.length, 2);
+  const [button, label] = control.children;
+  assert.equal(button.tagName, 'BUTTON');
+  assert.equal(button.className, 'btn btn-small speaker-preview');
+  assert.equal(button.getAttribute('aria-label'), 'Play voice sample for Speaker 1 at 00:12');
+  assert.equal(button.textContent, '▶ 00:12');
+  assert.equal(label.tagName, 'SPAN');
+  assert.equal(label.className, 'speaker-preview-label');
+  assert.equal(label.getAttribute('aria-hidden'), 'true');
+  assert.equal(label.textContent, 'Sample');
 });
 
 test('Name speakers refreshes the selected recording before focus and respects a changed selection', async () => {

@@ -28,21 +28,54 @@
     return parts.reduce((total, part) => total * 60 + Number(part), 0);
   }
 
+  const MIN_SPEAKER_SAMPLE_SEC = 5;
+
   function extractSpeakerSamples(segments) {
-    const samples = new Map();
+    const candidates = new Map();
     for (const segment of Array.isArray(segments) ? segments : []) {
       if (!segment || !SPEAKER_KEY.test(segment.speaker || '')) continue;
       const speaker = segment.speaker;
+      if (!candidates.has(speaker)) {
+        candidates.set(speaker, {
+          preferred: null,
+          longestTimed: null,
+          longestDuration: -1,
+          startOnly: null,
+          untimed: null,
+        });
+      }
       const excerpt = String(segment.text || '').replace(/\s+/g, ' ').trim();
-      if (!samples.has(speaker)) samples.set(speaker, { speaker, excerpt: '', startSec: null, endSec: null });
-      const sample = samples.get(speaker);
-      if (!sample.excerpt && excerpt) {
-        sample.excerpt = excerpt;
-        sample.startSec = seconds(segment, 'start');
-        sample.endSec = seconds(segment, 'end');
+      if (!excerpt) continue;
+      const entry = candidates.get(speaker);
+      if (entry.preferred) continue;
+      const startSec = seconds(segment, 'start');
+      const endSec = seconds(segment, 'end');
+      const sample = { speaker, excerpt, startSec, endSec };
+      if (startSec !== null && endSec !== null && endSec > startSec) {
+        const duration = endSec - startSec;
+        if (duration >= MIN_SPEAKER_SAMPLE_SEC) {
+          entry.preferred = sample;
+        } else if (duration > entry.longestDuration) {
+          entry.longestTimed = sample;
+          entry.longestDuration = duration;
+        }
+      } else if (startSec !== null) {
+        if (!entry.startOnly) entry.startOnly = sample;
+      } else if (!entry.untimed) {
+        entry.untimed = { speaker, excerpt, startSec: null, endSec: null };
       }
     }
-    return Array.from(samples.values());
+    const samples = [];
+    for (const [speaker, entry] of candidates.entries()) {
+      samples.push(
+        entry.preferred
+        || entry.longestTimed
+        || entry.startOnly
+        || entry.untimed
+        || { speaker, excerpt: '', startSec: null, endSec: null }
+      );
+    }
+    return samples;
   }
 
   function applySpeakerNameMapToSegments(segments, names) {

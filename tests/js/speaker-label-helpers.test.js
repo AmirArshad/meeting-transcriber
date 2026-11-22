@@ -41,3 +41,37 @@ test('normalization removes controls before arrows and limits Unicode code point
 test('nested timestamp arrows are fully removed from names', () => {
   assert.equal(normalizeSpeakerName('A--->->B'), 'AB');
 });
+
+test('extractSpeakerSamples prefers the first >=5s timed segment and preserves speaker order', () => {
+  const segments = [
+    { speaker: 'Speaker 2', text: 'Short intro', startSec: 0, endSec: 2 },
+    { speaker: 'Speaker 1', text: 'Untimed first' },
+    { speaker: 'Speaker 2', text: 'Exact five seconds', startSec: 10, endSec: 15 },
+    { speaker: 'Speaker 2', text: 'Even longer later', startSec: 20, endSec: 32 },
+    { speaker: 'Speaker 1', text: 'Start only', startSec: 4 },
+    { speaker: 'Speaker 1', text: 'Short timed', startSec: 6, endSec: 9 },
+    { speaker: 'Speaker 1', text: 'Full six second clip', startSec: 12, endSec: 18 },
+  ];
+  assert.deepEqual(extractSpeakerSamples(segments), [
+    { speaker: 'Speaker 2', excerpt: 'Exact five seconds', startSec: 10, endSec: 15 },
+    { speaker: 'Speaker 1', excerpt: 'Full six second clip', startSec: 12, endSec: 18 },
+  ]);
+});
+
+test('extractSpeakerSamples falls back to longest timed (earliest tie-break), start-only, then untimed', () => {
+  const segments = [
+    { speaker: 'Speaker 1', text: 'Two sec', startSec: 0, endSec: 2 },
+    { speaker: 'Speaker 1', text: 'Four sec first', startSec: 5, endSec: 9 },
+    { speaker: 'Speaker 1', text: 'Four sec tie', startSec: 10, endSec: 14 },
+    { speaker: 'Speaker 2', text: 'Untimed first' },
+    { speaker: 'Speaker 2', text: 'Start only valid', startSec: 7, endSec: 7 },
+    { speaker: 'Speaker 2', text: 'Later start only', startSec: 12 },
+    { speaker: 'Speaker 3', text: 'Untimed only', endSec: 5 },
+    { speaker: 'Speaker 3', text: 'Second untimed' },
+  ];
+  assert.deepEqual(extractSpeakerSamples(segments), [
+    { speaker: 'Speaker 1', excerpt: 'Four sec first', startSec: 5, endSec: 9 },
+    { speaker: 'Speaker 2', excerpt: 'Start only valid', startSec: 7, endSec: 7 },
+    { speaker: 'Speaker 3', excerpt: 'Untimed only', startSec: null, endSec: null },
+  ]);
+});

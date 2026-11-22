@@ -1561,8 +1561,10 @@ function playSpeakerSample(button, player, sample, updateButton) {
     return;
   }
   stopSpeakerPreview?.();
-  const endSec = Number.isFinite(sample.endSec) && sample.endSec > sample.startSec
-    ? sample.endSec : sample.startSec + 4;
+  const MAX_SPEAKER_SAMPLE_PLAYBACK_SEC = 12;
+  const rawEndSec = Number.isFinite(sample.endSec) && sample.endSec > sample.startSec
+    ? sample.endSec : sample.startSec + 5;
+  const endSec = Math.min(rawEndSec, sample.startSec + MAX_SPEAKER_SAMPLE_PLAYBACK_SEC);
   const stop = () => {
     stopSpeakerPreview = null;
     pendingAudioSeekCleanup?.();
@@ -1612,13 +1614,15 @@ function buildSpeakerRow(prefix, sample, names, player, signal) {
   field.value = names[sample.speaker] || '';
   row.append(label, field);
   if (player?.getAttribute('src') && !player.error && sample.startSec !== null) {
+    const control = document.createElement('div');
+    control.className = 'speaker-preview-control';
     const preview = document.createElement('button');
     preview.type = 'button';
     preview.className = 'btn btn-small speaker-preview';
     const timestamp = formatJumpTimestamp(sample.startSec);
     const update = (playing) => {
       preview.setAttribute('aria-pressed', String(playing));
-      preview.setAttribute('aria-label', `Voice preview for ${sample.speaker} at ${timestamp}`);
+      preview.setAttribute('aria-label', `Play voice sample for ${sample.speaker} at ${timestamp}`);
       preview.textContent = `${playing ? '❚❚' : '▶'} ${timestamp}`;
     };
     update(false);
@@ -1627,7 +1631,12 @@ function buildSpeakerRow(prefix, sample, names, player, signal) {
       preview.disabled = true;
       preview.title = 'Recording audio is unavailable';
     }, { once: true, signal });
-    row.appendChild(preview);
+    const previewLabel = document.createElement('span');
+    previewLabel.className = 'speaker-preview-label';
+    previewLabel.setAttribute('aria-hidden', 'true');
+    previewLabel.textContent = 'Sample';
+    control.append(preview, previewLabel);
+    row.appendChild(control);
   }
   if (sample.excerpt) {
     const excerpt = document.createElement('p');
