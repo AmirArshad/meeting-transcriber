@@ -340,7 +340,7 @@ _CONVERSATIONAL_FOLLOW_UP_WORDS = _QUESTION_STOPWORDS | _FOLLOW_UP_CUES | frozen
 
 _DEEPEN_RE = re.compile(
     r"\b(?:go deep(?:er)?|tell me more|said more than that|elaborate|what else|"
-    r"expand on (?:that|this)|give (?:more )?details?|continue|say more)\b",
+    r"expand on (?:that|this)|give (?:me )?(?:more )?details?|continue|say more)\b",
     re.IGNORECASE,
 )
 _PRONOUN_FOLLOW_UP_RE = re.compile(
@@ -879,6 +879,10 @@ def _merge_adjacent_candidates(
                     current["contextDistance"] = min(current["contextDistance"], item["contextDistance"])
                 if item.get("rank", 0.0) < current.get("rank", 0.0):
                     current["rank"] = item["rank"]
+                    if item.get("excerpt"):
+                        current["excerpt"] = item["excerpt"]
+                elif current.get("rank", 0.0) == 0.0 and item.get("rank", 0.0) == 0.0:
+                    current["excerpt"] = ""
                 continue
 
             current = {**item, "seqLastIndex": item["seqIndex"]}
@@ -1049,26 +1053,38 @@ def _retrieve_direct_evidence(
     block_cap: int,
     token_cap: int,
 ) -> List[Dict[str, Any]]:
-    if not 1 <= len(headers) <= MAX_OVERVIEW_MEETINGS:
+    if not 1 <= len(headers) <= MAX_OVERVIEW_MEETINGS or block_cap <= 0 or token_cap <= 0:
         return []
-    meeting_ids = [h["meetingId"] for h in sorted(headers, key=lambda h: (h["date"], h["meetingId"]))]
+    ordered_headers = sorted(headers, key=lambda h: (h["date"], h["meetingId"]))
+    meeting_ids = [h["meetingId"] for h in ordered_headers]
     sizes = estimate_meeting_transcripts(conn, meeting_ids)
     if (
         len(sizes) != len(meeting_ids)
-        or sum(count for count, _ in sizes.values()) > block_cap
         or sum(size for _, size in sizes.values()) > token_cap * 4
     ):
         return []
     order = {mid: idx for idx, mid in enumerate(meeting_ids)}
-    items = fetch_meeting_passages(conn, meeting_ids, kinds=("transcript",))
-    items.sort(key=lambda item: (order[item["meetingId"]], item["seqIndex"]))
+    raw_items = [
+        item
+        for item in fetch_meeting_passages(conn, meeting_ids, kinds=("transcript",))
+        if str(item.get("text") or "").strip()
+    ]
+    items = sorted(
+        _merge_adjacent_candidates(raw_items),
+        key=lambda item: (order[item["meetingId"]], item["seqIndex"]),
+    )
     if (
         len(items) > block_cap
         or {item["meetingId"] for item in items} != order.keys()
         or sum(_estimate_item_tokens(item) for item in items) > token_cap
     ):
         return []
-    return _pack_evidence_items(items, block_cap=block_cap, token_cap=token_cap, hash_lookup={})
+    hash_lookup = {
+        h["meetingId"]: str(h.get("transcriptHash") or "")
+        for h in ordered_headers
+        if h.get("transcriptHash")
+    }
+    return _pack_evidence_items(items, block_cap=block_cap, token_cap=token_cap, hash_lookup=hash_lookup)
 
 
 def _retrieve_overview_evidence(
@@ -1130,30 +1146,65 @@ def _retrieve_overview_evidence(
         key=lambda item: (item["meetingOrder"], item["seqIndex"]),
     )
     transcripts = [item for item in merged if item["kind"] == "transcript"]
+    all_summaries = [item for item in merged if item["kind"] == "summary"]
     per_meeting_tx: Dict[str, List[Dict[str, Any]]] = {}
     for item in transcripts:
         per_meeting_tx.setdefault(item["meetingId"], []).append(item)
 
-    counts = {mid: len(items) for mid, items in per_meeting_tx.items()}
-    if len(transcripts) > block_cap or sum(_estimate_item_tokens(item) for item in transcripts) > token_cap:
-        target_blocks = min(block_cap, len(transcripts))
-        while target_blocks >= 1:
-            counts = _allocate_fair_counts(chosen_ids, per_meeting_tx, target_blocks)
-            transcripts = [
-                item for mid in per_meeting_tx for item in _uniform_sample(per_meeting_tx[mid], counts[mid])
-            ]
-            sampled_tokens = sum(_estimate_item_tokens(item) for item in transcripts)
-            if sampled_tokens <= token_cap or target_blocks == 1:
-                break
-            target_blocks = min(target_blocks - 1, max(1, target_blocks * token_cap // sampled_tokens))
-
-    fully_timed_ids = {
+    timed_meeting_ids = {
         mid for mid, items in per_meeting_tx.items()
-        if counts[mid] == len(items) and all(item.get("startSec") is not None for item in items)
+        if all(item.get("startSec") is not None for item in items)
     }
-    summaries = [item for item in merged if item["kind"] == "summary" and item["meetingId"] not in fully_timed_ids]
+    needed_summaries = [item for item in all_summaries if item["meetingId"] not in timed_meeting_ids]
+    summary_tokens = sum(_estimate_item_tokens(item) for item in needed_summaries)
+    total_tx_tokens = sum(_estimate_item_tokens(item) for item in transcripts)
+
+    counts = {mid: len(items) for mid, items in per_meeting_tx.items()}
+    if len(transcripts) + len(needed_summaries) > block_cap or total_tx_tokens + summary_tokens > token_cap:
+        summaries = list(needed_summaries)
+        for _ in range(2):
+            rem_blocks = max(0, block_cap - len(summaries))
+            rem_tokens = max(0, token_cap - sum(_estimate_item_tokens(item) for item in summaries))
+            if rem_blocks <= 0 or rem_tokens <= 0 or not transcripts:
+                counts = {mid: 0 for mid in per_meeting_tx}
+                sampled_tx: List[Dict[str, Any]] = []
+            else:
+                target_blocks = min(rem_blocks, len(transcripts))
+                sampled_tx = []
+                while target_blocks >= 1:
+                    counts = _allocate_fair_counts(chosen_ids, per_meeting_tx, target_blocks)
+                    sampled_tx = [
+                        item
+                        for mid in per_meeting_tx
+                        for item in _uniform_sample(per_meeting_tx[mid], counts[mid])
+                    ]
+                    sampled_tokens = sum(_estimate_item_tokens(item) for item in sampled_tx)
+                    if sampled_tokens <= rem_tokens or target_blocks == 1:
+                        break
+                    target_blocks = min(
+                        target_blocks - 1,
+                        max(1, target_blocks * rem_tokens // max(1, sampled_tokens)),
+                    )
+            fully_timed_ids = {
+                mid for mid in timed_meeting_ids
+                if counts.get(mid, 0) == len(per_meeting_tx[mid])
+            }
+            next_summaries = [item for item in all_summaries if item["meetingId"] not in fully_timed_ids]
+            if len(next_summaries) == len(summaries):
+                transcripts = sampled_tx
+                break
+            summaries = next_summaries
+            transcripts = sampled_tx
+        needed_summaries = summaries
+
+    ordered_evidence = [*transcripts, *needed_summaries]
+    if needed_summaries and (
+        len(ordered_evidence) > block_cap
+        or sum(_estimate_item_tokens(item) for item in ordered_evidence) > token_cap
+    ):
+        ordered_evidence = [*needed_summaries, *transcripts]
     return _pack_evidence_items(
-        [*transcripts, *summaries],
+        ordered_evidence,
         block_cap=block_cap,
         token_cap=token_cap,
         hash_lookup=hash_lookup,
@@ -1315,11 +1366,7 @@ def retrieve_evidence(
         prior = {**thread, **(prior_turn if isinstance(prior_turn, dict) else {})}
         last_question = str(prior.get("lastQuestion") or "")
         deepen = bool(_DEEPEN_RE.search(raw_question))
-        prior_tokens_cf = {tok.casefold() for tok in extract_query_tokens(last_question)}
-        new_name = any(
-            tok[0].isupper() and tok.casefold() not in prior_tokens_cf for tok in topic_tokens
-        )
-        pronoun = bool(_PRONOUN_FOLLOW_UP_RE.search(raw_question)) and not new_name
+        pronoun = bool(_PRONOUN_FOLLOW_UP_RE.search(raw_question))
         # An explicit current entity or time constraint takes precedence over the thread.
         has_date_filter = bool(temporal["dateFrom"] or temporal["dateTo"] or temporal["latestOnly"])
         conversational = all(tok.casefold() in _CONVERSATIONAL_FOLLOW_UP_WORDS for tok in topic_tokens)
@@ -1342,14 +1389,23 @@ def retrieve_evidence(
                 )["matchedSpeakers"]
             hints = [*explicit_hints, *hinted_speakers]
             _, prior_tokens = build_retrieval_query(last_question, allow_raw_fallback=False)
+            prior_topic = [
+                tok
+                for tok in prior_tokens
+                if tok.casefold() not in prior_entities["matchedTokens"]
+                and tok.casefold() not in _CONVERSATIONAL_FOLLOW_UP_WORDS
+                and not _is_generic_token(tok)
+            ]
             if not hints:
                 # A name mentioned in speech may not be a named speaker in the index.
-                hints = [tok for tok in prior_tokens if tok[0].isupper() and not _is_generic_token(tok)]
-            if not hints and not prior_entities["meetingIds"]:
-                hints = prior_tokens
+                hints = [tok for tok in prior_topic if tok[0].isupper()]
+            if not hints:
+                hints = prior_topic
             _, carry_tokens = build_retrieval_query(" ".join(hints), allow_raw_fallback=False)
             if not prior_headers:
-                carry_ids = set(match_entities(" ".join(hints), hint_headers)["strongMeetingIds"])
+                carry_ids = set(prior_entities["strongMeetingIds"]) or set(
+                    match_entities(" ".join(hints), hint_headers)["strongMeetingIds"]
+                )
                 prior_headers = [h for h in hint_headers if h["meetingId"] in carry_ids]
             topic_tokens = [tok for tok in topic_tokens if tok.casefold() not in _CONVERSATIONAL_FOLLOW_UP_WORDS]
 
@@ -1461,6 +1517,14 @@ def retrieve_evidence(
             candidates, per_meeting = search(target_headers)
 
         meeting_order = list(dict.fromkeys(c["meetingId"] for c in candidates))
+        if conn is not None and 1 <= len(meeting_order) <= 4:
+            upgraded_budget = _passage_budget(len(meeting_order), deepen=deepen)
+            if upgraded_budget > per_meeting:
+                matched_id_set = set(meeting_order)
+                matched_headers = [h for h in target_headers if h["meetingId"] in matched_id_set]
+                if matched_headers:
+                    candidates, per_meeting = search(matched_headers)
+                    meeting_order = list(dict.fromkeys(c["meetingId"] for c in candidates))
         if conn is not None:
             anchor_ids = list(dict.fromkeys([*meeting_order, *(h["meetingId"] for h in prior_headers)]))
             candidates += _nearby_candidates(
@@ -1491,16 +1555,18 @@ def retrieve_evidence(
                 item["seqIndex"],
             ))
 
+        matched_recordings = len(routed_ids)
+        final_per_meeting = _passage_budget(matched_recordings, deepen=deepen)
         ordered = [
             by_meeting[mid][slot]
-            for slot in range(per_meeting)
+            for slot in range(final_per_meeting)
             for mid in routed_ids
             if mid in by_meeting and slot < len(by_meeting[mid])
         ]
         block_cap = block_limit if block_limit is not None else (
-            per_meeting if len(target_headers) <= 1 else MAX_EVIDENCE_BLOCKS
+            final_per_meeting if matched_recordings <= 1 else MAX_EVIDENCE_BLOCKS
         )
-        if len(target_headers) >= 5:
+        if matched_recordings >= 5:
             token_cap = min(token_cap, 18_000)
         missing_hash_ids = [c["meetingId"] for c in ordered if not c.get("sourceTranscriptHash")]
         header_hashes = _build_source_hash_lookup(rec_dir, idx_path, missing_hash_ids, conn=conn) if missing_hash_ids else {}

@@ -84,7 +84,7 @@ def test_retrieve_evidence_scoping_fail_closed_merge_and_token_budget(tmp_path):
         index_path,
         question="What did we say about quantum submarines?",
         scope={"type": "selected_meetings", "meetingIds": ["m1"]},
-        max_evidence_blocks=1,
+        max_evidence_tokens=50,
     )
     assert zero["evidence"] == []
     assert zero["searchedMeetingCount"] == 1
@@ -937,6 +937,124 @@ def test_prompt_budget_preserves_recent_pairs_and_clamps_generation():
     assert 128 <= generated < 2048
     assert generated + budget.message_tokens(messages) == 3200 - 1024
     assert 0 < budget.evidence_tokens() < 2048
+
+    # On a 32k model with pre-retrieved evidence + history, fit_evidence preserves full 2048 generation headroom.
+    large_history = [
+        {"role": "user", "content": "Prior question " + ("q" * 6000)},
+        {"role": "assistant", "content": "Prior answer " + ("a" * 6000)},
+    ]
+    budget_32k = QAPromptBudget({"modelContextTokens": 32768, "history": large_history}, "Go deeper")
+    oversized_evidence = [
+        {"evidenceId": f"E{idx}", "text": "x" * 4000}
+        for idx in range(1, 35)
+    ]
+    fitted_32k, messages_32k = budget_32k.fit_evidence(oversized_evidence)
+    assert 0 < len(fitted_32k) < len(oversized_evidence)
+    assert budget_32k.generation_tokens(messages_32k) == 2048
+
+
+def test_direct_fit_merges_short_segments_overview_keeps_needed_summaries_and_stage_b_upgrades(tmp_path):
+    rec_dir = tmp_path / "recordings"
+    index_path = tmp_path / "index.sqlite"
+
+    # 1. >64 short same-speaker segments (~4 min total) merge into granular <=35s/<=550-char direct_full blocks.
+    short_lines = []
+    for idx in range(70):
+        start_s = idx * 4
+        end_s = start_s + 3
+        short_lines.append(
+            f"**[{start_s // 60:02d}:{start_s % 60:02d} - {end_s // 60:02d}:{end_s % 60:02d}]** **Dan:**\n"
+            f"Point {idx} about telemetry.\n"
+        )
+    _seed_meeting(rec_dir, "m_short_many", "Short Memo", "2026-11-20T10:00:00", "".join(short_lines))
+    sync_history_index(rec_dir, index_path)
+
+    direct = retrieve_evidence(
+        rec_dir, index_path, question="Summarize this recording",
+        scope={"type": "selected_meetings", "meetingIds": ["m_short_many"]},
+    )
+    assert direct["retrievalMode"] == "direct_full"
+    assert 1 < len(direct["evidence"]) <= 64
+    assert all(len(ev["text"]) <= 550 for ev in direct["evidence"])
+    assert all((ev["endSec"] - ev["startSec"]) <= 35.0 for ev in direct["evidence"])
+    assert "Point 0" in direct["evidence"][0]["text"]
+    assert "Point 69" in direct["evidence"][-1]["text"]
+
+    # 2. Overview reserves room for summaries of truncated or transcript-absent recordings while omitting redundant ones.
+    long_lines = []
+    for idx in range(75):
+        start_s = idx * 40
+        end_s = start_s + 20
+        long_lines.append(
+            f"**[{start_s // 60:02d}:{start_s % 60:02d} - {end_s // 60:02d}:{end_s % 60:02d}]** **Alice:**\n"
+            f"Long topic {idx}: Christopher reviewed rollout milestone {idx}.\n"
+        )
+    _seed_meeting(rec_dir, "m_long_sum", "Regional Rollout", "2026-11-21T10:00:00", "".join(long_lines))
+    _seed_meeting(rec_dir, "m_sum_only", "Summary Only", "2026-11-22T10:00:00", "# Summary Only\n---\n")
+    meetings_file = rec_dir / "meetings.json"
+    meta = json.loads(meetings_file.read_text(encoding="utf-8"))
+    for entry in meta:
+        if entry["id"] in ("m_short_many", "m_long_sum", "m_sum_only"):
+            sum_path = rec_dir / f"{entry['id']}_summary.md"
+            sum_path.write_text(f"Executive summary for {entry['id']}.", encoding="utf-8")
+            entry["ai"] = {"summary": {"status": "completed", "markdownPath": str(sum_path)}}
+    meetings_file.write_text(json.dumps(meta), encoding="utf-8")
+    sync_history_index(rec_dir, index_path)
+
+    ov = retrieve_evidence(
+        rec_dir, index_path, question="Summarize these recordings",
+        scope={"type": "selected_meetings", "meetingIds": ["m_sum_only", "m_long_sum", "m_short_many"]},
+        max_evidence_blocks=20,
+    )
+    assert ov["retrievalMode"] == "overview"
+    summary_mids = {ev["meetingId"] for ev in ov["evidence"] if ev["kind"] == "summary"}
+    assert "m_sum_only" in summary_mids
+    assert "m_long_sum" in summary_mids
+    assert "m_short_many" not in summary_mids
+
+    # 3. Follow-ups with capitalized topics stay anchored to prior_headers, and title tokens do not leak from lastQuestion.
+    for idx in range(4):
+        _seed_meeting(
+            rec_dir, f"m_other_{idx}", f"Other Sync {idx}", f"2026-11-1{idx}T09:00:00",
+            f"**[00:05 - 00:15]** **Bob:**\nKubernetes cluster node {idx} and generic rollout notes.\n",
+        )
+    sync_history_index(rec_dir, index_path)
+
+    cap_topic = retrieve_evidence(
+        rec_dir, index_path, question="What did she say about Kubernetes?",
+        thread_context={"lastCitedMeetingIds": ["m_other_1"], "lastQuestion": "Tell me about Other Sync 1"},
+    )
+    assert cap_topic["retrievalMode"] == "targeted"
+    assert {ev["meetingId"] for ev in cap_topic["evidence"]} == {"m_other_1"}
+
+    title_in_prior = retrieve_evidence(
+        rec_dir, index_path, question="He said more than that go deeper",
+        thread_context={
+            "lastCitedMeetingIds": ["m_long_sum"],
+            "lastQuestion": "What did Christopher want in Regional Rollout?",
+        },
+    )
+    assert title_in_prior["queryTokens"] == ["Christopher"]
+    assert {ev["meetingId"] for ev in title_in_prior["evidence"]} == {"m_long_sum"}
+
+    lower_in_prior = retrieve_evidence(
+        rec_dir, index_path, question="He said more than that go deeper",
+        thread_context={
+            "lastCitedMeetingIds": ["m_long_sum"],
+            "lastQuestion": "what did christopher want in regional rollout?",
+        },
+    )
+    assert lower_in_prior["queryTokens"] == ["christopher"]
+    assert {ev["meetingId"] for ev in lower_in_prior["evidence"]} == {"m_long_sum"}
+
+    # 4. Stage B upgrades passage budget from 5 to 40 when an "All recordings" query matches only 1 long recording.
+    all_scope_single_match = retrieve_evidence(
+        rec_dir, index_path, question="What did Christopher say about milestone?",
+        scope={"type": "all"},
+    )
+    assert all_scope_single_match["retrievalMode"] == "targeted"
+    assert {ev["meetingId"] for ev in all_scope_single_match["evidence"]} == {"m_long_sum"}
+    assert len(all_scope_single_match["evidence"]) == 40
 
 
 def test_overview_mode_uniformly_samples_long_recording(tmp_path):

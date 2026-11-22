@@ -348,17 +348,26 @@ class QAPromptBudget:
     def fit_evidence(
         self, evidence: Sequence[Dict[str, Any]],
     ) -> Tuple[Sequence[Dict[str, Any]], List[Dict[str, str]]]:
+        base_available = self.context_limit - self.message_tokens(self.messages([]))
+        target_reserve = self._reserve_for_evidence(base_available)
         messages = self.messages(evidence)
-        if self.generation_tokens(messages) >= MIN_GENERATION_TOKENS:
+        if self.generation_tokens(messages) >= target_reserve:
             return evidence, messages
-        low, high = 0, len(evidence)
-        while low < high:
-            middle = (low + high + 1) // 2
-            if self.generation_tokens(self.messages(evidence[:middle])) >= MIN_GENERATION_TOKENS:
-                low = middle
-            else:
-                high = middle - 1
-        return evidence[:low], self.messages(evidence[:low])
+
+        def max_fitting(min_gen: int) -> int:
+            low, high = 0, len(evidence)
+            while low < high:
+                middle = (low + high + 1) // 2
+                if self.generation_tokens(self.messages(evidence[:middle])) >= min_gen:
+                    low = middle
+                else:
+                    high = middle - 1
+            return low
+
+        fitted_count = max_fitting(target_reserve)
+        if fitted_count == 0 and target_reserve > MIN_GENERATION_TOKENS:
+            fitted_count = max_fitting(MIN_GENERATION_TOKENS)
+        return evidence[:fitted_count], self.messages(evidence[:fitted_count])
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
