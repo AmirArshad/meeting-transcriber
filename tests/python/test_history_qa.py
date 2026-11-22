@@ -1647,7 +1647,7 @@ def test_citation_dedupe_insufficient_explanation_and_general_chat_verifier():
             "answerMarkdown": (
                 "First verse starts quietly [E1] [E1].\n\n"
                 "- Second point repeats [E1, E1] and mixes invalid [E2] [E99] [E2] [E1].\n"
-                "- Tight pair [E2][E2]."
+                "- Tight pair [E2][E2]. Nested unknown [E[E99]88]."
             ),
             "citedEvidenceIds": ["E1", "E2", "E99"],
             "insufficientEvidence": False,
@@ -1659,12 +1659,13 @@ def test_citation_dedupe_insufficient_explanation_and_general_chat_verifier():
     assert "- Second point repeats [E1] and mixes invalid [E2] [E1]." in verified["answerMarkdown"]
     assert "- Tight pair [E2]." in verified["answerMarkdown"]
     assert "[E99]" not in verified["answerMarkdown"]
+    assert "[E88]" not in verified["answerMarkdown"]
     assert [(c["evidenceId"], c["startSec"]) for c in verified["citations"]] == [("E1", 11.0), ("E2", 45.0)]
 
     # Grounded insufficient_evidence preserves the LLM's concise explanation (stripping stray markers) with 0 citations.
     explained_insufficient = json.dumps(
         {
-            "answerMarkdown": "The recordings cover Q4 launch dates [E1], but they do not mention travel budgets [E99].",
+            "answerMarkdown": "The recordings cover Q4 launch dates [E1], but they do not mention travel budgets [E[E1]99].",
             "citedEvidenceIds": ["E1"],
             "insufficientEvidence": True,
         }
@@ -1679,6 +1680,15 @@ def test_citation_dedupe_insufficient_explanation_and_general_chat_verifier():
     insuff_fallback = verify_grounded_response(empty_insufficient, evidence)
     assert insuff_fallback["status"] == "insufficient_evidence"
     assert insuff_fallback["answerMarkdown"] == INSUFFICIENT_EVIDENCE_MESSAGE
+
+    for flag in ("false", "true", 0, 1, None, []):
+        malformed = json.dumps({"answerMarkdown": "Unverified claim [E99].", "insufficientEvidence": flag})
+        result = verify_grounded_response(malformed, evidence)
+        assert result["needsRepair"] and result["reason"] == "malformed_json"
+        assert result["answerMarkdown"] == ""
+
+    malformed = json.dumps({"answerMarkdown": {"claim": "Unverified"}, "insufficientEvidence": True})
+    assert verify_grounded_response(malformed, evidence)["needsRepair"]
 
     # General chat verifier strips reasoning tags and stray [Ek] markers while preserving Markdown & code blocks.
     raw_general = (
@@ -1771,7 +1781,7 @@ def test_retrieval_scope_none_and_general_chat_direct_markdown_sse(tmp_path, cap
             chunks = [
                 "<think>drafting</think>",
                 "## Recursion\n\n",
-                "A function calls itself [E1] ",
+                "A function calls itself [E[E1]2] ",
                 "until reaching a base case (token hf_secret_token_99999).",
             ]
             for piece in chunks:
@@ -1808,6 +1818,7 @@ def test_retrieval_scope_none_and_general_chat_direct_markdown_sse(tmp_path, cap
         assert res["searchedMeetingCount"] == 0
         assert res["evidenceCount"] == 0
         assert "[E1]" not in res["answerMarkdown"]
+        assert "[E2]" not in res["answerMarkdown"]
         assert "hf_secret_token_99999" not in res["answerMarkdown"]
         assert "[redacted-token]" in res["answerMarkdown"]
         assert res["answerMarkdown"].startswith("## Recursion\n\nA function calls itself")
@@ -1823,6 +1834,7 @@ def test_retrieval_scope_none_and_general_chat_direct_markdown_sse(tmp_path, cap
         assert any("Recursion" in evt.get("draftMarkdown", "") for evt in streaming_events)
         assert all("<think>" not in evt.get("draftMarkdown", "") for evt in streaming_events)
         assert all("[E1]" not in evt.get("draftMarkdown", "") for evt in streaming_events)
+        assert all("[E2]" not in evt.get("draftMarkdown", "") for evt in streaming_events)
     finally:
         server.shutdown()
         server.server_close()

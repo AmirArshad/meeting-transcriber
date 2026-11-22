@@ -31,6 +31,7 @@ _UNCLOSED_GEMMA_THOUGHT_RE = re.compile(
 )
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$", re.IGNORECASE)
 _EVIDENCE_GROUP_RE = re.compile(r"\[((?:E\d+)(?:\s*[,;/]\s*E\d+)+)\]")
+_EVIDENCE_MARKER_RE = re.compile(r"\[(E\d+(?:\s*[,;/]\s*E\d+)*)\]")
 _SINGLE_EVIDENCE_RE = re.compile(r"\[(E\d+)\]")
 _CITATION_CLUSTER_RE = re.compile(r"\[E\d+\](?:[ \t]*\[E\d+\])+")
 
@@ -65,6 +66,21 @@ def strip_model_artifacts(raw_text: Any) -> str:
     return cleaned
 
 
+def _strip_invalid_markers(text: str, valid_ids: Optional[set[str]] = None) -> str:
+    def keep_valid(match: re.Match[str]) -> str:
+        if not valid_ids:
+            return ""
+        ids = re.split(r"\s*[,;/]\s*", match.group(1))
+        return " ".join(f"[{eid}]" for eid in ids if eid in valid_ids)
+
+    # Removing an inner marker can expose another complete marker.
+    while True:
+        cleaned = _EVIDENCE_MARKER_RE.sub(keep_valid, text)
+        if cleaned == text:
+            return cleaned
+        text = cleaned
+
+
 def strip_stray_evidence_markers(markdown: Any) -> str:
     """Strip all [Ek] and grouped [E1, E2] markers cleanly while preserving Markdown structure."""
     out_lines: List[str] = []
@@ -81,9 +97,8 @@ def strip_stray_evidence_markers(markdown: Any) -> str:
             fence_len = len(fence_match.group(1))
             close_fence_re = re.compile(rf"^\s{{0,3}}{re.escape(fence_char)}{{{fence_len},}}\s*$")
 
-        sanitized_line = _EVIDENCE_GROUP_RE.sub("", line)
-        sanitized_line = _SINGLE_EVIDENCE_RE.sub("", sanitized_line)
-        if close_fence_re is None:
+        sanitized_line = _strip_invalid_markers(line)
+        if close_fence_re is None and sanitized_line != line:
             sanitized_line = re.sub(r"(?<=\S)[ \t]+([.,;:!?])", r"\1", sanitized_line)
             sanitized_line = re.sub(r"(?<=\S)[ \t]{2,}", " ", sanitized_line).rstrip()
         out_lines.append(sanitized_line)
@@ -137,19 +152,19 @@ def parse_qa_json(raw_text: Any) -> Optional[Dict[str, Any]]:
             parsed = json.loads(candidate)
         except json.JSONDecodeError:
             continue
-        if isinstance(parsed, dict) and (
-            isinstance(parsed.get("answerMarkdown"), str)
-            or isinstance(parsed.get("insufficientEvidence"), bool)
-        ):
+        if not isinstance(parsed, dict):
+            continue
+        if "insufficientEvidence" in parsed and not isinstance(parsed["insufficientEvidence"], bool):
+            continue
+        if "answerMarkdown" in parsed and not isinstance(parsed["answerMarkdown"], str):
+            continue
+        if "answerMarkdown" in parsed or "insufficientEvidence" in parsed:
             return parsed
     return None
 
 
 def _normalize_inline_citations(markdown: str, valid_ids: set[str]) -> Tuple[str, bool]:
     """Expand grouped citations and detect citation-only lines before stripping invalid IDs."""
-    def replace_marker(match: re.Match[str]) -> str:
-        return match.group(0) if match.group(1) in valid_ids else ""
-
     out_lines: List[str] = []
     standalone_citation = False
     close_fence_re: Optional[re.Pattern[str]] = None
@@ -175,7 +190,7 @@ def _normalize_inline_citations(markdown: str, valid_ids: set[str]) -> Tuple[str
         if "|" not in body and _SINGLE_EVIDENCE_RE.search(body) and not _block_has_factual_text(body):
             standalone_citation = True
 
-        sanitized_line = _SINGLE_EVIDENCE_RE.sub(replace_marker, expanded)
+        sanitized_line = _strip_invalid_markers(expanded, valid_ids)
         if close_fence_re is None:
             sanitized_line = _CITATION_CLUSTER_RE.sub(_dedupe_citation_cluster, sanitized_line)
             # Collapse spaces left by removed citations without changing indentation.
@@ -381,8 +396,8 @@ def verify_grounded_response(
             "reason": "malformed_json",
         }
 
-    if bool(parsed.get("insufficientEvidence")):
-        raw_explanation = strip_stray_evidence_markers(str(parsed.get("answerMarkdown") or "").strip())
+    if parsed.get("insufficientEvidence") is True:
+        raw_explanation = strip_stray_evidence_markers(parsed.get("answerMarkdown", ""))
         return {
             "ok": True,
             "needsRepair": False,
@@ -488,6 +503,7 @@ def verify_grounded_response(
                 "evidenceId": eid,
                 "meetingId": ev["meetingId"],
                 "meetingTitle": ev["meetingTitle"],
+                **({"passageKey": ev["passageKey"]} if "passageKey" in ev else {}),
                 "meetingDate": ev.get("meetingDate") or "",
                 "startSec": ev.get("startSec"),
                 "endSec": ev.get("endSec"),

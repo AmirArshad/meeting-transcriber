@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { EventEmitter } = require('node:events');
 
@@ -1030,12 +1031,25 @@ test('general chat (scope.type = none) bypasses FTS5/zero-hit gate, enforces CUD
           evidenceCount: 99,
         })));
       } else {
+        // Cross the production verifier boundary before persisting the turn and testing its follow-up.
+        const root = path.resolve(__dirname, '../..');
+        const venv = path.join(root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+        const python = fs.existsSync(venv) ? venv : (process.platform === 'win32' ? 'python' : 'python3');
+        const modelReply = {
+          answerMarkdown: `Grounded answer ${turn} [E1].`,
+          insufficientEvidence: false,
+          citations: [{ evidenceId: 'E1', passageKey: 'invented:7', startSec: 999 }],
+        };
+        const verified = JSON.parse(execFileSync(python, ['-c', [
+          'import json, sys',
+          'from backend.history_qa.citation_verifier import verify_grounded_response',
+          'reply, evidence = json.load(sys.stdin)',
+          'print(json.dumps(verify_grounded_response(json.dumps(reply), evidence)))',
+        ].join('\n')], { cwd: root, input: JSON.stringify([modelReply, payload.evidence]), encoding: 'utf8' }));
         proc.stdout.emit('data', Buffer.from(JSON.stringify({
-          status: 'answered',
+          ...verified,
           chatMode: 'grounded',
           retrievalMode: 'direct_full',
-          answerMarkdown: `Grounded answer ${turn} [E1].`,
-          citations: payload.evidence,
           searchedMeetingCount: 1,
           evidenceCount: payload.evidence.length,
         })));
@@ -1103,6 +1117,7 @@ test('general chat (scope.type = none) bypasses FTS5/zero-hit gate, enforces CUD
   assert.equal(gr1.chatMode, 'grounded');
   assert.equal(gr1.assistantMessage.chatMode, 'grounded');
   assert.equal(gr1.assistantMessage.retrievalMode, 'direct_full');
+  assert.equal(gr1.assistantMessage.citations[0].startSec, 65);
   assert.equal(h.getSyncCalls(), 1);
   assert.equal(runnerPayloads[2].chatMode, 'grounded');
   assert.deepEqual(runnerPayloads[2].history, []);

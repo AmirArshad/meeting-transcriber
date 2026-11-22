@@ -33,6 +33,7 @@ from .citation_verifier import (
     clip_repair_output,
     strip_model_artifacts,
     strip_reasoning_blocks,
+    strip_stray_evidence_markers,
     verify_general_response,
     verify_grounded_response,
 )
@@ -176,14 +177,9 @@ def extract_partial_answer_markdown(raw_text: Any) -> Optional[str]:
 
 def extract_partial_general_markdown(raw_text: Any) -> Optional[str]:
     """Safely extract progressive plain Markdown from streamed general-chat output."""
-    cleaned = strip_reasoning_blocks(raw_text)
-    if not cleaned:
-        return None
-    cleaned = _STREAM_CITATION_RE.sub("", cleaned)
+    cleaned = strip_stray_evidence_markers(strip_reasoning_blocks(raw_text))
     cleaned = _STREAM_TRAILING_CITATION_RE.sub("", cleaned)
-    cleaned = re.sub(r"(?<=\S)[ \t]+([.,;:!?])", r"\1", cleaned)
-    cleaned = cleaned.rstrip(" \t")
-    return cleaned if cleaned.strip() else None
+    return cleaned.rstrip() or None
 
 
 def bound_conversation_history(
