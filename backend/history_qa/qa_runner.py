@@ -32,6 +32,9 @@ from .citation_verifier import (
     build_repair_prompt,
     clip_repair_output,
     strip_model_artifacts,
+    strip_reasoning_blocks,
+    strip_stray_evidence_markers,
+    verify_general_response,
     verify_grounded_response,
 )
 from .retrieval import estimate_token_count, retrieve_evidence
@@ -172,6 +175,13 @@ def extract_partial_answer_markdown(raw_text: Any) -> Optional[str]:
     return text if text.strip() else None
 
 
+def extract_partial_general_markdown(raw_text: Any) -> Optional[str]:
+    """Safely extract progressive plain Markdown from streamed general-chat output."""
+    cleaned = strip_stray_evidence_markers(strip_reasoning_blocks(raw_text))
+    cleaned = _STREAM_TRAILING_CITATION_RE.sub("", cleaned)
+    return cleaned.rstrip() or None
+
+
 def bound_conversation_history(
     history: Optional[Sequence[Dict[str, Any]]],
     *,
@@ -241,6 +251,48 @@ def bound_conversation_history(
     return turns
 
 
+def _resolve_chat_mode(payload: Dict[str, Any]) -> str:
+    raw_mode = str(payload.get("chatMode") or "").strip().lower()
+    if raw_mode == "general":
+        return "general"
+    if raw_mode == "grounded":
+        return "grounded"
+    scope = payload.get("scope")
+    if isinstance(scope, dict) and str(scope.get("type") or "").strip().lower() == "none":
+        return "general"
+    return "grounded"
+
+
+def build_general_chat_messages(
+    *,
+    question: str,
+    history: Optional[Sequence[Dict[str, Any]]] = None,
+    history_max_tokens: int = MAX_HISTORY_TOKENS,
+) -> List[Dict[str, str]]:
+    system_prompt = "\n".join(
+        [
+            "You are AvaNevis, a private local AI assistant running 100% offline.",
+            "No recordings are attached to this conversation. Answer helpfully using general knowledge.",
+            "Do not invent recording quotes, timestamps, or [E1] citations.",
+            "Respond directly in clear, concise Markdown (do not wrap your answer in JSON).",
+        ]
+    )
+
+    turns = bound_conversation_history(history, max_tokens=history_max_tokens)
+    digest = next((turn["content"] for turn in turns if turn["role"] == "context"), "")
+    user_content = "\n\n".join(
+        [
+            *([digest] if digest else []),
+            str(question or "").strip(),
+        ]
+    )
+
+    messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    messages.extend(turn for turn in turns if turn["role"] != "context")
+    messages.append({"role": "user", "content": user_content})
+    return messages
+
+
 def build_qa_messages(
     *,
     question: str,
@@ -251,19 +303,16 @@ def build_qa_messages(
     system_prompt = "\n".join(
         [
             "You are AvaNevis, a private local audio transcript assistant running 100% offline.",
-            "Answer the user's question ONLY using facts explicitly stated in the numbered evidence passages [E1]..[En] below.",
-            "SYNTHESIS & FORMATTING RULES:",
-            "1. Synthesize across multiple [Ek] passages (including Summary and Transcript excerpts) to give a clear, helpful answer.",
-            "2. If only part of a multi-part question is covered in the passages, answer what IS supported and briefly note what was not covered.",
-            "3. Format cleanly with concise Markdown headings, bullet lists, or GFM tables when helpful.",
-            "4. Place inline square-bracket citations like [E1] or [E1] [E2] on the SAME line at the end of EVERY factual paragraph, bullet point, blockquote, and table data row (for example: '- Approved the calibration [E1].'). NEVER put [E1] on a separate line or standalone bullet like '- [E1]'. [E1]..[En] numbering applies specifically to the current turn's `Evidence passages` list (never earlier turns). (Headings, table header/separator rows, and short colon-terminated lead-in lines before a list or table do not need citations.)",
-            "5. NEVER invent facts, decisions, numbers, quotes, recording names, speakers, or timestamps not present in the evidence.",
-            "Cite the specific timestamped [Ek] that supports each claim. If adjacent verses or speaker turns support different claims, cite each at its matching timestamp. Prefer timestamped transcript passages when a summary repeats the same facts.",
-            "For transcript attribution, the Speaker label in the passage header identifies who said the following words. A per-excerpt speaker label takes precedence for its excerpt. A name spoken in the passage may refer to somebody else. If saved summary attribution differs, use the transcript's current speaker label.",
-            "Use earlier conversation to resolve references and focus follow-up questions. Support every factual claim with this turn's evidence.",
-            "6. Only set insufficientEvidence to true when none of the retrieved passages address the question at all.",
-            "7. Respond ONLY with a valid JSON object matching this exact schema (no prose outside JSON, no markdown code fences):",
-            '{"answerMarkdown": "<Markdown answer with inline [Ek] citations>", "citedEvidenceIds": ["E1"], "insufficientEvidence": false}',
+            "Ground all facts about recordings ONLY in numbered passages [E1]..[En] below.",
+            "RULES:",
+            "1. Synthesize, explain concepts mentioned, or draft follow-ups (emails, checklists, summaries) from [Ek] passages; cite transcript facts inline with [Ek] and briefly note any uncovered parts.",
+            "2. Use concise Markdown headings, bullets, or GFM tables when helpful.",
+            "3. Put inline [E1] or [E1] [E2] citations on the SAME line at the end of EVERY factual paragraph, bullet, blockquote, and table row (e.g. '- Approved calibration [E1].'). NEVER put [E1] on a separate line or standalone bullet like '- [E1]'. [E1]..[En] applies only to the current turn's `Evidence passages` list. (Headings, table headers/separators, and short colon lead-ins need no citations.)",
+            "4. NEVER invent facts, numbers, quotes, titles, speakers, or timestamps.",
+            "Cite the specific timestamped [Ek] supporting each claim; prefer timestamped transcript passages over summaries. The passage header's Speaker label identifies who spoke (and overrides differing summary attribution). Use prior turns to resolve follow-ups, citing this turn's evidence.",
+            "5. Set insufficientEvidence to true ONLY if no passage addresses the question; briefly explain in answerMarkdown what was covered versus missing.",
+            "6. Reply ONLY with valid JSON (no fences or prose):",
+            '{"answerMarkdown": "<Markdown with inline [Ek] citations>", "citedEvidenceIds": ["E1"], "insufficientEvidence": false}',
         ]
     )
 
@@ -316,13 +365,26 @@ class QAPromptBudget:
         self.evidence_limit = payload.get("maxEvidenceTokens")
         self.question = question
         self.history = payload.get("history")
-        fixed_tokens = self.message_tokens(build_qa_messages(question=question, evidence=[]))
-        available = self.context_limit - fixed_tokens
-        self.history_limit = max(0, min(MAX_HISTORY_TOKENS, (available - self._reserve_for_evidence(available)) // 4))
+        self.chat_mode = _resolve_chat_mode(payload)
+        if self.chat_mode == "general":
+            fixed_tokens = self.message_tokens(build_general_chat_messages(question=question))
+            available = self.context_limit - fixed_tokens
+            self.history_limit = max(0, min(MAX_HISTORY_TOKENS, available - self._reserve_for_evidence(available)))
+        else:
+            fixed_tokens = self.message_tokens(build_qa_messages(question=question, evidence=[]))
+            available = self.context_limit - fixed_tokens
+            self.history_limit = max(0, min(MAX_HISTORY_TOKENS, (available - self._reserve_for_evidence(available)) // 4))
 
     @staticmethod
     def message_tokens(messages: Sequence[Dict[str, str]]) -> int:
         return sum(estimate_token_count(message["content"]) + 12 for message in messages)
+
+    def general_messages(self) -> List[Dict[str, str]]:
+        return build_general_chat_messages(
+            question=self.question,
+            history=self.history,
+            history_max_tokens=self.history_limit,
+        )
 
     def messages(self, evidence: Sequence[Dict[str, Any]]) -> List[Dict[str, str]]:
         return build_qa_messages(
@@ -407,6 +469,7 @@ def call_llama_server(
     temperature: float = 0.1,
     timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS,
     stream: bool = False,
+    json_mode: bool = True,
     on_draft_update: Optional[Callable[[str], None]] = None,
 ) -> str:
     """Call resident loopback llama-server bypassing ambient HTTP proxy env vars."""
@@ -416,16 +479,16 @@ def call_llama_server(
         raise ValueError("Missing llama-server bearer token.")
 
     endpoint = f"{base_url}/v1/chat/completions"
-    body = json.dumps(
-        {
-            "messages": list(messages),
-            "temperature": float(temperature),
-            "max_tokens": int(max_tokens),
-            "stream": bool(stream),
-            "response_format": {"type": "json_object"},
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
-    ).encode("utf-8")
+    request_payload: Dict[str, Any] = {
+        "messages": list(messages),
+        "temperature": float(temperature),
+        "max_tokens": int(max_tokens),
+        "stream": bool(stream),
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    if json_mode:
+        request_payload["response_format"] = {"type": "json_object"}
+    body = json.dumps(request_payload).encode("utf-8")
 
     request = urllib.request.Request(
         endpoint,
@@ -437,6 +500,7 @@ def call_llama_server(
         method="POST",
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RejectRedirects())
+    preview_extractor = extract_partial_answer_markdown if json_mode else extract_partial_general_markdown
     try:
         with opener.open(request, timeout=timeout_seconds) as response:
             content_type = str(response.headers.get("Content-Type") or "").lower()
@@ -473,7 +537,7 @@ def call_llama_server(
                     chunks.append(piece)
 
                     if on_draft_update is not None:
-                        preview = extract_partial_answer_markdown("".join(chunks))
+                        preview = preview_extractor("".join(chunks))
                         now = time.monotonic()
                         if (
                             preview
@@ -487,7 +551,7 @@ def call_llama_server(
 
                 full_content = "".join(chunks)
                 if on_draft_update is not None:
-                    final_preview = extract_partial_answer_markdown(full_content)
+                    final_preview = preview_extractor(full_content)
                     if final_preview and final_preview != last_emitted_preview:
                         on_draft_update(final_preview)
                 return full_content
@@ -534,7 +598,87 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not question:
         raise ValueError("Question must not be empty.")
 
+    chat_mode = _resolve_chat_mode(payload)
     budget = QAPromptBudget(payload, question)
+    mode = str(payload.get("executionMode") or "server").strip().lower()
+    use_stream = bool(payload.get("stream", False)) and mode == "server"
+    default_temp = 0.3 if chat_mode == "general" else 0.1
+    temperature = float(payload.get("temperature") if payload.get("temperature") is not None else default_temp)
+
+    def complete(
+        turn_messages: Sequence[Dict[str, str]],
+        *,
+        allow_stream: bool = False,
+        json_mode: bool = True,
+    ) -> str:
+        max_tokens = budget.generation_tokens(turn_messages)
+        if mode == "server":
+            on_draft = (
+                (lambda preview: emit_progress(
+                    "streaming",
+                    "Writing answer locally…",
+                    percent=65,
+                    draft_markdown=preview,
+                ))
+                if allow_stream
+                else None
+            )
+            server_kwargs: Dict[str, Any] = {
+                "server_url": str(payload.get("serverUrl") or ""),
+                "server_token": str(payload.get("serverToken") or ""),
+                "messages": turn_messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": allow_stream,
+                "on_draft_update": on_draft,
+            }
+            if not json_mode:
+                server_kwargs["json_mode"] = False
+            return call_llama_server(**server_kwargs)
+        runtime_dir = str(payload.get("runtimeDir") or "")
+        model_path = str(payload.get("modelPath") or "")
+        runtime = apply_inference_descriptor(resolve_llama_runtime(runtime_dir=runtime_dir, model_path=model_path), payload.get("inferenceDescriptor"))
+        with tempfile.TemporaryDirectory(prefix="avanevis-qa-cli-") as work_dir:
+            prompt_file = Path(work_dir) / "qa.prompt.txt"
+            formatter = format_gemma_prompt if runtime["inference"].get("promptFormat") == "gemma" else format_chatml_prompt
+            prompt_file.write_text(formatter(turn_messages), encoding="utf-8")
+            return run_llama_prompt(
+                runtime,
+                prompt_path=str(prompt_file),
+                max_tokens=max_tokens,
+                timeout_seconds=DEFAULT_HTTP_TIMEOUT_SECONDS,
+            )
+
+    if chat_mode == "general":
+        messages = budget.general_messages()
+        emit_progress("generating", "Writing answer locally…", percent=55)
+        raw_output = complete(messages, allow_stream=use_stream, json_mode=False)
+        verified = verify_general_response(raw_output)
+        emit_progress("completed", "Done.", percent=100)
+        if not verified.get("ok"):
+            return {
+                "status": "verification_failed",
+                "chatMode": "general",
+                "failureReason": str(verified.get("reason") or "empty_answer"),
+                "answerMarkdown": "",
+                "citations": [],
+                "inspectedSources": [],
+                "detectedDateFilter": "",
+                "retrievalMode": "",
+                "searchedMeetingCount": 0,
+                "evidenceCount": 0,
+            }
+        return {
+            "status": "answered",
+            "chatMode": "general",
+            "answerMarkdown": redact_sensitive_text(verified["answerMarkdown"], max_length=0, preserve_whitespace=True),
+            "citations": [],
+            "detectedDateFilter": "",
+            "retrievalMode": "",
+            "searchedMeetingCount": 0,
+            "evidenceCount": 0,
+        }
+
     evidence = payload.get("evidence")
     searched_meeting_count = int(payload.get("searchedMeetingCount") or 0)
     detected_date_filter = str(payload.get("detectedDateFilter") or "")
@@ -569,6 +713,7 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not evidence:
         return {
             "status": "no_matching_excerpts",
+            "chatMode": "grounded",
             "failureReason": "no_matching_excerpts",
             "answerMarkdown": NO_MATCHING_EXCERPTS_MESSAGE,
             "citations": [],
@@ -578,46 +723,6 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
             "searchedMeetingCount": searched_meeting_count,
             "evidenceCount": 0,
         }
-
-    mode = str(payload.get("executionMode") or "server").strip().lower()
-    use_stream = bool(payload.get("stream", False)) and mode == "server"
-    temperature = float(payload.get("temperature") if payload.get("temperature") is not None else 0.1)
-
-    def complete(turn_messages: Sequence[Dict[str, str]], *, allow_stream: bool = False) -> str:
-        max_tokens = budget.generation_tokens(turn_messages)
-        if mode == "server":
-            on_draft = (
-                (lambda preview: emit_progress(
-                    "streaming",
-                    "Writing answer locally…",
-                    percent=65,
-                    draft_markdown=preview,
-                ))
-                if allow_stream
-                else None
-            )
-            return call_llama_server(
-                server_url=str(payload.get("serverUrl") or ""),
-                server_token=str(payload.get("serverToken") or ""),
-                messages=turn_messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                stream=allow_stream,
-                on_draft_update=on_draft,
-            )
-        runtime_dir = str(payload.get("runtimeDir") or "")
-        model_path = str(payload.get("modelPath") or "")
-        runtime = apply_inference_descriptor(resolve_llama_runtime(runtime_dir=runtime_dir, model_path=model_path), payload.get("inferenceDescriptor"))
-        with tempfile.TemporaryDirectory(prefix="avanevis-qa-cli-") as work_dir:
-            prompt_file = Path(work_dir) / "qa.prompt.txt"
-            formatter = format_gemma_prompt if runtime["inference"].get("promptFormat") == "gemma" else format_chatml_prompt
-            prompt_file.write_text(formatter(turn_messages), encoding="utf-8")
-            return run_llama_prompt(
-                runtime,
-                prompt_path=str(prompt_file),
-                max_tokens=max_tokens,
-                timeout_seconds=DEFAULT_HTTP_TIMEOUT_SECONDS,
-            )
 
     emit_progress("generating", "Writing answer locally…", percent=55)
     raw_output = complete(messages, allow_stream=use_stream)
@@ -656,6 +761,7 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not verified.get("ok"):
         return {
             "status": "verification_failed",
+            "chatMode": "grounded",
             "failureReason": str(verified.get("reason") or "verification_failed"),
             "answerMarkdown": VERIFICATION_FAILED_MESSAGE,
             "citations": [],
@@ -669,8 +775,9 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     if verified["status"] == "insufficient_evidence":
         return {
             "status": "insufficient_evidence",
+            "chatMode": "grounded",
             "failureReason": "insufficient_evidence",
-            "answerMarkdown": verified["answerMarkdown"],
+            "answerMarkdown": redact_sensitive_text(verified["answerMarkdown"], max_length=0, preserve_whitespace=True),
             "citations": [],
             "inspectedSources": _build_inspected_sources(evidence),
             "detectedDateFilter": detected_date_filter,
@@ -681,6 +788,7 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "status": verified["status"],
+        "chatMode": "grounded",
         "answerMarkdown": redact_sensitive_text(verified["answerMarkdown"], max_length=0, preserve_whitespace=True),
         "citations": verified["citations"],
         "detectedDateFilter": detected_date_filter,

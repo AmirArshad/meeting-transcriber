@@ -1628,3 +1628,213 @@ def test_mixed_answer_rejects_citation_only_blocks_and_uncited_fences():
     verified = verify_grounded_response(json.dumps({"answerMarkdown": "## Calibration [E2]\n\nApproved calibration [E1]."}), evidence)
     assert verified["ok"] is True
     assert [citation["evidenceId"] for citation in verified["citations"]] == ["E1"]
+
+
+def test_citation_dedupe_insufficient_explanation_and_general_chat_verifier():
+    from backend.history_qa.citation_verifier import (
+        strip_stray_evidence_markers,
+        verify_general_response,
+    )
+
+    evidence = [
+        {"evidenceId": "E1", "meetingId": "m1", "meetingTitle": "Sync", "startSec": 11.0},
+        {"evidenceId": "E2", "meetingId": "m1", "meetingTitle": "Sync", "startSec": 45.0},
+    ]
+
+    # Adjacent/consecutive identical citations dedupe cleanly while preserving immutable evidence_map verification.
+    dup_answer = json.dumps(
+        {
+            "answerMarkdown": (
+                "First verse starts quietly [E1] [E1].\n\n"
+                "- Second point repeats [E1, E1] and mixes invalid [E2] [E99] [E2] [E1].\n"
+                "- Tight pair [E2][E2]. Nested unknown [E[E99]88]."
+            ),
+            "citedEvidenceIds": ["E1", "E2", "E99"],
+            "insufficientEvidence": False,
+        }
+    )
+    verified = verify_grounded_response(dup_answer, evidence)
+    assert verified["status"] == "answered"
+    assert "First verse starts quietly [E1]." in verified["answerMarkdown"]
+    assert "- Second point repeats [E1] and mixes invalid [E2] [E1]." in verified["answerMarkdown"]
+    assert "- Tight pair [E2]." in verified["answerMarkdown"]
+    assert "[E99]" not in verified["answerMarkdown"]
+    assert "[E88]" not in verified["answerMarkdown"]
+    assert [(c["evidenceId"], c["startSec"]) for c in verified["citations"]] == [("E1", 11.0), ("E2", 45.0)]
+
+    # Grounded insufficient_evidence preserves the LLM's concise explanation (stripping stray markers) with 0 citations.
+    explained_insufficient = json.dumps(
+        {
+            "answerMarkdown": "The recordings cover Q4 launch dates [E1], but they do not mention travel budgets [E[E1]99].",
+            "citedEvidenceIds": ["E1"],
+            "insufficientEvidence": True,
+        }
+    )
+    insuff = verify_grounded_response(explained_insufficient, evidence)
+    assert insuff["ok"] is True
+    assert insuff["status"] == "insufficient_evidence"
+    assert insuff["citations"] == []
+    assert insuff["answerMarkdown"] == "The recordings cover Q4 launch dates, but they do not mention travel budgets."
+
+    empty_insufficient = json.dumps({"answerMarkdown": "   ", "citedEvidenceIds": [], "insufficientEvidence": True})
+    insuff_fallback = verify_grounded_response(empty_insufficient, evidence)
+    assert insuff_fallback["status"] == "insufficient_evidence"
+    assert insuff_fallback["answerMarkdown"] == INSUFFICIENT_EVIDENCE_MESSAGE
+
+    for flag in ("false", "true", 0, 1, None, []):
+        malformed = json.dumps({"answerMarkdown": "Unverified claim [E99].", "insufficientEvidence": flag})
+        result = verify_grounded_response(malformed, evidence)
+        assert result["needsRepair"] and result["reason"] == "malformed_json"
+        assert result["answerMarkdown"] == ""
+
+    malformed = json.dumps({"answerMarkdown": {"claim": "Unverified"}, "insufficientEvidence": True})
+    assert verify_grounded_response(malformed, evidence)["needsRepair"]
+
+    # General chat verifier strips reasoning tags and stray [Ek] markers while preserving Markdown & code blocks.
+    raw_general = (
+        "<think>internal plan</think>\n"
+        "## Overview\n\n"
+        "A closure captures variables from its enclosing scope [E1] [E2, E3].\n\n"
+        "```python\n"
+        "def outer():\n"
+        "    x = 1  # keep indent [E4]\n"
+        "    return lambda: x\n"
+        "```"
+    )
+    gen = verify_general_response(raw_general)
+    assert gen["ok"] is True
+    assert gen["status"] == "answered"
+    assert gen["citations"] == []
+    assert "<think>" not in gen["answerMarkdown"]
+    assert "[E1]" not in gen["answerMarkdown"]
+    assert "[E2" not in gen["answerMarkdown"]
+    assert "[E4]" not in gen["answerMarkdown"]
+    assert "A closure captures variables from its enclosing scope." in gen["answerMarkdown"]
+    assert "    x = 1  # keep indent" in gen["answerMarkdown"]
+    assert strip_stray_evidence_markers("Array item a[0] stays intact [E1].") == "Array item a[0] stays intact."
+
+    empty_gen = verify_general_response("<think>only thought</think> [E1]")
+    assert empty_gen["ok"] is False
+    assert empty_gen["reason"] == "empty_answer"
+
+
+def test_retrieval_scope_none_and_general_chat_direct_markdown_sse(tmp_path, capsys):
+    from backend.history_qa.qa_runner import (
+        build_general_chat_messages,
+        extract_partial_general_markdown,
+    )
+    from backend.history_qa.retrieval import normalize_scope
+
+    # 1. normalize_scope and retrieve_evidence accept scope.type == "none" without touching SQLite.
+    assert normalize_scope({"type": "none"}) == {
+        "type": "none",
+        "meetingIds": [],
+        "dateFrom": None,
+        "dateTo": None,
+        "tags": [],
+    }
+    assert normalize_scope({"type": "NONE", "meetingIds": ["m1"], "tags": ["call"]}) == {
+        "type": "none",
+        "meetingIds": [],
+        "dateFrom": None,
+        "dateTo": None,
+        "tags": [],
+    }
+    none_retrieval = retrieve_evidence(
+        tmp_path / "missing_recordings",
+        tmp_path / "missing_index.sqlite",
+        question="Explain recursion",
+        scope={"type": "none"},
+    )
+    assert none_retrieval["evidence"] == []
+    assert none_retrieval["searchedMeetingCount"] == 0
+    assert not (tmp_path / "missing_index.sqlite").exists()
+
+    # 2. General chat prompt & grounded prompt synthesis guidance.
+    gen_msgs = build_general_chat_messages(question="Explain recursion")
+    assert "No recordings are attached to this conversation." in gen_msgs[0]["content"]
+    assert "Do not invent recording quotes, timestamps, or [E1] citations." in gen_msgs[0]["content"]
+    grounded_msgs = build_qa_messages(
+        question="Draft a follow-up email",
+        evidence=[{"evidenceId": "E1", "meetingId": "m1", "meetingTitle": "Sync", "text": "Pilot starts Monday."}],
+    )
+    assert "draft follow-ups" in grounded_msgs[0]["content"]
+    assert "insufficientEvidence to true" in grounded_msgs[0]["content"]
+
+    assert extract_partial_general_markdown("<think>plan</think>Hello world [E1") == "Hello world"
+    assert extract_partial_general_markdown("<|channel>thought\nhi\n<channel|>## Title\nBody [E2].") == "## Title\nBody."
+
+    # 3. execute_qa_request in general mode omits response_format, streams raw Markdown SSE, strips [Ek], redacts secrets.
+    seen_requests = []
+
+    class GeneralStreamHandler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            return
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            seen_requests.append(body)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            chunks = [
+                "<think>drafting</think>",
+                "## Recursion\n\n",
+                "A function calls itself [E[E1]2] ",
+                "until reaching a base case (token hf_secret_token_99999).",
+            ]
+            for piece in chunks:
+                sse = f"data: {json.dumps({'choices': [{'delta': {'content': piece}}]})}\n\n"
+                self.wfile.write(sse.encode("utf-8"))
+                self.wfile.flush()
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), GeneralStreamHandler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        capsys.readouterr()
+        res = execute_qa_request(
+            {
+                "question": "Explain recursion",
+                "chatMode": "general",
+                "history": [
+                    {"role": "user", "content": "Hi"},
+                    {"role": "assistant", "content": "Hello!"},
+                ],
+                "contextTokens": 8192,
+                "executionMode": "server",
+                "stream": True,
+                "serverUrl": f"http://127.0.0.1:{port}",
+                "serverToken": "gen-tok",
+            }
+        )
+        assert res["status"] == "answered"
+        assert res["chatMode"] == "general"
+        assert res["citations"] == []
+        assert res["searchedMeetingCount"] == 0
+        assert res["evidenceCount"] == 0
+        assert "[E1]" not in res["answerMarkdown"]
+        assert "[E2]" not in res["answerMarkdown"]
+        assert "hf_secret_token_99999" not in res["answerMarkdown"]
+        assert "[redacted-token]" in res["answerMarkdown"]
+        assert res["answerMarkdown"].startswith("## Recursion\n\nA function calls itself")
+
+        assert len(seen_requests) == 1
+        assert "response_format" not in seen_requests[0]
+        assert seen_requests[0]["stream"] is True
+        assert seen_requests[0]["messages"][1]["content"] == "Hi"
+
+        stderr_lines = [json.loads(line) for line in capsys.readouterr().err.splitlines() if line.strip()]
+        streaming_events = [evt for evt in stderr_lines if evt.get("phase") == "streaming"]
+        assert streaming_events
+        assert any("Recursion" in evt.get("draftMarkdown", "") for evt in streaming_events)
+        assert all("<think>" not in evt.get("draftMarkdown", "") for evt in streaming_events)
+        assert all("[E1]" not in evt.get("draftMarkdown", "") for evt in streaming_events)
+        assert all("[E2]" not in evt.get("draftMarkdown", "") for evt in streaming_events)
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -261,3 +261,93 @@ test('model preference and answer provenance survive reload independently', asyn
   const reloadedOverride = await makeStore(tmpDir).getThread(withOverride.id);
   assert.equal(reloadedOverride.modelId, 'gemma-4-e4b');
 });
+
+test('chat thread store supports scope.type = none, chatMode, direct_full, and passageKey while keeping corrupt scope fail-closed', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-chat-general-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const store = makeStore(tmpDir);
+  assert.deepEqual(store.sanitizeScope({ type: 'none' }), {
+    type: 'none',
+    meetingIds: [],
+    dateFrom: null,
+    dateTo: null,
+    tags: [],
+  });
+  assert.deepEqual(store.sanitizeScope({ type: 'NONE', meetingIds: ['m1'], tags: ['call'], dateFrom: '2026-11-01' }), {
+    type: 'none',
+    meetingIds: [],
+    dateFrom: null,
+    dateTo: null,
+    tags: [],
+  });
+
+  const generalThread = await store.createThread({ scope: { type: 'none' } });
+  assert.deepEqual(generalThread.scope, {
+    type: 'none',
+    meetingIds: [],
+    dateFrom: null,
+    dateTo: null,
+    tags: [],
+  });
+
+  const generalTurn = await store.appendTurn(generalThread.id, {
+    question: 'Explain Python decorators',
+    status: 'answered',
+    chatMode: 'general',
+    answerMarkdown: 'A decorator wraps a function.',
+    citations: [],
+    searchedMeetingCount: 0,
+    evidenceCount: 0,
+  });
+  assert.equal(generalTurn.assistantMessage.chatMode, 'general');
+
+  const groundedTurn = await store.appendTurn(generalThread.id, {
+    question: 'Summarize the sync',
+    status: 'answered',
+    chatMode: 'grounded',
+    retrievalMode: 'direct_full',
+    answerMarkdown: 'Shipped v3.2 [E1].',
+    citations: [
+      {
+        evidenceId: 'E1',
+        meetingId: 'm1',
+        meetingTitle: 'Release Sync',
+        passageKey: 'm1:4',
+        speaker: 'Alice',
+        kind: 'transcript',
+      },
+    ],
+    searchedMeetingCount: 1,
+    evidenceCount: 1,
+    scope: { type: 'all' },
+  });
+  assert.equal(groundedTurn.assistantMessage.chatMode, 'grounded');
+  assert.equal(groundedTurn.assistantMessage.retrievalMode, 'direct_full');
+  assert.equal(groundedTurn.assistantMessage.citations[0].passageKey, 'm1:4');
+  assert.equal(groundedTurn.thread.scope.type, 'all');
+
+  const cleared = await store.updateThreadScope(generalThread.id, { type: 'none' });
+  assert.equal(cleared.scope.type, 'none');
+
+  const reloaded = await makeStore(tmpDir).getThread(generalThread.id);
+  assert.equal(reloaded.scope.type, 'none');
+  assert.equal(reloaded.messages[1].chatMode, 'general');
+  assert.equal(reloaded.messages[3].chatMode, 'grounded');
+  assert.equal(reloaded.messages[3].retrievalMode, 'direct_full');
+  assert.equal(reloaded.messages[3].citations[0].passageKey, 'm1:4');
+
+  // Corrupt saved scope must still fail closed to selected_meetings [] (never elevate to 'none').
+  const storePath = store.getThreadsPath();
+  const disk = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+  disk.threads.push({ id: 'corrupt-thread', scope: { type: 'bogus_mode' }, messages: [] });
+  fs.writeFileSync(storePath, JSON.stringify(disk), 'utf8');
+  const recovered = await makeStore(tmpDir).getThread('corrupt-thread');
+  assert.deepEqual(recovered.scope, {
+    type: 'selected_meetings',
+    meetingIds: [],
+    dateFrom: null,
+    dateTo: null,
+    tags: [],
+  });
+});

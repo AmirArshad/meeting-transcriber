@@ -49,6 +49,35 @@ const HISTORY_QA_PROGRESS_CHANNEL = 'history-qa-progress';
 const HISTORY_QA_CANCEL_CODE = 'HISTORY_QA_CANCELLED';
 const DEFAULT_IDLE_UNLOAD_MS = 10 * 60 * 1000;
 const DEFAULT_SERVER_STARTUP_TIMEOUT_MS = 120 * 1000;
+const GENERIC_SPEAKER_RE = /^(?:speaker(?:\s+|_)\d+|unknown)$/i;
+const INLINE_CITATION_RE = /\[E\d+(?:\s*[,;/]\s*E\d+)*\]/g;
+
+function getMessageChatMode(message) {
+  return message && message.chatMode === 'general' ? 'general' : 'grounded';
+}
+
+function sliceMessagesSinceModeSwitch(messages, chatMode) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return [];
+  }
+  let boundaryIndex = 0;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i]?.role === 'assistant' && getMessageChatMode(messages[i]) !== chatMode) {
+      boundaryIndex = i + 1;
+      break;
+    }
+  }
+  return messages.slice(boundaryIndex);
+}
+
+function summarizeAssistantForContext(content) {
+  return String(content || '')
+    .replace(INLINE_CITATION_RE, '')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([.,;:!?])/g, '$1')
+    .trim()
+    .slice(0, 280);
+}
 
 const PINNED_LINUX_LLAMA_SERVER = Object.freeze({
   runtimeId: 'llama-cpp-v0.3.0-linux-x64-cuda-12.8',
@@ -1081,192 +1110,250 @@ function createHistoryQaService(deps) {
     }
     const frozenModelId = eligibility.modelId;
     const frozenArtifact = JSON.stringify([eligibility.artifact, eligibility.runtimeArtifact, eligibility.runtimeDir]);
+    const activeContextTokens = Number(eligibility.artifact?.inference?.contextTokens) || 32768;
     checkCurrent();
     const effectiveScope = requestedScope ?? thread.scope;
+    const isGeneralChat = effectiveScope?.type === 'none';
+    const chatMode = isGeneralChat ? 'general' : 'grounded';
 
     activeQaRequest.threadId = thread.id;
-    activeQaRequest.phase = 'retrieving';
 
-      const preflightRegistrar = createCancellableProcessRegistrar({
-        cancelSignal: controller.signal,
-        terminateProcess: terminateProcessBestEffort,
-        registerProcess: (proc) => {
-          if (activeQaRequest && activeQaRequest.controller === controller) {
-            activeQaRequest.process = proc;
-          }
-          return proc;
-        },
-        createCancelError: () => createQaCancelError(),
-      });
-
-      emitQaProgress({
-        threadId: thread.id,
-        phase: 'retrieving',
-        message: 'Searching your transcripts…',
-        percent: 10,
-      });
-
-      const generation = historySearchService.getGeneration();
-      await historySearchService.ensureSynced();
-      preflightRegistrar.throwIfCancelled();
-      const assertFresh = () => {
-        checkCurrent();
-        if (historySearchService.getGeneration() !== generation) throw new Error('History changed while answering; please retry.');
-      };
-      const scopedSelectedIds = effectiveScope && effectiveScope.type === 'selected_meetings'
-        ? new Set((effectiveScope.meetingIds || []).map(String))
-        : null;
-      const scopedTags = Array.isArray(effectiveScope?.tags) && effectiveScope.tags.length
-        ? new Set(effectiveScope.tags)
-        : null;
-      const dateFrom = effectiveScope?.dateFrom || '';
-      const dateTo = effectiveScope?.dateTo || '';
-      const hasScopeFilter = scopedSelectedIds || scopedTags || dateFrom || dateTo;
-      const turnMatchesScope = (assistant) => {
-        if (!hasScopeFilter) return true;
-        if (!Array.isArray(assistant.citations) || !assistant.citations.length) return false;
-        return assistant.citations.every((citation) => {
-          if (!citation || typeof citation !== 'object') return false;
-          if (scopedSelectedIds && !scopedSelectedIds.has(String(citation.meetingId))) return false;
-          if (scopedTags && !scopedTags.has(citation.tag)) return false;
-          if (dateFrom || dateTo) {
-            const day = typeof citation.meetingDate === 'string' ? citation.meetingDate.slice(0, 10) : '';
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
-            if ((dateFrom && day < dateFrom) || (dateTo && day > dateTo)) return false;
-          }
-          return true;
-        });
-      };
       const messages = Array.isArray(thread.messages) ? thread.messages : [];
-      const existingMessages = hasScopeFilter ? messages.filter((message, index) => {
-        if (message.role === 'user') {
-          const next = messages[index + 1];
-          return next?.role === 'assistant' && next.status === 'answered' && turnMatchesScope(next);
-        }
-        return message.role === 'assistant' && message.status === 'answered'
-          && messages[index - 1]?.role === 'user' && turnMatchesScope(message);
-      }) : messages;
-      let lastCitedMeetingIds = [];
-      let lastQuestion = '';
-      let lastAnsweredIdx = -1;
-      for (let i = existingMessages.length - 1; i >= 0; i -= 1) {
-        const msg = existingMessages[i];
-        if (msg.role === 'assistant' && msg.status === 'answered') {
-          lastAnsweredIdx = i;
-          if (Array.isArray(msg.citations) && msg.citations.length > 0) {
-            lastCitedMeetingIds = [...new Set(msg.citations.map((c) => c.meetingId).filter(Boolean))];
+      const modeIsolatedMessages = sliceMessagesSinceModeSwitch(messages, chatMode);
+
+      let assertFresh = () => {
+        checkCurrent();
+      };
+      let existingMessages = modeIsolatedMessages;
+      let evidence = [];
+      let searchedMeetingCount = 0;
+      let detectedDateFilter = '';
+      let retrievalMode = '';
+
+      if (!isGeneralChat) {
+        activeQaRequest.phase = 'retrieving';
+        const preflightRegistrar = createCancellableProcessRegistrar({
+          cancelSignal: controller.signal,
+          terminateProcess: terminateProcessBestEffort,
+          registerProcess: (proc) => {
+            if (activeQaRequest && activeQaRequest.controller === controller) {
+              activeQaRequest.process = proc;
+            }
+            return proc;
+          },
+          createCancelError: () => createQaCancelError(),
+        });
+
+        emitQaProgress({
+          threadId: thread.id,
+          phase: 'retrieving',
+          message: 'Searching your transcripts…',
+          percent: 10,
+        });
+
+        const generation = historySearchService.getGeneration();
+        await historySearchService.ensureSynced();
+        preflightRegistrar.throwIfCancelled();
+        assertFresh = () => {
+          checkCurrent();
+          if (historySearchService.getGeneration() !== generation) throw new Error('History changed while answering; please retry.');
+        };
+        const scopedSelectedIds = effectiveScope && effectiveScope.type === 'selected_meetings'
+          ? new Set((effectiveScope.meetingIds || []).map(String))
+          : null;
+        const scopedTags = Array.isArray(effectiveScope?.tags) && effectiveScope.tags.length
+          ? new Set(effectiveScope.tags)
+          : null;
+        const dateFrom = effectiveScope?.dateFrom || '';
+        const dateTo = effectiveScope?.dateTo || '';
+        const hasScopeFilter = scopedSelectedIds || scopedTags || dateFrom || dateTo;
+        const turnMatchesScope = (assistant) => {
+          if (!hasScopeFilter) return true;
+          if (!Array.isArray(assistant.citations) || !assistant.citations.length) return false;
+          return assistant.citations.every((citation) => {
+            if (!citation || typeof citation !== 'object') return false;
+            if (scopedSelectedIds && !scopedSelectedIds.has(String(citation.meetingId))) return false;
+            if (scopedTags && !scopedTags.has(citation.tag)) return false;
+            if (dateFrom || dateTo) {
+              const day = typeof citation.meetingDate === 'string' ? citation.meetingDate.slice(0, 10) : '';
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+              if ((dateFrom && day < dateFrom) || (dateTo && day > dateTo)) return false;
+            }
+            return true;
+          });
+        };
+        existingMessages = hasScopeFilter ? modeIsolatedMessages.filter((message, index) => {
+          if (message.role === 'user') {
+            const next = modeIsolatedMessages[index + 1];
+            return next?.role === 'assistant' && next.status === 'answered' && turnMatchesScope(next);
           }
-          break;
-        }
-      }
-      if (lastAnsweredIdx !== -1) {
-        for (let i = lastAnsweredIdx - 1; i >= 0; i -= 1) {
+          return message.role === 'assistant' && message.status === 'answered'
+            && modeIsolatedMessages[index - 1]?.role === 'user' && turnMatchesScope(message);
+        }) : modeIsolatedMessages;
+
+        let lastCitedMeetingIds = [];
+        let lastCitedPassageKeys = [];
+        let lastCitedSpeakers = [];
+        let lastAssistantSummary = '';
+        let lastQuestion = '';
+        let lastAnsweredIdx = -1;
+        let lastCitedMsg = null;
+        for (let i = existingMessages.length - 1; i >= 0; i -= 1) {
           const msg = existingMessages[i];
-          if (msg.role === 'user' && msg.content) {
-            lastQuestion = String(msg.content);
+          if (msg.role === 'assistant' && msg.status === 'answered') {
+            lastAnsweredIdx = i;
+            lastAssistantSummary = summarizeAssistantForContext(msg.content);
+            if (Array.isArray(msg.citations) && msg.citations.length > 0) {
+              lastCitedMsg = msg;
+              lastCitedMeetingIds = [...new Set(msg.citations.map((c) => c.meetingId).filter(Boolean))];
+            }
             break;
           }
         }
-        if (lastCitedMeetingIds.length === 0) {
+        if (lastAnsweredIdx !== -1) {
           for (let i = lastAnsweredIdx - 1; i >= 0; i -= 1) {
             const msg = existingMessages[i];
-            if (
-              msg.role === 'assistant'
-              && msg.status === 'answered'
-              && Array.isArray(msg.citations)
-              && msg.citations.length > 0
-            ) {
-              lastCitedMeetingIds = [...new Set(msg.citations.map((c) => c.meetingId).filter(Boolean))];
+            if (msg.role === 'user' && msg.content) {
+              lastQuestion = String(msg.content);
+              break;
+            }
+          }
+          if (lastCitedMeetingIds.length === 0) {
+            for (let i = lastAnsweredIdx - 1; i >= 0; i -= 1) {
+              const msg = existingMessages[i];
+              if (
+                msg.role === 'assistant'
+                && msg.status === 'answered'
+                && Array.isArray(msg.citations)
+                && msg.citations.length > 0
+              ) {
+                lastCitedMsg = msg;
+                lastCitedMeetingIds = [...new Set(msg.citations.map((c) => c.meetingId).filter(Boolean))];
+                break;
+              }
+            }
+          }
+        } else {
+          for (let i = existingMessages.length - 1; i >= 0; i -= 1) {
+            const msg = existingMessages[i];
+            if (msg.role === 'user' && msg.content) {
+              lastQuestion = String(msg.content);
               break;
             }
           }
         }
-      } else {
-        for (let i = existingMessages.length - 1; i >= 0; i -= 1) {
-          const msg = existingMessages[i];
-          if (msg.role === 'user' && msg.content) {
-            lastQuestion = String(msg.content);
-            break;
-          }
+        if (lastCitedMsg && Array.isArray(lastCitedMsg.citations)) {
+          lastCitedPassageKeys = [...new Set(
+            lastCitedMsg.citations
+              .map((c) => (typeof c?.passageKey === 'string' ? c.passageKey.trim() : ''))
+              .filter(Boolean),
+          )];
+          lastCitedSpeakers = [...new Set(
+            lastCitedMsg.citations
+              .map((c) => (typeof c?.speaker === 'string' ? c.speaker.trim() : ''))
+              .filter((spk) => spk && !GENERIC_SPEAKER_RE.test(spk)),
+          )];
         }
-      }
-      const threadContext = (lastCitedMeetingIds.length > 0 || lastQuestion)
-        ? { lastCitedMeetingIds, lastQuestion }
-        : null;
+        const mentionedText = `${lastQuestion} ${lastAssistantSummary}`.toLowerCase();
+        const hasOtherNamedSubject = /\s[A-Z][a-z]{2,}/.test(lastQuestion)
+          && !lastCitedSpeakers.some((spk) => mentionedText.includes(spk.toLowerCase()));
+        const hintedSpeakers = hasOtherNamedSubject ? [] : lastCitedSpeakers;
+        const threadContext = (lastCitedMeetingIds.length > 0 || lastQuestion)
+          ? { lastCitedMeetingIds, lastQuestion }
+          : null;
+        const hasPriorTurnHints = (
+          lastCitedPassageKeys.length > 0
+          || hintedSpeakers.length > 0
+          || Boolean(lastAssistantSummary)
+        );
+        const priorTurnContext = hasPriorTurnHints
+          ? {
+              ...(lastQuestion ? { lastQuestion } : {}),
+              ...(lastCitedMeetingIds.length > 0 ? { lastCitedMeetingIds } : {}),
+              ...(lastCitedPassageKeys.length > 0 ? { lastCitedPassageKeys } : {}),
+              ...(hintedSpeakers.length > 0 ? { speakers: hintedSpeakers } : {}),
+              ...(lastAssistantSummary ? { lastAssistantSummary } : {}),
+            }
+          : null;
 
-      const runRetrieval = () => runPythonStdinJson({
-        moduleName: 'history_qa.retrieval',
-        args: [
-          '--recordings-dir',
-          path.join(app.getPath('userData'), 'recordings'),
-          '--index-path',
-          historySearchService.getIndexPath(),
-          '--stdin-json',
-        ],
-        payload: {
-          question,
-          scope: effectiveScope,
-          ...(threadContext ? { threadContext } : {}),
-          sync: false,
-        },
-        timeoutMs: retrievalTimeoutMs,
-        registrar: preflightRegistrar,
-        threadId: thread.id,
-      });
-      const retrieval = await historySearchService.enqueueOperation(async () => {
-        assertFresh();
-        return runRetrieval();
-      });
-      assertFresh();
-      preflightRegistrar.cleanup();
-      preflightRegistrar.throwIfCancelled();
-
-      const evidence = Array.isArray(retrieval.evidence) ? retrieval.evidence : [];
-      const searchedMeetingCount = Number(retrieval.searchedMeetingCount) || 0;
-      const detectedDateFilter = typeof retrieval.detectedDateFilter === 'string'
-        ? retrieval.detectedDateFilter
-        : '';
-      const retrievalMode = typeof retrieval.retrievalMode === 'string'
-        ? retrieval.retrievalMode
-        : '';
-
-      // Zero-hit preflight gate: NEVER acquire compute queue or allocate VRAM!
-      if (evidence.length === 0) {
-        assertFresh();
-        const noMatchAnswer = searchedMeetingCount === 0
-          ? 'No indexed recordings match the selected filter yet.'
-          : (detectedDateFilter
-            ? `No matching excerpts were found for ${detectedDateFilter} in the selected recordings.`
-            : 'No matching excerpts were found in the selected recordings for that question.');
-        const persisted = await chatThreadStore.appendTurn(thread.id, {
-          question,
-          status: 'no_matching_excerpts',
-          failureReason: 'no_matching_excerpts',
-          detectedDateFilter: detectedDateFilter || null,
-          retrievalMode: retrievalMode || null,
-          answerMarkdown: noMatchAnswer,
-          citations: [],
-          searchedMeetingCount,
-          evidenceCount: 0,
-          scope: options.scope || null,
-        }, { beforeCommit: assertFresh });
-        assertFresh();
-        emitQaProgress({
+        const runRetrieval = () => runPythonStdinJson({
+          moduleName: 'history_qa.retrieval',
+          args: [
+            '--recordings-dir',
+            path.join(app.getPath('userData'), 'recordings'),
+            '--index-path',
+            historySearchService.getIndexPath(),
+            '--stdin-json',
+          ],
+          payload: {
+            question,
+            scope: effectiveScope,
+            contextTokens: activeContextTokens,
+            ...(threadContext ? { threadContext } : {}),
+            ...(priorTurnContext ? { priorTurnContext } : {}),
+            sync: false,
+          },
+          timeoutMs: retrievalTimeoutMs,
+          registrar: preflightRegistrar,
           threadId: thread.id,
-          phase: 'completed',
-          message: 'Done.',
-          percent: 100,
         });
-        return {
-          ...persisted,
-          status: 'no_matching_excerpts',
-          failureReason: 'no_matching_excerpts',
-          detectedDateFilter: detectedDateFilter || null,
-          retrievalMode: retrievalMode || null,
-          modelLoaded: isModelLoaded(),
-          searchedMeetingCount,
-          evidenceCount: 0,
-        };
+        const retrieval = await historySearchService.enqueueOperation(async () => {
+          assertFresh();
+          return runRetrieval();
+        });
+        assertFresh();
+        preflightRegistrar.cleanup();
+        preflightRegistrar.throwIfCancelled();
+
+        evidence = Array.isArray(retrieval.evidence) ? retrieval.evidence : [];
+        searchedMeetingCount = Number(retrieval.searchedMeetingCount) || 0;
+        detectedDateFilter = typeof retrieval.detectedDateFilter === 'string'
+          ? retrieval.detectedDateFilter
+          : '';
+        retrievalMode = typeof retrieval.retrievalMode === 'string'
+          ? retrieval.retrievalMode
+          : '';
+
+        // Zero-hit preflight gate: NEVER acquire compute queue or allocate VRAM!
+        if (evidence.length === 0) {
+          assertFresh();
+          const noMatchAnswer = searchedMeetingCount === 0
+            ? 'No indexed recordings match the selected filter yet.'
+            : (detectedDateFilter
+              ? `No matching excerpts were found for ${detectedDateFilter} in the selected recordings.`
+              : 'No matching excerpts were found in the selected recordings for that question.');
+          const persisted = await chatThreadStore.appendTurn(thread.id, {
+            question,
+            status: 'no_matching_excerpts',
+            failureReason: 'no_matching_excerpts',
+            detectedDateFilter: detectedDateFilter || null,
+            chatMode: 'grounded',
+            retrievalMode: retrievalMode || null,
+            answerMarkdown: noMatchAnswer,
+            citations: [],
+            searchedMeetingCount,
+            evidenceCount: 0,
+            scope: options.scope || null,
+          }, { beforeCommit: assertFresh });
+          assertFresh();
+          emitQaProgress({
+            threadId: thread.id,
+            phase: 'completed',
+            message: 'Done.',
+            percent: 100,
+          });
+          return {
+            ...persisted,
+            status: 'no_matching_excerpts',
+            chatMode: 'grounded',
+            failureReason: 'no_matching_excerpts',
+            detectedDateFilter: detectedDateFilter || null,
+            retrievalMode: retrievalMode || null,
+            modelLoaded: isModelLoaded(),
+            searchedMeetingCount,
+            evidenceCount: 0,
+          };
+        }
       }
 
       if (activeQaRequest && activeQaRequest.controller === controller) {
@@ -1290,10 +1377,20 @@ function createHistoryQaService(deps) {
           user.role === 'user'
           && assistant.role === 'assistant'
           && assistant.status === 'answered'
+          && getMessageChatMode(assistant) === chatMode
           && user.content
           && assistant.content
         ) {
-          historyTurns.push({ role: 'user', content: user.content }, { role: 'assistant', content: assistant.content });
+          const assistantTurn = { role: 'assistant', content: assistant.content };
+          if (!isGeneralChat && Array.isArray(assistant.citations) && assistant.citations.length > 0) {
+            const citationTitles = assistant.citations
+              .map((c) => (typeof c?.meetingTitle === 'string' && c.meetingTitle ? { meetingTitle: c.meetingTitle } : null))
+              .filter(Boolean);
+            if (citationTitles.length > 0) {
+              assistantTurn.citations = citationTitles;
+            }
+          }
+          historyTurns.push({ role: 'user', content: user.content }, assistantTurn);
         }
       }
 
@@ -1446,16 +1543,19 @@ function createHistoryQaService(deps) {
 
             try {
               assertFresh();
+              const runnerContextTokens = Number(admitted.artifact?.inference?.contextTokens) || activeContextTokens || 32768;
               const output = await runPythonStdinJson({
                 moduleName: 'history_qa.qa_runner',
                 args: ['--stdin-json'],
                 payload: {
                   question,
+                  chatMode,
                   evidence,
                   history: historyTurns,
                   searchedMeetingCount,
                   detectedDateFilter,
                   retrievalMode,
+                  contextTokens: runnerContextTokens,
                   executionMode,
                   inferenceDescriptor: admitted.artifact.inference || { contextTokens: 32768, family: 'qwen', promptFormat: 'chatml', disableThinking: true },
                   stream: executionMode === 'server',
@@ -1483,22 +1583,34 @@ function createHistoryQaService(deps) {
       assertFresh();
       const finalStatus = qaResult.status || 'answered';
       const finalFailureReason = qaResult.failureReason || null;
-      const finalDateFilter = qaResult.detectedDateFilter || detectedDateFilter || null;
-      const finalRetrievalMode = qaResult.retrievalMode || retrievalMode || null;
-      const finalInspectedSources = Array.isArray(qaResult.inspectedSources) ? qaResult.inspectedSources : [];
+      const finalDateFilter = isGeneralChat ? null : (qaResult.detectedDateFilter || detectedDateFilter || null);
+      const finalRetrievalMode = isGeneralChat ? null : (qaResult.retrievalMode || retrievalMode || null);
+      const finalInspectedSources = isGeneralChat
+        ? []
+        : (Array.isArray(qaResult.inspectedSources) ? qaResult.inspectedSources : []);
+      const finalCitations = isGeneralChat
+        ? []
+        : (Array.isArray(qaResult.citations) ? qaResult.citations : []);
+      const finalSearchedMeetingCount = isGeneralChat
+        ? 0
+        : (Number(qaResult.searchedMeetingCount) || searchedMeetingCount);
+      const finalEvidenceCount = isGeneralChat
+        ? 0
+        : (Number(qaResult.evidenceCount) || evidence.length);
       const persisted = await chatThreadStore.appendTurn(thread.id, {
         question,
         status: finalStatus,
+        chatMode,
         failureReason: finalFailureReason,
         detectedDateFilter: finalDateFilter,
         retrievalMode: finalRetrievalMode,
         answerMarkdown: qaResult.answerMarkdown || '',
-        citations: Array.isArray(qaResult.citations) ? qaResult.citations : [],
+        citations: finalCitations,
         inspectedSources: finalInspectedSources,
         modelId: frozenModelId,
         modelName: eligibility.modelName,
-        searchedMeetingCount: Number(qaResult.searchedMeetingCount) || searchedMeetingCount,
-        evidenceCount: Number(qaResult.evidenceCount) || evidence.length,
+        searchedMeetingCount: finalSearchedMeetingCount,
+        evidenceCount: finalEvidenceCount,
         scope: options.scope || null,
       }, { beforeCommit: assertFresh });
       assertFresh();
@@ -1513,12 +1625,13 @@ function createHistoryQaService(deps) {
       return {
         ...persisted,
         status: finalStatus,
+        chatMode,
         failureReason: finalFailureReason,
         detectedDateFilter: finalDateFilter,
         retrievalMode: finalRetrievalMode,
         modelLoaded: isModelLoaded(),
-        searchedMeetingCount: Number(qaResult.searchedMeetingCount) || searchedMeetingCount,
-        evidenceCount: Number(qaResult.evidenceCount) || evidence.length,
+        searchedMeetingCount: finalSearchedMeetingCount,
+        evidenceCount: finalEvidenceCount,
       };
     } catch (error) {
       if (error && (error.name === 'AbortError' || error.code === HISTORY_QA_CANCEL_CODE)) {
