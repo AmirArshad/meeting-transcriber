@@ -11,7 +11,7 @@
 
 AvaNevis (formerly Meeting Transcriber) is a local audio recorder and transcriber. Capture your microphone, desktop audio, or both at once—or import existing audio files—and transcribe on your device with Whisper or optional NVIDIA Parakeet. Optional local add-ons add speaker labels and recording summaries or transcript chat. No cloud upload, no telemetry, no account.
 
-**Latest published release:** [v3.0.0](docs/releases/v3.0.0.md) adds local History FTS5 search, grounded Chat with timestamp citations, SRT/WebVTT subtitle exports, and an in-app auto-updater. Branch `codex/v3.1-phase4-model-library` adds v3.1 streaming Chat, recording tags with dedicated summary templates, speaker naming with voice previews, and a multi-model Summaries & Chat library. See the [v3.0 qualification record](docs/development/V3_0_QUALIFICATION.md), [v3.1 qualification record](docs/development/V3_1_QUALIFICATION.md), and [release status](todo.md). Tagged installers are published by the [release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/workflows/build-release.yml).
+**Latest published release:** [v3.0.0](docs/releases/v3.0.0.md) adds local History FTS5 search, grounded Chat with timestamp citations, SRT/WebVTT subtitle exports, and an in-app auto-updater. Branch `release/3.1` prepares v3.1 with streaming Chat and improved local retrieval, 11 recording tags with dedicated summary templates, speaker naming with voice previews, a multi-model Summaries & Chat library, and updated dependencies. See the [v3.0 qualification record](docs/development/V3_0_QUALIFICATION.md), [v3.1 qualification record](docs/development/V3_1_QUALIFICATION.md), and [release status](todo.md). Tagged installers are published by the [release workflow](https://github.com/AmirArshad/meeting-transcriber/actions/workflows/build-release.yml).
 
 ## Why
 
@@ -79,7 +79,7 @@ The AppImage is a static-pie runtime and does **not** need host `fuse2` / `libfu
 
 Transcription defaults to local CPU `faster-whisper`. On x86_64 Linux with a verified managed CUDA 12 runtime and NVIDIA GPU, CUDA transcription and local add-ons may be set up; otherwise their controls remain fail-closed. Linux support and acceptance boundaries are in [LINUX_EXPERIMENTAL.md](docs/guides/LINUX_EXPERIMENTAL.md). The [v2.9 compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) is the historical release evidence record.
 
-> **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS, `~/.config/avanevis` on Linux), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The in-app update banner opens the matching installer download in your browser, or the GitHub release page if no installer matches. It does not install the update.
+> **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS, `~/.config/avanevis` on Linux), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. On v3.0+, Windows NSIS, Linux AppImage, and Developer ID macOS builds support differential in-app updates, Linux `pacman`/`.deb` installs provide copyable upgrade commands, and ad-hoc macOS builds open the matching `.dmg` download.
 
 ## Develop
 
@@ -134,7 +134,7 @@ See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS
 AI Add-ons are optional and live under Settings. They are not required for recording or transcription.
 
 - **Speaker Identification:** Settings lets you install **one** engine: **Speakrs** (no account needed; default for new users on Windows CUDA / macOS Apple Silicon CoreML; the only engine on Linux CUDA) or **Pyannote** (`pyannote/speaker-diarization-community-1` with your own Hugging Face token; Windows CUDA / macOS Apple Silicon MPS only — unavailable on Linux). Switching uninstalls the other engine's models; a saved Hugging Face token is kept across a switch and when removing Speakrs, and deleted when removing Pyannote. When ready, AvaNevis runs diarization before transcription and uses padded speaker turns to create speaker-guided chunks; if that guided path fails, it saves a standard transcript and records the speaker-label error. The main process uses catalog-resolved model refs, validates the required accelerator, disables standalone Speakrs CPU mode, and serializes heavy AI work (transcription, diarization, guided transcription, summaries, and Chat) through one compute queue with timeouts so a stalled job cannot block the app.
-- **Summaries & Chat:** Uses pinned local `llama.cpp` runtimes (shared across compatible models) and GGUF model artifacts stored under Electron `userData`. Settings shows installed and downloadable models (**Qwen3.5 9B** default, **Qwen3.5 4B**, **Gemma 4 E4B**, **Gemma 4 12B**, and gated **Inkling 2 Mini**) alongside disk usage, device memory fit checks, and a **Free memory** control. Hugging Face-hosted public GGUF downloads use bundled `huggingface_hub` HTTPS with patched certifi, without reusing the speaker token. Native Xet acceleration is disabled pending its certificate-trust qualification; large downloads can take longer. Setup verifies HTTPS artifact hosts, SHA-256 checksums, and safe runtime extraction. Summary generation and Chat questions are always user-triggered; AvaNevis runs one local model in memory at a time across Chat and summaries and unloads idle servers automatically. Qwen3.5 9B/4B support 11 languages, while Gemma 4 E4B/12B currently support English summaries on Apple Silicon (`v3.1` checks); Chat and Prepare summary let you switch among installed models and remember per-thread Chat choices.
+- **Summaries & Chat:** Uses pinned local `llama.cpp` runtimes (shared across compatible models) and GGUF model artifacts stored under Electron `userData`. Settings shows installed and downloadable models (**Qwen3.5 9B** default, **Qwen3.5 4B**, **Gemma 4 E4B**, **Gemma 4 12B**, and gated **Inkling 2 Mini**) alongside disk usage, device memory fit checks, and a **Free memory** control. Hugging Face-hosted public GGUF downloads use bundled `huggingface_hub` HTTPS with patched certifi, without reusing the speaker token. Native Xet acceleration is disabled pending its certificate-trust qualification; large downloads can take longer. Setup verifies HTTPS artifact hosts, SHA-256 checksums, and safe runtime extraction. Summary generation and Chat questions are always user-triggered; AvaNevis runs one local model in memory at a time across Chat and summaries and unloads idle servers automatically. Under `summary-language-v3`, **Qwen3.5 9B** supports 11 summary languages across supported runtimes, **Gemma 4 E4B/12B** currently support English summaries on Apple Silicon (`v3.1` checks), and **Qwen3.5 4B** is currently Chat-only pending summary-language qualification; Chat and Prepare summary let you switch among installed models and remember per-thread Chat choices.
 - **Expected size:** the default Qwen3.5 9B model is about 5.7 GB (Qwen3.5 4B ~2.7 GB, Gemma 4 E4B ~4.6 GB, Gemma 4 12B ~7.2 GB) plus platform runtime archives. CUDA setup remains separate and can add several GB.
 - **Outputs:** derived files are saved beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; raw transcripts remain the source of truth.
 
@@ -145,9 +145,11 @@ See [docs/development/LOCAL_AI_MODEL_CATALOG.md](docs/development/LOCAL_AI_MODEL
 ```bash
 npm run prepare-build     # downloads pinned Python + ffmpeg into build/resources
 npm run build             # Windows NSIS
-npm run build:mac         # macOS DMG (Apple Silicon)
-npm run build:dir         # unpacked dir build for fast smoke testing
+npm run build:mac         # macOS DMG + ZIP (Apple Silicon)
+npm run build:linux       # Linux AppImage + pacman + experimental deb (x86_64)
+npm run build:dir         # unpacked dir build for fast smoke testing (Windows)
 npm run build:mac:dir     # unpacked .app for macOS
+npm run build:linux:dir   # unpacked dir build for Linux
 ```
 
 The macOS build also signs and bundles the native `audiocapture-helper` Swift binary from `swift/AudioCaptureHelper/`.
@@ -216,7 +218,7 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
 - **Frontend:** Electron 46.0.0-alpha.11, plain HTML / CSS / JavaScript (no UI framework)
 - **Backend:** Python 3.11, bundled with the installer
 - **Transcription:** `faster-whisper` (Windows/Linux, CUDA optional), `lightning-whisper-mlx` (macOS, Metal); optional Parakeet v2 with pinned platform runtimes
-- **Local AI add-ons:** Speakrs (token-free native CLI) or `pyannote.audio` for Windows CUDA and macOS Apple Silicon speaker identification; pinned `llama.cpp` (`llama-server` + `llama-cli` fallback) + GGUF models (Qwen3.5, Gemma 4) for user-triggered summaries and local Chat
+- **Local AI add-ons:** Speakrs (token-free native CLI on Windows CUDA, macOS Apple Silicon CoreML, and Linux CUDA) or `pyannote.audio` (Windows CUDA / macOS Apple Silicon MPS) for speaker identification; pinned `llama.cpp` (`llama-server` + `llama-cli` fallback) + GGUF models (Qwen3.5, Gemma 4) for user-triggered summaries and local Chat
 - **Audio capture:** `pyaudiowpatch` WASAPI loopback (Windows), `sounddevice` + native Swift `AudioCaptureHelper` using CoreAudio process taps on macOS 14.2+ with ScreenCaptureKit fallback, Pulse/PipeWire on Linux
 - **Audio processing:** NumPy, soxr + ffmpeg (Opus) in packaged Windows, macOS, and Linux builds; macOS also keeps scipy for the MLX stack
 - **Search & Updater:** SQLite FTS5 local index; `electron-updater` differential in-app downloads + GitHub Releases metadata (with Linux `pacman`/`.deb` manual command and ad-hoc macOS `.dmg` fallback)
@@ -230,7 +232,7 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
   - [Recording features & history](docs/guides/MEETING_TRANSCRIPTION.md) — history, recovery, metadata
   - [macOS install guide](docs/guides/MACOS_INSTALLATION.md)
 - **Developers**
-  - [Agent guide / invariants](AGENTS.md) — architecture, IPC contracts, compute queue, validation expectations
+  - [Agent guide / invariants](AGENTS.md) and [canonical contracts](docs/development/contracts/) — architecture, IPC contracts, compute queue, validation expectations
   - [Build instructions](docs/development/BUILD_INSTRUCTIONS.md)
   - [Testing guide](docs/development/TESTING.md)
   - [Backend development notes](docs/development/BACKEND.md)
@@ -257,7 +259,6 @@ Whisper exposes 11 language choices: English, Spanish, French, German, Italian, 
   - [Acoustic echo cancellation](docs/initiatives/FEATURE_ECHO_CANCELLATION.md)
   - [Linux support](docs/initiatives/LINUX_SUPPORT.md)
   - [Linux experimental beta](docs/guides/LINUX_EXPERIMENTAL.md)
-  - [Troubleshooting](docs/guides/TROUBLESHOOTING.md)
   - [Speaker diarization](docs/completed/FEATURE_SPEAKER_DIARIZATION.md)
   - [Transcript summaries](docs/completed/FEATURE_TRANSCRIPT_SUMMARIES.md)
   - [Local AI feature plan](docs/completed/PLAN_LOCAL_AI_FEATURES.md)
@@ -331,7 +332,7 @@ PRs welcome. Please run `npm run test:all` before opening one and add coverage f
 
 AvaNevis application source code is licensed under the [MIT License](LICENSE.txt).
 
-Bundled and optional components (ffmpeg, Python packages, Whisper weights, Speakrs, pyannote, Qwen GGUF, llama.cpp, CUDA runtimes, and others) are governed by their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution, copyleft obligations, and optional model terms. Packaged installers also include a copy under `resources/legal/`.
+Bundled and optional components (ffmpeg, Python packages, Whisper weights, Speakrs, pyannote, Qwen/Gemma GGUF, llama.cpp, CUDA runtimes, and others) are governed by their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution, copyleft obligations, and optional model terms. Packaged installers also include a copy under `resources/legal/`.
 
 ## Repo note
 

@@ -61,7 +61,7 @@ When using `test_recording.py` with the `AudioRecorder` class, audio was choppy:
 - Uses callbacks with proper initialization order
 - Mixer thread only runs when needed
 - **Audio is SMOOTH and CLEAN** ✅
-- Same mic (ID 39: Logitech Webcam C925e at 16kHz)
+- Same mic (ID 39: USB webcam microphone at 16kHz)
 
 ### What We Tried to Fix It (Before Finding Root Cause)
 
@@ -90,7 +90,7 @@ The problem **WAS**:
 
 **Microphone:**
 - ID: 39
-- Name: Logitech Webcam C925e
+- Name: USB webcam microphone
 - Sample Rate: 16000 Hz (resampled to 48kHz in post-processing)
 - Host API: Windows WASAPI
 - Channels: 2
@@ -209,7 +209,7 @@ The problem **WAS**:
 ## 🚀 To Resume Tomorrow
 
 1. Open PowerShell
-2. Navigate: `cd D:\Projects\meeting-transcriber\backend`
+2. Navigate: `cd <repo-root>/backend`
 3. Share this file with Claude: "Read SESSION_NOTES.md and continue from where we left off"
 4. Claude will know everything we tried and continue debugging
 
@@ -327,7 +327,7 @@ Applied **intelligent processing to microphone only** (desktop audio untouched):
 
 ```bash
 # Navigate to backend:
-cd D:\Projects\meeting-transcriber\backend
+cd <repo-root>/backend
 
 # Device enumeration:
 python device_manager.py

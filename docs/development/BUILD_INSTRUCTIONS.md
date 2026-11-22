@@ -52,7 +52,7 @@ This step downloads and prepares the packaged runtime resources for the current 
 - Bundled Python runtime
 - Python dependencies from the platform-specific requirements file
 - ffmpeg binary
-- Bundled `speakrs-cli` (built from `native/speakrs-cli`) plus its validation fixture WAV — Windows and macOS only; Linux Core Beta skips Speakrs
+- Bundled `speakrs-cli` (built from `native/speakrs-cli`, Speakrs 0.7.0) plus its validation fixture WAV and integrity manifest (Windows, macOS, and Linux)
 - macOS Swift `audiocapture-helper` binary when building on macOS
 
 ```bash
@@ -101,7 +101,7 @@ Output: `dist/win-unpacked/` - can run directly for testing
 npm run build:mac
 ```
 
-Output: `dist/AvaNevis-Setup-<version>.dmg`
+Output: `dist/AvaNevis-Setup-<version>.dmg` and `dist/AvaNevis-Setup-<version>.zip` (plus `latest-mac.yml` and `*.blockmap`)
 
 ### macOS unpacked build (for testing)
 
@@ -143,7 +143,7 @@ Stay on electron-builder 26.x with `"toolsets": { "appimage": "1.0.2" }`. That i
 
 Arch/Omarchy **build host** extra: electron-builder's bundled fpm needs `libcrypt.so.1` (`sudo pacman -S libxcrypt-compat`). That package is not a runtime `pacman.depends` entry.
 
-Linux packages include the native x86_64 Speakrs CLI and validation fixture. CPU faster-whisper is the default transcription path. On supported NVIDIA hosts, explicit managed CUDA 12 setup enables the accelerator preflight for Speakrs. Qwen summaries have a separate CUDA and artifact gate. Model and runtime setup downloads are separate from installer construction.
+Linux packages include the native x86_64 Speakrs CLI and validation fixture. CPU faster-whisper is the default transcription path. On supported NVIDIA hosts, explicit managed CUDA 12 setup enables the accelerator preflight for Speakrs. Summaries & Chat (Qwen3.5, Gemma 4) have a separate CUDA and artifact gate. Model and runtime setup downloads are separate from installer construction.
 
 Do not commit `dist/` or downloaded `build/resources/` runtimes.
 
@@ -161,10 +161,12 @@ The installer includes:
 
 **NOT included (downloaded on first use or during explicit Settings setup):**
 
-- ❌ Whisper AI models (~150-1500MB depending on model size)
+- ❌ Whisper AI models (~500 MB–3 GB depending on model size)
+- ❌ Parakeet v2 models, Silero VAD, and private Parakeet runtime wheels
 - ❌ CUDA/GPU libraries (optional, user opt-in)
-- ❌ Speakrs model packs and the Windows ONNX Runtime 1.27.1 archive
+- ❌ Speakrs pinned native model files
 - ❌ Pyannote / PyTorch speaker-identification dependencies
+- ❌ Summaries & Chat GGUF models (Qwen3.5, Gemma 4) and `llama.cpp` runtimes
 
 ## Build Artifacts
 
@@ -173,11 +175,14 @@ After building, you'll have:
 ```text
 dist/
 ├── AvaNevis-Setup-<version>.exe          # Windows NSIS (Windows builds)
-├── AvaNevis-Setup-<version>.dmg          # macOS (macOS builds)
+├── AvaNevis-Setup-<version>.dmg          # macOS DMG (macOS builds)
+├── AvaNevis-Setup-<version>.zip          # macOS ZIP for Squirrel.Mac updater (macOS builds)
 ├── AvaNevis-Setup-<version>.AppImage     # Linux portable (Linux builds)
 ├── AvaNevis-Setup-<version>.pkg.tar.zst  # Linux pacman (Linux builds)
 ├── AvaNevis-Setup-<version>.deb          # Linux deb, experimental (Linux builds)
+├── latest*.yml / *.blockmap              # Differential updater metadata
 ├── win-unpacked/                         # Unpacked Windows app (if using build:dir)
+├── mac-arm64/                            # Unpacked macOS app (if using build:mac:dir)
 ├── linux-unpacked/                       # Unpacked Linux app (if using build:linux:dir)
 └── builder-*.yaml                        # Build metadata
 ```

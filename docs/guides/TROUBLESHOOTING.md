@@ -199,13 +199,26 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 ---
 
+### Chat Says No Matching Excerpts Or Insufficient Evidence
+
+**Symptom:** A question in **Chat** returns a notice about no matching excerpts, insufficient evidence, or citation verification failing.
+
+**Cause:** Local Chat answers only from retrieved transcripts and summaries inside the active scope (selected recordings, date range, or recording tags) and verifies every factual claim against retrieved `[Ek]` passages before showing an answer.
+
+**What to do:**
+- Click **Search all recordings** or **Reset filters** on the notice if a date, tag, or single-recording filter excluded the recording you meant.
+- Confirm the recording has finished transcribing in **History** (untranscribed audio is not indexed).
+- Click **Retry** if citation verification failed, or try naming a specific topic, speaker, or date from the recording.
+
+---
+
 ### Speaker Identification Cache Missing
 
 **Symptom:** Speaker identification fails with "model cache is missing or incomplete" after setup previously completed.
 
-**Cause:** Runs use the engine that was installed during setup. **Pyannote** loads from the local Hugging Face cache and does not re-download the gated model during meeting processing. A related bug (fixed) could also misreport Hugging Face auth-path probe failures as a missing cache when `HF_TOKEN_PATH` was cleared to an empty string. **Speakrs** uses the setup-time model pack (and on Windows the ONNX Runtime closure); it does not use a Hugging Face token.
+**Cause:** Runs use the engine that was installed during setup. **Pyannote** loads from the local Hugging Face cache and does not re-download the gated model during recording processing. A related bug (fixed) could also misreport Hugging Face auth-path probe failures as a missing cache when `HF_TOKEN_PATH` was cleared to an empty string. **Speakrs** (0.7.0) uses its setup-time pinned native model files directly on CUDA/CoreML; it does not use a Hugging Face token.
 
-**What to do:** First update to the latest app build and retry — do **not** remove CUDA or speaker setup unless Settings still shows speaker identification as not ready. If it still fails after updating, open Settings > AI Add-ons and run Validate (or setup again). For Pyannote, confirm the Hugging Face token still has access to `pyannote/speaker-diarization-community-1`. For Speakrs, re-run setup so the model pack (and Windows ORT) can download again.
+**What to do:** First update to the latest app build and retry — do **not** remove CUDA or speaker setup unless Settings still shows speaker identification as not ready. If it still fails after updating, open Settings > AI Add-ons and run Validate (or setup again). For Pyannote, confirm the Hugging Face token still has access to `pyannote/speaker-diarization-community-1`. For Speakrs, re-run setup (or Repair) so the pinned model files can download again.
 
 ---
 
@@ -259,7 +272,7 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 ### 🎤 Recording failed with no microphone audio
 
-**Symptom:** Stop completes but there is no meeting file; you see a failure about empty or missing microphone capture.
+**Symptom:** Stop completes but there is no recording file; you see a failure about empty or missing microphone capture.
 
 **Cause:** The recorder detected no usable mic audio and returned structured `success: false` on stdout (no bogus output path).
 
@@ -298,6 +311,7 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 2. Try again - downloads are resumable
 3. If a partial model cache is corrupted, remove the platform cache and retry:
    - Windows / `faster-whisper`: `%USERPROFILE%\.cache\huggingface\hub`
+   - Linux / `faster-whisper`: `~/.cache/huggingface/hub`
    - macOS Apple Silicon / MLX: `~/Library/Caches/avanevis`
 
 ---
@@ -359,7 +373,12 @@ C:\Users\<YourUsername>\AppData\Roaming\AvaNevis\recordings\
 ~/Library/Application Support/AvaNevis/recordings/
 ```
 
-Open that path manually in File Explorer or Finder.
+**Linux:**
+```
+~/.config/avanevis/recordings/
+```
+
+Open that path manually in File Explorer, Finder, or your file manager.
 
 The app does not currently expose a `Show in Folder` action in the history UI.
 

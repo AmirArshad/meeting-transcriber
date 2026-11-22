@@ -4,14 +4,19 @@ Omarchy 4 and CachyOS x86_64 on Hyprland/Wayland (PipeWire with `pipewire-pulse`
 
 This is not Linux 1.0 and not Windows/macOS parity. Transcription uses CPU `faster-whisper` by default. Optional managed CUDA 12 acceleration can be installed from Settings when an NVIDIA GPU is visible (`/proc/driver/nvidia` or `nvidia-smi`); it is hardware-evidenced on CachyOS x86_64 + RTX 4070 and best-effort elsewhere. Uninstall stays available whenever a managed runtime tree exists, including after a GPU disappears, and returns transcription to CPU.
 
-Linux Speakrs and Qwen summaries are CUDA-only, explicit setup paths: no CPU, Vulkan, SYCL, ROCm, Pyannote, or cloud fallback is offered. They remain disabled unless the managed CUDA runtime is admitted. Task 6 packaged summary evidence is complete on the CachyOS RTX 4070 host. Linux Speakrs Task 5 is **accepted** (2026-09-04), including the Windows x64 never-installed check. The authoritative evidence and exact scope are in the [v2.9 compatibility matrix](../development/V2_9_DEPENDENCY_COMPATIBILITY.md).
+Linux Speakrs and Summaries & Chat are CUDA-only, explicit setup paths: no CPU, Vulkan, SYCL, ROCm, Pyannote, or cloud fallback is offered. They remain disabled unless the managed CUDA 12 runtime is admitted. Task 6 packaged summary evidence is complete on the CachyOS RTX 4070 host, and Linux Speakrs Task 5 is **accepted** (2026-09-04). The authoritative historical v2.9 evidence lives in the [v2.9 compatibility matrix](../development/V2_9_DEPENDENCY_COMPATIBILITY.md).
 
-v2.10 adds optional English-only Parakeet with pinned runtime/model/VAD integrity
-checks and managed CUDA admission. Whisper remains the default; Parakeet has no
-CPU/cloud fallback. Current Qwen summaries support 11 checked transcript languages
-with confirmation and prior-output preservation. See the
-[v2.10 notes](../releases/v2.10.0.md) and
-[dated qualification/manual acceptance](../development/V2_10_LINUX_RELEASE_QUALIFICATION.md).
+v2.10 added optional English-only Parakeet with pinned runtime/model/VAD integrity
+checks and managed CUDA admission (Whisper remains the default; Parakeet has no
+CPU/cloud fallback), plus confirmed transcript-language Qwen summaries. v3.0 and
+v3.1 add local SQLite FTS5 History search (no AI add-on required), `.srt`/`.vtt`
+subtitle exports, differential AppImage updates, streaming grounded Chat, 11
+recording tags with dedicated summary templates, non-destructive speaker naming
+with voice previews, and the multi-model Summaries & Chat library (Qwen3.5 9B/4B
+and Gemma 4 E4B/12B; Inkling 2 Mini remains gated pending compatible runtimes).
+See the [v3.0 notes](../releases/v3.0.0.md),
+[v3.0 qualification](../development/V3_0_QUALIFICATION.md), and
+[v3.1 qualification](../development/V3_1_QUALIFICATION.md).
 The support tiers below are unchanged.
 
 Friend hardware evidence uses [tests/manual/linux-experimental-beta-checklist.md](../../tests/manual/linux-experimental-beta-checklist.md). Automated packaging tests do not count as distro validation.
@@ -32,7 +37,7 @@ Friend hardware evidence uses [tests/manual/linux-experimental-beta-checklist.md
 | Fedora Silverblue/Kinoite and other Atomic desktops | **Out** | None | Not the Workstation beta target. |
 | Linux ARM64, Flatpak, Snap, RPM, AUR publishing | **Out** | None | Unchanged scope. |
 
-Notify-only updates follow the same family rules: a running AppImage stays on AppImage; Debian-family installs prefer `.deb`; Arch-family installs prefer pacman; Fedora, SteamOS, and unknown Linux prefer AppImage. Filenames must still start with `AvaNevis-Setup-`.
+In-app updates follow the same family rules: a running AppImage uses `electron-updater` differential in-app updates (`latest-linux.yml` + `*.blockmap`) with recording- and AI-safe restart gates; Debian-family `.deb` and Arch-family `pacman` installs use `manual-package` mode with copyable `apt` / `pacman` upgrade commands rather than self-updating system-managed packages; Fedora, SteamOS, and unknown Linux prefer AppImage. Filenames must still start with `AvaNevis-Setup-`.
 
 ## Desktop environments
 
@@ -52,7 +57,7 @@ Capture is Pulse/PipeWire, not compositor-specific. Desktop differences are secr
 
 ## Install
 
-Release assets are `AvaNevis-Setup-<version>.AppImage`, `AvaNevis-Setup-<version>.pkg.tar.zst`, and `AvaNevis-Setup-<version>.deb`. The v2.9 branch packages bundled Python 3.11, ffmpeg, backend, and staged `speakrs-cli`; Whisper models, Speakrs model packs, llama.cpp/Qwen artifacts, and CUDA runtimes are explicit setup-time downloads. No ambient system CUDA libraries are trusted.
+Release assets are `AvaNevis-Setup-<version>.AppImage`, `AvaNevis-Setup-<version>.pkg.tar.zst`, and `AvaNevis-Setup-<version>.deb` (plus `latest-linux.yml` and `*.blockmap`). Linux packages bundle Python 3.11, ffmpeg, backend, and staged `speakrs-cli`; Whisper models, Parakeet runtimes/models, Speakrs model files, llama.cpp/GGUF artifacts, and CUDA runtimes are explicit setup-time downloads. No ambient system CUDA libraries are trusted.
 
 ### AppImage
 

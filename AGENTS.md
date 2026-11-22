@@ -33,7 +33,7 @@ No lint/typecheck/E2E npm target. Setup/native checks: README.md and docs/develo
 - Store recordings, metadata, FTS5 search, Chat threads and AI sidecars in Electron userData, never the repo. Preserve locks, atomic writes, recovery, non-destructive speaker names/tags and stop/discard distinctions.
 - One model process runs at a time (`src/main/summary-process-slot.js`), releasing before switching, setup tests or removal. Keep citations verified against retrieved transcripts.
 - Preserve Windows 10/11 x64, macOS arm64 and Linux x86_64 targets (packaging owns macOS minimum), plus Windows faster-whisper, Apple Silicon MLX and Linux CPU transcription with optional managed CUDA 12.
-- Linux device IDs are opaque strings; never parseInt them. A managed CUDA tree makes transcription fail-closed; keep Repair/Uninstall and component gates. Linux speaker ID is Speakrs-only, CUDA-only; summaries need their own CUDA gate. Never add CPU/cloud fallbacks for those add-ons.
+- Linux device IDs are opaque strings; never parseInt them. A managed CUDA tree makes transcription fail-closed; keep Repair/Uninstall and component gates. Linux speaker ID is Speakrs-only, CUDA-only; Summaries & Chat need their own CUDA gate. Never add CPU/cloud fallbacks for those add-ons.
 - Keep supported Omarchy/CachyOS Hyprland/Wayland/PipeWire distinct from experimental tiers. Use compatibility evidence for acceptance claims; never infer hardware success from CI.
 - Change IPC owner, preload, every renderer caller and characterization tests together. Keep facade export key sets and AI_ADDON_PROGRESS_CHANNEL / AI_ADDON_CANCEL_CODE values.
 - UI/docs use `recording`/`audio`/`Summaries & Chat` in plain copy; internal modules, IPC, DOM IDs and on-disk `meetings.json`/`meeting_*` names stay until a dedicated refactor.
@@ -46,7 +46,7 @@ No lint/typecheck/E2E npm target. Setup/native checks: README.md and docs/develo
 | AI add-ons, tokens, downloads, queues, quit, GPU/cache policy | `docs/development/contracts/local-ai.md` |
 | Prepared resources, installers, signing, tray | `docs/development/contracts/packaging.md` |
 | Swift helper or macOS desktop audio | `docs/development/contracts/macos-audio.md` |
-| Recording/meeting metadata, scan/import, rename | `docs/development/contracts/meeting-persistence.md` |
+| Recording/meeting metadata, tags, speakers, scan/import, search | `docs/development/contracts/meeting-persistence.md` |
 | Main/preload/renderer, exports, cross-cutting change checklists | `docs/development/contracts/ipc.md` |
 
 ## Working agreements

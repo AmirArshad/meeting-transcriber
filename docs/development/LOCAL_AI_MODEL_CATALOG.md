@@ -14,11 +14,13 @@ re-enable acceleration only after its trust handling is patched and qualified.
 The installed `qwen3.5-9b-q4-k-m` model has bounded local synthetic evidence for
 `en/es/fr/de/zh/ja/it/pa/hi/ko/pt`, including Chinese and Panjabi script cases.
 See [the recorded checks and limits](V2_10_SUMMARY_QUALIFICATION.md).
-`src/summary-language-policy.js` owns eligibility and policy revision; add-on
-status exposes it without inference or downloads. Gemma 4 E4B and 12B offer
-English on Apple Silicon after the [v3.1 checks](V3_1_QUALIFICATION.md). Other
-Gemma language and platform combinations remain gated. Existing platform
-runtime admission still applies.
+`src/summary-language-policy.js` owns eligibility and policy revision
+(`summary-language-v3`); add-on status exposes it without inference or downloads.
+`qwen3.5-4b-q4-k-m` is installable for local Chat, while its summary languages
+remain gated pending qualification. Gemma 4 E4B and 12B offer English summaries
+on Apple Silicon after the [v3.1 checks](V3_1_QUALIFICATION.md). Other Gemma
+language and platform combinations remain gated. Existing platform runtime
+admission still applies.
 Generation requires transcript-language confirmation tied to its hash; chunk,
 merge and repair share that language, and the selected local model checks prose
 language before committing sidecars.
@@ -28,7 +30,7 @@ language before committing sidecars.
 - Keep AvaNevis local-only: no cloud diarization, cloud summarization, telemetry, or background uploads.
 - Summary model and runtime downloads must be explicit user-triggered setup actions.
 - Speaker diarization setup must be explicit and stays under Electron `userData`. Speakrs 0.7 uses direct model files at an immutable upstream revision; pyannote uses its managed Python dependencies and Hugging Face cache.
-- Speaker diarization is accelerator-only: Windows uses CUDA; macOS uses Apple Silicon CoreML for Speakrs or PyTorch Metal/MPS for pyannote. Linux is Speakrs-only, CUDA-only on x86_64 after the accepted managed CUDA 12 preflight, and has no CPU fallback. Pyannote is not a Linux product option. Linux summaries are an active v2.9 CUDA-only Qwen lane, but remain unavailable until their own pinned runtime/model, integrity, managed CUDA, packaged, and RTX 4070 gates pass. Linux 0.7 requires the same live managed CUDA 12 admission before native inference.
+- Speaker diarization is accelerator-only: Windows uses CUDA; macOS uses Apple Silicon CoreML for Speakrs or PyTorch Metal/MPS for pyannote. Linux is Speakrs-only, CUDA-only on x86_64 after the accepted managed CUDA 12 preflight, and has no CPU fallback. Pyannote is not a Linux product option. Linux Summaries & Chat (Qwen3.5 and Gemma 4; Inkling 2 Mini gated) are CUDA-only and remain unavailable unless managed CUDA 12 admission, pinned runtime/model integrity, and platform gates pass. Linux Speakrs 0.7 requires the same live managed CUDA 12 admission before native inference.
 - Setup downloads must emit redacted progress, support cancellation, clean partial `.download` files, and preserve any previously valid install when cancellation happens during validation. Redaction must cover bearer tokens, legacy `Authorization: token ...`, `token=` / `access_token=` / `api_key=` query parameters, `X-Api-Key`, and URL credentials.
 - Pin every downloadable summary model and runtime artifact by immutable URL, filename, and SHA-256 checksum.
 - Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from catalog **download-related** keys only (`downloadUrl`, `url`, `indexUrl`, `extraIndexUrls`) plus known GitHub/Hugging Face/PyPI redirect hosts listed explicitly in `DOWNLOAD_REDIRECT_HOSTS` (`src/ai-addon/download-helpers.js`). `licenseUrl` / `releaseUrl` / docs links must not expand the allowlist. Do **not** wildcard `*.hf.co` / `*.huggingface.co`; when HF/Xet rotates CDN subdomains, add the new host to that set. HF-hosted summary models normally download via bundled Python `huggingface_hub` HTTP (bypassing the JS allowlist) and still require pinned SHA-256 verification. Arbitrary HTTPS hosts remain blocked.
@@ -135,13 +137,13 @@ inference smoke record.
 
 ## Updating llama.cpp Runtime Pins
 
-1. Update `PINNED_LLAMA_CPP_RUNTIME` in `src/ai-addon-state.js` with the release tag and commit.
+1. Update `PINNED_LLAMA_CPP_RUNTIME` (and model-specific runtime entries) in `src/ai-addon-state.js` with the release tag and commit.
 2. Update every platform entry in `SUMMARY_RUNTIME_ARTIFACTS`.
 3. Include all runtime archives needed for the platform, including CUDA dependency archives when required.
 4. Keep runtime archive URLs under trusted release hosts covered by the setup download host allowlist; setup rejects unallowed hosts even when SHA-256 metadata exists.
-5. Keep `executableName` aligned with the extracted `llama-cli` binary. Runtime archives extract under the managed runtime cache's `extract/` directory, and execution should prefer the extracted archive layout so Windows DLLs and macOS dylibs remain beside the executable.
-6. For ZIP and `tar.gz` archives, keep extraction paths relative and safe; shared validation lives in `src/ai-addon-archive-helpers.js`. On-disk runtime archives extract off the main thread (`src/ai-addon-zip-extractor-worker.js` on Windows, `src/ai-addon-tar-extractor-worker.js` on macOS). Setup creates the extraction directory and rejects unsafe or unparseable archive entries before extraction.
-7. Confirm the pinned runtime supports the non-interactive CLI flags used by setup/generation (`--no-warmup`, `--single-turn`, `--simple-io`, and the current Qwen reasoning flag) before changing runtime pins.
+5. Keep `executableName` (`llama-cli`) and `serverExecutableName` (`llama-server`) aligned with the extracted layout under `ai-addons/runtimes/llama-cpp/<runtime-id>/extract/` so Windows DLLs, Linux `.so` libraries, and macOS dylibs remain beside the executables. Shared runtimes are reused across models pinned to the same runtime ID.
+6. For ZIP and `tar.gz` archives, keep extraction paths relative and safe; shared validation lives in `src/ai-addon-archive-helpers.js`. On-disk runtime archives extract off the main thread (`src/ai-addon-zip-extractor-worker.js` on Windows, `src/ai-addon-tar-extractor-worker.js` on macOS/Linux). Setup creates the extraction directory and rejects unsafe or unparseable archive entries before extraction.
+7. Confirm the pinned runtime supports the non-interactive CLI flags used by setup/generation (`--no-warmup`, `--single-turn`, `--simple-io`, and the model's reasoning flag) and `llama-server` loopback flags (`--no-webui`, `--parallel 1`, `--reasoning off`, `LLAMA_API_KEY` env) before changing runtime pins.
 8. Run `npm test` and `npm run test:python`.
 
 ## Validation Checklist
@@ -165,7 +167,7 @@ inference smoke record.
 - Unallowed download host: setup must refuse to download the artifact.
 - Checksum mismatch: delete the cached file, re-download intentionally, and verify whether the upstream artifact changed.
 - Unsafe or unparseable runtime archive entry: reject the archive and verify the upstream runtime packaging before updating pins.
-- Missing `llama-cli`: inspect the runtime archive layout under `runtime/<platform-arch>/extract/`, cleaned extraction staging, and `executableName` before updating pins.
+- Missing `llama-cli` or `llama-server`: inspect the runtime archive layout under `ai-addons/runtimes/llama-cpp/<runtime-id>/extract/` (or legacy `runtime/<platform-arch>/extract/`), cleaned extraction staging, and `executableName` before updating pins.
 - Unsupported platform: keep status `unsupported`; do not add fallback cloud behavior.
 - Missing accelerator: keep speaker setup out of `ready`; do not silently run CPU diarization.
 - Missing pyannote cache during diarization: keep runtime offline/local-only and ask the user to re-run speaker identification setup.

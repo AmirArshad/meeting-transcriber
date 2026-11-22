@@ -794,4 +794,4 @@ def _save_markdown(self, results: Dict[str, Any], audio_path: str, output_path: 
 
 **Status:** Ready for implementation
 **Priority:** Next feature after macOS stabilization
-**Related:** [claude.md](../../claude.md) (architecture reference)
+**Related:** [AGENTS.md](../../AGENTS.md) (architecture reference)

@@ -1,6 +1,6 @@
 ---
 description: Electron IPC — keep main, preload, and renderer in sync
-globs: src/main.js,src/main/**/*.js,src/preload.js,src/renderer/**,src/main-process-helpers.js,src/ai-addon*.js
+globs: src/main.js,src/main/**/*.js,src/preload.js,src/renderer/**,src/main-process-helpers.js,src/main-process/**/*.js,src/ai-addon*.js
 alwaysApply: false
 ---
 

@@ -33,7 +33,7 @@ If an area looks solid, say so briefly and stop. Prefer concrete patches over va
 ## Shared preamble
 
 ```text
-You are reviewing AvaNevis — a privacy-first Electron desktop app (mic + desktop audio → local Whisper). Windows: faster-whisper (+ optional CUDA). macOS Apple Silicon: MLX + Swift CoreAudio tap helper. Optional local AI: exclusive Speakrs (token-free) or pyannote diarization, llama.cpp summaries. No cloud transcription / no telemetry.
+You are reviewing AvaNevis — a privacy-first Electron desktop app for recording mic/desktop audio, importing audio files, and transcribing locally. Windows: faster-whisper (+ optional CUDA). macOS Apple Silicon: MLX + Swift CoreAudio tap helper. Linux x86_64: PipeWire/Pulse + CPU faster-whisper (+ optional managed CUDA 12). Optional Parakeet v2, exclusive Speakrs 0.7 (token-free) or pyannote diarization, SQLite FTS5 History search, and multi-model llama.cpp Summaries & Chat (single-slot process runner, streaming Q&A with verified citations, 11 tag summary templates, non-destructive speaker names). No cloud transcription / no telemetry.
 
 Canonical contracts: docs/development/contracts/, indexed by root AGENTS.md. Do not invent a second architecture.
 
@@ -58,6 +58,9 @@ Allowed paths only:
 - src/main.js (before-quit, allowImmediateQuit / consumeAllowImmediateQuit, hasInFlightAiWork, drainAiWorkBeforeQuit, aiQuitDrainPromise)
 - src/main/recorder-service.js (handleQuitDuringRecording, quitWorkflowPromise, forceKillRecordingOnShutdown, stop/wait helpers)
 - src/main/summary-service.js (activeSummaryGeneration phases, abortActiveSummaryForQuit, metadata phase)
+- src/main/history-qa-service.js (resident server teardown, active Q&A cancellation)
+- src/main/summary-process-slot.js (single-slot process-group / Job Object release)
+- src/main/updater-service.js (install-update-now recording/import/AI safety gates)
 - src/main/gpu-runtime-service.js (gpuRuntimeActionPromise, hasInFlightGpuRuntimeAction, waitForGpuRuntimeIdle)
 - src/main/ai-compute-queue.js
 - src/main/ai-addon-ipc.js (setup abort / hasInFlightAiAddonSetup only as it relates to quit)
@@ -121,6 +124,9 @@ Allowed paths only:
 - src/main/ai-compute-queue.js
 - src/main/transcription-service.js
 - src/main/summary-service.js
+- src/main/history-qa-service.js
+- src/main/summary-process-slot.js
+- backend/summary_process_tree.py
 - src/main/ai-addon-ipc.js (validation createAbortableComputeAction / queues)
 - src/main/gpu-runtime-service.js
 - src/main-process/compute-timeout-helpers.js

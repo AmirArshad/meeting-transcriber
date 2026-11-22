@@ -61,7 +61,7 @@ using System32-only DLL search and a restricted PATH also returned CUDA for
 the short fixture; sampled modules included System32 `nvcuda.dll` and the
 NVIDIA DriverStore driver. Sampling can miss transient loads: this is not a
 complete image-load trace or an approved product loader policy. Scratch probe
-artifacts are local under `D:\avanevis-v211-windows-probe-4`.
+artifacts are local under `<local-probe-dir>`.
 
 The probe script was corrected for an empty Git diff and for Windows process
 environment removal (setting a variable to null produced an empty variable).
@@ -116,7 +116,7 @@ matching the 48 known turns by maximum overlap (24/24 per voice). The trace
 showed the System32 NVIDIA driver and its DriverStore dependency; it does not
 qualify every GPU tier or driver-dependent load path. The NVIDIA driver files
 and full traces are inventoried in local scratch
-`D:\avanevis-v211-windows-probe-3`.
+`<local-probe-dir>`.
 
 On the same synthetic short and long WAVs, isolated v2.10.3 Speakrs 0.5 and
 0.7 CUDA runs produced identical segment boundaries and speaker labels: 8 and

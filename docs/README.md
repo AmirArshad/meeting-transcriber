@@ -4,7 +4,7 @@ This directory separates current guides, maintainer references, completed implem
 
 ## Current Release
 
-- [AvaNevis v3.1 qualification record](development/V3_1_QUALIFICATION.md) (in progress on `codex/v3.1-phase4-model-library`)
+- [AvaNevis v3.1 qualification record](development/V3_1_QUALIFICATION.md) (in progress on `release/3.1`)
 - [AvaNevis v3.0.0 release notes](releases/v3.0.0.md) and [qualification](development/V3_0_QUALIFICATION.md)
 - [AvaNevis v2.12.0 release notes](releases/v2.12.0.md) and [qualification](development/V2_12_QUALIFICATION.md)
 - [AvaNevis v2.11.0 release notes](releases/v2.11.0.md) and [qualification](development/V2_11_SPEAKRS_ELECTRON_QUALIFICATION.md)
@@ -19,6 +19,17 @@ This directory separates current guides, maintainer references, completed implem
 - [Recording history and transcript storage](guides/MEETING_TRANSCRIPTION.md)
 - [macOS installation](guides/MACOS_INSTALLATION.md)
 - [macOS feature compatibility](guides/MACOS_FEATURE_COMPATIBILITY.md)
+- [Linux experimental beta](guides/LINUX_EXPERIMENTAL.md)
+- [Arch User Repository (AUR) package guide](guides/AUR_PACKAGE_GUIDE.md)
+
+## Canonical Contracts
+
+- [IPC contract](development/contracts/ipc.md)
+- [Local AI contract](development/contracts/local-ai.md)
+- [Meeting persistence contract](development/contracts/meeting-persistence.md)
+- [Recording contract](development/contracts/recording.md)
+- [Packaging contract](development/contracts/packaging.md)
+- [macOS desktop-audio contract](development/contracts/macos-audio.md)
 
 ## Development References
 

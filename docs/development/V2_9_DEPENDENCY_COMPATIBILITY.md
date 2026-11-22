@@ -454,7 +454,7 @@ transcription: `cuda` / `float16`.
 
 ### 7. Residual desktop-audio smoke (best-effort; does not block CUDA acceptance)
 
-8.00 s packaged mic+desktop Stop (Logitech C925e `pulse-source:` + FiiO
+8.00 s packaged mic+desktop Stop (USB webcam mic `pulse-source:` + USB DAC
 `pulse-monitor:`) wrote `recording_2026-09-02T11-55-42.opus` (116K). No
 `DESKTOP_AUDIO_RESOURCE_EXHAUSTED` warning on this host. Not reproduced; CUDA
 acceptance does not depend on it.
@@ -1674,15 +1674,15 @@ Held: Electron 42.9.0; `onnxruntime` 1.26.0 vs runtime 1.29.0; `filelock==3.32.3
 - Packaged `device_manager.py`: opaque `pulse-source:` / `pulse-monitor:` / `pulse-sink:` IDs; onboard front-mic `available=no` omitted; HDMI `available=yes` kept
 - First-run Whisper **preload defaulted to CUDA** via CTranslate2 on this NVIDIA host. Fixed: `buildWhisperPreloadArgs` and `resolve_faster_whisper_device` force CPU on Linux. Packaged-python `--preload --model small --device cpu` loaded **CPU / int8**
 - Add-ons reported `supported: false` with the Core Beta reason strings; legal notices readable
-- Hardware capture (2026-08-31, same packaged `linux-unpacked`): Discard of ~10 s left `meetings.json` empty. Stop of 2:28 (Logitech C925e + FiiO `pulse-monitor`, Chrome looping the Whisper JFK fixture, no ScreenCast portal) saved one History meeting. `faster_whisper_transcriber --device cpu` wrote `transcriptionDevice: cpu`, `transcriptionComputeType: int8`. The `.md` contains the looping JFK line (“ask not what your country can do for you” / “fellow Americans”), not only level-meter activity. Setup / Install Model / Generate Summary stayed disabled. noctalia `RegisteredStatusNotifierItems` included `StatusNotifierItem-<avanevis-pid>-1` while recording; recording tray-bar crops had more red pixels than idle. Physical HDMI unplug was not performed (port still `available`); unplugged onboard analog-input stayed omitted
+- Hardware capture (2026-08-31, same packaged `linux-unpacked`): Discard of ~10 s left `meetings.json` empty. Stop of 2:28 (USB webcam mic + USB DAC `pulse-monitor`, Chrome looping the Whisper JFK fixture, no ScreenCast portal) saved one History meeting. `faster_whisper_transcriber --device cpu` wrote `transcriptionDevice: cpu`, `transcriptionComputeType: int8`. The `.md` contains the looping JFK line (“ask not what your country can do for you” / “fellow Americans”), not only level-meter activity. Setup / Install Model / Generate Summary stayed disabled. noctalia `RegisteredStatusNotifierItems` included `StatusNotifierItem-<avanevis-pid>-1` while recording; recording tray-bar crops had more red pixels than idle. Physical HDMI unplug was not performed (port still `available`); unplugged onboard analog-input stayed omitted
 - macOS 13+ arm64 hardware matrix passed on **44.1.0** on 2026-09-01; evidence below.
 
 **Windows packaging (Windows 11 Pro 10.0.26200, 2026-08-31):** Node 22.15.0, npm 10.9.2. `npm ci` installed Electron **44.1.0**. `npm run test:all`: 768 JS pass / 2 skip (the extra skip is `ar`/binutils for synthesizing a `.deb`), 578 Python pass / 7 skip. One JS test failed until patched: `assertAppImageUsesStaticRuntime`’s malformed-ELF case shelled out to Unix `file(1)`. The static-runtime case already injected `spawnSyncFn`; the malformed case now does too. Live Linux `verify:linux:packaged` still uses real `file`. `npm run build:dir` packaged `electron=44.1.0`; `AvaNevis.exe` `process.versions` reports `electron 44.1.0`, `chrome 152.0.7977.65`, `node 24.19.0`. Bundled `pip check` clean. Bundled PyAV **18.1.0** decoded `tests/fixtures/speakrs-two-speaker-16k.wav` → rate 16000, channels 1, frames 223, samples 227592. Offline CPU `--model small --device cpu` wrote `device: cpu`, `computeType: int8`, duration 14.22s, English fixture text. Speakrs packaging verifier passed; no stale `audiocapture-helper`. First electron-builder attempt in this agent shell failed with `spawn powershell.exe ENOENT` because PATH had PowerShell 7 (`pwsh`) only; retry with `C:\Windows\System32\WindowsPowerShell\v1.0` succeeded. Not a product change — CI `windows-latest` already has `powershell.exe`.
 
 **Windows x64 smoke (packaged `win-unpacked`, Electron 44.1.0):**
 - CDP `Browser`: `Chrome/152.0.7977.65`; renderer `file://…/app.asar/src/renderer/index.html`
-- Packaged `device_manager.py`: WASAPI Logitech C925e mic id 39; FiiO DAC-E10 loopback id 47. Host also has CUDA 13 toolkits on PATH; this pass used the already-installed packaged CUDA 12 profile (not a CUDA 13 install)
-- Discard of ~12 s (C925e + FiiO loopback) left History at 40 meetings; latest id stayed `20260827_230839`. UI returned to Ready; Cancel stayed hidden
+- Packaged `device_manager.py`: WASAPI USB webcam mic id 39; USB DAC loopback id 47. Host also has CUDA 13 toolkits on PATH; this pass used the already-installed packaged CUDA 12 profile (not a CUDA 13 install)
+- Discard of ~12 s (USB mic + USB DAC loopback) left History at 40 meetings; latest id stayed `20260827_230839`. UI returned to Ready; Cancel stayed hidden
 - Stop of 2:28 (`durationSeconds` 148.82) saved meeting `20260831_231450`. Status flipped to `Ready · 1 transcribing` then completed. Metadata: `model: medium`, `transcriptionDevice: cuda`, `transcriptionComputeType: float16`. Speakrs `speakrs-community1-vbx` completed (`speakerCount: 1` — looping single-file speech). The `.md` contains the looping two-speaker fixture lines (“Morning, Zyra” / “design review starts at 10” / “Thanks, Hazel”), not only level-meter activity
 
 **macOS packaging (macOS 26.6.2 arm64, 2026-09-01):** Node 26.8.1, npm 11.19.0. `npm ci` installed Electron **44.1.0** with no audit findings. `npm run test:all`: 768 JS pass / 2 skip, 577 Python pass / 8 skip, JS+Python syntax OK. `npm run build:mac:dir` packaged `electron=44.1.0`; the first attempt was stopped after stale local `node_modules` exposed Electron 42.9.0, then `npm ci` restored the lockfile runtime before the accepted build. `npm run verify:mac:packaged` passed with host Metal access: arm64 app/ffmpeg/Speakrs CLI, deep/strict bundle seal, helper and Speakrs signatures/entitlements, Opus encode, MLX imports, and no bundled Torch. The restricted-shell verifier reached the same seal/native checks but could not expose a Metal device; the host-GPU rerun is the accepted result. A deep/strict recheck after the first live smoke then exposed Python `__pycache__` writes inside the signed bundle. Root cause: the verifier protected its own import smoke with `PYTHONDONTWRITEBYTECODE=1`, but normal packaged children did not. `buildPythonEnv()` now forces that flag for every packaged child (caller overrides cannot disable it), with a red/green contract test. A rebuilt app retained a valid deep/strict seal after startup, CoreAudio recording, Opus finalization, Speakrs, and MLX transcription; the bundled backend contained zero `__pycache__` directories.
@@ -1723,8 +1723,8 @@ remain experimental per `docs/guides/LINUX_EXPERIMENTAL.md`.
 Selected devices were kept as opaque strings throughout; no numeric parsing or
 coercion was used:
 
-- Mic: `pulse-source:alsa_input.usb-046d_Logitech_Webcam_C925e_681FC0BF-02.analog-stereo`
-- Desktop: `pulse-monitor:alsa_output.usb-FiiO_DigiHug_USB_Audio-01.analog-stereo.monitor`
+- Mic: `pulse-source:alsa_input.usb-<vendor>_<usb-mic>_<serial>-02.analog-stereo`
+- Desktop: `pulse-monitor:alsa_output.usb-<usb-dac>-01.analog-stereo.monitor`
 - Stale selections used for negative-path checks were `pulse-monitor:does-not-exist`, `pulse-source:does-not-exist`, and `none`.
 
 ### Commands and exit codes
@@ -1744,7 +1744,7 @@ coercion was used:
 The raw recorder check was run as:
 
 ```sh
-../.venv/bin/python -m audio.linux_recorder --mic pulse-source:alsa_input.usb-046d_Logitech_Webcam_C925e_681FC0BF-02.analog-stereo --loopback pulse-monitor:alsa_output.usb-FiiO_DigiHug_USB_Audio-01.analog-stereo.monitor --capture-mode mic-and-desktop --output /tmp/avanevis-cli-stdout-check-<timestamp>.opus
+../.venv/bin/python -m audio.linux_recorder --mic pulse-source:alsa_input.usb-<vendor>_<usb-mic>_<serial>-02.analog-stereo --loopback pulse-monitor:alsa_output.usb-<usb-dac>-01.analog-stereo.monitor --capture-mode mic-and-desktop --output /tmp/avanevis-cli-stdout-check-<timestamp>.opus
 ```
 
 It exited **0**; `<timestamp>` denotes the unique temporary output suffix used
@@ -1824,7 +1824,7 @@ Sanitized late-loss event:
 | PipeWire | PulseAudio protocol 35, server `PulseAudio (on PipeWire 1.6.8)` |
 | Electron / dev app | Electron **44.1.0**, Chrome/152.0.7977.65, `app.isPackaged=false` |
 | Python | `.venv` CPython 3.11.16 |
-| Devices | mic `pulse-source:alsa_input.usb-046d_Logitech_Webcam_C925e_681FC0BF-02.analog-stereo`; desktop `pulse-monitor:alsa_output.pci-0000_01_00.1.hdmi-stereo.monitor` (HDMI VG27AQML1A). Empty isolated `localStorage` selected those Pulse defaults. |
+| Devices | mic `pulse-source:alsa_input.usb-<vendor>_<usb-mic>_<serial>-02.analog-stereo`; desktop `pulse-monitor:alsa_output.pci-0000_01_00.1.hdmi-stereo.monitor` (HDMI monitor). Empty isolated `localStorage` selected those Pulse defaults. |
 | Playback | looping `tests/fixtures/speakrs-two-speaker-16k.wav` via `pw-play --target alsa_output.pci-0000_01_00.1.hdmi-stereo` |
 | Transcription | local cached Whisper `tiny`, CPU / `int8`; no cloud or upload path |
 
@@ -1852,8 +1852,8 @@ Renderer IPC was driven through local CDP (`file://<repo>/src/renderer/index.htm
 
 | Mode / recording | Hardware observation | Saved/transcription result |
 |---|---|---|
-| Electron `desktop-only` Stop, meeting `20260905_164049`, 15.21 s | argv `--mic none --loopback pulse-monitor:…hdmi-stereo.monitor --capture-mode desktop-only`. Log: `Desktop audio stream opened` only. Pulse `linux_recorder.py` source-output was on HDMI monitor source **64**, not C925e source **65**. | Playable 48 kHz stereo Opus **15.22 s**. CPU/`int8` `tiny` transcript contains the fixture (“Morning, Zira” / “design reviews start at 10” / “Thanks, Hazel”). |
-| Electron `mic-and-desktop` Stop, meeting `20260905_164219`, 19.22 s | argv `--mic pulse-source:…C925e… --loopback pulse-monitor:…hdmi-stereo.monitor --capture-mode mic-and-desktop`. Both `Desktop audio stream opened` and `Microphone stream opened`. | Playable 48 kHz stereo Opus **19.22 s**. CPU/`int8` `tiny` transcript contains the desktop fixture. No independent spoken mic phrase appeared. **PARTIAL** for mixed mic content (same class as the 2026-09-04 host pass). |
+| Electron `desktop-only` Stop, meeting `20260905_164049`, 15.21 s | argv `--mic none --loopback pulse-monitor:…hdmi-stereo.monitor --capture-mode desktop-only`. Log: `Desktop audio stream opened` only. Pulse `linux_recorder.py` source-output was on HDMI monitor source **64**, not USB mic source **65**. | Playable 48 kHz stereo Opus **15.22 s**. CPU/`int8` `tiny` transcript contains the fixture (“Morning, Zira” / “design reviews start at 10” / “Thanks, Hazel”). |
+| Electron `mic-and-desktop` Stop, meeting `20260905_164219`, 19.22 s | argv `--mic pulse-source:…usb-mic… --loopback pulse-monitor:…hdmi-stereo.monitor --capture-mode mic-and-desktop`. Both `Desktop audio stream opened` and `Microphone stream opened`. | Playable 48 kHz stereo Opus **19.22 s**. CPU/`int8` `tiny` transcript contains the desktop fixture. No independent spoken mic phrase appeared. **PARTIAL** for mixed mic content (same class as the 2026-09-04 host pass). |
 
 Stop progress advanced through Finishing / Normalizing / Mixing / Encoding. No `NO_DESKTOP_AUDIO_CAPTURED` and no “saved recording contains microphone audio only” warning on the single-source live sessions.
 
@@ -1958,9 +1958,9 @@ Stop progress on the CLI path emitted `post_processing_started`, `audio_normaliz
 | OS / architecture | Windows 11 Pro 24H2 (`10.0.26200`), x64 |
 | CPU / GPU | AMD Ryzen 5 7600; NVIDIA GeForce RTX 4070 |
 | Node / npm / Electron | Node v22.23.2, Electron **44.1.0**, `app.isPackaged=false` |
-| Python | `.venv` CPython 3.11.9; ffmpeg `2025-11-17-git-e94439e49b` (`C:\ffmpeg\bin\ffmpeg.exe`) |
-| Devices | WASAPI mic `42` Logitech Webcam C925e; WASAPI loopback `48` `VG27AQML1A (NVIDIA High Definition Audio) [Loopback]`. PortAudio `defaults.default_input=1` (FiiO SPDIF Interface MME) / `default_output=7` (VG27AQML1A speakers, not a loopback id) |
-| Playback | looping `tests/fixtures/speakrs-two-speaker-16k.wav` via `System.Media.SoundPlayer` / `winsound` on the default output (VG27AQML1A) |
+| Python | `.venv` CPython 3.11.9; ffmpeg `2025-11-17-git-e94439e49b` (host PATH `ffmpeg.exe`) |
+| Devices | WASAPI mic `42` (USB webcam mic); WASAPI loopback `48` `HDMI Monitor (NVIDIA High Definition Audio) [Loopback]`. PortAudio `defaults.default_input=1` (USB DAC SPDIF MME) / `default_output=7` (HDMI monitor speakers, not a loopback id) |
+| Playback | looping `tests/fixtures/speakrs-two-speaker-16k.wav` via `System.Media.SoundPlayer` / `winsound` on the default output (HDMI monitor) |
 | Transcription | local cached faster-whisper; CLI used `--model base --device cuda` (`cuda` / `float16`); Electron Stop used the user’s `medium` + Speakrs path (`cuda` / `float16`) |
 
 Artifacts: `%TEMP%\avanevis-windows-capture-modes-20260905\`.
@@ -1969,7 +1969,7 @@ Artifacts: `%TEMP%\avanevis-windows-capture-modes-20260905\`.
 
 | Command | Result |
 |---|---|
-| `.venv\Scripts\python.exe backend\device_manager.py` | exit **0**; WASAPI C925e `42`, VG27AQML1A loopback `48` |
+| `.venv\Scripts\python.exe backend\device_manager.py` | exit **0**; WASAPI USB mic `42`, HDMI loopback `48` |
 | `audio.windows_recorder --capture-mode {mic-and-desktop,mic-only,desktop-only}` stdin `stop` | each exit **0** |
 | same with stdin `cancel` | each exit **0**, `{ success: true, cancelled: true }` |
 | silent `desktop-only` stdin `stop` (no fixture, `desktop_max=0`) | exit **1**, structured `RECORDER_FAILED` carrying `DESKTOP_ONLY_NO_AUDIO_MESSAGE` |
@@ -1981,7 +1981,7 @@ Artifacts: `%TEMP%\avanevis-windows-capture-modes-20260905\`.
 | Mode / recording | Hardware observation | Saved/transcription result |
 |---|---|---|
 | CLI `desktop-only` Stop, 15.372 s | No `mic_stream_opened`; levels `mic_max=0.0`, `desktop_max=0.496`; stderr “MIC first callback: NEVER”; CapabilityAccess `microphone\NonPackaged` did **not** add `.venv` Python (the `pythoncore-3.11-64\python.exe` LastUsed stamp only moved on a later mic-only run) | Playable 48 kHz stereo Opus. CUDA `base` transcript contained the fixture (“Morning, Zyra” / “design review starts at 10” / “Thanks, Hazel”). |
-| CLI `mic-only` Stop, 16.384 s | `mic_stream_opened` only; no loopback probe; levels `mic_max=0.12`, `desktop_max=0.0`; “Desktop spool included: False”; “DESKTOP first callback: NEVER” | Playable Opus. Transcript contained fixture speech via **acoustic bleed** into the C925e (monitor speakers). Isolation is the missing desktop spool/levels, not a sealed room. |
+| CLI `mic-only` Stop, 16.384 s | `mic_stream_opened` only; no loopback probe; levels `mic_max=0.12`, `desktop_max=0.0`; “Desktop spool included: False”; “DESKTOP first callback: NEVER” | Playable Opus. Transcript contained fixture speech via **acoustic bleed** into the USB mic (monitor speakers). Isolation is the missing desktop spool/levels, not a sealed room. |
 | CLI `mic-and-desktop` Stop, 16.384 s | Both streams; levels `mic_max=0.12`, `desktop_max=0.496` | Playable Opus. CUDA transcript contained the fixture. Independent live mic speech was not used; mic energy is room/bleed. **PARTIAL** for mixed mic content, same class as the Linux and macOS hosts. |
 | CLI Discard of all three modes | `{ cancelled: true }`; no post-processing events; no leftover `.capture`; no Opus | No meeting persisted. |
 | CLI silent `desktop-only` (fixture stopped), ~16 s wall | Loopback opened; levels stayed `0.0`/`0.0`; WASAPI delivered **no** desktop callbacks | Stop **failed**. Structured `success: false`, `code: RECORDER_FAILED`, message is `DESKTOP_ONLY_NO_AUDIO_MESSAGE`. No Opus. `{stem}.capture` left behind. **Accepted 2026-09-05:** keep this empty-spool failure; do not save an empty meeting. macOS tap silence is a different path (frames delivered). |
@@ -1990,7 +1990,7 @@ Artifacts: `%TEMP%\avanevis-windows-capture-modes-20260905\`.
 | Electron renderer reload mid mixed recording | After `Page.reload`, hydrated status still `Recording mic + system audio…`, both tracks visible | Discard afterwards left Ready; no extra meeting. |
 | Electron cancel during startup (`desktop-only`) | State `starting` / “Running checks...”; Discard visible | Returned to Ready; History still 42. |
 | Electron `desktop-only` Stop, meeting `20260905_150450`, 15.039 s | `Mic spool bytes: 0`; MIC callbacks NEVER; desktop peak from live loopback; `Ready · 1 transcribing` then completed | Guided Whisper/Speakrs `medium` `cuda`/`float16`. The `.md` contains the fixture (“Morning, Zyra” / “design review starts at 10” / “Thanks, Hazel”). This is the WASAPI desktop-primary / mono-downmix path in the product UI. |
-| First renderer snapshot (empty selection) | Dropdowns populated (11 inputs / 10 desktop entries) but stayed on placeholders before CDP selected C925e `42` + VG27AQML1A loopback `48` | PortAudio `default_output=7` is the VG27AQML1A **speakers** id, not loopback `48`, so the desktop placeholder matches the missing-ID rule. Mic `default_input=1` (FiiO SPDIF MME) was not auto-selected on this origin. |
+| First renderer snapshot (empty selection) | Dropdowns populated (11 inputs / 10 desktop entries) but stayed on placeholders before CDP selected USB mic `42` + HDMI loopback `48` | PortAudio `default_output=7` is the HDMI monitor **speakers** id, not loopback `48`, so the desktop placeholder matches the missing-ID rule. Mic `default_input=1` (USB DAC SPDIF MME) was not auto-selected on this origin. |
 
 Stop progress on the CLI path emitted `post_processing_started`, `audio_normalizing`, `audio_mixing`, `audio_encoding`, and `post_processing_complete`. Stderr stayed diagnostic. No `NO_DESKTOP_AUDIO_CAPTURED` and no “saved recording contains microphone audio only” warning on mic-only or desktop-only.
 
@@ -1999,7 +1999,7 @@ Stop progress on the CLI path emitted `post_processing_started`, `audio_normaliz
 | Scenario | Result on this host |
 |---|---|
 | Default mixed start/UI/save/desktop transcription | **PASS** |
-| Default mixed independent mic speech in transcript | **PARTIAL** (C925e + speaker bleed; both spools live) |
+| Default mixed independent mic speech in transcript | **PARTIAL** (USB mic + speaker bleed; both spools live) |
 | Mic-only source isolation and local transcription | **PASS** |
 | Desktop-only source isolation, no mic open, and transcript | **PASS** (no `mic_stream_opened`; OS mic consent stamp unchanged for `.venv` Python; fixture in CLI and Electron transcripts) |
 | Stop and Discard for all three modes | **PASS** |

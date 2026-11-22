@@ -260,7 +260,7 @@ Users might see these warnings (they are SAFE):
 
 **Your code:** MIT License ✅
 
-**Bundled in installers (see [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md)):**
+**Bundled in installers (see [THIRD_PARTY_NOTICES.md](../../../THIRD_PARTY_NOTICES.md)):**
 - Electron: MIT ✅
 - Python runtime: PSF ✅
 - **ffmpeg: GPLv3** (third-party prebuilt binaries from gyan.dev on Windows and shaka-project/static-ffmpeg-binaries on macOS) — **not** “permissive-only”; requires source offer and release-page distribution (see `legal/FFMPEG-COMPLIANCE.json`, `docs/development/RELEASE_COMPLIANCE.md`)

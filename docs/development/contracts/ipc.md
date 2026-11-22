@@ -25,19 +25,20 @@ Not inferable from the tree, and the highest-risk surface in the repo. Renaming 
 
 | Service in `src/main/` | Channels |
 |---|---|
-| `recorder-service.js` | `run-recording-preflight`, `start-recording`, `stop-recording`, `cancel-recording`, `get-recording-state` |
-| `transcription-service.js` | `check-model-downloaded`, `download-model`, `transcribe-audio`, `transcribe-audio-with-speakers`, `diarize-transcript`, `retry-transcription`, `finalize-recording-transcription`, `cancel-pending-transcription` |
+| `recorder-service.js` | `run-recording-preflight`, `start-recording`, `stop-recording`, `cancel-recording`, `get-recording-state`, `get-recording-recovery-state`, `recover-recording`, `defer-recording-recovery` |
+| `transcription-service.js` | `get-transcription-engine-status`, `setup-transcription-engine`, `cancel-transcription-engine-setup`, `validate-transcription-engine`, `remove-transcription-engine`, `check-model-downloaded`, `download-model`, `cancel-download-model`, `transcribe-audio`, `transcribe-audio-with-speakers`, `diarize-transcript`, `retry-transcription`, `finalize-recording-transcription`, `cancel-pending-transcription`, `resume-pending-transcriptions`, `get-transcription-queue-state` |
 | `audio-import-service.js` | `select-import-audio`, `start-import-audio`, `cancel-import-audio`, `import-audio-progress` (event) |
 | `summary-service.js` | `generate-summary`, `cancel-summary-generation` |
 | `history-search-service.js` | `search-history`, `rebuild-history-index`, `get-history-index-status` |
-| `history-qa-service.js` | `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, plus `history-qa-model-state` / `history-qa-progress` events |
+| `history-qa-service.js` | `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, `update-chat-thread-model`, plus `history-qa-model-state` / `history-qa-progress` events |
 | `meeting-manager-client.js` | `list-meetings`, `get-meeting`, `delete-meeting`, `scan-recordings`, `add-meeting`, `update-meeting`, `update-meeting-ai` |
 | `device-ipc.js` | `validate-devices`, `check-disk-space`, `check-audio-output`, `get-audio-devices`, `warm-up-audio-system`, `get-macos-permission-status` |
 | `file-export-ipc.js` | `save-transcript-file`, `save-speaker-segments-file`, `save-transcript-as`, `open-legal-notices` |
 | `gpu-runtime-service.js` | `check-gpu`, `check-cuda`, `install-gpu`, `ensure-compatible-gpu-runtime`, `uninstall-gpu` |
-| `ai-addon-ipc.js` | AI add-on status, diarization token, diarization/summary setup/cancel/validate/remove |
+| `ai-addon-ipc.js` | AI add-on status, diarization token, diarization/summary setup/cancel/validate/remove, `set-default-summary-model` |
 | `updater-service.js` | `get-update-state`, `check-for-updates`, `download-update`, `cancel-update-download`, `install-update-now`, `set-auto-download-updates`, `open-update-release-page`, plus `update-state-changed` (event) |
 | `ai-compute-queue.js` | none (no IPC) — owns the compute queue itself |
+| `summary-process-slot.js` | none (no IPC) — enforces one loaded Summaries & Chat model process across Chat, summaries, and setup smoke |
 | `recording-presence-service.js` | none — tray/Dock/taskbar presentation only |
 
 Phase 0 source-scan tests treat `src/main.js` + `src/main/**/*.js` as one combined surface, so channel names and payloads stay pinned across the split.
@@ -49,8 +50,8 @@ The native picker returns the basename of one selected MP3, WAV or Opus file. Ma
 ### Summary language payload
 
 `generate-summary` requires `{ meetingId, transcriptLanguage,
-sourceTranscriptHash, profile? }`, with optional `modelId` constrained to the
-installed model. Main validates eligibility and the current on-disk transcript
+sourceTranscriptHash, profile? }`, with optional `modelId` constrained to an
+installed ready model. Main validates eligibility and the current on-disk transcript
 and reads the recording's authoritative `tag` from `meeting_manager get`;
 it passes `--language`, `--source-transcript-hash`, `--model-id`, and optional
 `--tag` to the local runner. Successful `ai.summary` metadata may add

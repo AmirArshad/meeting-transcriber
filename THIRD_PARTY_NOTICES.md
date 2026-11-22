@@ -18,7 +18,9 @@ These components are included when you build installers via
 | Component | Role | License (summary) | Notes |
 |-----------|------|-------------------|--------|
 | [Electron](https://www.electronjs.org/) | Desktop shell | MIT | |
-| [marked](https://marked.js.org/) (`18.2.1`) | Offline Markdown parsing for Chat responses | MIT | Bundled inside `app.asar` |
+| [electron-updater](https://www.electron.build/auto-update) (`6.8.11`) | Differential in-app update checks and downloads | MIT | Bundled inside `app.asar` |
+| [adm-zip](https://github.com/cthackers/adm-zip) (`0.6.1`) | Safe ZIP archive inspection and extraction | MIT | Bundled inside `app.asar` |
+| [marked](https://marked.js.org/) (`18.2.1`) | Offline Markdown parsing for Chat responses and release notes | MIT | Bundled inside `app.asar` |
 | [DOMPurify](https://github.com/cure53/DOMPurify) (`3.4.18`) | HTML sanitization for rendered Markdown | Apache-2.0 (or MPL-2.0) | Bundled inside `app.asar` |
 | [Python](https://www.python.org/) | Embedded / standalone runtime in installer | PSF License | See python.org license page |
 | [ffmpeg](https://ffmpeg.org/) | Opus compression after recording | **GPLv3** (typical third-party builds) | See [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt) and [legal/FFMPEG-COMPLIANCE.json](legal/FFMPEG-COMPLIANCE.json). Windows: gyan.dev essentials build. macOS: shaka-project/static-ffmpeg-binaries arm64 static build. Linux (when packaged): shaka-project `ffmpeg-linux-x64` static build. Windows builds may include `legal/ffmpeg-upstream-*` copied from the gyan.dev archive. |
@@ -117,13 +119,13 @@ same source notices are installed under
 
 ## 3. Development-only dependencies
 
-`npm install` pulls JavaScript tooling (e.g. electron, electron-builder, adm-zip) under their respective npm licenses (mostly MIT). These are not redistributed as application logic in the same way as the Python runtime.
+`npm ci` pulls JavaScript build tooling (e.g. `electron`, `electron-builder`) under their respective npm licenses (mostly MIT). These are not redistributed as application logic in the same way as the Python runtime.
 
 ---
 
 ## 4. Trademarks
 
-Names such as **Whisper**, **Parakeet**, **Qwen**, **pyannote**, **Speakrs**, **Hugging Face**, **Electron**, **NVIDIA**, and **CUDA** are trademarks of their respective owners. AvaNevis uses them only to describe compatible components and does not claim endorsement.
+Names such as **Whisper**, **Parakeet**, **Qwen**, **Gemma**, **Inkling**, **pyannote**, **Speakrs**, **Hugging Face**, **Electron**, **NVIDIA**, and **CUDA** are trademarks of their respective owners. AvaNevis uses them only to describe compatible components and does not claim endorsement.
 
 ---
 
@@ -145,4 +147,4 @@ Installers intentionally omit the full source tarball to save size; the release 
 
 For license questions about AvaNevis itself, open a GitHub Discussion or Issue on the project repository. For legal advice about your specific distribution, consult a qualified attorney.
 
-*Last updated for AvaNevis 2.6.x with optional Speakrs / Pyannote speaker identification.*
+*Last updated for AvaNevis 3.1.x.*

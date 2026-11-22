@@ -1,39 +1,39 @@
 # AvaNevis — Product Roadmap
 
-This document outlines what's shipped, what's in flight, and what's planned. AvaNevis (formerly Meeting Transcriber) is a privacy-first local-only meeting recorder + transcriber for Windows, Apple Silicon macOS, and Linux x86_64 Core Beta.
+This document outlines what's shipped, what's in flight, and what's planned. AvaNevis (formerly Meeting Transcriber) is a privacy-first local-only audio recorder and transcriber for Windows, Apple Silicon macOS, and Linux x86_64 Core Beta.
 
 ## Shipped
 
 ### Core
 
-- **Dual audio capture** — microphone + desktop audio recorded in parallel and mixed after the recording stops. WASAPI loopback on Windows; native Swift helper on macOS using CoreAudio process taps on macOS 14.2+ with Swift/PyObjC ScreenCaptureKit fallback.
-- **Local transcription** — `faster-whisper` on Windows and Linux (optional CUDA), `lightning-whisper-mlx` on Apple Silicon with Metal, plus optional English-only **Parakeet v2** on supported GPUs.
-- **Local AI add-ons (optional)** — speaker diarization (**Speakrs** token-free or **Pyannote** on Windows/macOS) and **Summaries & Chat** (`llama.cpp` with Qwen3.5 9B/4B and Gemma 4 E4B/12B) with explicit setup, device memory fit checks, and local-only execution.
+- **Dual audio capture** — microphone + desktop audio recorded in parallel and mixed after the recording stops. WASAPI loopback on Windows; native Swift helper on macOS using CoreAudio process taps on macOS 14.2+ with Swift/PyObjC ScreenCaptureKit fallback; Pulse/PipeWire on Linux.
+- **Local transcription** — `faster-whisper` on Windows and Linux (optional managed CUDA 12), `lightning-whisper-mlx` on Apple Silicon with Metal, plus optional English-only **Parakeet v2** on supported GPUs.
+- **Local AI add-ons (optional)** — speaker diarization (**Speakrs** token-free on Windows CUDA, macOS CoreML, and Linux CUDA; or **Pyannote** on Windows CUDA / macOS MPS) and **Summaries & Chat** (`llama.cpp` with Qwen3.5 9B/4B and Gemma 4 E4B/12B; Inkling 2 Mini gated) with explicit setup, device memory fit checks, single-slot memory release, and local-only execution.
 - **Local History search & grounded Chat (v3.0.0+)** — disposable SQLite FTS5 full-text search across transcripts and summaries without AI add-ons, plus threaded local Q&A with clickable timestamp citations (`llama-server` with `llama-cli` fallback) and manual/idle memory unload.
 - **Import local audio** — add WAV, MP3 or Opus to History and queue local transcription while preserving the source file.
 - **Recording history & subtitle exports** — persisted under the user-data folder with a unique ID, browseable list, transcript viewer, synchronized audio playback, and `.md`/`.txt`/`.srt`/`.vtt` exports.
 - **Cross-platform installers & in-app updater (v3.0.0+)** — Windows NSIS, macOS DMG/ZIP, and Linux x86_64 AppImage/pacman/experimental `.deb` packages with bundled runtimes and differential in-app updates (plus copyable `pacman`/`apt` commands for system packages and manual `.dmg` fallback for ad-hoc macOS builds).
 - **GPU acceleration** — CUDA on Windows and managed Linux CUDA 12, Metal/MLX on Apple Silicon.
-- **Opus compression** — ~95% size reduction vs WAV (≈ 23 MB for a 40-minute meeting), with WAV fallback if ffmpeg fails or output verification fails.
+- **Opus compression** — ~95% size reduction vs WAV (≈ 23 MB for a 40-minute recording), with WAV fallback if ffmpeg fails or output verification fails.
 - **Model preloading** — improves first-time experience by warming the Whisper model in the background.
 - **macOS feature parity** — full parity with Windows including 48 kHz target sample rate (shared soxr VHQ in spool finalization; macOS capture still uses separate mix/align paths in `macos_recorder.py`).
 
 ### Audio quality
 
-- 48 kHz target sample rate end-to-end on both platforms.
-- soxr VHQ resampling via shared `backend/audio/processor.py` (Windows capture rates and shared spool finalization); macOS capture uses separate mix/align paths.
+- 48 kHz target sample rate end-to-end on all platforms.
+- soxr VHQ resampling via shared `backend/audio/processor.py` (Windows and Linux capture rates, and shared spool finalization); macOS capture uses separate mix/align paths.
 - Gentle mic enhancement (DC-offset removal, light normalization). Desktop audio is left untouched.
 - Stereo output with per-channel processing.
 
 ### UI / UX (latest UI overhaul)
 
-- **Premium dark theme** with vertical icon rail (Record / History / Settings), top-bar app pane, Inter + JetBrains Mono typography, and violet/sky accents on a layered obsidian background.
+- **Premium dark theme** with vertical icon rail (Record / Chat / History / Settings), top-bar app pane, Inter + JetBrains Mono typography, and violet/sky accents on a layered obsidian background.
 - **Expressive dual-channel waveform visualizer** with sample interpolation, peak-hold caps, glow, and DPR-aware rendering — running off `requestAnimationFrame` rather than the recorder's 5 FPS level events.
 - **Custom audio scrubber** built on the native `<audio>` element with rAF-driven progress updates for stutter-free seeking.
-- **Markdown transcript rendering** in the meeting viewer (headings, lists, links, inline code, blockquotes, bold/italic) with `[mm:ss - mm:ss]` timestamp lines styled as accent pill chips. The raw `.md` is preserved as the source of truth for copy and save.
-- **Inline meeting rename** in both history detail and the post-recording view, backed by a new `update-meeting` IPC and `MeetingManager.update_meeting` that mutates only the title — filenames stay anchored to the meeting ID.
-- **Save Transcript As** via Electron's native save dialog with sanitized default filenames and `.md` / `.txt` / All Files filters, available from history detail and the post-recording view.
-- **Multi-select + bulk delete** for the history list, plus a sidebar search filter, relative-time meeting timestamps, and a developer console drawer for inspecting backend logs.
+- **Markdown transcript rendering** in the History viewer (headings, lists, links, inline code, blockquotes, bold/italic) with `[mm:ss - mm:ss]` timestamp lines styled as accent pill chips. The raw `.md` is preserved as the source of truth for copy and save.
+- **Inline recording rename** in both History detail and Activity, backed by the `update-meeting` IPC and `MeetingManager.update_meeting` that mutates only the title — filenames stay anchored to the recording ID.
+- **Export Transcript** via Electron's native save dialog with sanitized default filenames and `.md`, `.txt`, `.srt`, and `.vtt` formats, available from History detail.
+- **Multi-select + bulk delete** for the history list, plus full-text History search, tag filters, relative-time recording timestamps, and a developer console drawer for inspecting backend logs.
 - **Slimmer waveform container** (28 px high, denser buffer, gentler glow and peak cap) for a less-dominant visualizer.
 
 ### Reliability / data integrity
@@ -73,7 +73,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 ## Current release: v3.0.0 (v3.1.0 in development)
 
 - **v3.0.0 (November 21, 2026)** — Local SQLite FTS5 History search, grounded local Chat with timestamp citations, caption-scale timing sidecars with `.srt`/`.vtt` exports, differential in-app auto-updater, bundled CPython `3.11.18+20261110`, and decoupled recovery locking. See the [v3.0.0 release notes](../releases/v3.0.0.md) and [v3.0 qualification record](../development/V3_0_QUALIFICATION.md).
-- **v3.1.0 (in progress on `codex/v3.1-phase4-model-library`)** — Streaming grounded Chat with tag/date filters and actionable recovery notices; 11 canonical recording tags with dedicated summary templates; inline speaker naming with timestamped voice previews across History, Activity, and Prepare summary; and the multi-model Summaries & Chat library (Qwen3.5 9B/4B, Gemma 4 E4B/12B, gated Inkling 2 Mini) with device-fit checks and single-slot memory release. See the [v3.1 qualification record](../development/V3_1_QUALIFICATION.md).
+- **v3.1.0 (in progress on `release/3.1`)** — Streaming grounded Chat with smart date/entity/tag retrieval, follow-up continuity, and actionable recovery notices; 11 canonical recording tags with dedicated per-tag summary templates; non-destructive inline speaker naming with timestamped voice previews across History, Activity, and Prepare summary; the multi-model Summaries & Chat library (Qwen3.5 9B/4B, Gemma 4 E4B/12B, gated Inkling 2 Mini) with device-fit checks and single-slot memory release; and Phase 5 dependency/security updates. See the [v3.1 qualification record](../development/V3_1_QUALIFICATION.md).
 
 ### Earlier v2.12.0 release
 
@@ -134,7 +134,7 @@ historical evidence.
 
 ### Packaging & Distribution
 
-- **AUR package (`avanevis-bin`) & CI release automation — deferred beyond v2.10.** The supported CachyOS/Omarchy install smoke is complete; revisit publishing automation later, likely around/after v3. Reference: [AUR_PACKAGING_AND_AUTOMATION.md](AUR_PACKAGING_AND_AUTOMATION.md) and [AUR_PACKAGE_GUIDE.md](../guides/AUR_PACKAGE_GUIDE.md).
+- **AUR package (`avanevis-bin`) & CI release automation.** The supported CachyOS/Omarchy install smoke is complete; revisit publishing automation in a future release. Reference: [AUR_PACKAGING_AND_AUTOMATION.md](AUR_PACKAGING_AND_AUTOMATION.md) and [AUR_PACKAGE_GUIDE.md](../guides/AUR_PACKAGE_GUIDE.md).
 
 ---
 
@@ -144,13 +144,13 @@ Longer horizon, lower priority:
 
 - **Linux expansion.** Broader desktop/hardware validation beyond the supported Core Beta hosts, including the still-open Ubuntu desktop recording/`safeStorage` smoke. Reference: [LINUX_SUPPORT.md](LINUX_SUPPORT.md).
 - **Setup wizard.** Guided first-time configuration. Reference: [FEATURE_SETUP_WIZARD.md](FEATURE_SETUP_WIZARD.md).
-- **Optional private meeting-object sync** to user-controlled storage (never to a hosted AvaNevis backend). See [Meeting objects and private sync](MEETING_OBJECTS_AND_PRIVATE_SYNC.md); not scheduled for v2.10.
-- **Local inference performance** (recording finalization/encoding, Whisper, llama.cpp knobs and warm workers; stay on Electron + Python). See [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md); further production-default changes were deferred beyond v2.10.
-- **Apple Developer signing/notarization** — deferred until a later release, likely around/after v3; ad-hoc macOS packaging checks remain the current boundary.
+- **Optional private meeting-object sync** to user-controlled storage (never to a hosted AvaNevis backend). See [Meeting objects and private sync](MEETING_OBJECTS_AND_PRIVATE_SYNC.md); not yet scheduled.
+- **Local inference performance** (recording finalization/encoding, Whisper, llama.cpp knobs and warm workers; stay on Electron + Python). See [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md); further production-default changes remain deferred.
+- **Apple Developer signing/notarization & Windows Authenticode signing** — repo/CI wiring is in place and activates once signing credentials are configured; unsigned Windows and ad-hoc macOS packaging checks remain the current boundary.
 - **Companion mobile apps** (iOS / Android) for remote review.
 - **Localized UI** (Spanish, French, etc.).
 - **Semantic search** across transcripts.
-- **Meeting templates** with preset device + model configuration.
+- **Recording presets** with preset device + model configuration.
 
 ---
 
