@@ -666,7 +666,7 @@ const AI_MODEL_CATALOG = deepFreeze({
         profiles: SUMMARY_PROFILES.map((profile) => profile.id),
       },
       gemmaSummaryModel('gemma-4-e4b', 'Gemma 4 E4B', 'An option for follow-up questions about details across recordings.', { gpu: 8, unified: 16, minRuntimeBytes: 5331582976 }),
-      gemmaSummaryModel('gemma-4-12b', 'Gemma 4 12B', 'An option for pulling together themes and decisions from longer recordings.', { gpu: 16, unified: 24, minRuntimeBytes: 8409792512 }),
+      gemmaSummaryModel('gemma-4-12b', 'Gemma 4 12B', 'An option for pulling together themes and decisions from longer recordings.', { gpu: 12, unified: 16, minRuntimeBytes: 8409792512 }),
       {
         id: 'inkling-2-mini',
         label: 'Inkling 2 Mini',

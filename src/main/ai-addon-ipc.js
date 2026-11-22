@@ -38,6 +38,7 @@ const {
   getSummaryArtifactForPlatform,
 } = require('../ai-addon-state');
 const { getSummaryModelFit } = require('../ai-addon/summary-device-fit');
+const { managedLinuxCudaRuntimeExists } = require('../main-process/linux-cuda-runtime-helpers');
 const {
   TOKEN_KEYS,
   deleteAiAddonToken,
@@ -119,6 +120,7 @@ function createAiAddonIpc(deps) {
     getCachedCudaStatus = () => null,
     resolveCudaStatusForTranscription = null,
     getSummaryDeviceMemory = async () => null,
+    getResidentSummaryModelState = () => null,
     runExclusiveSummaryMutation = (action) => action(),
   } = deps;
 
@@ -252,6 +254,8 @@ function createAiAddonIpc(deps) {
 
     return options;
   }
+
+  let passiveCudaRefresh = null;
 
   async function resolveCudaStatusForAddonStatus(checkDevice) {
     if (checkDevice && process.platform === 'linux' && process.arch === 'x64') {
@@ -654,9 +658,21 @@ function createAiAddonIpc(deps) {
     ipcMain.handle('get-ai-addon-status', async (event, options = {}) => {
       const checkDevice = options?.checkDevice === true;
       if (checkDevice) assertTrustedRendererSender(event);
+      const userDataDir = app.getPath('userData');
       const cudaStatus = await resolveCudaStatusForAddonStatus(checkDevice);
+      const cudaStatusPending = !checkDevice && !cudaStatus && process.platform === 'linux'
+        && process.arch === 'x64' && !isQuitCommitted()
+        && typeof resolveCudaStatusForTranscription === 'function'
+        && managedLinuxCudaRuntimeExists(userDataDir, fs);
+      if (cudaStatusPending && !passiveCudaRefresh) {
+        passiveCudaRefresh = resolveCudaStatusForAddonStatus(true)
+          .catch(() => {})
+          .finally(() => { passiveCudaRefresh = null; });
+      }
+      const deviceMemory = await getSummaryDeviceMemory({ live: checkDevice });
+      const resident = checkDevice ? getResidentSummaryModelState() : null;
       return checkAiAddonSetupStatus({
-        userDataDir: app.getPath('userData'),
+        userDataDir,
         platform: process.platform,
         arch: process.arch,
         includeStorageSizes: Boolean(options?.includeStorageSizes),
@@ -664,7 +680,14 @@ function createAiAddonIpc(deps) {
         verifyChecksumsIfChanged: Boolean(options?.verifyChecksumsIfChanged),
         checkTokenEncryption: false,
         cudaStatus,
-        deviceMemory: await getSummaryDeviceMemory({ live: checkDevice }),
+        deviceMemory: {
+          ...deviceMemory,
+          cudaStatusPending,
+          ...(resident?.status === 'loaded' && {
+            residentModelId: resident.modelId,
+            residentModelName: resident.modelName,
+          }),
+        },
       });
     });
 
