@@ -99,7 +99,17 @@ test('History and Chat preserve summary layout, pending edits, and keyboard cont
   assert.equal(result.chatAndTags.historyFocusRestored, true);
   assert.equal(result.chatAndTags.scopeFocusRestored, true);
   assert.equal(result.chatAndTags.escapeClosesScope, true);
-  assert.deepEqual(result.chatAndTags.overflow, { maxHeight: '460px', overflowY: 'auto', topClipped: false });
+  assert.deepEqual(result.chatAndTags.overflow, { maxHeight: '468px', overflowY: 'auto', topClipped: false });
+  assert.equal(result.chatAndTags.scopeListLayout.popoverWidth, 460);
+  assert.equal(result.chatAndTags.scopeListLayout.popoverHorizontalOverflow, false);
+  assert.equal(result.chatAndTags.scopeListLayout.listMaxHeight, '240px');
+  assert.equal(result.chatAndTags.scopeListLayout.listHorizontalOverflow, false);
+  assert.match(result.chatAndTags.scopeListLayout.dateText, /^Nov 22, \d{1,2}:\d{2}\s[AP]M$/);
+  assert.equal(result.chatAndTags.scopeListLayout.dateHasTitle, true);
+  assert.equal(result.chatAndTags.scopeListLayout.dateSingleLine, true);
+  assert.equal(result.chatAndTags.scopeListLayout.dateAlignedRight, true);
+  assert.ok(result.chatAndTags.scopeListLayout.titleWidth >= 240, JSON.stringify(result.chatAndTags.scopeListLayout));
+  assert.equal(result.chatAndTags.scopeListLayout.titleTruncated, true);
   assert.equal(result.chatAndTags.unavailableControls.sendDisabled, true);
   assert.ok(result.chatAndTags.unavailableControls.starterDisabled.length);
   assert.ok(result.chatAndTags.unavailableControls.starterDisabled.every(Boolean));

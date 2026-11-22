@@ -233,7 +233,17 @@ async function exerciseSpeakerSave() {
 }
 
 function exerciseChatAndTagControls() {
-  meetings = Array.from({ length: 24 }, (_, i) => ({ id: String(i), title: `Recording ${i}`, tag: 'meeting' }));
+  const nowYear = new Date().getFullYear();
+  meetings = Array.from({ length: 24 }, (_, i) => ({
+    id: String(i),
+    title: i === 0
+      ? 'Quarterly Product Architecture & Release Planning Sync With Extended Stakeholder Notes'
+      : `Recording ${i}`,
+    date: i === 1
+      ? `${nowYear - 1}-12-18T09:05:00`
+      : `${nowYear}-11-22T14:${String(i % 60).padStart(2, '0')}:00`,
+    tag: 'meeting',
+  }));
   renderHistoryTagFilterBar();
   const historyTag = () => document.querySelector('#history-tag-filter-bar [data-tag="meeting"]');
   if (!historyTag()) throw new Error('History tag was not rendered');
@@ -254,10 +264,30 @@ function exerciseChatAndTagControls() {
   const scopeFocusRestored = scopeTag() === document.activeElement && scopeTag().getAttribute('aria-pressed') === 'true';
   const popover = document.getElementById('chat-scope-popover');
   const popoverStyle = getComputedStyle(popover);
+  const meetingsList = document.getElementById('chat-scope-meetings-list');
+  const firstOption = meetingsList.querySelector('.chat-scope-meeting-option');
+  const firstTitle = firstOption?.querySelector('.chat-scope-meeting-title');
+  const firstDate = firstOption?.querySelector('.chat-scope-meeting-date');
+  const optionRect = firstOption.getBoundingClientRect();
+  const titleRect = firstTitle.getBoundingClientRect();
+  const dateRect = firstDate.getBoundingClientRect();
+  const listStyle = getComputedStyle(meetingsList);
   const overflow = {
     maxHeight: popoverStyle.maxHeight,
     overflowY: popoverStyle.overflowY,
     topClipped: Boolean(clippedBy(popover)),
+  };
+  const scopeListLayout = {
+    popoverWidth: Math.round(popover.getBoundingClientRect().width),
+    popoverHorizontalOverflow: popover.scrollWidth > popover.clientWidth,
+    listMaxHeight: listStyle.maxHeight,
+    listHorizontalOverflow: meetingsList.scrollWidth > meetingsList.clientWidth,
+    dateText: firstDate.textContent,
+    dateHasTitle: Boolean(firstDate.title),
+    dateSingleLine: dateRect.height <= 22,
+    dateAlignedRight: dateRect.left >= titleRect.right && Math.abs(optionRect.right - dateRect.right) <= 10,
+    titleWidth: Math.round(titleRect.width),
+    titleTruncated: firstTitle.scrollWidth > firstTitle.clientWidth,
   };
   scopeTag().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
   const escapeClosesScope = popover.hidden && scopeBtn === document.activeElement && scopeBtn.getAttribute('aria-expanded') === 'false';
@@ -290,7 +320,7 @@ function exerciseChatAndTagControls() {
   document.getElementById('chat-messages').appendChild(chip);
   const chipStyle = getComputedStyle(chip);
   const sourceChip = { marginRight: chipStyle.marginRight, textTransform: chipStyle.textTransform };
-  return { historyFocusRestored, scopeFocusRestored, escapeClosesScope, overflow, unavailableControls, availableControls, recoveryCards, sourceChip };
+  return { historyFocusRestored, scopeFocusRestored, escapeClosesScope, overflow, scopeListLayout, unavailableControls, availableControls, recoveryCards, sourceChip };
 }
 
 function settle() {

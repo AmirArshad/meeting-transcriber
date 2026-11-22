@@ -167,6 +167,8 @@ const {
   buildStarterPrompts,
   filterChatThreads,
   formatChatScopeLabel,
+  formatScopeMeetingDate,
+  formatScopeMeetingDateTooltip,
   groupThreadsByRecency,
   resolveNoticeActionScope,
   shouldShowChatProgressBanner,
@@ -11594,10 +11596,23 @@ function renderScopePopover(focusedTag) {
           else nextIds.delete(String(m.id));
           chatState.scopeDraft.meetingIds = [...nextIds];
         });
+        const titleText = m.title || 'Untitled recording';
         const span = document.createElement('span');
         span.className = 'chat-scope-meeting-title';
-        span.textContent = m.title || 'Untitled recording';
+        span.textContent = titleText;
+        span.title = titleText;
         label.append(cb, span);
+        const shortDate = formatScopeMeetingDate(m.date);
+        if (shortDate) {
+          const dateEl = document.createElement('span');
+          dateEl.className = 'chat-scope-meeting-date';
+          dateEl.textContent = shortDate;
+          const fullDate = formatScopeMeetingDateTooltip(m.date);
+          if (fullDate) {
+            dateEl.title = fullDate;
+          }
+          label.appendChild(dateEl);
+        }
         listEl.appendChild(label);
       }
     }

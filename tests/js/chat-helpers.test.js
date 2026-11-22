@@ -11,6 +11,8 @@ const {
   buildStarterPrompts,
   filterChatThreads,
   formatChatScopeLabel,
+  formatScopeMeetingDate,
+  formatScopeMeetingDateTooltip,
   groupThreadsByRecency,
   isCitedMeetingAvailable,
   isScopeFiltered,
@@ -312,4 +314,25 @@ test('formatChatScopeLabel, isScopeFiltered, and buildAssistantNoticeView suppor
     { type: 'all', tags: ['call'] },
   );
   assert.deepEqual(noMatchWithTag.actions.map((a) => a.id), ['reset_filters']);
+});
+
+test('formatScopeMeetingDate and formatScopeMeetingDateTooltip format compact and full timestamps safely', () => {
+  const now = new Date(2026, 10, 22, 16, 0, 0);
+  const sameYear = new Date(2026, 10, 22, 14, 30, 0).toISOString();
+  const priorYear = new Date(2025, 11, 18, 9, 5, 0).toISOString();
+
+  const shortSameYear = formatScopeMeetingDate(sameYear, now);
+  assert.match(shortSameYear, /^Nov 22, \d{1,2}:\d{2}\s[AP]M$/);
+  assert.doesNotMatch(shortSameYear, /2026/);
+
+  const shortPriorYear = formatScopeMeetingDate(priorYear, now);
+  assert.equal(shortPriorYear, 'Dec 18, 2025');
+
+  const tooltip = formatScopeMeetingDateTooltip(priorYear);
+  assert.match(tooltip, /^Dec 18, 2025, \d{1,2}:\d{2}\s[AP]M$/);
+
+  assert.equal(formatScopeMeetingDate('', now), '');
+  assert.equal(formatScopeMeetingDate(null, now), '');
+  assert.equal(formatScopeMeetingDate('not-a-date', now), '');
+  assert.equal(formatScopeMeetingDateTooltip('not-a-date'), '');
 });

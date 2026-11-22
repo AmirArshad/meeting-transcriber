@@ -352,12 +352,56 @@
     return null;
   }
 
+  function formatScopeMeetingDate(dateString, now = Date.now()) {
+    if (!dateString) {
+      return '';
+    }
+    const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+    const nowDate = now instanceof Date ? now : new Date(now);
+    const sameYear = !Number.isNaN(nowDate.getTime()) && date.getFullYear() === nowDate.getFullYear();
+    if (sameYear) {
+      return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    }
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  }
+
+  function formatScopeMeetingDateTooltip(dateString) {
+    if (!dateString) {
+      return '';
+    }
+    const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
+
   return {
     buildAssistantNoticeView,
     buildModelMemoryPillView,
     buildStarterPrompts,
     filterChatThreads,
     formatChatScopeLabel,
+    formatScopeMeetingDate,
+    formatScopeMeetingDateTooltip,
     groupThreadsByRecency,
     isCitedMeetingAvailable,
     isScopeFiltered,
