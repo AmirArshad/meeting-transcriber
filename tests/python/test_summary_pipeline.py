@@ -564,3 +564,42 @@ def test_summary_runner_uses_format_override_and_preserves_recording_tag(tmp_pat
     assert 'Ship release' in markdown
     assert '**Format:**' not in render_summary_markdown({'summary': 'Overview'}, {'tag': 'meeting', 'template': 'meeting'})
     assert '**Format:**' not in render_summary_markdown({'summary': 'Overview'}, {'tag': None, 'template': 'other'})
+
+
+def test_summary_runner_untagged_format_selection_and_strict_validation(tmp_path, monkeypatch):
+    from backend.summaries import summary_runner
+
+    transcript = tmp_path / 'recording.md'
+    transcript.write_text('[00:00] Hello', encoding='utf-8')
+    monkeypatch.setattr(summary_runner, 'resolve_llama_runtime', lambda **kwargs: {})
+
+    def summarize(**kwargs):
+        assert kwargs['tag'] == 'interview'
+        return {'summary': 'Overview'}
+
+    monkeypatch.setattr(summary_runner, 'generate_summary_from_segments', summarize)
+    result = summary_runner.generate_summary(
+        meeting_id='recording',
+        transcript_path=str(transcript),
+        runtime_dir='runtime',
+        model_path='model.gguf',
+        tag=None,
+        template='interview',
+    )
+
+    assert result['metadata']['tag'] is None
+    assert result['metadata']['template'] == 'interview'
+    markdown = render_summary_markdown(result['summary'], result['metadata'])
+    assert '**Tag:**' not in markdown
+    assert '**Format:** Interview' in markdown
+
+    for bad_template in ('unknown', 'Interview', '', ' '):
+        with pytest.raises(ValueError):
+            summary_runner.generate_summary(
+                meeting_id='recording',
+                transcript_path=str(transcript),
+                runtime_dir='runtime',
+                model_path='model.gguf',
+                tag=None,
+                template=bad_template,
+            )

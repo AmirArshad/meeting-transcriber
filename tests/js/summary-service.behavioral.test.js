@@ -447,6 +447,19 @@ test('untagged regeneration clears a previous summary tag', async () => {
   assert.equal(JSON.parse(args[args.indexOf('--summary-json') + 1]).tag, null);
 });
 
+test('untagged recording with explicit format selection keeps tag null and passes --template', async () => {
+  const harness = createHarness({
+    meetingTag: null,
+    summaryMetadata: { tag: null, template: 'interview', templateVersion: 'tag-templates-v1' },
+  });
+  const result = await harness.handlers['generate-summary']({}, { ...confirmedOptions, template: 'interview' });
+  const runnerArgs = harness.getSpawnedArgs()[1];
+  assert.equal(runnerArgs.includes('--tag'), false);
+  assert.equal(runnerArgs[runnerArgs.indexOf('--template') + 1], 'interview');
+  assert.equal(result.meeting.ai.summary.tag, null);
+  assert.equal(result.meeting.ai.summary.template, 'interview');
+});
+
 
 test('generation captures speaker names and persists the runner snapshot hash', async () => {
   const hash = `sha256:${'a'.repeat(64)}`;
