@@ -243,8 +243,9 @@
       return null;
     }
     const metaObj = summaryMeta && typeof summaryMeta === 'object' ? summaryMeta : {};
-    const summaryTag = normalizeTag(metaObj.tag) || (metaObj.templateVersion ? 'other' : 'meeting');
-    if (summaryTag === currentTag) {
+    const template = normalizeTag(metaObj.template);
+    const summaryTag = normalizeTag(metaObj.tag) || template || (metaObj.templateVersion ? 'other' : 'meeting');
+    if (summaryTag === currentTag || template === currentTag) {
       return null;
     }
     const currentMeta = getTagMeta(currentTag);

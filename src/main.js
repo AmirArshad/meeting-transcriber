@@ -1222,7 +1222,7 @@ function buildManagedPythonModuleArgs(moduleName, extraArgs = [], managedSitePac
   ];
 }
 
-function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel, modelId, transcriptLanguage, sourceTranscriptHash, tag = null, speakerNames, validateRuntime = false, inferenceDescriptor }) {
+function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel, modelId, transcriptLanguage, sourceTranscriptHash, tag = null, template, speakerNames, validateRuntime = false, inferenceDescriptor }) {
   const args = [
     '--meeting-id', meetingId,
     '--runtime-dir', runtimeDir,
@@ -1249,6 +1249,9 @@ function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, ou
     }
     if (tag) {
       args.push('--tag', String(tag));
+    }
+    if (template) {
+      args.push('--template', template);
     }
   }
 

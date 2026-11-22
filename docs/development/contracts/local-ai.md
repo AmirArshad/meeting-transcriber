@@ -111,11 +111,11 @@ default. Unrelated library weights and speaker models are outside that hash scop
   are localized. Language evidence is separate from platform runtime admission.
 - `backend/summaries/templates.py` defines the recording-tag schemas, prompt
   instructions and render sections under `TEMPLATE_VERSION = "tag-templates-v1"`.
-  New summaries use the recording's tag or the `other` template for untagged
-  recordings. The sidecar records the template and version separately from the
-  recording tag. `summary_prose()` reads the selected template's prose fields for
-  language checks and uses the `meeting` template for legacy summaries without
-  template information.
+  Prepare summary lets users choose a format, defaulting to the recording tag or
+  General (Other) for untagged recordings. The sidecar and `ai.summary` store the
+  chosen template and version alongside the recording tag at generation time.
+  `summary_prose()` reads the selected template's prose fields for language checks
+  and uses the `meeting` template for legacy summaries without template information.
 
 **Accepted tradeoff — summary checksum skip.** `generate-summary` calls `checkAiAddonSetupStatus({ verifyChecksums: true, verifyChecksumsIfChanged: true })`. After the first full SHA-256 match in a process, later generates skip re-hashing when the `path`/`size`/`mtimeMs` fingerprint is unchanged. A local attacker preserving size and mtime could bypass it. This is deliberate for an already-locally-trusted file. **Setup and validate paths still full-hash — do not weaken those gates.**
 

@@ -88,6 +88,7 @@ def normalize_ai_feature_metadata(manager, feature: str, metadata: Dict) -> Dict
             'modelProfile',
             'model',
             'tag',
+            'template',
             'templateVersion',
             'generatedAt',
             'sourceTranscriptHash',
@@ -133,9 +134,10 @@ def normalize_ai_feature_metadata(manager, feature: str, metadata: Dict) -> Dict
             normalized_path = manager._normalize_sidecar_path(value, ('.md',))
             if normalized_path is not None:
                 normalized[field] = normalized_path
-        elif field == 'tag':
+        elif field in ('tag', 'template'):
             if isinstance(value, str) and not value.strip():
-                normalized[field] = None
+                if field == 'tag':
+                    normalized[field] = None
                 continue
             normalized_tag = meeting_norm.normalize_recording_tag(value, strict=False)
             if normalized_tag is not None:

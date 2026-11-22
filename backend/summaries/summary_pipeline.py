@@ -660,12 +660,19 @@ def render_summary_markdown(summary: Dict[str, Any], metadata: Optional[Dict[str
         field_labels.update({key: key for key in field_labels})
     tag_display = labels["tag_names"].get(meta_tag, "") if meta_tag else ""
 
+    template_id = template["template_id"]
+    format_display = labels["tag_names"].get(template_id, template_id) if (
+        metadata.get("template") and template_id != (meta_tag or "other")
+    ) else ""
+
     lines = [f"# {labels['title']}", "", validated["summary"], ""]
-    if tag_display or profile or model or generated_at:
+    if tag_display or format_display or profile or model or generated_at:
         lines.append("---")
         lines.append("")
         if tag_display:
             lines.append(f"**{labels['tag']}:** {tag_display}")
+        if format_display:
+            lines.append(f"**Format:** {format_display}")
         if profile:
             lines.append(f"**{labels['profile']}:** {profile}")
         if model:

@@ -178,3 +178,12 @@ test('hydrated empty summaries do not show a tag mismatch', () => {
     tag: 'podcast', ai: { summary: { status: 'completed', tag: 'meeting' } },
   }));
 });
+
+test('a summary format override only shows a mismatch after a change to a different tag', () => {
+  const summary = { status: 'completed', tag: 'interview', template: 'meeting' };
+  const meeting = { tag: 'interview', ai: { summary } };
+  assert.equal(getSummaryTagMismatch(meeting), null);
+  assert.equal(getSummaryTagMismatch({ ...meeting, tag: 'meeting' }), null);
+  assert.equal(getSummaryTagMismatch({ ...meeting, tag: 'podcast' }).currentTag, 'podcast');
+  assert.equal(getSummaryTagMismatch({ tag: 'other', ai: { summary: { ...summary, tag: null } } }).currentTag, 'other');
+});

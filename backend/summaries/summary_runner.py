@@ -267,6 +267,7 @@ def generate_summary(
     profile: str = DEFAULT_PROFILE,
     language: Optional[str] = None,
     tag: Optional[str] = None,
+    template: Optional[str] = None,
     speaker_names: Optional[Dict[str, str]] = None,
     model_label: str = "local-summary-model",
     model_id: Optional[str] = None,
@@ -278,7 +279,10 @@ def generate_summary(
 ) -> Dict[str, Any]:
     emit_progress(meeting_id, "loading-transcript", "Loading transcript for local summary.")
     normalized_tag = normalize_recording_tag(tag, strict=False)
-    template_id = resolve_template_id(normalized_tag, fallback="other")
+    normalized_template = normalize_recording_tag(template, strict=True) if template is not None else None
+    if template is not None and (not isinstance(template, str) or normalized_template is None or normalized_template != template):
+        raise ValueError("Unsupported summary format.")
+    template_id = resolve_template_id(normalized_template or normalized_tag, fallback="other")
     transcript_text = read_transcript_text(transcript_path)
     source_hash = hash_transcript_text(transcript_text)
     if source_transcript_hash is not None and source_hash != source_transcript_hash:
@@ -367,6 +371,7 @@ def main() -> None:
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
     parser.add_argument("--language")
     parser.add_argument("--tag", default=None)
+    parser.add_argument("--template")
     parser.add_argument("--source-transcript-hash")
     parser.add_argument("--model-id")
     parser.add_argument("--inference-json", default="{}")
@@ -397,6 +402,9 @@ def main() -> None:
         if not is_model_language_supported(args.model_id, args.language, args.platform, args.arch):
             raise SummaryLanguageError("Summary language is not qualified for this model.")
         normalized_tag = normalize_recording_tag(args.tag, strict=True) if args.tag is not None else None
+        normalized_template = normalize_recording_tag(args.template, strict=True) if args.template is not None else None
+        if args.template is not None and (normalized_template is None or normalized_template != args.template):
+            raise ValueError("Unsupported summary format.")
         speaker_names = normalize_speaker_names(json.loads(args.speaker_names_json), strict=True)
         result = generate_summary(
             meeting_id=args.meeting_id,
@@ -411,6 +419,7 @@ def main() -> None:
             model_label=args.model_label,
             language=args.language,
             tag=normalized_tag,
+            template=normalized_template,
             source_transcript_hash=args.source_transcript_hash,
             model_id=args.model_id,
             inference_descriptor=json.loads(args.inference_json),

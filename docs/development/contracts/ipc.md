@@ -50,14 +50,17 @@ The native picker returns the basename of one selected MP3, WAV or Opus file. Ma
 ### Summary language payload
 
 `generate-summary` requires `{ meetingId, transcriptLanguage,
-sourceTranscriptHash, profile? }`, with optional `modelId` constrained to an
-installed ready model. Main validates eligibility and the current on-disk transcript
-and reads the recording's authoritative `tag` from `meeting_manager get`;
-it passes `--language`, `--source-transcript-hash`, `--model-id`, and optional
-`--tag` to the local runner. Successful `ai.summary` metadata may add
+sourceTranscriptHash, profile?, template? }`, with optional `modelId` constrained
+to an installed ready model. Main validates eligibility and the current on-disk
+transcript and reads the recording's authoritative `tag` from `meeting_manager
+get`. It passes `--language`, `--source-transcript-hash`, `--model-id`, and
+optional `--tag` to the local runner. The optional `template` must be a canonical
+slug. Main passes it as `--template`, defaulting to the recording tag or `other`.
+Successful `ai.summary` metadata may add
 `language`, `languageSource` (`userConfirmed`), `modelId`,
 `languagePolicyVersion`, `tag` (canonical slug or `null` for untagged recordings),
-and `templateVersion`. Main passes the recording's speaker-name snapshot to
+`template` (the format used), and `templateVersion`. Choosing a format leaves the
+recording tag intact. Main passes the recording's speaker-name snapshot to
 the runner for attribution, and completed summary metadata stores
 `speakerNamesHash` alongside the transcript hash.
 Missing fields mean legacy/unconfirmed output. Channel names and preload export

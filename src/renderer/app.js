@@ -5543,8 +5543,10 @@ function updateSummaryLanguageCaptions(meeting) {
     ['transcript-summary-language-caption', helpers.formatTranscriptLanguageCaption(meeting && meeting.language)],
     ['summary-language-caption', (() => {
       const caption = helpers.formatSummaryLanguageCaption(meeting);
-      const modelId = meeting?.ai?.summary?.modelId;
+      const { modelId, template } = meeting?.ai?.summary || {};
       if (caption.visible && modelId && typeof summaryModelName === 'function') caption.value += ` · ${summaryModelName(modelId)}`;
+      const format = getTagMeta(template);
+      if (caption.visible && format) caption.value += ` · ${format.slug === 'other' ? 'General (Other)' : format.label} format`;
       return caption;
     })()],
   ];
@@ -5627,8 +5629,7 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
   const message = document.getElementById('summary-language-message');
   const speakerFieldset = document.getElementById('summary-speaker-fieldset');
   const speakerRows = document.getElementById('summary-speaker-rows');
-  const tagField = document.getElementById('summary-recording-type');
-  const tagSelect = document.getElementById('summary-recording-tag');
+  const formatSelect = document.getElementById('summary-recording-tag');
   const formatPreview = document.getElementById('summary-format-preview');
   const fields = new Map();
   const names = meeting.ai?.diarization?.speakerNames || {};
@@ -5641,14 +5642,13 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
   if (dedicatedPlayer) dedicatedPlayer.src = window.electronAPI.buildFileUrl(meeting.audioPath);
   speakerRows.replaceChildren();
   speakerFieldset.hidden = !showSpeakers;
-  tagField.hidden = Boolean(normalizeTag(meeting.tag));
-  tagSelect.replaceChildren(new Option('None (use general format)', ''));
-  for (const tag of RECORDING_TAGS) tagSelect.add(new Option(tag.label, tag.slug));
+  formatSelect.replaceChildren(...RECORDING_TAGS.map(({ label, slug }) =>
+    new Option(slug === 'other' ? 'General (Other)' : label, slug)));
+  formatSelect.value = normalizeTag(meeting.tag) || 'other';
   const updateFormat = () => {
-    const tag = getTagMeta(tagSelect.value || 'other');
-    formatPreview.textContent = `${tag.label} format · ${tag.formatPreview}`;
+    formatPreview.textContent = getTagMeta(formatSelect.value).formatPreview;
   };
-  tagSelect.addEventListener('change', updateFormat, { signal: controller.signal });
+  formatSelect.addEventListener('change', updateFormat, { signal: controller.signal });
   updateFormat();
   if (!speakerFieldset.hidden) {
     const player = useHistoryPlayer ? historyPlayer : dedicatedPlayer;
@@ -5720,6 +5720,7 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
       if (saving || submit.disabled) return;
       const transcriptLanguage = select.value;
       const selectedModelId = modelSelect?.value || null;
+      const template = formatSelect.value;
       const editedNames = { ...names };
       for (const [speaker, field] of fields) editedNames[speaker] = field.value;
       const speakerNames = diffSpeakerNames(names, editedNames);
@@ -5729,7 +5730,6 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
         updates.expectedSourceTranscriptHash = sourceTranscriptHash;
         updates.expectedTranscriptionAttemptId = meeting.transcriptionResult?.attemptId || '';
       }
-      if (!tagField.hidden && tagSelect.value) updates.tag = tagSelect.value;
       if (Object.keys(updates).length) {
         saving = true;
         submit.disabled = true;
@@ -5737,10 +5737,6 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
         try {
           const updated = await window.electronAPI.updateMeeting(meeting.id, updates);
           if (closed) return;
-          if (Object.hasOwn(updates, 'tag')) {
-            const id = String(updated.id);
-            meetingTagMutationVersions.set(id, (meetingTagMutationVersions.get(id) || 0) + 1);
-          }
           syncMeetingInList(updated);
           if (meetingIdsEqual(currentMeetingId, updated.id)) {
             applyTagPillView(document.getElementById('meeting-tag-btn'), document.getElementById('meeting-tag-btn-label'), updated.tag);
@@ -5772,7 +5768,7 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
           return;
         }
       }
-      close(library ? { transcriptLanguage, modelId: selectedModelId } : transcriptLanguage);
+      close({ transcriptLanguage, modelId: selectedModelId, template });
     };
     const onCancel = () => close(null);
     const onKey = (event) => {
@@ -5869,7 +5865,7 @@ async function generateSummaryForMeeting(meetingId) {
     if (summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) throw new Error('Summary generation cancelled.');
     const preferredLanguage = window.summaryLanguageHelpers.reusableSummaryLanguage(meeting, sourceTranscriptHash, policy);
     const selection = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash, library);
-    const transcriptLanguage = typeof selection === 'string' ? selection : selection?.transcriptLanguage;
+    const transcriptLanguage = selection?.transcriptLanguage;
     if (!transcriptLanguage || summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) {
       await restoreCurrentHistorySummary(normalizedMeetingId, 'Summary generation cancelled. Transcript is unchanged.', { showTab: false });
       return;
@@ -5881,7 +5877,8 @@ async function generateSummaryForMeeting(meetingId) {
       meetingId: normalizedMeetingId,
       transcriptLanguage,
       sourceTranscriptHash,
-      modelId: selection?.modelId || undefined,
+      modelId: selection.modelId || undefined,
+      template: selection.template,
       profile: (summaryProfileSelect && summaryProfileSelect.value) || summaryStatus.profile || DEFAULT_SUMMARY_PROFILE,
     });
 
