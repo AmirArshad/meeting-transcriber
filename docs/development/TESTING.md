@@ -8,11 +8,11 @@ The current test setup is intentionally small and fast. It focuses on high-value
 
 It includes:
 
-- JavaScript tests for main-process helpers, Pattern C service behavioral/deps tests, IPC/compute-queue source-scan characterization, and facade export snapshots
+- JavaScript tests for main-process helpers, Pattern C service behavioral/deps tests (recorder, transcription, audio import, summary, History search, History Q&A, chat thread store, model library & single-slot process runner, auto-updater), renderer helper suites (tags, speaker labels, chat, subtitle exports, model library UI), IPC/compute-queue source-scan characterization, and facade export snapshots
 - JavaScript syntax checks for **all** `.js` files under `src/` (recursive glob via `scripts/check-js-syntax.js`)
-- Python unit tests for pure backend modules (`meeting_manager` / `meetings/`, sensitive-text redaction, recorder helpers, diarization/summary utilities)
+- Python unit tests for backend modules (`meeting_manager` / `meetings/`, SQLite FTS5 `history_index`, `history_qa` retrieval & citation verifier, tag-aware summary templates & language checks, sensitive-text redaction, recorder & spool recovery helpers, captions, diarization/Speakrs utilities)
 - Recursive Python syntax checks under `backend/` (`npm run test:python-syntax`)
-- A manual smoke checklist for hardware-dependent recording flows
+- Manual checklists for hardware-dependent recording and local AI flows
 
 It does not yet include full end-to-end recorder automation with real audio devices.
 
@@ -44,7 +44,7 @@ py -3.11 --version
 ### Node.js dependencies
 
 ```bash
-npm install
+npm ci
 ```
 
 ### Python test dependencies only
@@ -148,7 +148,7 @@ npm run test:all
 From a clean Windows machine:
 
 ```powershell
-npm install
+npm ci
 py -3.11 -m pip install -r requirements-windows.txt -r requirements-dev.txt
 npm run test:all
 ```
@@ -156,7 +156,7 @@ npm run test:all
 If you only want the regression suite and not the full runtime stack:
 
 ```powershell
-npm install
+npm ci
 py -3.11 -m pip install -r requirements-dev.txt
 npm test
 npm run test:python
@@ -197,21 +197,16 @@ Full remediation checklist (archived): [`docs/completed/todo-archives/TODO_ARCHI
 
 ## CI Coverage
 
-CI currently runs:
+CI currently runs (`.github/workflows/ci.yml`):
 
-- Python unit tests
-- Python syntax checks
-- JavaScript tests
-- JavaScript syntax checks
-- Swift helper build check on macOS
-- packaged Windows build smoke test
-- packaged macOS build smoke test
-- packaged macOS resource verification for helper, Python, and ffmpeg
-- Ubuntu Linux packaging job: `npm run test:all`, resource preparation, AppImage + pacman + experimental deb, `scripts/verify-linux-packaging.js` (bundled Python/ffmpeg/backend, no deferred add-on binaries, static AppImage runtime, pacman `.PKGINFO`, Debian control)
+- Python unit tests and recursive syntax checks on Windows and macOS (`test-backend-windows`, `test-backend-macos`), including the native Windows ONNX ETW telemetry + CPU VAD qualification check
+- JavaScript regression tests, syntax checks, Speakrs CLI unit tests + CPU smoke, and packaged Windows dir smoke (`test-frontend`)
+- Swift helper build, Speakrs CLI tests + CPU smoke, and packaged macOS app/DMG verification (`test-backend-macos`)
+- Ubuntu Linux packaging job (`test-packaging-linux`): `npm run test:all`, resource preparation, AppImage + pacman + experimental deb, `scripts/verify-linux-packaging.js` (bundled Python/ffmpeg/backend/`speakrs-cli`, static AppImage runtime, pacman `.PKGINFO`, Debian control)
+- Security & dependency audits (`security-audit`, `optional-runtime-audit`, `pyannote-closure-audit`, `cargo-audit`): `npm audit`, build-requirements closure check, `pip-audit` across build pins / Parakeet locks / pyannote closure, and `cargo audit --deny warnings`
+- Documentation checks (`validate-docs`): markdownlint and link checks
 
-Linux Core Beta hardware smoke (Omarchy Pulse/PipeWire recording, packaged AppImage Settings/legal-notices/CPU transcription) is manual — see `tests/manual/recording-smoke-checklist.md` and `docs/initiatives/LINUX_SUPPORT.md`. Friend distro/desktop coverage is `tests/manual/linux-experimental-beta-checklist.md`. The Phase 3 60-minute soak was cancelled 2026-08-27 (not run). Ubuntu 24.04 desktop recording/`safeStorage` smoke is still open, as are a visual tray-icon check and unplugged-endpoint filtering on hardware.
-
-**Fakes must model the real dependency.** The 2026-08-28 pre-merge review found three defects that the green suite could not see because the test doubles were shaped more conveniently than the library. `is_pulse_port_unavailable` matched every `FakePort` and no real `pulsectl.EnumValue`; the tray icon assertions never loaded an actual image, so an undecodable `.ico` passed. When a helper exists to interpret a third-party object, assert against the real type (`pytest.importorskip`) or against the real asset bytes — not only against a hand-written stand-in.
+Linux Core Beta hardware smoke (Omarchy/CachyOS Pulse/PipeWire recording, packaged AppImage Settings/legal-notices/CPU transcription) is manual — see `tests/manual/recording-smoke-checklist.md` and `docs/initiatives/LINUX_SUPPORT.md`. Friend distro/desktop coverage is `tests/manual/linux-experimental-beta-checklist.md`. The Phase 3 60-minute soak was cancelled 2026-08-27 (not run). Ubuntu 24.04 desktop recording/`safeStorage` smoke is still open.
 
 ## Troubleshooting
 
@@ -244,7 +239,7 @@ py -3.11 -m pytest tests/python
 ### Recorder behavior passes tests but fails on real hardware
 
 That can still happen. Run the manual smoke checklist in `tests/manual/recording-smoke-checklist.md`.
-If the change touches recorder failure handling or process messaging, also compare output against the representative fixtures in `tests/manual/fixtures/`.
+If the change touches recorder failure handling or process messaging, also compare output against the representative fixtures in `tests/fixtures/`.
 
 ## Validation
 
@@ -253,6 +248,7 @@ Check commands per toolchain — full setup lives in `README.md`:
 - JS: `npm test` (regression suite + `node --check` over all `src/**/*.js`)
 - Python: `npm run test:python`, `npm run test:python-syntax`
 - Everything: `npm run test:all`
+- Agent setup / instructions: `python3 scripts/agents/validate_setup.py` (Windows: `py -3.11`)
 - Device smoke: `python backend/device_manager.py`
 - macOS helper: `swift build -c release --arch arm64` inside `swift/AudioCaptureHelper`
 

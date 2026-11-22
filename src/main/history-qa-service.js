@@ -188,14 +188,16 @@ function resolveLlamaServerBinary({
       const realServer = pathModule.resolve(fsModule.realpathSync(candidateServer));
       const rel = pathModule.relative(realExtractRoot, realServer);
       if (rel && !rel.startsWith('..') && !pathModule.isAbsolute(rel)) {
-        if (
-          platform === 'linux'
-          && runtimeArtifact
-          && runtimeArtifact.id === pinnedLinuxServer.runtimeId
-          && pinnedLinuxServer.sha256
-        ) {
-          const actualDigest = sha256File(fsModule, realServer);
-          if (stat.size !== pinnedLinuxServer.sizeBytes || actualDigest !== pinnedLinuxServer.sha256) {
+        if (platform === 'linux') {
+          const requiredFiles = [
+            ...(runtimeArtifact?.requiredFiles || []),
+            ...(runtimeArtifact?.artifacts || []).flatMap((archive) => archive.requiredFiles || []),
+          ];
+          const catalogPin = requiredFiles.find((entry) =>
+            typeof entry === 'object' && pathModule.basename(entry.path || entry.relativePath || '') === serverName);
+          const pin = catalogPin || (runtimeArtifact?.id === pinnedLinuxServer.runtimeId ? pinnedLinuxServer : null);
+          const actualDigest = pin?.sha256 ? sha256File(fsModule, realServer) : null;
+          if (!pin?.sha256 || stat.size !== pin.sizeBytes || actualDigest !== pin.sha256) {
             return {
               mode: 'cli',
               executablePath: cliPath,
@@ -295,6 +297,11 @@ function createHistoryQaService(deps) {
     http: httpModule = http,
     pythonConfig,
     spawnTrackedPython,
+    spawnSummaryPython = spawnTrackedPython,
+    ensureSummaryProcessExited = async () => {},
+    getOutstandingSummaryProcess = () => null,
+    hasActiveSummaryGeneration = () => false,
+    getSummaryDeviceMemory = async () => null,
     spawnServerProcess = defaultSpawnServerProcess,
     getBackendModuleArgs,
     collectPythonProcessOutput,
@@ -369,6 +376,9 @@ function createHistoryQaService(deps) {
       phase: String(payload.phase || 'status'),
       message: redactSensitiveText(String(payload.message || '')).slice(0, 300),
       ...(Number.isFinite(payload.percent) ? { percent: payload.percent } : {}),
+      ...(typeof payload.draftMarkdown === 'string' && payload.draftMarkdown
+        ? { draftMarkdown: redactSensitiveText(payload.draftMarkdown).slice(0, 16000) }
+        : {}),
     });
   }
 
@@ -405,100 +415,145 @@ function createHistoryQaService(deps) {
     idleTimer.unref?.();
   }
 
-  async function resolveEligibility({ verifyChecksums = false, verifyChecksumsIfChanged = true } = {}) {
+  async function resolveEligibility({
+    verifyChecksums = false,
+    verifyChecksumsIfChanged = true,
+    summaryModelId = null,
+    deviceMemory,
+    cudaStatus,
+    checkFit = false,
+    fallbackToUsableLibraryModel = false,
+  } = {}) {
     const status = await checkAiAddonSetupStatus(
       getAiAddonRuntimeOptions({
+        verifySelectedSummaryOnly: true,
         verifyChecksums,
         verifyChecksumsIfChanged,
+        ...(summaryModelId ? { summaryModelId } : {}),
+        ...(deviceMemory !== undefined ? { deviceMemory } : {}),
+        ...(cudaStatus !== undefined ? { cudaStatus } : {}),
       }),
     );
-    const summaryStatus = status && status.features && status.features.summary;
-    if (!summaryStatus) {
-      return {
-        eligible: false,
-        reason: 'Chat uses the Summaries & Chat add-on, which is not set up.',
-        setupTarget: 'ai-addons',
-        modelId: null,
-        modelName: null,
-        artifactId: null,
-      };
-    }
-
-    const modelId = summaryStatus.modelId || null;
-    const modelMeta = modelId ? getModelById('summary', modelId) : null;
-    const modelName = (modelMeta && (modelMeta.label || modelMeta.name)) || modelId || null;
-    const artifact = modelId ? getSummaryArtifactForPlatform(modelId, platform, arch) : null;
-    const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch);
-
-    if (platform === 'linux') {
-      const managedRuntimePath = path.join(app.getPath('userData'), 'ai-addons', 'cuda', 'python');
-      if (!fs.existsSync(managedRuntimePath)) {
+    const evaluateStatus = (targetStatus) => {
+      const summaryStatus = targetStatus && targetStatus.features && targetStatus.features.summary;
+      if (!summaryStatus) {
         return {
           eligible: false,
-          reason: 'Chat on Linux requires the CUDA 12 runtime and the Summaries & Chat add-on.',
+          reason: 'Chat uses the Summaries & Chat add-on, which is not set up.',
+          setupTarget: 'ai-addons',
+          modelId: null,
+          modelName: null,
+          artifactId: null,
+        };
+      }
+
+      const modelId = summaryStatus.modelId || null;
+      const modelFit = summaryStatus.fit || targetStatus.summaryLibrary?.models?.find((item) => item.modelId === modelId)?.fit;
+      if (checkFit && modelFit?.blocked === true) {
+        return { eligible: false, reason: modelFit.reason || 'This model cannot run safely on this device.', setupTarget: 'ai-addons', modelId };
+      }
+      const modelMeta = modelId ? getModelById('summary', modelId) : null;
+      const modelName = (modelMeta && (modelMeta.label || modelMeta.name)) || modelId || null;
+      const artifact = modelId ? getSummaryArtifactForPlatform(modelId, platform, arch) : null;
+      const runtimeArtifact = summaryStatus.runtimeCache?.runtimeArtifact || getSummaryRuntimeArtifactForPlatform(platform, arch, undefined, modelId);
+      const runtimeDir = summaryStatus.runtimeCache?.runtimeDir || null;
+
+      if (platform === 'linux') {
+        const managedRuntimePath = path.join(app.getPath('userData'), 'ai-addons', 'cuda', 'python');
+        if (!fs.existsSync(managedRuntimePath)) {
+          return {
+            eligible: false,
+            reason: 'Chat on Linux requires the CUDA 12 runtime and the Summaries & Chat add-on.',
+            setupTarget: 'ai-addons',
+            modelId,
+            modelName,
+            artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
+          };
+        }
+        const cacheReady = summaryStatus.cache?.valid === true && summaryStatus.runtimeCache?.valid === true;
+        if (!cacheReady || !artifact || !runtimeArtifact) {
+          return {
+            eligible: false,
+            reason: 'Install or repair the Summaries & Chat add-on in Settings before using Chat.',
+            setupTarget: 'ai-addons',
+            modelId,
+            modelName,
+            artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
+          };
+        }
+        return {
+          eligible: true,
+          reason: null,
+          setupTarget: null,
+          modelId,
+          modelName,
+          artifactId: artifact.artifactId || artifact.id,
+          artifact,
+          runtimeArtifact,
+          runtimeDir,
+        };
+      }
+
+      if (summaryStatus.status === 'unsupported') {
+        return {
+          eligible: false,
+          reason: (summaryStatus.availability && summaryStatus.availability.reason)
+            || summaryStatus.error
+            || 'Chat is not supported on this platform.',
           setupTarget: 'ai-addons',
           modelId,
           modelName,
-          artifactId: artifact ? artifact.id : null,
+          artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
         };
       }
-      const cacheReady = summaryStatus.cache?.valid === true && summaryStatus.runtimeCache?.valid === true;
-      if (!cacheReady || !artifact || !runtimeArtifact) {
+
+      if (summaryStatus.status !== 'ready' || !summaryStatus.setupComplete || !artifact) {
         return {
           eligible: false,
-          reason: 'Install or repair the Summaries & Chat add-on in Settings before using Chat.',
+          reason: 'Enable the Summaries & Chat add-on in Settings to use Chat.',
           setupTarget: 'ai-addons',
           modelId,
           modelName,
-          artifactId: artifact ? artifact.id : null,
+          artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
         };
       }
+
       return {
         eligible: true,
         reason: null,
         setupTarget: null,
         modelId,
         modelName,
-        artifactId: artifact.id,
+        artifactId: artifact.artifactId || artifact.id,
         artifact,
         runtimeArtifact,
+        runtimeDir,
       };
-    }
-
-    if (summaryStatus.status === 'unsupported') {
-      return {
-        eligible: false,
-        reason: (summaryStatus.availability && summaryStatus.availability.reason)
-          || summaryStatus.error
-          || 'Chat is not supported on this platform.',
-        setupTarget: 'ai-addons',
-        modelId,
-        modelName,
-        artifactId: artifact ? artifact.id : null,
-      };
-    }
-
-    if (summaryStatus.status !== 'ready' || !summaryStatus.setupComplete || !artifact) {
-      return {
-        eligible: false,
-        reason: 'Enable the Summaries & Chat add-on in Settings to use Chat.',
-        setupTarget: 'ai-addons',
-        modelId,
-        modelName,
-        artifactId: artifact ? artifact.id : null,
-      };
-    }
-
-    return {
-      eligible: true,
-      reason: null,
-      setupTarget: null,
-      modelId,
-      modelName,
-      artifactId: artifact.id,
-      artifact,
-      runtimeArtifact,
     };
+
+    const primary = evaluateStatus(status);
+    if (!primary.eligible && !summaryModelId && fallbackToUsableLibraryModel) {
+      const candidates = (status?.summaryLibrary?.models || []).filter(
+        (item) => item.installed && item.setupComplete && item.status === 'ready' && item.fit?.blocked !== true,
+      );
+      for (const candidate of candidates) {
+        const candidateStatus = await checkAiAddonSetupStatus(
+          getAiAddonRuntimeOptions({
+            verifySelectedSummaryOnly: true,
+            verifyChecksums,
+            verifyChecksumsIfChanged,
+            summaryModelId: candidate.modelId,
+            ...(deviceMemory !== undefined ? { deviceMemory } : {}),
+            ...(cudaStatus !== undefined ? { cudaStatus } : {}),
+          }),
+        );
+        const evaluated = evaluateStatus(candidateStatus);
+        if (evaluated.eligible) {
+          return evaluated;
+        }
+      }
+    }
+    return primary;
   }
 
   function sanitizeEligibilityResponse(full) {
@@ -542,11 +597,26 @@ function createHistoryQaService(deps) {
     }
   }
 
+  function reportUnloaded(reason) {
+    emitModelState({ status: 'unloaded', modelId: null, modelName: null, backend: null, loadedAt: null, reason });
+  }
+
+  async function confirmSummaryProcessExit() {
+    const modelId = modelState.modelId;
+    try {
+      await ensureSummaryProcessExited();
+    } catch (error) {
+      emitModelState({ status: 'release_error', modelId: modelState.modelId || modelId, reason: 'exit_unconfirmed' });
+      throw error;
+    }
+  }
+
   async function unloadModel(reason = 'manual', { cancelActive = true } = {}) {
     if (activeUnloadPromise) {
       return activeUnloadPromise;
     }
 
+    const lastModelId = modelState.modelId;
     activeUnloadPromise = (async () => {
       clearIdleTimer();
       if (cancelActive) {
@@ -555,28 +625,29 @@ function createHistoryQaService(deps) {
 
       const server = residentServer;
       if (!server) {
-        if (modelState.status !== 'unloaded') {
-          emitModelState({
-            status: 'unloaded',
-            modelId: null,
-            modelName: null,
-            backend: null,
-            loadedAt: null,
-            reason,
-          });
+        const outstanding = getOutstandingSummaryProcess();
+        if (outstanding && (hasActiveSummaryGeneration(outstanding) || hasInFlightAiAddonSetup())) {
+          return { unloaded: true, alreadyUnloaded: true };
         }
-        return { unloaded: true, alreadyUnloaded: true };
+        if (outstanding) await terminateProcessBestEffort(outstanding);
+        await ensureSummaryProcessExited();
+        if (modelState.status !== 'unloaded') reportUnloaded(reason);
+        return { unloaded: true, alreadyUnloaded: !outstanding };
       }
 
       emitModelState({ status: 'unloading', reason });
       server.unloading = true;
-      server.unloadReason = reason;
       server.token = null;
 
       await stopServer(server);
+      await ensureSummaryProcessExited();
+      reportUnloaded(reason);
 
       return { unloaded: true, alreadyUnloaded: false };
-    })().finally(() => {
+    })().catch((error) => {
+      emitModelState({ status: 'release_error', modelId: modelState.modelId || lastModelId, reason: 'exit_unconfirmed' });
+      throw error;
+    }).finally(() => {
       activeUnloadPromise = null;
     });
 
@@ -625,13 +696,14 @@ function createHistoryQaService(deps) {
     }
   }
 
-  function buildRuntimeSpawnEnv({ userDataDir, artifact, runtimeArtifact, serverToken = null }) {
+  function buildRuntimeSpawnEnv({ userDataDir, artifact, runtimeArtifact, runtimeDir, serverToken = null }) {
     let runtimeEnv = {};
     if (platform === 'linux') {
       runtimeEnv = buildSummaryRuntimeEnv({
         userDataDir,
         artifact,
         runtimeArtifact,
+        runtimeDir,
         platform,
         arch,
       });
@@ -656,9 +728,12 @@ function createHistoryQaService(deps) {
     runtimeArtifact,
     binaryInfo,
     cancelSignal,
+    checkLiveAdmission,
   }) {
     if (
       residentServer
+      && residentServer.modelId === modelId
+      && residentServer.artifactIdentity === JSON.stringify([artifact, runtimeArtifact])
       && residentServer.modelPath === modelPath
       && residentServer.runtimeDir === runtimeDir
       && !residentServer.exited
@@ -675,6 +750,9 @@ function createHistoryQaService(deps) {
       throw cancelSignal.reason instanceof Error ? cancelSignal.reason : createQaCancelError();
     }
 
+    await confirmSummaryProcessExit();
+    await checkLiveAdmission();
+    if (cancelSignal?.aborted || isQuitCommitted()) throw cancelSignal?.reason || createQaCancelError();
     const userDataDir = app.getPath('userData');
     const token = crypto.randomBytes(32).toString('hex');
     const port = await awaitAbortable(allocateLoopbackPort(), cancelSignal);
@@ -687,19 +765,21 @@ function createHistoryQaService(deps) {
       '--model',
       modelPath,
       '--ctx-size',
-      '32768',
+      String(artifact.inference?.contextTokens || 32768),
       '--n-gpu-layers',
-      '-1',
+      artifact.inference?.singleTurnOnly ? '999' : '-1',
       '--parallel',
       '1',
       '--no-webui',
       '--reasoning',
       'off',
     ];
+    if (artifact.inference?.singleTurnOnly) args.push('--fit', 'off');
     const spawnEnv = buildRuntimeSpawnEnv({
       userDataDir,
       artifact,
       runtimeArtifact,
+      runtimeDir,
       serverToken: token,
     });
 
@@ -754,9 +834,9 @@ function createHistoryQaService(deps) {
       modelName,
       modelPath,
       runtimeDir,
+      artifactIdentity: JSON.stringify([artifact, runtimeArtifact]),
       exited: false,
       unloading: false,
-      unloadReason: null,
       exitPromise,
     };
 
@@ -768,14 +848,7 @@ function createHistoryQaService(deps) {
       if (residentServer === serverEntry) {
         residentServer = null;
         clearIdleTimer();
-        emitModelState({
-          status: 'unloaded',
-          modelId: null,
-          modelName: null,
-          backend: null,
-          loadedAt: null,
-          reason: `server_error:${err?.message || 'spawn_failed'}`,
-        });
+        if (!serverEntry.unloading) reportUnloaded(`server_error:${err?.message || 'spawn_failed'}`);
       }
       resolveExit();
     });
@@ -788,14 +861,7 @@ function createHistoryQaService(deps) {
       if (residentServer === serverEntry) {
         residentServer = null;
         clearIdleTimer();
-        emitModelState({
-          status: 'unloaded',
-          modelId: null,
-          modelName: null,
-          backend: null,
-          loadedAt: null,
-          reason: serverEntry.unloading ? (serverEntry.unloadReason || 'manual') : `process_exited_${code}`,
-        });
+        if (!serverEntry.unloading) reportUnloaded(`process_exited_${code}`);
       }
       resolveExit();
     });
@@ -832,11 +898,8 @@ function createHistoryQaService(deps) {
       }
       throw new Error('Timed out waiting for local Q&A model server to finish loading.');
     } catch (error) {
-      serverEntry.unloading = true;
-      serverEntry.unloadReason = 'startup_aborted';
-      serverEntry.token = null;
       try {
-        await stopServer(serverEntry);
+        await unloadModel('startup_aborted', { cancelActive: false });
       } catch (_stopError) {
         // Keep ownership until the child actually exits; later unloads can retry.
       }
@@ -844,8 +907,10 @@ function createHistoryQaService(deps) {
     }
   }
 
-  function runPythonStdinJson({ moduleName, args = [], payload, env = {}, timeoutMs, registrar, threadId, emitProgressEvents = false }) {
-    return new Promise((resolve, reject) => {
+  async function runPythonStdinJson({ moduleName, args = [], payload, env = {}, timeoutMs, registrar, threadId, emitProgressEvents = false, modelBearing = false }) {
+    let spawnedModelBearing = false;
+    try {
+      return await new Promise((resolve, reject) => {
       try {
         registrar.throwIfCancelled();
       } catch (err) {
@@ -853,13 +918,16 @@ function createHistoryQaService(deps) {
         return;
       }
 
-      const python = spawnTrackedPython(
+      const python = (modelBearing ? spawnSummaryPython : spawnTrackedPython)(
         getBackendModuleArgs(moduleName, args),
         {
           cwd: pythonConfig.backendPath,
           env,
         },
       );
+      if (modelBearing) {
+        spawnedModelBearing = true;
+      }
 
       let registered = false;
       try {
@@ -871,12 +939,20 @@ function createHistoryQaService(deps) {
       }
 
       const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+      let settled = false;
+      let timedOut = false;
       let stderrRemainder = '';
       if (emitProgressEvents && python.stderr && typeof python.stderr.on === 'function') {
         python.stderr.on('data', (chunk) => {
+          if (settled || timedOut || registrar.isCancelled()) {
+            return;
+          }
           const split = splitBufferedLines(String(chunk), stderrRemainder);
           stderrRemainder = split.remainder;
           for (const line of split.lines) {
+            if (settled || timedOut || registrar.isCancelled()) {
+              return;
+            }
             const parsed = parseAiBackendProgressLine(line, 'history-qa');
             if (parsed) {
               emitQaProgress({
@@ -884,14 +960,13 @@ function createHistoryQaService(deps) {
                 phase: parsed.phase,
                 message: parsed.message,
                 percent: parsed.percent,
+                ...(parsed.draftMarkdown ? { draftMarkdown: parsed.draftMarkdown } : {}),
               });
             }
           }
         });
       }
 
-      let settled = false;
-      let timedOut = false;
       const finish = (cb, val) => {
         if (settled) {
           return;
@@ -948,7 +1023,12 @@ function createHistoryQaService(deps) {
           // Child closed before stdin write; close/error handler will settle.
         }
       }
-    });
+      });
+    } finally {
+      if (spawnedModelBearing) {
+        await confirmSummaryProcessExit().catch(() => {});
+      }
+    }
   }
 
   async function askHistory(options = {}, { runQueuedCompute = null } = {}) {
@@ -976,21 +1056,31 @@ function createHistoryQaService(deps) {
       if (hasInFlightAiAddonSetup()) throw new Error('Local AI setup is in progress; please retry.');
     };
     try {
+    checkCurrent();
+    const requestedThreadModelId = options.threadModelId == null ? null : String(options.threadModelId).trim() || null;
+    if (requestedThreadModelId !== null && (typeof options.threadModelId !== 'string' || !getModelById('summary', requestedThreadModelId))) {
+      throw new Error('Invalid Chat model selection.');
+    }
+    if (options.threadId) {
+      thread = await chatThreadStore.getThread(options.threadId);
+    }
+    const targetModelId = (thread ? thread.modelId : requestedThreadModelId) || null;
     const eligibility = await awaitAbortable(resolveEligibility({
       verifyChecksums: true,
       verifyChecksumsIfChanged: true,
+      summaryModelId: targetModelId,
     }), controller.signal);
-    if (!eligibility.eligible) {
-      throw new Error(eligibility.reason || 'Local Q&A is not available until the local Summary AI add-on is installed.');
+    if (!eligibility.eligible || (targetModelId && eligibility.modelId !== targetModelId)) {
+      throw new Error(eligibility.reason || 'The selected Chat model is unavailable. Choose another model in Settings.');
     }
-
-    checkCurrent();
-    if (options.threadId) {
-      thread = await chatThreadStore.getThread(options.threadId);
-    } else {
-      thread = await chatThreadStore.createThread({ scope: requestedScope });
+    if (options.modelId && options.modelId !== eligibility.modelId) {
+      throw new Error('The Chat model changed. Review the model selection and retry.');
     }
-
+    if (!thread) {
+      thread = await chatThreadStore.createThread({ scope: requestedScope, modelId: requestedThreadModelId });
+    }
+    const frozenModelId = eligibility.modelId;
+    const frozenArtifact = JSON.stringify([eligibility.artifact, eligibility.runtimeArtifact, eligibility.runtimeDir]);
     checkCurrent();
     const effectiveScope = requestedScope ?? thread.scope;
 
@@ -1023,6 +1113,87 @@ function createHistoryQaService(deps) {
         checkCurrent();
         if (historySearchService.getGeneration() !== generation) throw new Error('History changed while answering; please retry.');
       };
+      const scopedSelectedIds = effectiveScope && effectiveScope.type === 'selected_meetings'
+        ? new Set((effectiveScope.meetingIds || []).map(String))
+        : null;
+      const scopedTags = Array.isArray(effectiveScope?.tags) && effectiveScope.tags.length
+        ? new Set(effectiveScope.tags)
+        : null;
+      const dateFrom = effectiveScope?.dateFrom || '';
+      const dateTo = effectiveScope?.dateTo || '';
+      const hasScopeFilter = scopedSelectedIds || scopedTags || dateFrom || dateTo;
+      const turnMatchesScope = (assistant) => {
+        if (!hasScopeFilter) return true;
+        if (!Array.isArray(assistant.citations) || !assistant.citations.length) return false;
+        return assistant.citations.every((citation) => {
+          if (!citation || typeof citation !== 'object') return false;
+          if (scopedSelectedIds && !scopedSelectedIds.has(String(citation.meetingId))) return false;
+          if (scopedTags && !scopedTags.has(citation.tag)) return false;
+          if (dateFrom || dateTo) {
+            const day = typeof citation.meetingDate === 'string' ? citation.meetingDate.slice(0, 10) : '';
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+            if ((dateFrom && day < dateFrom) || (dateTo && day > dateTo)) return false;
+          }
+          return true;
+        });
+      };
+      const messages = Array.isArray(thread.messages) ? thread.messages : [];
+      const existingMessages = hasScopeFilter ? messages.filter((message, index) => {
+        if (message.role === 'user') {
+          const next = messages[index + 1];
+          return next?.role === 'assistant' && next.status === 'answered' && turnMatchesScope(next);
+        }
+        return message.role === 'assistant' && message.status === 'answered'
+          && messages[index - 1]?.role === 'user' && turnMatchesScope(message);
+      }) : messages;
+      let lastCitedMeetingIds = [];
+      let lastQuestion = '';
+      let lastAnsweredIdx = -1;
+      for (let i = existingMessages.length - 1; i >= 0; i -= 1) {
+        const msg = existingMessages[i];
+        if (msg.role === 'assistant' && msg.status === 'answered') {
+          lastAnsweredIdx = i;
+          if (Array.isArray(msg.citations) && msg.citations.length > 0) {
+            lastCitedMeetingIds = [...new Set(msg.citations.map((c) => c.meetingId).filter(Boolean))];
+          }
+          break;
+        }
+      }
+      if (lastAnsweredIdx !== -1) {
+        for (let i = lastAnsweredIdx - 1; i >= 0; i -= 1) {
+          const msg = existingMessages[i];
+          if (msg.role === 'user' && msg.content) {
+            lastQuestion = String(msg.content);
+            break;
+          }
+        }
+        if (lastCitedMeetingIds.length === 0) {
+          for (let i = lastAnsweredIdx - 1; i >= 0; i -= 1) {
+            const msg = existingMessages[i];
+            if (
+              msg.role === 'assistant'
+              && msg.status === 'answered'
+              && Array.isArray(msg.citations)
+              && msg.citations.length > 0
+            ) {
+              lastCitedMeetingIds = [...new Set(msg.citations.map((c) => c.meetingId).filter(Boolean))];
+              break;
+            }
+          }
+        }
+      } else {
+        for (let i = existingMessages.length - 1; i >= 0; i -= 1) {
+          const msg = existingMessages[i];
+          if (msg.role === 'user' && msg.content) {
+            lastQuestion = String(msg.content);
+            break;
+          }
+        }
+      }
+      const threadContext = (lastCitedMeetingIds.length > 0 || lastQuestion)
+        ? { lastCitedMeetingIds, lastQuestion }
+        : null;
+
       const runRetrieval = () => runPythonStdinJson({
         moduleName: 'history_qa.retrieval',
         args: [
@@ -1035,6 +1206,7 @@ function createHistoryQaService(deps) {
         payload: {
           question,
           scope: effectiveScope,
+          ...(threadContext ? { threadContext } : {}),
           sync: false,
         },
         timeoutMs: retrievalTimeoutMs,
@@ -1051,17 +1223,28 @@ function createHistoryQaService(deps) {
 
       const evidence = Array.isArray(retrieval.evidence) ? retrieval.evidence : [];
       const searchedMeetingCount = Number(retrieval.searchedMeetingCount) || 0;
+      const detectedDateFilter = typeof retrieval.detectedDateFilter === 'string'
+        ? retrieval.detectedDateFilter
+        : '';
+      const retrievalMode = typeof retrieval.retrievalMode === 'string'
+        ? retrieval.retrievalMode
+        : '';
 
       // Zero-hit preflight gate: NEVER acquire compute queue or allocate VRAM!
       if (evidence.length === 0) {
         assertFresh();
-      const persisted = await chatThreadStore.appendTurn(thread.id, {
+        const noMatchAnswer = searchedMeetingCount === 0
+          ? 'No indexed recordings match the selected filter yet.'
+          : (detectedDateFilter
+            ? `No matching excerpts were found for ${detectedDateFilter} in the selected recordings.`
+            : 'No matching excerpts were found in the selected recordings for that question.');
+        const persisted = await chatThreadStore.appendTurn(thread.id, {
           question,
-          status: 'insufficient_evidence',
-          answerMarkdown:
-            searchedMeetingCount === 0
-              ? 'No indexed recordings match the selected filter yet.'
-              : 'No matching excerpts were found in the selected recordings for that question.',
+          status: 'no_matching_excerpts',
+          failureReason: 'no_matching_excerpts',
+          detectedDateFilter: detectedDateFilter || null,
+          retrievalMode: retrievalMode || null,
+          answerMarkdown: noMatchAnswer,
           citations: [],
           searchedMeetingCount,
           evidenceCount: 0,
@@ -1076,7 +1259,10 @@ function createHistoryQaService(deps) {
         });
         return {
           ...persisted,
-          status: 'insufficient_evidence',
+          status: 'no_matching_excerpts',
+          failureReason: 'no_matching_excerpts',
+          detectedDateFilter: detectedDateFilter || null,
+          retrievalMode: retrievalMode || null,
           modelLoaded: isModelLoaded(),
           searchedMeetingCount,
           evidenceCount: 0,
@@ -1096,15 +1282,17 @@ function createHistoryQaService(deps) {
       });
 
       const queueRunner = runQueuedCompute || ((action) => enqueueAiComputeAction(() => enqueueGpuResourceActionForQa(action)));
-      const evidenceIds = new Set(evidence.map((item) => item.meetingId));
       const historyTurns = [];
-      const messages = Array.isArray(thread.messages) ? thread.messages : [];
-      for (let i = 0; i + 1 < messages.length; i += 2) {
-        const user = messages[i];
-        const assistant = messages[i + 1];
-        if (user.role === 'user' && assistant.role === 'assistant'
-            && Array.isArray(assistant.citations) && assistant.citations.length > 0
-            && assistant.citations.every((citation) => evidenceIds.has(citation.meetingId))) {
+      for (let i = 0; i + 1 < existingMessages.length; i += 2) {
+        const user = existingMessages[i];
+        const assistant = existingMessages[i + 1];
+        if (
+          user.role === 'user'
+          && assistant.role === 'assistant'
+          && assistant.status === 'answered'
+          && user.content
+          && assistant.content
+        ) {
           historyTurns.push({ role: 'user', content: user.content }, { role: 'assistant', content: assistant.content });
         }
       }
@@ -1147,21 +1335,23 @@ function createHistoryQaService(deps) {
             const admitted = await resolveEligibility({
               verifyChecksums: true,
               verifyChecksumsIfChanged: true,
+              summaryModelId: frozenModelId,
             });
-            if (!admitted.eligible) {
+            if (!admitted.eligible || admitted.modelId !== frozenModelId || JSON.stringify([admitted.artifact, admitted.runtimeArtifact, admitted.runtimeDir]) !== frozenArtifact) {
               throw new Error(admitted.reason || 'Local Summary AI add-on changed while queued.');
             }
             registrar.throwIfCancelled();
 
             const userDataDir = app.getPath('userData');
             const modelPath = getSummaryArtifactPath(userDataDir, admitted.artifact);
-            const runtimeDir = getSummaryRuntimeDir(userDataDir, admitted.artifact);
+            const runtimeDir = admitted.runtimeDir || getSummaryRuntimeDir(userDataDir, admitted.artifact);
 
+            let cudaStatus;
             if (platform === 'linux') {
               if (typeof resolveCudaStatusForTranscription !== 'function') {
                 throw new Error('Linux local Q&A requires the live CUDA runtime resolver.');
               }
-              const cudaStatus = await resolveCudaStatusForTranscription({
+              cudaStatus = await resolveCudaStatusForTranscription({
                 registerProcess: (proc) => registrar.register(proc),
               });
               registrar.throwIfCancelled();
@@ -1182,6 +1372,20 @@ function createHistoryQaService(deps) {
               throw new Error('Local Q&A runtime executable could not be verified.');
             }
 
+            const checkLiveAdmission = async () => {
+              registrar.throwIfCancelled();
+              const deviceMemory = await getSummaryDeviceMemory({ live: true });
+              registrar.throwIfCancelled();
+              const live = await resolveEligibility({
+                verifyChecksums: true, verifyChecksumsIfChanged: true,
+                summaryModelId: frozenModelId, deviceMemory, cudaStatus, checkFit: true,
+              });
+              if (!live.eligible || live.modelId !== frozenModelId
+                || JSON.stringify([live.artifact, live.runtimeArtifact, live.runtimeDir]) !== frozenArtifact) {
+                throw new Error(live.reason || 'The selected Chat model changed or no longer fits. Check Settings and retry.');
+              }
+              registrar.throwIfCancelled();
+            };
             let executionMode = 'cli';
             let serverUrl = null;
             let serverToken = null;
@@ -1207,11 +1411,16 @@ function createHistoryQaService(deps) {
                 runtimeArtifact: admitted.runtimeArtifact,
                 binaryInfo,
                 cancelSignal: combinedController.signal,
+                checkLiveAdmission,
               });
               executionMode = 'server';
               serverUrl = server.url;
               serverToken = server.token;
             } else {
+              await unloadModel('cli_fallback', { cancelActive: false });
+              await confirmSummaryProcessExit();
+              await checkLiveAdmission();
+              registrar.throwIfCancelled();
               transientCliState = true;
               emitModelState({
                 status: 'loading',
@@ -1231,6 +1440,7 @@ function createHistoryQaService(deps) {
               userDataDir,
               artifact: admitted.artifact,
               runtimeArtifact: admitted.runtimeArtifact,
+              runtimeDir,
               serverToken: null,
             });
 
@@ -1244,7 +1454,11 @@ function createHistoryQaService(deps) {
                   evidence,
                   history: historyTurns,
                   searchedMeetingCount,
+                  detectedDateFilter,
+                  retrievalMode,
                   executionMode,
+                  inferenceDescriptor: admitted.artifact.inference || { contextTokens: 32768, family: 'qwen', promptFormat: 'chatml', disableThinking: true },
+                  stream: executionMode === 'server',
                   ...(executionMode === 'server' ? { serverUrl, serverToken } : { runtimeDir, modelPath }),
                 },
                 env: runnerEnv,
@@ -1252,18 +1466,12 @@ function createHistoryQaService(deps) {
                 registrar,
                 threadId: thread.id,
                 emitProgressEvents: true,
+                modelBearing: executionMode === 'cli',
               });
               return output;
             } finally {
-              if (transientCliState) {
-                emitModelState({
-                  status: 'unloaded',
-                  modelId: null,
-                  modelName: null,
-                  backend: null,
-                  loadedAt: null,
-                  reason: 'cli_turn_finished',
-                });
+              if (transientCliState && modelState.status === 'loading') {
+                reportUnloaded('cli_turn_finished');
               }
             }
           } finally {
@@ -1273,11 +1481,22 @@ function createHistoryQaService(deps) {
       })), controller.signal);
 
       assertFresh();
+      const finalStatus = qaResult.status || 'answered';
+      const finalFailureReason = qaResult.failureReason || null;
+      const finalDateFilter = qaResult.detectedDateFilter || detectedDateFilter || null;
+      const finalRetrievalMode = qaResult.retrievalMode || retrievalMode || null;
+      const finalInspectedSources = Array.isArray(qaResult.inspectedSources) ? qaResult.inspectedSources : [];
       const persisted = await chatThreadStore.appendTurn(thread.id, {
         question,
-        status: qaResult.status || 'answered',
+        status: finalStatus,
+        failureReason: finalFailureReason,
+        detectedDateFilter: finalDateFilter,
+        retrievalMode: finalRetrievalMode,
         answerMarkdown: qaResult.answerMarkdown || '',
         citations: Array.isArray(qaResult.citations) ? qaResult.citations : [],
+        inspectedSources: finalInspectedSources,
+        modelId: frozenModelId,
+        modelName: eligibility.modelName,
         searchedMeetingCount: Number(qaResult.searchedMeetingCount) || searchedMeetingCount,
         evidenceCount: Number(qaResult.evidenceCount) || evidence.length,
         scope: options.scope || null,
@@ -1293,7 +1512,10 @@ function createHistoryQaService(deps) {
 
       return {
         ...persisted,
-        status: qaResult.status || 'answered',
+        status: finalStatus,
+        failureReason: finalFailureReason,
+        detectedDateFilter: finalDateFilter,
+        retrievalMode: finalRetrievalMode,
         modelLoaded: isModelLoaded(),
         searchedMeetingCount: Number(qaResult.searchedMeetingCount) || searchedMeetingCount,
         evidenceCount: Number(qaResult.evidenceCount) || evidence.length,
@@ -1320,11 +1542,19 @@ function createHistoryQaService(deps) {
   }
 
   function registerIpc(ipcMain) {
-    ipcMain.handle('get-history-qa-eligibility', async (event) => {
+    ipcMain.handle('get-history-qa-eligibility', async (event, options = {}) => {
       assertTrustedRendererSender(event);
+      const requestedModelId = typeof options?.modelId === 'string' && options.modelId.trim()
+        ? options.modelId.trim()
+        : null;
+      if (requestedModelId !== null && !getModelById('summary', requestedModelId)) {
+        throw new Error('Invalid Chat model selection.');
+      }
       const result = await resolveEligibility({
         verifyChecksums: false,
         verifyChecksumsIfChanged: true,
+        summaryModelId: requestedModelId,
+        fallbackToUsableLibraryModel: !requestedModelId,
       });
       return sanitizeEligibilityResponse(result);
     });
@@ -1367,7 +1597,11 @@ function createHistoryQaService(deps) {
 
     ipcMain.handle('create-chat-thread', async (event, options = {}) => {
       assertTrustedRendererSender(event);
-      const thread = await chatThreadStore.createThread(options || {});
+      const modelId = options?.modelId ?? null;
+      if (modelId !== null && (typeof modelId !== 'string' || !getModelById('summary', modelId))) {
+        throw new Error('Invalid Chat model selection.');
+      }
+      const thread = await chatThreadStore.createThread({ ...(options || {}), modelId });
       return { thread };
     });
 
@@ -1381,6 +1615,16 @@ function createHistoryQaService(deps) {
       assertTrustedRendererSender(event);
       const threadId = typeof options === 'string' ? options : options?.threadId;
       return chatThreadStore.deleteThread(threadId);
+    });
+
+    ipcMain.handle('update-chat-thread-model', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      const modelId = options?.modelId;
+      if (modelId !== null && (typeof modelId !== 'string' || !getModelById('summary', modelId))) {
+        throw new Error('Invalid Chat model selection.');
+      }
+      const thread = await chatThreadStore.updateThreadModel(options?.threadId, modelId);
+      return { thread };
     });
 
     ipcMain.handle('update-chat-thread-scope', async (event, options = {}) => {

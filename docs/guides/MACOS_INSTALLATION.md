@@ -4,7 +4,7 @@ Complete guide for installing AvaNevis on macOS.
 
 ## Install AvaNevis
 
-AvaNevis v2.12 requires Apple Silicon and macOS 15 (Sequoia) or later.
+AvaNevis (v2.12 and later) requires Apple Silicon and macOS 15 (Sequoia) or later.
 On macOS 14, use [v2.10.3](https://github.com/AmirArshad/meeting-transcriber/releases/tag/v2.10.3).
 
 1. Download the `AvaNevis-Setup-<version>.dmg` from [GitHub Releases](https://github.com/AmirArshad/meeting-transcriber/releases).
@@ -75,7 +75,7 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) or [open an issue on GitHub](https:
 
 ## 📋 macOS Version Requirements
 
-- **Minimum for v2.12:** macOS 15 (Sequoia) on Apple Silicon
+- **Minimum (v2.12+):** macOS 15 (Sequoia) on Apple Silicon
 - CoreAudio system-audio capture is available on this supported baseline; the helper retains its separate compatibility checks.
 - **Architecture:**
   - ✅ Apple Silicon (M1 or newer) — packaged target
@@ -106,4 +106,4 @@ Once installed and opened successfully:
 
 ---
 
-**Last Updated:** December 2025
+**Last Updated:** November 2026

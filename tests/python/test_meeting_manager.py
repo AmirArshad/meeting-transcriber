@@ -1061,6 +1061,12 @@ def test_update_meeting_ai_merges_partial_feature_updates(tmp_path):
 
     assert meeting['ai']['summary']['jsonPath'] == str(summary_json_path.resolve(strict=False))
     assert meeting['ai']['summary']['error'] == 'later warning'
+    assert meeting['tag'] is None
+    for cleared in (None, '', '   '):
+        manager.update_meeting_ai('20260107_104555', summary={'tag': 'meeting'})
+        updated = manager.update_meeting_ai('20260107_104555', summary={'tag': cleared})
+        assert updated['ai']['summary']['tag'] is None
+    assert manager.update_transcription('20260107_104555')['tag'] is None
 
 
 def test_update_meeting_ai_clears_stale_diarization_path_on_terminal_error(tmp_path):
@@ -2495,3 +2501,201 @@ def test_scan_rejects_audio_changed_after_duration_read(tmp_path, monkeypatch, c
     assert not audio.with_suffix('.md').exists()
     assert manager.scan_and_sync_recordings()['added'] == 1
     assert manager.get_meeting('20261121_010000')['durationSeconds'] == 12.5
+
+
+def test_recording_tag_normalization_persistence_cli_and_summary_staleness(tmp_path):
+    from backend.meetings.normalization import (
+        VALID_RECORDING_TAGS,
+        normalize_recording_tag,
+        recording_tag_display_label,
+    )
+
+    assert len(VALID_RECORDING_TAGS) == 11
+    assert normalize_recording_tag('Meeting') == 'meeting'
+    assert normalize_recording_tag('phone / support call') == 'call'
+    assert normalize_recording_tag('voice_memo') == 'voice-note'
+    assert normalize_recording_tag('') is None
+    assert normalize_recording_tag(None) is None
+    assert recording_tag_display_label('call') == 'Phone / Support Call'
+
+    with pytest.raises(ValueError, match='Unsupported recording tag'):
+        normalize_recording_tag('unknown-category', strict=True)
+
+    recordings = tmp_path / 'recordings'
+    audio_a, transcript_a = _create_source_files(recordings, 'tagged_a')
+    manager = MeetingManager(str(recordings))
+
+    # Add with tag (alias accepted and normalized)
+    added = manager.add_meeting(
+        audio_path=str(audio_a),
+        transcript_path=str(transcript_a),
+        duration=45.0,
+        tag='Voice Memo',
+    )
+    assert added['tag'] == 'voice-note'
+    assert manager.get_meeting(added['id'])['tag'] == 'voice-note'
+
+    # Invalid tag rejected on add and update
+    audio_b, transcript_b = _create_source_files(recordings, 'tagged_b')
+    with pytest.raises(ValueError, match='Unsupported recording tag'):
+        manager.add_meeting(str(audio_b), str(transcript_b), 12.0, tag='not-a-tag')
+
+    with pytest.raises(ValueError, match='Unsupported recording tag'):
+        manager.update_meeting(added['id'], tag='invalid-tag')
+
+    # Attach completed summary and verify changing/clearing tag leaves summaryStale False
+    summary_json = recordings / f"{added['id']}.summary.json"
+    summary_md = recordings / f"{added['id']}.summary.md"
+    summary_json.write_text('{}', encoding='utf-8')
+    summary_md.write_text('# Summary\n\nBody\n', encoding='utf-8')
+    tx_hash = meeting_manager_module.meeting_norm.hash_text(
+        Path(added['transcriptPath']).read_text(encoding='utf-8')
+    )
+    manager.update_meeting_ai(
+        added['id'],
+        summary={
+            'status': 'completed',
+            'sourceTranscriptHash': tx_hash,
+            'tag': 'voice-note',
+            'template': 'voice-note',
+            'templateVersion': 'tag-templates-v1',
+        },
+    )
+
+    updated = manager.update_meeting(added['id'], tag='lecture')
+    assert updated['tag'] == 'lecture'
+    hydrated_updated = manager.get_meeting(added['id'])
+    assert hydrated_updated['summaryStale'] is False
+    assert hydrated_updated['ai']['summary']['sourceTranscriptHash'] == tx_hash
+
+    cleared = manager.update_meeting(added['id'], tag='')
+    assert cleared['tag'] is None
+    assert manager.get_meeting(added['id'])['summaryStale'] is False
+
+    # Legacy record missing 'tag' key lazily exposes tag: None without mutating meetings.json
+    legacy_audio, legacy_transcript = _create_source_files(recordings, 'legacy_rec')
+    legacy_added = manager.add_meeting(str(legacy_audio), str(legacy_transcript), 20.0)
+    raw_before = json.loads((recordings / 'meetings.json').read_text(encoding='utf-8'))
+    for item in raw_before:
+        item.pop('tag', None)
+    (recordings / 'meetings.json').write_text(json.dumps(raw_before), encoding='utf-8')
+    reloaded = MeetingManager(str(recordings))
+    assert reloaded.get_meeting(legacy_added['id'])['tag'] is None
+    raw_after_read = json.loads((recordings / 'meetings.json').read_text(encoding='utf-8'))
+    assert all('tag' not in item for item in raw_after_read)
+
+    # CLI add --tag, update --tag, update --clear-tag
+    cli_audio, cli_transcript = _create_source_files(recordings, 'cli_tagged')
+    import subprocess
+    import sys
+
+    env = {**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[2] / 'backend')}
+    res_add = subprocess.run(
+        [
+            sys.executable, '-m', 'backend.meeting_manager',
+            '--recordings-dir', str(recordings),
+            'add', '--audio', str(cli_audio), '--transcript', str(cli_transcript), '--duration', '15', '--tag', 'podcast',
+        ],
+        capture_output=True, text=True, check=True, env=env,
+    )
+    cli_meeting = json.loads(res_add.stdout)
+    assert cli_meeting['tag'] == 'podcast'
+
+    res_upd = subprocess.run(
+        [
+            sys.executable, '-m', 'backend.meeting_manager',
+            '--recordings-dir', str(recordings),
+            'update', cli_meeting['id'], '--tag', 'brainstorm',
+        ],
+        capture_output=True, text=True, check=True, env=env,
+    )
+    assert json.loads(res_upd.stdout)['tag'] == 'brainstorm'
+
+    res_clr = subprocess.run(
+        [
+            sys.executable, '-m', 'backend.meeting_manager',
+            '--recordings-dir', str(recordings),
+            'update', cli_meeting['id'], '--clear-tag',
+        ],
+        capture_output=True, text=True, check=True, env=env,
+    )
+    assert json.loads(res_clr.stdout)['tag'] is None
+
+
+def test_speaker_names_patch_is_atomic_and_preserves_transcript(tmp_path):
+    from backend.transcription.captions import hash_transcript_text
+    from backend.meetings.speaker_names import speaker_names_hash
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings, 'speaker_patch')
+    manager = MeetingManager(str(recordings))
+    meeting = manager.add_meeting(str(audio), str(transcript), 1)
+    path = Path(meeting['transcriptPath'])
+    original = path.read_text(encoding='utf-8')
+    expected = hash_transcript_text(original)
+    updated = manager.update_meeting(meeting['id'], tag='interview', speaker_names={'Speaker 1': ' *Alice* -->\n ', 'SPEAKER_01': 'Bob'}, expected_source_transcript_hash=expected)
+    assert updated['ai']['diarization']['speakerNames'] == {'Speaker 1': 'Alice', 'SPEAKER_01': 'Bob'}
+    assert updated['speakerNamesHash'] == speaker_names_hash(updated['ai']['diarization']['speakerNames'])
+    assert manager.list_meetings()[0]['speakerNamesHash'] == updated['speakerNamesHash']
+    updated = manager.update_meeting(meeting['id'], speaker_names={'Speaker 1': ''})
+    assert updated['ai']['diarization']['speakerNames'] == {'SPEAKER_01': 'Bob'}
+    with pytest.raises(ValueError, match='STALE_SOURCE_TRANSCRIPT'):
+        manager.update_meeting(meeting['id'], tag='lecture', speaker_names={'Speaker 1': 'Eve'}, expected_source_transcript_hash='sha256:' + '0' * 64)
+    assert manager.get_meeting(meeting['id'])['tag'] == 'interview'
+    with pytest.raises(ValueError):
+        manager.update_meeting(meeting['id'], speaker_names={'Bad ID': 'Eve'})
+    assert path.read_text(encoding='utf-8') == original
+
+
+def test_speaker_names_strip_unicode_controls_before_arrows_and_cap_codepoints():
+    from backend.meetings.speaker_names import normalize_speaker_names, speaker_names_hash
+
+    names = normalize_speaker_names({
+        'Speaker 1': '  A\x00\ud800\u2028\u2029\u200b-*- >B 😀!  ',
+        'Speaker 2': '😀' * 65,
+    }, strict=True)
+    assert names == {'Speaker 1': 'A-- >B 😀!', 'Speaker 2': '😀' * 64}
+    assert normalize_speaker_names({'Speaker 1': 'A-\x00->B'}) == {'Speaker 1': 'AB'}
+    assert speaker_names_hash(names).startswith('sha256:')
+
+
+def test_speaker_name_attempt_guard_rejects_identical_retranscription(tmp_path):
+    from backend.transcription.captions import hash_transcript_text
+
+    recordings = tmp_path / 'recordings'
+    audio, transcript = _create_source_files(recordings, 'same_text')
+    manager = MeetingManager(str(recordings))
+    meeting = manager.add_meeting(str(audio), str(transcript), 1)
+    source_hash = hash_transcript_text(Path(meeting['transcriptPath']).read_text(encoding='utf-8'))
+    # Legacy metadata has no committed attempt ID.
+    manager.update_meeting(meeting['id'], speaker_names={'Speaker 1': 'Alice'}, expected_transcription_attempt_id='')
+    with manager._metadata_guard():
+        meetings = manager._list_meetings_locked()
+        meetings[0]['transcriptionResult'] = {'attemptId': 'new-attempt'}
+        manager._save_meetings_unlocked(meetings)
+    with pytest.raises(ValueError, match='STALE_SOURCE_TRANSCRIPT'):
+        manager.update_meeting(meeting['id'], tag='lecture', speaker_names={'Speaker 1': 'Bob'}, expected_source_transcript_hash=source_hash, expected_transcription_attempt_id='')
+    assert manager.get_meeting(meeting['id'])['tag'] is None
+    updated = manager.update_meeting(meeting['id'], speaker_names={'Speaker 1': 'Bob'}, expected_source_transcript_hash=source_hash, expected_transcription_attempt_id='new-attempt')
+    assert updated['ai']['diarization']['speakerNames']['Speaker 1'] == 'Bob'
+
+
+def test_speaker_names_strip_nested_arrows():
+    from backend.meetings.speaker_names import normalize_speaker_names
+
+    assert normalize_speaker_names({'Speaker 1': 'A--->->B'}) == {'Speaker 1': 'AB'}
+
+
+@pytest.mark.parametrize('value, expected', [(None, ''), ('', ''), ('sha256:' + 'a' * 64, 'sha256:' + 'a' * 64)])
+def test_summary_speaker_names_hash_accepts_valid_values(value, expected):
+    from backend.meetings.paths import normalize_ai_feature_metadata
+
+    assert normalize_ai_feature_metadata(None, 'summary', {'speakerNamesHash': value})['speakerNamesHash'] == expected
+
+
+@pytest.mark.parametrize('value', ['invalid', 'sha256:' + 'A' * 64, 'sha256:' + 'a' * 63, 42, [], False])
+def test_summary_speaker_names_hash_rejects_invalid_values(value):
+    from backend.meetings.paths import normalize_ai_feature_metadata
+
+    with pytest.raises(ValueError, match='Invalid speakerNamesHash'):
+        normalize_ai_feature_metadata(None, 'summary', {'speakerNamesHash': value})

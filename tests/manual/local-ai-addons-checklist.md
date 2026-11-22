@@ -7,7 +7,7 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Confirm no network activity occurs during transcription, diarization, or summary generation.
 - [ ] Confirm network activity occurs only when the user explicitly starts summary model/runtime setup, Whisper model setup, CUDA setup, or update checks.
 - [ ] Confirm pyannote/PyTorch dependency downloads occur only when the user explicitly starts **Pyannote** speaker identification setup.
-- [ ] Confirm Speakrs model-pack / Windows ORT downloads occur only when the user explicitly starts **Speakrs** setup.
+- [ ] Confirm Speakrs pinned model-file downloads occur only when the user explicitly starts **Speakrs** setup.
 - [ ] Confirm Hugging Face token values never appear in logs, progress events, meeting metadata, transcripts, or summaries.
 - [ ] Confirm bearer tokens, legacy `Authorization: token ...`, `token=` / `access_token=` / `api_key=` values, `X-Api-Key`, and URL credentials are redacted from setup/runtime errors.
 
@@ -75,12 +75,12 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] New-user Home speaker prompt shows the same two cards and Set Up starts Speakrs (no token field).
 - [ ] Token fields and speaker-count stay **visually** hidden while Speakrs is selected (`.ai-addon-field[hidden]` must beat `display: flex`); they appear only for Pyannote. `needsAccount` still appears for Pyannote. Switching away from Pyannote clears typed tokens. Home and Settings never mix each other's token values.
 - [ ] When the other engine is installed, Settings/Home primary button reads **Switch model** (not Set Up). Selecting the other card leaves that button enabled. After setup reaches Ready, engine cards/radios must stay enabled (not stuck dimmed) so Speakrs→Pyannote is possible.
-- [ ] Switch Speakrs → Pyannote from a Ready Speakrs install: confirm copy appears, Speakrs pack/ORT is deleted, token field is shown (leave blank to reuse a saved token), shared CUDA pip (`nvidia-cublas`) remains.
+- [ ] Switch Speakrs → Pyannote from a Ready Speakrs install: confirm copy appears, Speakrs models (and any legacy private ORT tree) are deleted, token field is shown (leave blank to reuse a saved token), shared CUDA pip (`nvidia-cublas`) remains.
 - [ ] Switch Pyannote → Speakrs: confirm copy appears, pyannote deps/HF cache are deleted, **saved Hugging Face token is kept**, token UI hides, shared CUDA pip remains. Switching back to Pyannote with an empty token field reuses that saved token. Token-only Pyannote (saved token, no model tree) still requires this confirm and still enables Remove.
 - [ ] Remove deletes only the active engine (and any saved Hugging Face token) and leaves `engine` as the last choice so re-setup is one click.
 - [ ] Setup/Remove/Switch is rejected while setup is running or compute/preload/GPU-runtime work is pending. A job that starts after setup is queued must not begin exclusive deletion.
 - [ ] Packaged missing bundled `speakrs-cli`: Home and Settings show the incomplete-install / Reinstall AvaNevis copy. Set Up is disabled for Speakrs (it cannot restore the bundled binary). Do not tell the user to re-run speaker setup. No Python `FileNotFoundError` or traceback. Dev-mode missing CLI keeps the dev copy and does not show Reinstall AvaNevis.
-- [ ] Windows Speakrs setup: no token field; downloads the model pack and ORT; Ready; a new recording uses CUDA guided transcription and writes `*.speakers.json` without token values.
+- [ ] Windows Speakrs setup: no token field; downloads the pinned native Speakrs 0.7 model files; Ready; a new recording uses native CUDA guided transcription and writes `*.speakers.json` without token values.
 - [ ] macOS Speakrs setup: Apple Silicon CoreML-only (no CPU fallback); no token field; Ready; a new recording uses `coreml` guided transcription and writes `*.speakers.json`.
 - [ ] Settings > About credits Speakrs (Apache-2.0) and pyannote (CC BY 4.0). Open third-party notices includes the Speakrs pack table and bundled `speakrs-cli`.
 
@@ -148,3 +148,12 @@ ambient `LD_LIBRARY_PATH` behavior.
 - [ ] Untrusted summary/runtime download host keeps setup out of Ready.
 - [ ] Unsafe ZIP entries that escape the extraction directory are rejected before extraction.
 - [ ] Summary generation failure leaves transcript files unchanged.
+
+## v3.1 Summaries & Chat Model Library, Tags, Speaker Naming & Streaming Chat
+
+- [ ] **Model library (Settings → AI Add-ons → Summaries & Chat):** Download Qwen3.5 9B and a second model (e.g., Qwen3.5 4B or Gemma 4 E4B on Apple Silicon), confirm shared runtime reuse, switch **Default** with **Set as default**, and confirm **Inkling 2 Mini** stays gated (`Unavailable`).
+- [ ] **Memory fit & single-slot switching:** Verify memory fit guidance displays cleanly, switch models between Chat threads and **Prepare summary**, confirm the prior model process releases memory before the next loads, and confirm **Free memory** / Chat **Unload** release the resident server.
+- [ ] **Model removal:** Remove a non-default model and then the default model (choosing a replacement when 2+ remain); confirm saved summaries and Chat conversations remain readable and disk space is reclaimed.
+- [ ] **Recording tags & templates:** Assign tags from Record, Import, Activity, History, and Prepare summary; filter History and Chat by tag; generate a summary and verify the tag-specific sections and non-blocking tag-mismatch **Regenerate** banner after changing tags.
+- [ ] **Speaker naming:** Use **Name speakers** from Activity/toast or the History **Speakers** bar with timestamped voice previews; verify names propagate to History, FTS5 search, Chat citations, summaries, and `.md`/`.txt`/`.srt`/`.vtt` exports without modifying the raw `.md` transcript on disk.
+- [ ] **Streaming Chat & honest recovery:** Ask a question with live streaming (`Stop` cancels cleanly), verify clickable `[Title · MM:SS]` citations seek playback, and verify date-filter / `no_matching_excerpts` / `insufficient_evidence` notices offer actionable recovery buttons (**Search all recordings**, **Reset filters**, **Retry**).

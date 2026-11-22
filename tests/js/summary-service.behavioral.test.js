@@ -26,7 +26,12 @@ function createHarness({
   summaryExitCode = 0,
   metadataOutput = null,
   previousSummary = null,
+  meetingTag = null,
+  speakerNames = null,
   checkAiAddonSetupStatus,
+  getAiAddonRuntimeOptions = (options) => options,
+  resolveCudaStatusForTranscription,
+  getSummaryDeviceMemory,
   platform = 'win32',
   arch = platform === 'darwin' ? 'arm64' : 'x64',
   enqueueAiComputeAction = (action) => action(),
@@ -48,7 +53,9 @@ function createHarness({
     id: 'meeting_1',
     transcriptPath,
     transcriptionStatus: 'completed',
+    ...(meetingTag ? { tag: meetingTag } : {}),
     ai: {
+      ...(speakerNames ? { diarization: { speakerNames } } : {}),
       summary: previousSummary || {
         status: 'completed',
         jsonPath: previousOutputJson,
@@ -63,7 +70,7 @@ function createHarness({
       generatedAt: '2026-07-10T00:00:00.000Z',
       sourceTranscriptHash: confirmedHash,
       language: 'en', languageSource: 'userConfirmed',
-      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'qwen-language-v2',
+      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'summary-language-v3',
       ...summaryMetadata,
     },
     summary: { overview: 'new summary' },
@@ -115,7 +122,10 @@ function createHarness({
     getBackendModuleArgs: (moduleName, extraArgs = []) => ['-m', moduleName, ...extraArgs],
     enqueueAiComputeAction,
     createAiAddonCancelError: createAiAddonCancelErrorStandalone,
-    getAiAddonRuntimeOptions: () => ({}),
+    getAiAddonRuntimeOptions,
+    resolveCudaStatusForTranscription,
+    getSummaryDeviceMemory,
+    buildSummaryRuntimeEnv: () => ({ LD_LIBRARY_PATH: '/managed/cuda' }),
     buildSummaryArgs: (options) => [
       '-m', 'summaries.summary_runner',
       '--output-json', options.outputJson,
@@ -123,6 +133,8 @@ function createHarness({
       '--language', options.transcriptLanguage,
       '--source-transcript-hash', options.sourceTranscriptHash,
       '--model-id', options.modelId,
+      '--speaker-names-json', JSON.stringify(options.speakerNames),
+      ...(options.tag ? ['--tag', options.tag] : []),
     ],
     collectPythonProcessOutput(python) {
       let stdout = '';
@@ -197,6 +209,43 @@ test('Linux summary generation fails closed when the live CUDA resolver is unava
     harness.handlers['generate-summary']({ sender: {} }, confirmedOptions),
     /live CUDA runtime resolver/,
   );
+});
+
+test('Linux summary admission uses the live CUDA result when the cache is cold', async (t) => {
+  const readyCuda = {
+    statusCode: 'ready', installed: true, deviceAvailable: true, runtimeLoadable: true,
+    missingLibraries: [], matchedProfile: 'cuda12',
+  };
+  const deviceMemory = { totalBytes: 16 * 1024 ** 3 };
+  const checks = [];
+  const harness = createHarness({
+    platform: 'linux',
+    getAiAddonRuntimeOptions: (options) => ({ cudaStatus: null, ...options }),
+    resolveCudaStatusForTranscription: async () => {
+      checks.push('probe');
+      return readyCuda;
+    },
+    getSummaryDeviceMemory: async ({ live }) => {
+      assert.equal(live, true);
+      return deviceMemory;
+    },
+    checkAiAddonSetupStatus: async (options) => {
+      const ready = options.cudaStatus === readyCuda;
+      checks.push(ready ? 'ready' : 'cold');
+      if (ready) assert.equal(options.deviceMemory, deviceMemory);
+      return { features: { summary: {
+        status: ready ? 'ready' : 'unsupported', setupComplete: ready,
+        modelId: 'qwen3.5-9b-q4-k-m', cache: { valid: true }, runtimeCache: { valid: true },
+        fit: { blocked: !ready, reason: 'Runtime setup needed' },
+      } } };
+    },
+  });
+  const userData = path.dirname(harness.recordingsDir);
+  t.after(() => fs.rmSync(userData, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(userData, 'ai-addons', 'cuda', 'python'), { recursive: true });
+  await harness.handlers['generate-summary']({ sender: {} }, confirmedOptions);
+  assert.deepEqual(checks, ['cold', 'probe', 'ready']);
+  assert.ok(harness.getSpawnedArgs().some((args) => args.includes('summaries.summary_runner')));
 });
 
 test('failed summary regeneration preserves the previously committed sidecars', async () => {
@@ -344,7 +393,7 @@ for (const platform of ['win32', 'darwin']) {
     assert.equal(args[args.indexOf('--source-transcript-hash') + 1], confirmedHash);
     assert.equal(result.meeting.ai.summary.language, 'en');
     assert.equal(result.meeting.ai.summary.languageSource, 'userConfirmed');
-    assert.equal(result.meeting.ai.summary.languagePolicyVersion, 'qwen-language-v2');
+    assert.equal(result.meeting.ai.summary.languagePolicyVersion, 'summary-language-v3');
   });
 }
 
@@ -364,4 +413,141 @@ test('incorrect provenance or transcript change before finalization keeps prior 
     assert.equal(harness.getSpawnedArgs().some((args) => args.includes('update-ai')), false);
     assert.equal(fs.readdirSync(harness.recordingsDir).some((file) => file.endsWith('.tmp')), false);
   }
+});
+
+test('generate-summary forwards authoritative meeting.tag to Python and persists tag + templateVersion', async () => {
+  const harness = createHarness({
+    meetingTag: 'interview',
+    summaryMetadata: {
+      tag: 'interview',
+      template: 'interview',
+      templateVersion: 'tag-templates-v1',
+    },
+  });
+
+  const result = await harness.handlers['generate-summary']({}, confirmedOptions);
+  const runnerArgs = harness.getSpawnedArgs()[1];
+  const tagIdx = runnerArgs.indexOf('--tag');
+  assert.notEqual(tagIdx, -1);
+  assert.equal(runnerArgs[tagIdx + 1], 'interview');
+  assert.equal(result.meeting.ai.summary.tag, 'interview');
+  assert.equal(result.meeting.ai.summary.templateVersion, 'tag-templates-v1');
+});
+
+
+test('untagged regeneration clears a previous summary tag', async () => {
+  const harness = createHarness({ previousSummary: { status: 'completed', tag: 'interview' }, summaryMetadata: { tag: null } });
+  const result = await harness.handlers['generate-summary']({}, confirmedOptions);
+  assert.equal(result.meeting.ai.summary.tag, null);
+  const args = harness.getSpawnedArgs().find((entry) => entry.includes('update-ai'));
+  assert.equal(JSON.parse(args[args.indexOf('--summary-json') + 1]).tag, null);
+});
+
+
+test('generation captures speaker names and persists the runner snapshot hash', async () => {
+  const hash = `sha256:${'a'.repeat(64)}`;
+  const harness = createHarness({ speakerNames: { 'Speaker 1': 'Alice' }, summaryMetadata: { speakerNamesHash: hash } });
+  const result = await harness.handlers['generate-summary']({}, confirmedOptions);
+  const args = harness.getSpawnedArgs()[1];
+  assert.deepEqual(JSON.parse(args[args.indexOf('--speaker-names-json') + 1]), { 'Speaker 1': 'Alice' });
+  assert.equal(result.meeting.ai.summary.speakerNamesHash, hash);
+});
+
+test('summary service awaits ensureSummaryProcessExited and passes inferenceDescriptor to buildSummaryArgs', async () => {
+  let exitWaitCalls = 0;
+  let capturedBuildOptions = null;
+  const { createSummaryService } = require('../../src/main/summary-service');
+  const { createAiAddonCancelErrorStandalone } = require('../../src/main/ai-addon-ipc');
+  const { EventEmitter } = require('node:events');
+  const os = require('node:os');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'summary-exit-gate-'));
+  const transcriptPath = path.join(tmpDir, 'meeting.md');
+  fs.writeFileSync(transcriptPath, 'Hello team\n', 'utf8');
+  const sourceHash = `sha256:${require('node:crypto').createHash('sha256').update('Hello team\n', 'utf8').digest('hex')}`;
+  const handlers = {};
+  const service = createSummaryService({
+    app: { getPath: () => tmpDir },
+    path,
+    fs,
+    pythonConfig: { backendPath: tmpDir },
+    spawnTrackedPython: (args) => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => {};
+      process.nextTick(() => {
+        if (args.includes('get')) {
+          proc.stdout.emit('data', JSON.stringify({ id: 'm-1', transcriptPath, ai: {} }));
+        } else {
+          proc.stdout.emit('data', JSON.stringify({ id: 'm-1', ai: { summary: { status: 'completed' } } }));
+        }
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+    spawnSummaryPython: () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => {};
+      process.nextTick(() => {
+        fs.writeFileSync(`${transcriptPath.replace(/\.md$/, '')}.${Date.now()}-${process.pid}-1.summary.json.tmp`, '{}');
+        proc.emit('close', 1);
+      });
+      return proc;
+    },
+    ensureSummaryProcessExited: async () => {
+      exitWaitCalls += 1;
+    },
+    getBackendModuleArgs: (mod, args = []) => ['-m', mod, ...args],
+    enqueueAiComputeAction: (fn) => fn(),
+    createAiAddonCancelError: createAiAddonCancelErrorStandalone,
+    getAiAddonRuntimeOptions: () => ({}),
+    buildSummaryArgs: (opts) => {
+      capturedBuildOptions = opts;
+      return ['-m', 'summaries.summary_runner', '--output-json', opts.outputJson, '--output-markdown', opts.outputMarkdown];
+    },
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      let stderr = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      python.stderr.on('data', (data) => { stderr += data.toString(); });
+      return {
+        getStdout: () => stdout,
+        getStderr: () => stderr,
+        assertStdoutWithinLimit() {},
+      };
+    },
+    sendToRenderer: () => {},
+    appendSpawnLogBuffer: (acc, chunk) => acc + chunk.toString(),
+    appendSpawnJsonStdout: (acc, chunk) => acc + chunk.toString(),
+    assertTrustedRendererSender: () => {},
+    assertSafeExistingTranscriptPath: (p) => p,
+    assertSafeExistingSegmentsPath: (p) => p,
+    terminateProcessBestEffort: () => {},
+    summarizeSummaryValidationError: (msg) => msg || 'failed',
+    platform: 'darwin',
+    arch: 'arm64',
+    checkAiAddonSetupStatus: async () => ({
+      features: {
+        summary: {
+          status: 'ready',
+          setupComplete: true,
+          modelId: 'qwen3.5-9b-q4-k-m',
+          artifactId: 'art',
+          runtimeCache: { runtimeDir: path.join(tmpDir, 'runtime'), runtimeArtifact: { id: 'rt' } },
+        },
+      },
+    }),
+    getSummaryArtifactForPlatform: () => ({ modelId: 'qwen3.5-9b-q4-k-m', modelLabel: 'Qwen 9B', inference: { contextTokens: 32768, family: 'qwen' } }),
+    getSummaryArtifactPath: () => path.join(tmpDir, 'model.gguf'),
+    getSummaryRuntimeDir: () => path.join(tmpDir, 'runtime'),
+  });
+  service.registerIpc({ handle: (ch, fn) => { handlers[ch] = fn; } });
+  await assert.rejects(
+    () => handlers['generate-summary']({}, { meetingId: 'm-1', transcriptLanguage: 'en', sourceTranscriptHash: sourceHash }),
+  );
+  assert.equal(exitWaitCalls, 1);
+  assert.deepEqual(capturedBuildOptions.inferenceDescriptor, { contextTokens: 32768, family: 'qwen' });
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });

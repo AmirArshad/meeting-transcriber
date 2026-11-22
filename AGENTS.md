@@ -4,7 +4,7 @@ AvaNevis records mic/desktop audio, imports audio files, and transcribes locally
 
 ## Quick commands
 
-Run from the repository root unless a directory is specified. Use npm and the committed package-lock.json; use a repo-local Python 3.11 .venv.
+Run from repo root unless noted. Use npm with committed package-lock.json and repo-local Python 3.11 .venv.
 
 | Task | Command / expected signal |
 |---|---|
@@ -16,27 +16,28 @@ Run from the repository root unless a directory is specified. Use npm and the co
 | Windows / macOS / Linux installers | `npm run build` / `npm run build:mac` / `npm run build:linux` on the matching host — artifacts in dist/ |
 | Agent setup checks | `python3 scripts/agents/validate_setup.py` — exit 0 (Windows: `py -3.11`) |
 
-No lint/typecheck/E2E npm target. Setup and native checks: README.md and docs/development/TESTING.md. Install dependencies only when needed.
+No lint/typecheck/E2E npm target. Setup/native checks: README.md and docs/development/TESTING.md. Install deps only when needed.
 
 ## Repo map
 
-- `src/main.js`: lifecycle, tray, quit drain and wiring; keep it a composition root.
-- Follow `src/renderer/app.js` → `window.electronAPI` in `src/preload.js` → owning `src/main/` service → `src/main/python-runtime.js` → Python. Read both process sides for contract changes.
-- Start recorder work in `src/main/recorder-service.js` and `backend/audio/`; local audio import in `src/main/audio-import-service.js`; persistence in `backend/meeting_manager.py` and `backend/meetings/`.
-- Local AI: `src/main/transcription-service.js`, `backend/transcription/`, `src/ai-addon/`, `backend/diarization/`, `backend/summaries/`.
+- `src/main.js`: lifecycle, tray, quit drain, wiring; keep it a composition root.
+- Follow `src/renderer/app.js` → `window.electronAPI` in `src/preload.js` → `src/main/` service → `src/main/python-runtime.js` → Python. Read both sides for contract changes.
+- Capture, persist, search, updates (`src/main/`): `recorder-service.js` (`backend/audio/`), `audio-import-service.js`, `backend/meeting_manager.py` (`backend/meetings/`), `history-search-service.js` (`backend/search/`), `updater-service.js`.
+- Local AI (`src/main/` + `src/ai-addon/`): `transcription-service.js` (`backend/transcription/`), `backend/diarization/`, `summary-service.js` (`backend/summaries/`), `history-qa-service.js` (`backend/history_qa/`), `summary-process-slot.js`.
 - Packaging: `build/prepare-resources.js`, `build/download-manifest.js`, package.json, `.github/workflows/`. Native: `swift/AudioCaptureHelper/`, `native/speakrs-cli/`.
-- Pure renderer logic: `src/renderer/*-helpers.js`, matching `tests/js/*-helpers.test.js`. Keep plain JS and explicit platforms. Python is spawned per invocation.
+- Pure renderer logic: `src/renderer/*-helpers.js` with `tests/js/*-helpers.test.js`. Keep plain JS and explicit platforms. Python spawns per call.
 
 ## Invariants / do-not
 
 - Never add cloud processing, telemetry, background uploads, embedded/proxied secrets or hidden downloads. Model/add-on setup is explicit; summaries are user-triggered. Tokens stay in safeStorage and validated stdin boundaries.
-- Store recordings, metadata and AI sidecars in Electron userData, never the repo. Preserve locks, atomic writes, recovery, stop/discard distinctions and graceful degradation.
-- Preserve Windows 10/11 x64, macOS arm64 and Linux x86_64 targets (packaging owns macOS minimum). Preserve Windows faster-whisper, Apple Silicon MLX and Linux CPU transcription with optional managed CUDA 12.
-- Linux device IDs are opaque strings; never parseInt them. A managed CUDA tree makes transcription fail-closed; preserve Repair/Uninstall escape paths and component gates. Linux speaker identification is Speakrs-only, CUDA-only; summaries need their own CUDA gate. Never add CPU/cloud fallbacks for those add-ons.
-- Preserve supported Omarchy/CachyOS Hyprland/Wayland/PipeWire versus experimental distro/desktop tiers. Use compatibility evidence for acceptance claims; never infer hardware success from CI.
-- Change IPC owner, preload, every renderer caller and characterization tests together. Preserve facade export key sets and AI_ADDON_PROGRESS_CHANNEL / AI_ADDON_CANCEL_CODE values.
-- UI/docs use `recording`/`audio`/`Summaries & Chat` in plain operator copy; internal modules, IPC, DOM IDs and on-disk `meetings.json`/`meeting_*` names stay until a dedicated refactor.
-- Do not hand-edit generated build/resources, dist, native targets, Swift .build, caches or local data. Change manifests and regenerate deliberately; update lockfiles only for authorized dependency work. Never commit secrets or machine-local settings.
+- Store recordings, metadata, FTS5 search, Chat threads and AI sidecars in Electron userData, never the repo. Preserve locks, atomic writes, recovery, non-destructive speaker names/tags and stop/discard distinctions.
+- One model process runs at a time (`src/main/summary-process-slot.js`), releasing before switching, setup tests or removal. Keep citations verified against retrieved transcripts.
+- Preserve Windows 10/11 x64, macOS arm64 and Linux x86_64 targets (packaging owns macOS minimum), plus Windows faster-whisper, Apple Silicon MLX and Linux CPU transcription with optional managed CUDA 12.
+- Linux device IDs are opaque strings; never parseInt them. A managed CUDA tree makes transcription fail-closed; keep Repair/Uninstall and component gates. Linux speaker ID is Speakrs-only, CUDA-only; Summaries & Chat need their own CUDA gate. Never add CPU/cloud fallbacks for those add-ons.
+- Keep supported Omarchy/CachyOS Hyprland/Wayland/PipeWire distinct from experimental tiers. Use compatibility evidence for acceptance claims; never infer hardware success from CI.
+- Change IPC owner, preload, every renderer caller and characterization tests together. Keep facade export key sets and AI_ADDON_PROGRESS_CHANNEL / AI_ADDON_CANCEL_CODE values.
+- UI/docs use `recording`/`audio`/`Summaries & Chat` in plain copy; internal modules, IPC, DOM IDs and on-disk `meetings.json`/`meeting_*` names stay until a dedicated refactor.
+- Never hand-edit generated build/resources, dist, native targets, Swift .build, caches or local data. Update manifests/lockfiles deliberately; never commit secrets or machine-local settings.
 - Read the applicable canonical contract before editing:
 
 | Surface | Read first |
@@ -45,19 +46,19 @@ No lint/typecheck/E2E npm target. Setup and native checks: README.md and docs/de
 | AI add-ons, tokens, downloads, queues, quit, GPU/cache policy | `docs/development/contracts/local-ai.md` |
 | Prepared resources, installers, signing, tray | `docs/development/contracts/packaging.md` |
 | Swift helper or macOS desktop audio | `docs/development/contracts/macos-audio.md` |
-| Recording/meeting metadata, scan/import, rename | `docs/development/contracts/meeting-persistence.md` |
+| Recording/meeting metadata, tags, speakers, scan/import, search | `docs/development/contracts/meeting-persistence.md` |
 | Main/preload/renderer, exports, cross-cutting change checklists | `docs/development/contracts/ipc.md` |
 
 ## Working agreements
 
-- Work inline; delegate only when requested. Risk alone is not permission. Keep plans file-level; small fixes need only a short inline plan. No automatic planning/review/TDD/handoff chain.
+- Work inline; delegate only when requested. Risk alone is not permission. Keep plans file-level; small fixes need a short inline plan. No automatic planning/review/TDD/handoff chain.
 - Preserve behavior before simplifying; extract behind stable interfaces and explicit platforms.
-- Use focused tests while iterating. Run `npm run test:all` on final integrated inputs before any PR and for cross-cutting, recorder, persistence, packaging or security changes. Instruction/docs/setup edits use their relevant checks. Use real types/bytes where fakes hide behavior.
-- Reuse passing evidence while code, dependencies and environment are unchanged, including at commit/push time. Inspect the final diff; repeat checks/review only for changed inputs or unresolved concerns. One lead owns full-suite/installer gates in parallel work.
-- Search paths/symbols before large reads. Load applicable contracts once; read long plans by constraints, sequencing and current tasks. Parse lockfile keys instead of dumping files. Skip generated/ignored trees unless diagnosing them.
-- Capture verbose build/test output to ignored logs, preserve exit code, and read summaries/failure excerpts. Use completion notifications or blocking waits instead of short polls. Run one build per output tree; rebuild only for changed inputs or unresolved checks.
+- Iterate with focused tests; run `npm run test:all` before any PR and for cross-cutting, recorder, persistence, packaging or security changes. Instruction/docs/setup edits use their own checks. Use real types/bytes where fakes hide behavior.
+- Reuse passing evidence while code, deps and env are unchanged, including at commit/push. Inspect the final diff; repeat checks only for changed inputs or unresolved concerns. One lead owns full-suite/installer gates in parallel work.
+- Search paths/symbols before large reads; load contracts once. Read long plans by constraints, sequence and current tasks; query lockfile keys instead of dumping files. Skip generated/ignored trees unless diagnosing them.
+- Log verbose build/test output to ignored files, keep exit code, read summaries/failures. Wait for completion rather than short polls. Run one build per output tree unless inputs change.
 - Stage/commit/push/publish only with user authorization; editing permission is not enough.
-- Do not edit AGENTS.md, adapters or skill wiring during ordinary feature work; change them only for an explicitly requested instruction/setup task. Keep runtime facts in contracts and task status in todo.md.
+- Edit AGENTS.md, adapters or skill wiring only for explicit instruction/setup work. Keep runtime facts in contracts and status in todo.md.
 - Trust scripts/tests and compatibility evidence over stale prose; resolve conflicts at the canonical contract.
 
 ## Skills index

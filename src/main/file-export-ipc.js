@@ -12,6 +12,7 @@
 const crypto = require('crypto');
 const {
   VALID_EXPORT_FORMATS,
+  applySpeakerNamesToMarkdown,
   convertTranscriptMarkdownToPlainText,
   serializeCuesToSrt,
   serializeCuesToVtt,
@@ -196,9 +197,10 @@ function createFileExportIpc(deps) {
       };
     }
 
+    const speakerNames = meeting.ai?.diarization?.speakerNames || {};
     const content = format === 'srt'
-      ? serializeCuesToSrt(validation.cues, { includeSpeakers })
-      : serializeCuesToVtt(validation.cues, { includeSpeakers, useVoiceTags });
+      ? serializeCuesToSrt(validation.cues, { includeSpeakers, speakerNames })
+      : serializeCuesToVtt(validation.cues, { includeSpeakers, useVoiceTags, speakerNames });
 
     return {
       ok: true,
@@ -282,8 +284,16 @@ function createFileExportIpc(deps) {
       }
 
       let outputText = content;
+      if ((format === 'md' || format === 'txt') && opts.meetingId && typeof getMeeting === 'function') {
+        try {
+          const meeting = await getMeeting(opts.meetingId);
+          outputText = applySpeakerNamesToMarkdown(outputText, meeting?.ai?.diarization?.speakerNames);
+        } catch {
+          // Export the supplied transcript when metadata is unavailable.
+        }
+      }
       if (format === 'txt') {
-        outputText = opts.isPlainText === true ? content : convertTranscriptMarkdownToPlainText(content);
+        outputText = opts.isPlainText === true ? outputText : convertTranscriptMarkdownToPlainText(outputText);
       } else if (format === 'srt' || format === 'vtt') {
         const subtitleResult = await resolveValidatedSubtitleContent({
           meetingId: typeof opts.meetingId === 'string' ? opts.meetingId.trim() : '',

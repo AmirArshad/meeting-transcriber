@@ -39,6 +39,7 @@ const {
   getSummaryArtifactForPlatform: defaultGetSummaryArtifactForPlatform,
 } = require('../ai-addon-state');
 const { isLinuxCudaStatusReadyForAdmission } = require('../main-process/linux-cuda-runtime-helpers');
+const { normalizeTag } = require('../renderer/tag-helpers');
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -102,6 +103,9 @@ function createSummaryService(deps) {
     fs,
     pythonConfig,
     spawnTrackedPython,
+    spawnSummaryPython = spawnTrackedPython,
+    ensureSummaryProcessExited = async () => {},
+    getSummaryDeviceMemory = async () => null,
     getBackendModuleArgs,
     enqueueAiComputeAction,
     createAiAddonCancelError,
@@ -320,8 +324,10 @@ function createSummaryService(deps) {
         // Skip full GGUF re-hash on every generate; setup/validate already pin checksums.
         // Re-verify only when the artifact mtime/size changed since the last match.
         const statusOptions = getAiAddonRuntimeOptions({
+          verifySelectedSummaryOnly: true,
           verifyChecksums: true,
           verifyChecksumsIfChanged: true,
+          ...(modelId ? { summaryModelId: modelId } : {}),
         });
         aiStatus = await checkAiAddonSetupStatus(statusOptions);
       } catch (error) {
@@ -353,7 +359,7 @@ function createSummaryService(deps) {
       const selectedModelId = aiStatus.features.summary.modelId;
       if (modelId && modelId !== selectedModelId) {
         clearActiveSummaryGeneration();
-        throw new Error('Summary model selection is managed by local setup. Validate or reinstall the selected model in Settings.');
+        throw new Error('The selected summary model is unavailable. Choose another installed model.');
       }
       const languagePolicy = getSummaryLanguagePolicy(selectedModelId, platform, arch);
       if (!languagePolicy.languages.includes(transcriptLanguage)) {
@@ -375,7 +381,7 @@ function createSummaryService(deps) {
       let transcriptPath;
       try {
         modelPath = getSummaryArtifactPath(app.getPath('userData'), artifact);
-        runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
+        runtimeDir = aiStatus.features.summary.runtimeCache?.runtimeDir || getSummaryRuntimeDir(app.getPath('userData'), artifact);
         transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
         if (transcriptHash(await fs.promises.readFile(transcriptPath, 'utf8')) !== sourceTranscriptHash) {
           throw new Error('Transcript changed. Confirm the transcript language again.');
@@ -386,6 +392,7 @@ function createSummaryService(deps) {
       }
 
       const transcriptBase = transcriptPath.replace(/\.md$/i, '');
+      const meetingTag = normalizeTag(meeting.tag);
       const attemptId = `${Date.now()}-${process.pid}-${++summaryAttemptCounter}`;
       const outputJson = `${transcriptBase}.${attemptId}.summary.json`;
       const outputMarkdown = `${transcriptBase}.${attemptId}.summary.md`;
@@ -396,6 +403,7 @@ function createSummaryService(deps) {
         ? [previousSummaryMetadata.jsonPath, previousSummaryMetadata.markdownPath].filter(Boolean)
         : [];
       const diarizationMetadata = meeting.ai && meeting.ai.diarization;
+      const speakerNames = { ...(diarizationMetadata?.speakerNames || {}) };
       const speakerMetadataPath = diarizationMetadata
         && diarizationMetadata.status === 'completed'
         && diarizationMetadata.segmentsPath;
@@ -423,19 +431,7 @@ function createSummaryService(deps) {
         },
         action: async (registerProcess) => {
         if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
-        const admittedStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
-          verifyChecksums: true, verifyChecksumsIfChanged: true,
-        }));
-        if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
-        if (admittedStatus.features.summary.modelId !== selectedModelId
-          || admittedStatus.features.summary.artifactId !== aiStatus.features.summary.artifactId
-          || (platform !== 'linux' && (admittedStatus.features.summary.status !== 'ready'
-            || !admittedStatus.features.summary.setupComplete))
-          || (platform === 'linux' && (admittedStatus.features.summary.cache?.valid !== true
-            || admittedStatus.features.summary.runtimeCache?.valid !== true))) {
-          throw new Error('Summary installation changed while queued. Check Settings and retry.');
-        }
-        let summaryEnv = buildClearedHuggingFaceTokenEnv(buildHuggingFaceOfflineEnv());
+        let cudaStatus;
         if (platform === 'linux') {
           if (typeof resolveCudaStatusForTranscription !== 'function') {
             throw new Error('Linux local summaries require the live CUDA runtime resolver.');
@@ -461,7 +457,7 @@ function createSummaryService(deps) {
           if (controller.signal.aborted) {
             throw createAiAddonCancelError('Summary generation was canceled because the app is quitting.');
           }
-          const cudaStatus = await resolveCudaStatusForTranscription({
+          cudaStatus = await resolveCudaStatusForTranscription({
             registerProcess: registerSummaryProcess,
           });
           if (controller.signal.aborted) {
@@ -470,17 +466,48 @@ function createSummaryService(deps) {
           if (!isLinuxCudaStatusReadyForAdmission(cudaStatus)) {
             throw new Error('Linux local summaries require an admitted managed CUDA 12 runtime and NVIDIA GPU.');
           }
+        }
+        const deviceMemory = await getSummaryDeviceMemory({ live: true });
+        if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
+        const admittedStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+          verifySelectedSummaryOnly: true,
+          verifyChecksums: true, verifyChecksumsIfChanged: true, summaryModelId: selectedModelId, deviceMemory,
+          ...(cudaStatus !== undefined ? { cudaStatus } : {}),
+        }));
+        if (controller.signal.aborted) throw createAiAddonCancelError('Summary generation was canceled.');
+        const admittedFit = admittedStatus.features.summary.fit || admittedStatus.summaryLibrary?.models?.find((item) => item.modelId === selectedModelId)?.fit;
+        if (admittedFit?.blocked === true) {
+          throw new Error(admittedFit.reason || 'This model cannot run safely on this device.');
+        }
+        if (getSummaryLanguagePolicy(selectedModelId, platform, arch).version !== languagePolicy.version
+          || !getSummaryLanguagePolicy(selectedModelId, platform, arch).languages.includes(transcriptLanguage)
+          || JSON.stringify(admittedStatus.features.summary.runtimeCache?.runtimeArtifact) !== JSON.stringify(aiStatus.features.summary.runtimeCache?.runtimeArtifact)
+          || admittedStatus.features.summary.runtimeCache?.runtimeDir !== aiStatus.features.summary.runtimeCache?.runtimeDir
+          || admittedStatus.features.summary.modelId !== selectedModelId
+          || admittedStatus.features.summary.artifactId !== aiStatus.features.summary.artifactId
+          || (platform !== 'linux' && (admittedStatus.features.summary.status !== 'ready'
+            || !admittedStatus.features.summary.setupComplete))
+          || (platform === 'linux' && (admittedStatus.features.summary.cache?.valid !== true
+            || admittedStatus.features.summary.runtimeCache?.valid !== true))) {
+          throw new Error('Summary installation changed while queued. Check Settings and retry.');
+        }
+        let summaryEnv = buildClearedHuggingFaceTokenEnv(buildHuggingFaceOfflineEnv());
+        if (platform === 'linux') {
           summaryEnv = {
             ...summaryEnv,
             ...buildSummaryRuntimeEnv({
               userDataDir: app.getPath('userData'),
               artifact,
+              runtimeDir,
+              runtimeArtifact: admittedStatus.features.summary.runtimeCache?.runtimeArtifact,
               platform,
               arch,
             }),
           };
         }
-        return new Promise((resolve, reject) => {
+        let spawnedSummary = false;
+        try {
+        return await new Promise((resolve, reject) => {
         if (!activeSummaryGeneration || activeSummaryGeneration.controller !== controller || controller.signal.aborted) {
           clearActiveSummaryGeneration();
           reject(createAiAddonCancelError('Summary generation was canceled.'));
@@ -492,7 +519,7 @@ function createSummaryService(deps) {
         // While assigning the actual subprocess, cancellation relies on the shared
         // AbortController. terminateProcessBestEffort is best-effort for null.
         activeSummaryGeneration.process = null;
-        const python = spawnTrackedPython(buildSummaryArgs({
+        const summaryArgs = buildSummaryArgs({
           meetingId: normalizedMeetingId,
           transcriptPath,
           runtimeDir,
@@ -500,12 +527,17 @@ function createSummaryService(deps) {
           outputJson: outputJsonTemp,
           outputMarkdown: outputMarkdownTemp,
           speakersJsonPath,
+          speakerNames,
           profile: profile || 'balanced',
           modelLabel: artifact.modelLabel || artifact.modelId,
           modelId: selectedModelId,
           transcriptLanguage,
           sourceTranscriptHash,
-        }), { cwd: pythonConfig.backendPath, env: summaryEnv });
+          inferenceDescriptor: artifact.inference || { contextTokens: 32768, family: 'qwen', promptFormat: 'chatml', disableThinking: true },
+          ...(meetingTag ? { tag: meetingTag } : {}),
+        });
+        const python = spawnSummaryPython(summaryArgs, { cwd: pythonConfig.backendPath, env: summaryEnv });
+        spawnedSummary = true;
         activeSummaryGeneration.process = python;
         registerProcess(python);
 
@@ -623,6 +655,10 @@ function createSummaryService(deps) {
               return;
             }
 
+            const committedTag = normalizeTag(result.metadata.tag) || meetingTag || null;
+            const templateVersion = typeof result.metadata.templateVersion === 'string' && result.metadata.templateVersion.trim()
+              ? result.metadata.templateVersion.trim()
+              : null;
             const summaryMetadata = {
               status: 'completed',
               language: transcriptLanguage,
@@ -631,8 +667,11 @@ function createSummaryService(deps) {
               modelId: selectedModelId,
               modelProfile: result.metadata.profile,
               model: result.metadata.model,
+              tag: committedTag,
+              ...(templateVersion ? { templateVersion } : {}),
               generatedAt: result.metadata.generatedAt,
               sourceTranscriptHash: result.metadata.sourceTranscriptHash,
+              speakerNamesHash: result.metadata.speakerNamesHash || '',
               jsonPath: outputJson,
               markdownPath: outputMarkdown,
               error: null,
@@ -760,6 +799,11 @@ function createSummaryService(deps) {
           finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error);
         });
         });
+        } finally {
+          if (spawnedSummary) {
+            await ensureSummaryProcessExited().catch(() => {});
+          }
+        }
         },
         });
       }).catch((error) => {

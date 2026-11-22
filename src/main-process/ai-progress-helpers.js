@@ -80,6 +80,9 @@ function parseAiBackendProgressLine(line, expectedFeature = null) {
   if (typeof parsed.status === 'string' && parsed.status.trim()) {
     event.status = parsed.status.trim().slice(0, 80);
   }
+  if (feature === 'history-qa' && typeof parsed.draftMarkdown === 'string' && parsed.draftMarkdown) {
+    event.draftMarkdown = redactSensitiveText(parsed.draftMarkdown).slice(0, 16000);
+  }
 
   for (const key of Object.keys(parsed)) {
     if (SENSITIVE_PROGRESS_KEY_SET.has(key)) {

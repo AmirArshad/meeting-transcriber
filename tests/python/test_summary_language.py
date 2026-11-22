@@ -263,3 +263,41 @@ def test_localized_markdown_preserves_schema_keys_and_legacy_output():
             assert '**Profile:**' not in markdown
             assert '(owner:' not in markdown
     assert '# Summary' in render_summary_markdown({'summary': 'Legacy overview'})
+
+
+def test_summary_prose_extracts_content_and_excludes_metadata_across_all_tags():
+    from backend.meetings.normalization import VALID_RECORDING_TAGS
+    from backend.summaries.templates import get_template
+
+    for tag in VALID_RECORDING_TAGS:
+        tmpl = get_template(tag)
+        payload = {'summary': f'Overview prose for {tag}.'}
+        expected_prose = [f'Overview prose for {tag}.']
+        for idx, field in enumerate(tmpl['array_fields']):
+            spec = tmpl['field_schemas'][field]
+            item = {}
+            for pkey in spec['prose_keys']:
+                token = f'prose-{tag}-{field}-{pkey}-{idx}'
+                item[pkey] = token
+                expected_prose.append(token)
+            for mkey in spec['metadata_keys']:
+                item[mkey] = ['00:42'] if mkey == 'timestamps' else 'METADATA_SENTINEL_XYZ'
+            payload[field] = [item]
+
+        extracted = summary_prose(payload, tag=tag)
+        for token in expected_prose:
+            assert token in extracted
+        assert 'METADATA_SENTINEL_XYZ' not in extracted
+        assert '00:42' not in extracted
+
+
+def test_model_language_policy_keeps_unqualified_models_disabled():
+    from backend.summaries.summary_language import is_model_language_supported
+    assert is_model_language_supported('qwen3.5-9b-q4-k-m', 'en')
+    for model in ('qwen3.5-4b-q4-k-m', 'gemma-4-e4b', 'gemma-4-12b'):
+        assert not is_model_language_supported(model, 'en')
+    assert not is_model_language_supported('qwen3.5-9b-q4-k-m', 'fa')
+    for model in ('gemma-4-e4b', 'gemma-4-12b'):
+        assert is_model_language_supported(model, 'en', 'darwin', 'arm64')
+        assert not is_model_language_supported(model, 'es', 'darwin', 'arm64')
+        assert not is_model_language_supported(model, 'en', 'linux', 'x64')

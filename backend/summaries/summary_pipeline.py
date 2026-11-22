@@ -10,18 +10,25 @@ from __future__ import annotations
 import json
 import re
 
-from .summary_language import language_instruction
-from .language_labels import LANGUAGE_LABELS, PROFILE_LABELS
+from .summary_language import language_instruction, summary_prose
+from .language_labels import LANGUAGE_LABELS, PROFILE_LABELS, get_localized_labels
 from .summary_grounding import LOCALIZED_DENIAL_RES
+from .templates import (
+    SCHEMA_PLACEHOLDER_SUMMARY,
+    SUMMARY_TEMPLATES,
+    get_template,
+    render_schema_instruction,
+)
+from meetings.normalization import normalize_recording_tag
 from typing import Any, Dict, Iterable, List, Optional
 
 
-SUMMARY_ARRAY_FIELDS = ("topics", "decisions", "action_items", "risks", "open_questions")
-SCHEMA_PLACEHOLDER_SUMMARY = "short grounded overview"
+SUMMARY_ARRAY_FIELDS = SUMMARY_TEMPLATES["meeting"]["array_fields"]
 TRANSCRIPT_TIMESTAMP_RE = re.compile(
     r"^(?:\*\*)?\[(?P<start>\d{1,2}:\d{2}(?::\d{2})?)\s+-\s+(?P<end>\d{1,2}:\d{2}(?::\d{2})?)\](?:\*\*)?\s*(?P<tail>.*)$"
 )
-SPEAKER_PREFIX_RE = re.compile(r"^(?:\*\*)?(?P<speaker>Speaker\s+\d+|Unknown):(?:\*\*)?\s*(?P<text>.*)$", re.IGNORECASE)
+SPEAKER_PREFIX_RE = re.compile(r"^(?:\*\*(?P<speaker>[^*\n:]{1,64}):\*\*|(?P<plain_speaker>Speaker\s+\d+|Unknown):)\s*(?P<text>.*)$", re.IGNORECASE)
+UNTIMED_SPEAKER_RE = re.compile(r"^\*\*(?P<speaker>[^*\n:]{1,64}):\*\*\s*(?P<text>.*)$")
 TOPIC_BOUNDARY_RE = re.compile(
     r"\b(next|new|another)\s+(topic|item|section)\b|"
     r"\b(moving|move)\s+on\b|"
@@ -30,31 +37,39 @@ TOPIC_BOUNDARY_RE = re.compile(
     r"\bagenda\s+item\b",
     re.IGNORECASE,
 )
+_THINK_BLOCK_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
+_UNCLOSED_THINK_RE = re.compile(r"<think>[\s\S]*$", re.IGNORECASE)
+_GEMMA_THOUGHT_BLOCK_RE = re.compile(r"<\|channel>thought[\s\S]*?<channel\|>", re.IGNORECASE)
+_UNCLOSED_GEMMA_THOUGHT_RE = re.compile(r"<\|channel>thought[\s\S]*$", re.IGNORECASE)
+_CHAT_CONTROL_TOKEN_RE = re.compile(
+    r"<start_of_turn>|<end_of_turn>|<\|im_start\|>|<\|im_end\|>|<\|channel>|<channel\|>",
+    re.IGNORECASE,
+)
 
 SUMMARY_PROFILE_CONFIGS: Dict[str, Dict[str, Any]] = {
     "concise": {
         "label": "Concise",
         "max_output_tokens": 900,
         "chunk_tokens": 12000,
-        "instructions": "Be brief. Capture only the most important outcome, decisions, and next steps.",
+        "instructions": "Be brief. Capture only the most important overview, takeaways, and next steps.",
     },
     "balanced": {
         "label": "Balanced",
         "max_output_tokens": 1600,
         "chunk_tokens": 16000,
-        "instructions": "Create balanced meeting notes with topics, decisions, action items, risks, and open questions.",
+        "instructions": "Create balanced, well-structured notes covering the active template sections.",
     },
     "detailed": {
         "label": "Detailed",
         "max_output_tokens": 2600,
         "chunk_tokens": 20000,
-        "instructions": "Include broader topic coverage, important supporting timestamps, and nuanced risks or open questions.",
+        "instructions": "Include broader coverage, supporting details, important timestamps, and nuanced context.",
     },
     "action-items": {
         "label": "Action items",
         "max_output_tokens": 1400,
         "chunk_tokens": 14000,
-        "instructions": "Prioritize tasks, owners, due dates, blockers, decisions, and follow-up questions.",
+        "instructions": "Prioritize concrete follow-ups, next steps, owners, deadlines, and open items.",
     },
 }
 
@@ -78,6 +93,20 @@ def _to_float(value: Any, default: float = 0.0) -> float:
 
 def _clean_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def sanitize_prompt_control_tokens(value: Any) -> str:
+    """Strip chat-template control tokens from untrusted text before prompting."""
+    return _CHAT_CONTROL_TOKEN_RE.sub(" ", str(value or ""))
+
+
+def _strip_model_reasoning(raw_output: str) -> str:
+    cleaned = str(raw_output or "").strip()
+    cleaned = _THINK_BLOCK_RE.sub("", cleaned)
+    cleaned = _UNCLOSED_THINK_RE.sub("", cleaned)
+    cleaned = _GEMMA_THOUGHT_BLOCK_RE.sub("", cleaned)
+    cleaned = _UNCLOSED_GEMMA_THOUGHT_RE.sub("", cleaned)
+    return cleaned.strip()
 
 
 def format_timestamp(seconds: Any) -> str:
@@ -109,7 +138,7 @@ def _split_speaker_prefix(text: str) -> Dict[str, str]:
         return {"speaker": "Unknown", "text": cleaned}
 
     return {
-        "speaker": _clean_text(match.group("speaker")) or "Unknown",
+        "speaker": _clean_text(match.group("speaker") or match.group("plain_speaker")) or "Unknown",
         "text": _clean_text(match.group("text")),
     }
 
@@ -129,13 +158,19 @@ def _pull_following_body_line(lines: List[str], index: int) -> tuple[int, str]:
     next_index, next_text = _next_nonempty_line(lines, index + 1)
     if next_index < 0:
         return index, ""
-    if TRANSCRIPT_TIMESTAMP_RE.match(lines[next_index].strip()):
+    if (TRANSCRIPT_TIMESTAMP_RE.match(lines[next_index].strip())
+            or UNTIMED_SPEAKER_RE.match(lines[next_index].strip())
+            or _is_transcript_structure(lines[next_index].strip())):
         return index, ""
     return next_index, next_text
 
 
+def _is_transcript_structure(line: str) -> bool:
+    return bool(re.match(r"^#{1,6}(?:\s|$)", line)) or line in ("---", "***", "___")
+
+
 def parse_markdown_transcript(markdown_text: str) -> List[Dict[str, Any]]:
-    """Parse AvaNevis Markdown transcripts back into timestamped segments.
+    """Parse AvaNevis Markdown transcripts into timed and untimed segments.
 
     Supports both common shapes produced by the app:
 
@@ -152,7 +187,24 @@ def parse_markdown_transcript(markdown_text: str) -> List[Dict[str, Any]]:
         line = lines[index].strip()
         match = TRANSCRIPT_TIMESTAMP_RE.match(line)
         if not match:
-            index += 1
+            untimed = UNTIMED_SPEAKER_RE.match(line)
+            if not line or _is_transcript_structure(line):
+                index += 1
+                continue
+            speaker = _clean_text(untimed.group("speaker")) if untimed else "Unknown"
+            text_parts = [untimed.group("text") if untimed else line]
+            cursor = index + 1
+            while cursor < len(lines):
+                body = lines[cursor].strip()
+                if (not body or _is_transcript_structure(body) or TRANSCRIPT_TIMESTAMP_RE.match(body)
+                        or UNTIMED_SPEAKER_RE.match(body)):
+                    break
+                text_parts.append(_clean_text(body))
+                cursor += 1
+            text = _clean_text(" ".join(text_parts))
+            if text:
+                segments.append({"start": None, "end": None, "speaker": speaker, "text": text})
+            index = cursor
             continue
 
         tail = _clean_text(match.group("tail"))
@@ -191,14 +243,19 @@ def normalize_transcript_segments(segments: Iterable[Dict[str, Any]]) -> List[Di
     normalized: List[Dict[str, Any]] = []
 
     for segment in segments:
-        text = _clean_text(segment.get("text"))
+        text = _clean_text(sanitize_prompt_control_tokens(segment.get("text")))
         if not text:
             continue
 
         start = _to_float(segment.get("start"))
         end = _to_float(segment.get("end"), start)
-        speaker = _clean_text(segment.get("speaker")) or "Unknown"
-        line = f"[{format_timestamp(start)} - {format_timestamp(end)}] {speaker}: {text}"
+        speaker_value = segment.get("speaker")
+        speaker = _clean_text(sanitize_prompt_control_tokens(speaker_value)) if isinstance(speaker_value, str) else ""
+        speaker = speaker or "Unknown"
+        if segment.get("start") is None or segment.get("end") is None:
+            line = f"{speaker}: {text}"
+        else:
+            line = f"[{format_timestamp(start)} - {format_timestamp(end)}] {speaker}: {text}"
 
         normalized.append({
             "start": start,
@@ -231,6 +288,33 @@ def is_topic_boundary_segment(segment: Dict[str, Any]) -> bool:
     return bool(TOPIC_BOUNDARY_RE.search(text))
 
 
+def _split_oversized_segment(segment: Dict[str, Any], max_bytes: int) -> Iterable[Dict[str, Any]]:
+    if len(segment["line"].encode("utf-8")) <= max_bytes:
+        yield segment
+        return
+
+    text = segment["text"].encode("utf-8")
+    prefix = segment["line"][:-len(segment["text"])]
+    # Keep attribution on every piece when it fits beside a Unicode character.
+    if max_bytes - len(prefix.encode("utf-8")) < 4:
+        prefix = ""
+    body_budget = max_bytes - len(prefix.encode("utf-8"))
+    offset = 0
+    while offset < len(text):
+        body = text[offset : offset + body_budget].decode("utf-8", errors="ignore")
+        if offset + body_budget < len(text):
+            sentence_ends = list(re.finditer(r"(?:[.!?؟](?=\s)|[。！？])", body))
+            if sentence_ends:
+                body = body[:sentence_ends[-1].end()]
+            elif " " in body:
+                body = body.rsplit(" ", 1)[0] or body
+        offset += len(body.encode("utf-8"))
+        if offset < len(text) and text[offset] == ord(" "):
+            offset += 1
+        if body.strip():
+            yield {**segment, "text": body.strip(), "line": prefix + body.strip()}
+
+
 def chunk_transcript(
     segments: Iterable[Dict[str, Any]],
     *,
@@ -252,109 +336,126 @@ def chunk_transcript(
     if min_topic_chunk_tokens is not None and min_topic_chunk_tokens < 0:
         raise ValueError("min_topic_chunk_tokens must not be negative")
 
-    normalized = normalize_transcript_segments(segments)
+    max_bytes = max_tokens * 4
+    normalized = (
+        piece
+        for segment in normalize_transcript_segments(segments)
+        for piece in _split_oversized_segment(segment, max_bytes)
+    )
     chunks: List[Dict[str, Any]] = []
     current_segments: List[Dict[str, Any]] = []
-    current_tokens = 0
+    current_bytes = 0
     topic_threshold = min_topic_chunk_tokens if min_topic_chunk_tokens is not None else max(1, int(max_tokens * 0.5))
 
     def flush_current() -> None:
-        nonlocal current_segments, current_tokens
+        nonlocal current_segments, current_bytes
         if not current_segments:
             return
 
-        chunk_index = len(chunks) + 1
+        text = "\n".join(item["line"] for item in current_segments)
         chunks.append({
-            "index": chunk_index,
+            "index": len(chunks) + 1,
             "start": current_segments[0]["start"],
             "end": current_segments[-1]["end"],
-            "text": "\n".join(item["line"] for item in current_segments),
+            "text": text,
             "segments": [dict(item) for item in current_segments],
-            "estimatedTokens": current_tokens,
+            "estimatedTokens": estimate_token_count(text),
         })
 
-        if overlap_segments:
-            current_segments = current_segments[-overlap_segments:]
-            current_tokens = sum(estimate_token_count(item["line"]) for item in current_segments)
-        else:
-            current_segments = []
-            current_tokens = 0
+        current_segments = current_segments[-overlap_segments:] if overlap_segments else []
+        current_bytes = len("\n".join(item["line"] for item in current_segments).encode("utf-8"))
 
     for segment in normalized:
-        segment_tokens = estimate_token_count(segment["line"])
-        if (
-            prefer_topic_boundaries
-            and current_segments
-            and current_tokens >= topic_threshold
-            and is_topic_boundary_segment(segment)
+        segment_bytes = len(segment["line"].encode("utf-8"))
+        if current_segments and (
+            current_bytes + 1 + segment_bytes > max_bytes
+            or (prefer_topic_boundaries
+                and (current_bytes + 3) // 4 >= topic_threshold
+                and is_topic_boundary_segment(segment))
         ):
             flush_current()
+            while current_segments and current_bytes + 1 + segment_bytes > max_bytes:
+                current_bytes -= len(current_segments.pop(0)["line"].encode("utf-8")) + 1
 
-        if current_segments and current_tokens + segment_tokens > max_tokens:
-            flush_current()
-            if current_segments and current_tokens + segment_tokens > max_tokens:
-                current_segments = []
-                current_tokens = 0
-
+        current_bytes += segment_bytes + bool(current_segments)
         current_segments.append(segment)
-        current_tokens += segment_tokens
 
     flush_current()
 
     return chunks
 
 
-def summary_json_schema_instruction() -> str:
-    return f"""Return only valid JSON with this exact shape:
-{{
-  "summary": "{SCHEMA_PLACEHOLDER_SUMMARY}",
-  "topics": [{{"title": "topic", "summary": "what was discussed", "timestamps": ["MM:SS"]}}],
-  "decisions": [{{"decision": "decision made", "owner": "Speaker or Unknown", "timestamp": "MM:SS"}}],
-  "action_items": [{{"task": "task", "owner": "Speaker or Unknown", "due": "date or null", "timestamp": "MM:SS"}}],
-  "risks": [{{"risk": "risk or blocker", "timestamp": "MM:SS"}}],
-  "open_questions": [{{"question": "question", "timestamp": "MM:SS"}}]
-}}
-Use only evidence from the transcript. If an owner is not explicit, use "Unknown". Do not include markdown."""
+def build_profile_instruction(profile: str = "balanced", tag: Optional[str] = None) -> str:
+    """Combine profile verbosity instructions with template-aware action hints."""
+    normalized_profile = str(profile or "").strip() or "balanced"
+    profile_config = get_summary_profile(normalized_profile)
+    base = str(profile_config["instructions"])
+    if normalized_profile == "action-items" and tag:
+        template = get_template(tag, fallback="meeting")
+        hint = str(template.get("action_style_hint") or "").strip()
+        if hint:
+            return f"{base} {hint}"
+    return base
+
+
+def summary_json_schema_instruction(tag: Optional[str] = None) -> str:
+    return render_schema_instruction(tag, fallback="meeting")
 
 
 def no_thinking_instruction() -> str:
     return "Do not use a thinking or reasoning section. Do not output <think> tags. Return the JSON object directly."
 
 
-def build_chunk_summary_prompt(chunk: Dict[str, Any], *, profile: str = "balanced", language: Optional[str] = None) -> str:
+def build_chunk_summary_prompt(
+    chunk: Dict[str, Any],
+    *,
+    profile: str = "balanced",
+    language: Optional[str] = None,
+    tag: Optional[str] = None,
+) -> str:
     """Build the local LLM prompt for one transcript chunk."""
-    profile_config = get_summary_profile(profile)
+    template = get_template(tag, fallback="meeting")
     return "\n\n".join([
-        "You are AvaNevis, a local-only meeting summarizer. The transcript never leaves this device.",
+        template["persona"],
         no_thinking_instruction(),
         language_instruction(language) if language else "Write summary prose in the transcript language.",
-        profile_config["instructions"],
-        summary_json_schema_instruction(),
-        "The transcript chunk below is the only meeting content. Summarize that speech.",
+        build_profile_instruction(profile, template["template_id"]),
+        summary_json_schema_instruction(template["template_id"]),
+        template["chunk_instructions"],
         "Do not claim the transcript is missing, empty, or only system/CLI status.",
         f"Chunk {chunk.get('index', 1)} transcript:",
-        str(chunk.get("text", "")),
+        sanitize_prompt_control_tokens(chunk.get("text", "")),
     ])
 
 
-def build_final_merge_prompt(chunk_summaries: Iterable[Dict[str, Any]], *, profile: str = "balanced", language: Optional[str] = None) -> str:
+def build_final_merge_prompt(
+    chunk_summaries: Iterable[Dict[str, Any]],
+    *,
+    profile: str = "balanced",
+    language: Optional[str] = None,
+    tag: Optional[str] = None,
+) -> str:
     """Build the local LLM prompt that merges validated chunk summaries."""
-    profile_config = get_summary_profile(profile)
-    normalized_summaries = [validate_summary_json(summary) for summary in chunk_summaries]
+    template = get_template(tag, fallback="meeting")
+    normalized_summaries = [
+        validate_summary_json(summary, tag=template["template_id"])
+        for summary in chunk_summaries
+    ]
     return "\n\n".join([
-        "You are AvaNevis, a local-only meeting summarizer. Merge these chunk summaries into one final meeting summary.",
+        template["merge_persona"],
         no_thinking_instruction(),
         language_instruction(language) if language else "Write summary prose in the transcript language.",
-        profile_config["instructions"],
-        summary_json_schema_instruction(),
+        build_profile_instruction(profile, template["template_id"]),
+        template["merge_instructions"],
+        summary_json_schema_instruction(template["template_id"]),
         "Validated chunk summaries JSON:",
-        json.dumps(normalized_summaries, ensure_ascii=False, indent=2),
+        sanitize_prompt_control_tokens(json.dumps(normalized_summaries, ensure_ascii=False, indent=2)),
     ])
 
 
 def extract_json_object(raw_output: str) -> Dict[str, Any]:
     """Extract one JSON object from model output, tolerating fenced text."""
-    output = str(raw_output or "").strip()
+    output = _strip_model_reasoning(raw_output)
     if output.startswith("```"):
         output = re.sub(r"^```(?:json)?\s*", "", output, flags=re.IGNORECASE)
         output = re.sub(r"\s*```$", "", output).strip()
@@ -378,9 +479,9 @@ def extract_json_object(raw_output: str) -> Dict[str, Any]:
     return parsed
 
 
-def repair_summary_json(raw_output: str) -> Dict[str, Any]:
+def repair_summary_json(raw_output: str, *, tag: Optional[str] = None) -> Dict[str, Any]:
     """Best-effort local repair for common wrapper text around JSON output."""
-    return validate_summary_json(extract_json_object(raw_output))
+    return validate_summary_json(extract_json_object(raw_output), tag=tag)
 
 
 def _require_list(summary: Dict[str, Any], field: str) -> List[Dict[str, Any]]:
@@ -398,7 +499,7 @@ def _require_list(summary: Dict[str, Any], field: str) -> List[Dict[str, Any]]:
     return normalized
 
 
-def validate_summary_json(summary: Any) -> Dict[str, Any]:
+def validate_summary_json(summary: Any, *, tag: Optional[str] = None) -> Dict[str, Any]:
     """Validate and normalize generated summary JSON before persistence."""
     if not isinstance(summary, dict):
         raise SummaryValidationError("summary must be a JSON object")
@@ -407,8 +508,12 @@ def validate_summary_json(summary: Any) -> Dict[str, Any]:
     if not overview:
         raise SummaryValidationError("summary.summary must be a non-empty string")
 
+    explicit_template = tag or summary.get("template")
+    template = get_template(explicit_template, fallback="meeting")
     normalized: Dict[str, Any] = {"summary": overview}
-    for field in SUMMARY_ARRAY_FIELDS:
+    if explicit_template is not None:
+        normalized["template"] = template["template_id"]
+    for field in template["array_fields"]:
         normalized[field] = _require_list(summary, field)
 
     return normalized
@@ -418,8 +523,7 @@ def validate_summary_json(summary: Any) -> Dict[str, Any]:
 # affirmative phrases like "the transcript provided by the vendor".
 UNGROUNDED_SUMMARY_RE = re.compile(
     r"(?i)\b(?:"
-    r"no meeting content|"
-    r"no (?:meeting )?transcript(?:\s+was)?(?:\s+provided)?|"
+    r"no (?:meeting|recording|audio|appointment|call|interview|lecture|podcast|video|voice[- ]note|brainstorm|music|session)?\s*(?:content|transcript)|"
     r"(?:transcript|content)\s+(?:was\s+|were\s+)?not\s+(?:provided|found|available)|"
     r"(?:transcript|content)\s+(?:is|was|were)\s+(?:missing|empty)|"
     r"only\s+.{0,80}?(?:system\s+status|exit\s+commands?)"
@@ -435,11 +539,11 @@ def transcript_chunk_has_speech(chunk_text: str) -> bool:
     # Require at least one alphabetic token beyond timestamps/speaker labels.
     # Use Unicode letters so non-Latin transcripts still enable grounding checks.
     without_labels = re.sub(
-        r"\[\d{1,2}:\d{2}(?::\d{2})?\s+-\s+\d{1,2}:\d{2}(?::\d{2})?\]|"
-        r"\bSpeaker\s+\d+\b|\bUnknown\b",
-        " ",
-        cleaned,
-        flags=re.IGNORECASE,
+        r"^[ \t]*(?:\[\d{1,2}:\d{2}(?::\d{2})?(?:\s+-\s+\d{1,2}:\d{2}(?::\d{2})?)?\][ \t]*)?"
+        r"[^:\n]{1,64}:[ \t]*",
+        "",
+        str(chunk_text or ""),
+        flags=re.MULTILINE,
     )
     # Combining vowel signs can separate alphabetic characters in Hindi/Panjabi
     # words. Count letters within a whitespace-delimited word, not consecutive
@@ -447,9 +551,15 @@ def transcript_chunk_has_speech(chunk_text: str) -> bool:
     return any(sum(character.isalpha() for character in word) >= 3 for word in without_labels.split())
 
 
-def assert_summary_grounded_in_transcript(summary: Dict[str, Any], chunk_text: str, *, language: Optional[str] = None) -> Dict[str, Any]:
+def assert_summary_grounded_in_transcript(
+    summary: Dict[str, Any],
+    chunk_text: str,
+    *,
+    language: Optional[str] = None,
+    tag: Optional[str] = None,
+) -> Dict[str, Any]:
     """Reject summaries that deny transcript content when speech was provided."""
-    normalized = validate_summary_json(summary)
+    normalized = validate_summary_json(summary, tag=tag)
     if not transcript_chunk_has_speech(chunk_text):
         return normalized
     localized_denial = LOCALIZED_DENIAL_RES.get(language)
@@ -462,63 +572,100 @@ def assert_summary_grounded_in_transcript(summary: Dict[str, Any], chunk_text: s
     return normalized
 
 
-def _item_text(item: Dict[str, Any], keys: Iterable[str], untitled="Untitled") -> str:
+def _format_scalar_or_list(value: Any) -> str:
+    if isinstance(value, list):
+        parts = [_clean_text(v) for v in value]
+        return ", ".join(p for p in parts if p)
+    return _clean_text(value)
+
+
+def _item_text(item: Dict[str, Any], keys: Iterable[str], untitled="Untitled", *, detail_key: Optional[str] = None) -> str:
+    primary = ""
     for key in keys:
         value = _clean_text(item.get(key))
         if value:
-            return value
-    return untitled
+            primary = value
+            break
+    detail = _clean_text(item.get(detail_key)) if detail_key else ""
+    if not primary:
+        return detail or untitled
+    if detail_key:
+        if detail and detail != primary:
+            return f"{primary}: {detail}"
+    return primary
 
 
 def _item_metadata(item: Dict[str, Any], keys: Iterable[str], labels=None) -> str:
     parts = []
     for key in keys:
-        value = _clean_text(item.get(key))
+        value = _format_scalar_or_list(item.get(key))
         if value:
             parts.append(f"{(labels or {}).get(key, key)}: {value}")
     return f" ({'; '.join(parts)})" if parts else ""
 
 
-def _render_items(title: str, items: List[Dict[str, Any]], text_keys: Iterable[str], metadata_keys: Iterable[str], labels=None) -> List[str]:
+def _render_items(
+    title: str,
+    items: List[Dict[str, Any]],
+    text_keys: Iterable[str],
+    metadata_keys: Iterable[str],
+    labels=None,
+    *,
+    detail_key: Optional[str] = None,
+    field_labels=None,
+    empty_policy: str = "show_empty",
+) -> List[str]:
     labels = labels or {}
+    if not items and empty_policy == "omit":
+        return []
     lines = [f"## {title}", ""]
     if not items:
         lines.extend([labels.get("empty", "None captured."), ""])
         return lines
 
+    meta_labels = field_labels if field_labels is not None else labels
     for item in items:
-        lines.append(f"- {_item_text(item, text_keys, labels.get('untitled', 'Untitled'))}{_item_metadata(item, metadata_keys, labels)}")
+        text = _item_text(item, text_keys, labels.get("untitled", "Untitled"), detail_key=detail_key)
+        lines.append(f"- {text}{_item_metadata(item, metadata_keys, meta_labels)}")
     lines.append("")
     return lines
 
 
 def render_summary_markdown(summary: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> str:
     """Render a validated structured summary to Markdown for History display/export."""
-    validated = validate_summary_json(summary)
     metadata = metadata or {}
+    explicit_template = metadata.get("template") or metadata.get("tag") or (
+        summary.get("template") if isinstance(summary, dict) else None
+    )
+    template = get_template(explicit_template, fallback="meeting")
+    validated = validate_summary_json(summary, tag=template["template_id"] if explicit_template is not None else None)
     profile = _clean_text(metadata.get("profile"))
     model = _clean_text(metadata.get("model"))
     generated_at = _clean_text(metadata.get("generatedAt"))
+    meta_tag = normalize_recording_tag(metadata.get("tag"), strict=False)
 
-    table = LANGUAGE_LABELS
     language = metadata.get("language", "en")
     # Match the generated script for languages with two retained writing systems.
-    prose = validated["summary"]
+    prose = summary_prose(validated, tag=template["template_id"])
     if language == "pa" and re.search(r"[\u0600-\u06ff]", prose):
         language = "pa-Arab"
-    elif language == "zh" and re.search(r"[會議們週準備預還設備問題負責試驗擴]", prose):
+    elif language == "zh" and re.search(r"[會議們週準備預還設備問題負責試驗擴學習課講重點總結內容資訊觀眾聲樂錄音聽說話記錄這個為與從後發現關於經過進行應該時間開創藝術製作實踐設計]", prose):
         language = "zh-Hant"
-    row = table.get(language, table["en"])
-    labels = dict(zip(("title", "topics", "decisions", "action_items", "risks", "open_questions", "empty", "untitled", "profile", "model", "generated", "owner", "due", "timestamp", "timestamps"), row))
+    labels = get_localized_labels(language)
+    field_labels = dict(labels["fields"])
     if "language" in metadata:
         profiles = dict(zip(("concise", "balanced", "detailed", "action-items"), PROFILE_LABELS.get(language, PROFILE_LABELS["en"])))
         profile = profiles.get(profile, profile)
     if "language" not in metadata:
-        labels.update({key: key for key in ("owner", "due", "timestamp", "timestamps")})
+        field_labels.update({key: key for key in field_labels})
+    tag_display = labels["tag_names"].get(meta_tag, "") if meta_tag else ""
+
     lines = [f"# {labels['title']}", "", validated["summary"], ""]
-    if profile or model or generated_at:
+    if tag_display or profile or model or generated_at:
         lines.append("---")
         lines.append("")
+        if tag_display:
+            lines.append(f"**{labels['tag']}:** {tag_display}")
         if profile:
             lines.append(f"**{labels['profile']}:** {profile}")
         if model:
@@ -527,10 +674,21 @@ def render_summary_markdown(summary: Dict[str, Any], metadata: Optional[Dict[str
             lines.append(f"**{labels['generated']}:** {generated_at}")
         lines.append("")
 
-    lines.extend(_render_items(labels["topics"], validated["topics"], ("title", "topic"), ("timestamps",), labels))
-    lines.extend(_render_items(labels["decisions"], validated["decisions"], ("decision",), ("owner", "timestamp"), labels))
-    lines.extend(_render_items(labels["action_items"], validated["action_items"], ("task", "action"), ("owner", "due", "timestamp"), labels))
-    lines.extend(_render_items(labels["risks"], validated["risks"], ("risk",), ("timestamp",), labels))
-    lines.extend(_render_items(labels["open_questions"], validated["open_questions"], ("question",), ("timestamp",), labels))
+    empty_policy = template.get("empty_section_policy", "omit")
+    for field in template["array_fields"]:
+        spec = template["field_schemas"][field]
+        section_title = labels["sections"].get(field, field.replace("_", " ").title())
+        lines.extend(
+            _render_items(
+                section_title,
+                validated[field],
+                spec["text_keys"],
+                spec["metadata_keys"],
+                labels,
+                detail_key=spec.get("detail_key"),
+                field_labels=field_labels,
+                empty_policy=empty_policy,
+            )
+        )
 
     return "\n".join(lines).rstrip() + "\n"

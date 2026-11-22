@@ -100,3 +100,52 @@ test('findClosestTranscriptSegmentIndex prefers containing span, supports start 
   assert.equal(findClosestTranscriptSegmentIndex(segments, false), -1);
   assert.equal(findClosestTranscriptSegmentIndex([], 10), -1);
 });
+
+test('mergeSearchResultsWithMeetings and fallbackFilterMeetingsByTitle support optional tag filter', () => {
+  const meetings = [
+    { id: '1', title: 'Q4 Launch Sync', tag: 'meeting' },
+    { id: '2', title: 'Q4 Design Crit', tag: 'brainstorm' },
+    { id: '3', title: 'Untagged Q4' },
+  ];
+
+  const merged = mergeSearchResultsWithMeetings(
+    meetings,
+    {
+      meetings: [
+        { meetingId: '2', score: -2.0, matches: [] },
+        { meetingId: '1', score: -1.0, matches: [] },
+        { meetingId: '3', score: -0.5, matches: [] },
+      ],
+    },
+    { tag: 'Brainstorm' },
+  );
+  assert.deepEqual(merged.map((m) => m.id), ['2']);
+
+  assert.deepEqual(
+    fallbackFilterMeetingsByTitle(meetings, 'q4', { tag: 'meeting' }).map((m) => m.id),
+    ['1'],
+  );
+  assert.deepEqual(
+    fallbackFilterMeetingsByTitle(meetings, 'q4', { tag: null }).map((m) => m.id),
+    ['1', '2', '3'],
+  );
+});
+
+test('History search normalizes recording tags and filter aliases', () => {
+  const meetings = [
+    { id: 'note', title: 'Project memo', tag: 'Voice Memo' },
+    { id: 'call', title: 'Project update', tag: 'call' },
+    { id: 'untagged', title: 'Project notes' },
+  ];
+  const hits = { meetings: meetings.map(({ id }) => ({ meetingId: id })) };
+
+  assert.deepEqual(
+    mergeSearchResultsWithMeetings(meetings, hits, { tag: ' voice_note ' }).map(({ id }) => id),
+    ['note'],
+  );
+  assert.deepEqual(
+    fallbackFilterMeetingsByTitle(meetings, 'project', { tag: 'Phone / Support Call' }).map(({ id }) => id),
+    ['call'],
+  );
+  assert.deepEqual(fallbackFilterMeetingsByTitle(meetings, 'project', { tag: 'unknown' }), []);
+});

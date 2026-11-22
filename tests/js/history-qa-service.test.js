@@ -48,6 +48,8 @@ function makeQaHarness({
   checkStatus = null,
   queueAction = null,
   getSummaryArtifactPath = null,
+  getSummaryDeviceMemory = async () => null,
+  ensureSummaryProcessExited = async () => {},
 } = {}) {
   const recordingsDir = path.join(tmpDir, 'recordings');
   const extractDir = path.join(tmpDir, 'ai-addons', 'models', 'summary', 'qwen3.5-9b-q4-k-m', 'runtime', `${platform}-${arch}`, 'extract', 'cuda-12.8');
@@ -122,6 +124,8 @@ function makeQaHarness({
     pythonConfig: { backendPath: path.join(tmpDir, 'backend') },
     getBackendModuleArgs: (mod, args) => ['-m', mod, ...args],
     getAiAddonRuntimeOptions: (opts) => opts || {},
+    getSummaryDeviceMemory,
+    ensureSummaryProcessExited,
     checkAiAddonSetupStatus: checkStatus || (async () => aiStatus || ({
       features: {
         summary: {
@@ -270,7 +274,8 @@ test('zero-hit preflight never acquires compute queue or loads llama-server', as
 
   h.setRetrievalEvidence([], 3);
   const res = await h.handlers.get('ask-history')({}, { question: 'Where is Atlantis?' });
-  assert.equal(res.status, 'insufficient_evidence');
+  assert.equal(res.status, 'no_matching_excerpts');
+  assert.equal(res.failureReason, 'no_matching_excerpts');
   assert.equal(res.modelLoaded, false);
   assert.equal(h.getQueueRuns(), 0);
   assert.equal(h.spawnedServers.length, 0);
@@ -542,4 +547,464 @@ test('switching models unloads prior resident server with model_changed without 
     .map((e) => ({ status: e.payload.status, reason: e.payload.reason }));
   assert.ok(modelStates.some((s) => s.status === 'unloading' && s.reason === 'model_changed'));
   assert.ok(modelStates.some((s) => s.status === 'unloaded' && s.reason === 'model_changed'));
+});
+
+
+test('ask-history forwards draftMarkdown streaming progress, threadContext, shifted citations history, and failure metadata', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-qa-v31-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const runnerPayloads = [];
+  let turn = 0;
+  const h = makeQaHarness({
+    tmpDir,
+    onQaRunnerPayload(payload, proc) {
+      runnerPayloads.push(payload);
+      turn += 1;
+      if (turn === 1) {
+        proc.stderr.emit('data', Buffer.from(`${JSON.stringify({
+          type: 'progress',
+          feature: 'history-qa',
+          phase: 'streaming',
+          percent: 65,
+          message: 'Writing answer locally…',
+          draftMarkdown: 'Draft citing hf_secret_token and Beta',
+        })}\n`));
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({
+          status: 'answered',
+          answerMarkdown: 'Beta launches December 4 [E1].',
+          citations: payload.evidence,
+          retrievalMode: 'targeted',
+          detectedDateFilter: '2026-11-18',
+          searchedMeetingCount: 2,
+          evidenceCount: 1,
+        })));
+        proc.emit('close', 0);
+        return;
+      }
+      proc.stdout.emit('data', Buffer.from(JSON.stringify({
+        status: 'verification_failed',
+        failureReason: 'missing_citations',
+        answerMarkdown: 'Unverified output',
+        citations: [],
+        inspectedSources: payload.evidence,
+        retrievalMode: 'overview',
+        searchedMeetingCount: 2,
+        evidenceCount: 1,
+      })));
+      proc.emit('close', 0);
+    },
+  });
+
+  const first = await h.handlers.get('ask-history')({}, { question: 'When does beta launch?' });
+  assert.equal(first.status, 'answered');
+  assert.equal(first.retrievalMode, 'targeted');
+  assert.equal(first.detectedDateFilter, '2026-11-18');
+  assert.equal(runnerPayloads[0].stream, true);
+
+  const streamEvt = h.events.find((e) => e.channel === 'history-qa-progress' && e.payload.phase === 'streaming');
+  assert.ok(streamEvt);
+  assert.equal(streamEvt.payload.draftMarkdown, 'Draft citing [redacted-token] and Beta');
+
+  // Switch evidence to m2 in "All recordings" scope and ask a follow-up.
+  h.setRetrievalEvidence([
+    {
+      evidenceId: 'E1',
+      meetingId: 'm2',
+      meetingTitle: 'Vendor Sync',
+      meetingDate: '2026-11-19T10:00:00',
+      startSec: 12,
+      endSec: 25,
+      speaker: 'Bob',
+      tag: 'call',
+      kind: 'transcript',
+      excerpt: 'Vendor contract signed.',
+      text: 'Vendor contract signed.',
+      sourceTranscriptHash: 'sha256:456',
+    },
+  ], 2);
+
+  const second = await h.handlers.get('ask-history')({}, {
+    threadId: first.thread.id,
+    question: 'What else did he say about that?',
+  });
+  assert.equal(second.status, 'verification_failed');
+  assert.equal(second.failureReason, 'missing_citations');
+  assert.equal(second.assistantMessage.inspectedSources.length, 1);
+  assert.equal(second.assistantMessage.inspectedSources[0].meetingId, 'm2');
+
+  // Conversation history retained across shifted cited meeting IDs in All scope!
+  assert.equal(runnerPayloads[1].history.length, 2);
+
+  // threadContext was forwarded to retrieval preflight on the follow-up turn.
+  const retrievalSpawns = h.spawnedPython.filter((entry) => entry.args.includes('history_qa.retrieval'));
+  const secondRetrievalPayload = JSON.parse(retrievalSpawns[1].proc._stdinText);
+  assert.deepEqual(secondRetrievalPayload.threadContext, {
+    lastCitedMeetingIds: ['m1'],
+    lastQuestion: 'When does beta launch?',
+  });
+
+  // Turn 3 after Turn 2 verification_failed still captures lastQuestion from Turn 1 (preceding most recent answered turn).
+  await h.handlers.get('ask-history')({}, {
+    threadId: first.thread.id,
+    question: 'Clarify the timeline?',
+  });
+  const thirdRetrievalPayload = JSON.parse(
+    h.spawnedPython.filter((entry) => entry.args.includes('history_qa.retrieval'))[2].proc._stdinText,
+  );
+  assert.deepEqual(thirdRetrievalPayload.threadContext, {
+    lastCitedMeetingIds: ['m1'],
+    lastQuestion: 'When does beta launch?',
+  });
+});
+
+test('late stderr progress events are suppressed after cancel and threadContext falls back when no answered turn exists', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-qa-late-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  let heldProc = null;
+  let turn = 0;
+  const h = makeQaHarness({
+    tmpDir,
+    onQaRunnerPayload(payload, proc) {
+      turn += 1;
+      if (turn === 1) {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({
+          status: 'verification_failed',
+          failureReason: 'missing_citations',
+          answerMarkdown: 'Unverified output',
+          citations: [],
+          inspectedSources: payload.evidence,
+          searchedMeetingCount: 1,
+          evidenceCount: 1,
+        })));
+        proc.emit('close', 0);
+        return;
+      }
+      heldProc = proc;
+    },
+  });
+
+  // Turn 1 fails verification (no answered turns in thread yet).
+  const first = await h.handlers.get('ask-history')({}, { question: 'Initial failed question?' });
+  assert.equal(first.status, 'verification_failed');
+
+  // Turn 2 should fall back to Turn 1's user question because no answered turn exists yet.
+  const pending = h.handlers.get('ask-history')({}, {
+    threadId: first.thread.id,
+    question: 'Retry question?',
+  });
+  await new Promise((r) => setTimeout(r, 30));
+  const retrievalSpawns = h.spawnedPython.filter((entry) => entry.args.includes('history_qa.retrieval'));
+  const secondRetrievalPayload = JSON.parse(retrievalSpawns[1].proc._stdinText);
+  assert.deepEqual(secondRetrievalPayload.threadContext, {
+    lastCitedMeetingIds: [],
+    lastQuestion: 'Initial failed question?',
+  });
+
+  // Cancel Turn 2 and emit a late stderr progress line before process closes.
+  const eventsBeforeCancel = h.events.length;
+  await h.handlers.get('cancel-history-qa')({});
+  heldProc.stderr.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'progress',
+    feature: 'history-qa',
+    phase: 'streaming',
+    percent: 90,
+    message: 'Late chunk after cancel',
+    draftMarkdown: 'Should never be emitted',
+  })}\n`));
+  await assert.rejects(() => pending, (err) => err && err.code === HISTORY_QA_CANCEL_CODE);
+
+  const lateProgress = h.events
+    .slice(eventsBeforeCancel)
+    .filter((e) => e.channel === 'history-qa-progress' && e.payload.message === 'Late chunk after cancel');
+  assert.equal(lateProgress.length, 0);
+});
+
+test('scope changes exclude whole mixed-citation turns from history and retrieval context', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-scoped-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const payloads = [];
+  const h = makeQaHarness({ tmpDir, onQaRunnerPayload(payload, proc) {
+    payloads.push(payload);
+    proc.stdout.emit('data', JSON.stringify({ status: 'answered', answerMarkdown: 'Answer [E1]', citations: payload.evidence }));
+    proc.emit('close', 0);
+  } });
+  const citation = (id, tag, date) => ({ evidenceId: id, meetingId: id, tag, meetingDate: date, text: 'text', excerpt: 'text' });
+  h.setRetrievalEvidence([citation('m1', 'call', '2026-11-18'), citation('m2', 'lecture', '2026-10-01')]);
+  const first = await h.handlers.get('ask-history')({}, { question: 'First?' });
+  h.setRetrievalEvidence([citation('m1', 'call', '2026-11-18')]);
+  await h.handlers.get('ask-history')({}, { threadId: first.thread.id, question: 'Follow up?', scope: { type: 'all', tags: ['call'], dateFrom: '2026-11-01', dateTo: '2026-11-30' } });
+  assert.deepEqual(payloads[1].history, []);
+  const retrieval = h.spawnedPython.filter((entry) => entry.args.includes('history_qa.retrieval'));
+  assert.equal(JSON.parse(retrieval[1].proc._stdinText).threadContext, undefined);
+});
+
+test('live memory is checked after server exit, and exact reuse does not reallocate', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-live-fit-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  let id = 'qwen3.5-9b-q4-k-m';
+  let memoryChecks = 0;
+  let gates = 0;
+  const h = makeQaHarness({
+    tmpDir,
+    getSummaryArtifactPath: () => path.join(tmpDir, `${id}.gguf`),
+    ensureSummaryProcessExited: async () => { gates += 1; },
+    getSummaryDeviceMemory: async () => { memoryChecks += 1; return { availableBytes: 100 }; },
+    checkStatus: async () => ({ features: { summary: {
+      status: 'ready', setupComplete: true, modelId: id,
+      cache: { valid: true }, runtimeCache: { valid: true }, fit: { blocked: false },
+    } } }),
+  });
+  await h.service.askHistory({ question: 'First?' });
+  await h.service.askHistory({ question: 'Reuse?' });
+  assert.equal(memoryChecks, 1);
+  id = 'qwen3.5-4b-q4-k-m';
+  await h.service.askHistory({ question: 'Switch?' });
+  assert.equal(memoryChecks, 2);
+  assert.ok(h.spawnedServers[0].proc.killedSignal);
+  assert.ok(gates >= 3);
+  await h.service.unloadModel('manual');
+  assert.ok(gates >= 4);
+});
+
+test('failed process exit or blocked live fit prevents a new model load', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-live-block-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  let failGate = true;
+  const h = makeQaHarness({
+    tmpDir,
+    ensureSummaryProcessExited: async () => { if (failGate) throw new Error('Process exit unconfirmed'); },
+    getSummaryDeviceMemory: async () => ({ availableBytes: 1 }),
+    checkStatus: async (opts) => ({ features: { summary: {
+      status: 'ready', setupComplete: true, modelId: 'qwen3.5-9b-q4-k-m',
+      cache: { valid: true }, runtimeCache: { valid: true },
+      fit: { blocked: Boolean(opts.deviceMemory), reason: 'Not enough memory' },
+    } } }),
+  });
+  await assert.rejects(h.service.askHistory({ question: 'First?' }), /Process exit unconfirmed/);
+  failGate = false;
+  await assert.rejects(h.service.askHistory({ question: 'Second?' }), /Not enough memory/);
+  assert.equal(h.spawnedServers.length, 0);
+});
+
+test('CLI fallback waits for model exit and Free memory retries an orphan without stopping an active summary', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-cli-slot-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  let exitWaits = 0;
+  const h = makeQaHarness({
+    tmpDir,
+    createServerSibling: false,
+    ensureSummaryProcessExited: async () => { exitWaits += 1; },
+    onQaRunnerPayload(_payload, proc) {
+      proc.stdout.emit('data', JSON.stringify({ status: 'answered', answerMarkdown: 'CLI answer [E1]', citations: [{ evidenceId: 'E1', meetingId: 'm1' }] }));
+      proc.emit('close', 0);
+    },
+  });
+  await h.service.askHistory({ question: 'CLI?' });
+  assert.ok(exitWaits >= 2);
+
+  let raced = false;
+  let activeSummary = true;
+  let terminations = 0;
+  let orphan = createFakeProcess();
+  const { createHistoryQaService } = require('../../src/main/history-qa-service');
+  const { createChatThreadStore } = require('../../src/main/chat-thread-store');
+  const guarded = createHistoryQaService({
+    app: { getPath: () => tmpDir },
+    path,
+    fs,
+    pythonConfig: { backendPath: tmpDir },
+    spawnTrackedPython: () => assert.fail('unused'),
+    getBackendModuleArgs: (m, a) => ['-m', m, ...a],
+    collectPythonProcessOutput: () => ({}),
+    enqueueAiComputeAction: (fn) => fn(),
+    getAiAddonRuntimeOptions: () => ({}),
+    ensureSummaryProcessExited: async () => {
+      raced = true;
+      if (terminations === 1) throw new Error('exit unconfirmed');
+      orphan = null;
+    },
+    getOutstandingSummaryProcess: () => orphan,
+    hasActiveSummaryGeneration: () => activeSummary,
+    terminateProcessBestEffort: async (proc) => { assert.equal(proc, orphan); terminations += 1; },
+    historySearchService: { getGeneration: () => 1, ensureSynced: async () => {}, enqueueOperation: (fn) => fn(), getIndexPath: () => path.join(tmpDir, 'idx.sqlite') },
+    chatThreadStore: createChatThreadStore({ app: { getPath: () => tmpDir }, path, fs }),
+  });
+  const res = await guarded.unloadModel('competing_gpu_work');
+  assert.equal(res.alreadyUnloaded, true);
+  assert.equal(raced, false);
+  assert.equal(guarded.getModelState().status, 'unloaded');
+
+  activeSummary = false;
+  await assert.rejects(guarded.unloadModel(), /exit unconfirmed/);
+  assert.equal(terminations, 1);
+  assert.equal(guarded.getModelState().status, 'release_error');
+  assert.equal(guarded.getModelState().modelId, null);
+
+  assert.deepEqual(await guarded.unloadModel(), { unloaded: true, alreadyUnloaded: false });
+  assert.equal(terminations, 2);
+  assert.equal(orphan, null);
+  assert.equal(guarded.getModelState().status, 'unloaded');
+});
+
+test('get-history-qa-eligibility accepts modelId and falls back to usable library models; askHistory creates thread atomically', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-elig-fallback-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const modelPath = path.join(tmpDir, 'gemma.gguf');
+  fs.writeFileSync(modelPath, 'gguf');
+  const h = makeQaHarness({
+    tmpDir,
+    getSummaryArtifactPath: () => modelPath,
+    checkStatus: async (opts) => {
+      if (opts.summaryModelId === 'gemma-4-e4b') {
+        return {
+          features: { summary: { status: 'ready', setupComplete: true, modelId: 'gemma-4-e4b', cache: { valid: true }, runtimeCache: { valid: true } } },
+          summaryLibrary: { defaultModelId: 'qwen3.5-9b-q4-k-m', models: [{ modelId: 'gemma-4-e4b', installed: true, setupComplete: true, status: 'ready', fit: { blocked: false } }] },
+        };
+      }
+      return {
+        features: { summary: { status: 'error', setupComplete: false, modelId: 'qwen3.5-9b-q4-k-m', cache: { valid: false }, runtimeCache: { valid: true } } },
+        summaryLibrary: {
+          defaultModelId: 'qwen3.5-9b-q4-k-m',
+          models: [
+            { modelId: 'qwen3.5-9b-q4-k-m', installed: false, setupComplete: false, status: 'error' },
+            { modelId: 'gemma-4-e4b', installed: true, setupComplete: true, status: 'ready', fit: { blocked: false } },
+          ],
+        },
+      };
+    },
+  });
+  const fallbackElig = await h.handlers.get('get-history-qa-eligibility')({}, {});
+  assert.equal(fallbackElig.eligible, true);
+  assert.equal(fallbackElig.modelId, 'gemma-4-e4b');
+
+  const explicitElig = await h.handlers.get('get-history-qa-eligibility')({}, { modelId: 'gemma-4-e4b' });
+  assert.equal(explicitElig.eligible, true);
+  assert.equal(explicitElig.modelId, 'gemma-4-e4b');
+
+  // Failed default askHistory must not create an orphan empty thread.
+  await assert.rejects(() => h.handlers.get('ask-history')({}, { question: 'Fail default?' }));
+  const threadsAfterFail = await h.handlers.get('list-chat-threads')({});
+  assert.equal(threadsAfterFail.threads.length, 0);
+
+  const ok = await h.handlers.get('ask-history')({}, { question: 'Use override?', threadModelId: 'gemma-4-e4b', modelId: 'gemma-4-e4b' });
+  assert.equal(ok.thread.modelId, 'gemma-4-e4b');
+});
+
+test('ai-addon-ipc checks live VRAM, pre-validates removal, awaits process exit on smoke, and returns status on validate cancel', async (t) => {
+  const { EventEmitter } = require('node:events');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-addon-ipc-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const { createAiAddonIpc, AI_ADDON_CANCEL_CODE } = require('../../src/main/ai-addon-ipc');
+  const { saveAiAddonManifest } = require('../../src/ai-addon/manifest-store');
+  const { getModelById } = require('../../src/ai-addon-state');
+  saveAiAddonManifest({
+    userDataDir: tmpDir,
+    manifest: {
+      features: { summary: { status: 'ready', modelId: 'qwen3.5-9b-q4-k-m' } },
+      summaryLibrary: {
+        defaultModelId: 'qwen3.5-9b-q4-k-m',
+        models: {
+          'qwen3.5-9b-q4-k-m': { status: 'ready', modelId: 'qwen3.5-9b-q4-k-m' },
+          'qwen3.5-4b-q4-k-m': { status: 'ready', modelId: 'qwen3.5-4b-q4-k-m' },
+          'gemma-4-e4b': { status: 'ready', modelId: 'gemma-4-e4b' },
+        },
+      },
+    },
+  });
+  const memoryCalls = [];
+  let exclusiveRemovalCalls = 0;
+  let exitWaits = 0;
+  let pauseValidationMemory = null;
+  let notifyValidationMemoryStarted = null;
+  const handlers = new Map();
+  const svc = createAiAddonIpc({
+    app: { getPath: () => tmpDir },
+    path,
+    fs,
+    pythonConfig: { pythonExe: 'python', backendPath: tmpDir },
+    spawnTrackedPython: () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => {};
+      process.nextTick(() => {
+        proc.stdout.emit('data', JSON.stringify({ ok: true }));
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+    ensureSummaryProcessExited: async () => { exitWaits += 1; },
+    appendSpawnLogBuffer: (a, b) => a + b.toString(),
+    sendToRenderer: () => {},
+    getSafeStorage: () => ({}),
+    assertTrustedRendererSender: () => {},
+    buildCudaRuntimeEnv: () => ({}),
+    resolveCudaStatusForTranscription: async () => ({
+      statusCode: 'ready',
+      installed: true,
+      deviceAvailable: true,
+      runtimeLoadable: true,
+      missingLibraries: [],
+      matchedProfile: 'cuda12',
+    }),
+    createAbortableComputeAction: ({ action }) => action(),
+    terminateProcessBestEffort: () => {},
+    buildManagedDiarizationValidationArgs: () => [],
+    buildSummaryArgs: () => ['-m', 'summaries.summary_runner', '--validate-runtime'],
+    summarizeDiarizationError: (s) => s,
+    summarizeSummaryValidationError: (s) => s,
+    getSummaryDeviceMemory: async (opts = {}) => {
+      memoryCalls.push(opts);
+      if (pauseValidationMemory) {
+        notifyValidationMemoryStarted?.();
+        await pauseValidationMemory;
+      }
+      return { totalBytes: 32 * 1024 ** 3, availableBytes: 24 * 1024 ** 3 };
+    },
+    enqueueGpuExclusiveRemovalAction: (fn) => { exclusiveRemovalCalls += 1; return fn(); },
+    checkAiAddonSetupStatus: async (opts = {}) => ({
+      summaryLibrary: { defaultModelId: 'qwen3.5-9b-q4-k-m', models: [] },
+      features: { summary: { status: 'notConfigured', modelId: opts.summaryModelId || 'qwen3.5-9b-q4-k-m', setupComplete: false } },
+    }),
+  });
+  svc.registerIpc({ handle: (ch, fn) => handlers.set(ch, fn) });
+
+  // remove-summary-model rejects before acquiring GPU exclusive removal queue when replacementModelId is missing.
+  await assert.rejects(() => handlers.get('remove-summary-model')({}, { modelId: 'qwen3.5-9b-q4-k-m' }), /replacement default/);
+  assert.equal(exclusiveRemovalCalls, 0);
+
+  // set-default-summary-model calls getSummaryDeviceMemory({ live: true }).
+  await assert.rejects(() => handlers.get('set-default-summary-model')({}, { modelId: getModelById('summary', 'qwen3.5-4b-q4-k-m').id }));
+  assert.equal(memoryCalls.at(-1)?.live, true);
+
+  // validateSummaryRuntimeSmoke awaits ensureSummaryProcessExited().
+  const smokeRuntimeDir = path.join(tmpDir, 'smoke-runtime');
+  fs.mkdirSync(path.join(smokeRuntimeDir, 'extract'), { recursive: true });
+  fs.writeFileSync(path.join(smokeRuntimeDir, 'extract', 'llama-cli'), 'fixture');
+  for (const library of ['cublas', 'cudnn']) {
+    fs.mkdirSync(path.join(tmpDir, 'ai-addons', 'cuda', 'python', 'nvidia', library, 'lib'), { recursive: true });
+  }
+  await svc.validateSummaryRuntimeSmoke({
+    modelId: 'qwen3.5-9b-q4-k-m',
+    runtimeArtifact: { executableName: 'llama-cli' },
+    runtimeDir: smokeRuntimeDir,
+    cudaStatus: { statusCode: 'ready', installed: true, deviceAvailable: true, runtimeLoadable: true, missingLibraries: [], matchedProfile: 'cuda12' },
+  });
+  assert.equal(exitWaits, 1);
+
+  // validate-summary-model cancel returns status snapshot (not { canceled: true }) and uses live memory.
+  let releaseMemory;
+  pauseValidationMemory = new Promise((resolve) => { releaseMemory = resolve; });
+  const memoryStarted = new Promise((resolve) => { notifyValidationMemoryStarted = resolve; });
+  const pendingValidate = handlers.get('validate-summary-model')({}, { modelId: 'qwen3.5-9b-q4-k-m' });
+  await memoryStarted;
+  await handlers.get('cancel-summary-model-setup')({});
+  pauseValidationMemory = null;
+  releaseMemory();
+  const canceledStatus = await pendingValidate;
+  assert.ok(canceledStatus.summaryLibrary);
+  assert.equal(canceledStatus.canceled, undefined);
+  assert.ok(memoryCalls.some((c) => c.live === true));
 });

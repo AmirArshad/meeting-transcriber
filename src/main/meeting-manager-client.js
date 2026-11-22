@@ -1,5 +1,8 @@
 'use strict';
 
+const { normalizeTagStrict } = require('../renderer/tag-helpers');
+const { isCanonicalSpeakerKey, normalizeSpeakerName } = require('../renderer/speaker-label-helpers');
+
 /**
  * Meeting-manager IPC client for the AvaNevis main process.
  *
@@ -73,10 +76,14 @@ function createMeetingManagerClient(deps) {
   function addMeetingToHistory(meetingData) {
     let resolvedAudioPath;
     let resolvedTranscriptPath;
+    let normalizedTag = null;
 
     try {
       resolvedAudioPath = assertSafeExistingRecordingAudioPath(meetingData.audioPath);
       resolvedTranscriptPath = assertSafeExistingTranscriptPath(meetingData.transcriptPath);
+      if (Object.hasOwn(meetingData || {}, 'tag') && meetingData.tag !== undefined && meetingData.tag !== null && meetingData.tag !== '') {
+        normalizedTag = normalizeTagStrict(meetingData.tag);
+      }
     } catch (error) {
       return Promise.reject(error);
     }
@@ -105,6 +112,9 @@ function createMeetingManagerClient(deps) {
 
       if (title) {
         args.push(`--title=${title}`);
+      }
+      if (normalizedTag) {
+        args.push('--tag', normalizedTag);
       }
       if (transcriptionStatus) {
         args.push('--transcription-status', String(transcriptionStatus));
@@ -468,6 +478,37 @@ function createMeetingManagerClient(deps) {
       ];
       if (typeof updates.title === 'string') {
         args.push(`--title=${updates.title}`);
+      }
+      if (Object.hasOwn(updates, 'tag') && updates.tag !== undefined) {
+        const normalizedTag = normalizeTagStrict(updates.tag);
+        if (normalizedTag === null) {
+          args.push('--clear-tag');
+        } else {
+          args.push('--tag', normalizedTag);
+        }
+      }
+      if (Object.hasOwn(updates, 'speakerNames')) {
+        const names = updates.speakerNames;
+        const expectedHash = updates.expectedSourceTranscriptHash;
+        const expectedAttempt = updates.expectedTranscriptionAttemptId;
+        if (!names || typeof names !== 'object' || Array.isArray(names)
+            || Object.keys(names).length > 199 || Object.entries(names).some(([speaker, name]) => (
+              !isCanonicalSpeakerKey(speaker) || typeof name !== 'string' || name.length > 1024
+            ))) {
+          throw new Error('Invalid speaker names.');
+        }
+        if (typeof expectedHash !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(expectedHash)) {
+          throw new Error('Speaker names require the current transcript.');
+        }
+        const patch = Object.fromEntries(Object.entries(names)
+          .map(([speaker, name]) => [speaker, normalizeSpeakerName(name)]));
+        args.push('--speaker-names-json', JSON.stringify(patch), '--expected-source-transcript-hash', expectedHash);
+        if (expectedAttempt !== undefined) {
+          if (typeof expectedAttempt !== 'string' || expectedAttempt.length > 128 || expectedAttempt.includes('\0')) {
+            throw new Error('Invalid transcription attempt.');
+          }
+          args.push(`--expected-transcription-attempt-id=${expectedAttempt}`);
+        }
       }
 
       return enqueueMeetingUpdate(meetingId, () => new Promise((resolve, reject) => {

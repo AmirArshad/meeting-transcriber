@@ -36,7 +36,7 @@ This wizard will:
 Step 1 of 3: Select Your Microphone
 
 We found 4 microphones:
-  1. Logitech Webcam C925e
+  1. USB Microphone
   2. AI Noise-Canceling Microphone
   3. Steam Streaming Microphone
   4. CABLE Output (Virtual)
@@ -118,7 +118,7 @@ Detected:
 Setup Complete! ✓
 
 Your settings:
-  Microphone: Logitech Webcam C925e (ID: 39)
+  Microphone: USB Microphone (ID: 39)
   Desktop Audio: NVIDIA HDMI Audio (ID: 41)
 
 These will be used for all future recordings.
@@ -208,7 +208,7 @@ Save & Complete
 {
   "audio": {
     "microphone_id": 39,
-    "microphone_name": "Logitech Webcam C925e",
+    "microphone_name": "USB Microphone",
     "desktop_id": 41,
     "desktop_name": "NVIDIA HDMI Audio",
     "sample_rate": 48000,
@@ -227,7 +227,7 @@ Users can re-run setup or manually adjust:
 ```
 Audio Settings
 
-Microphone:  [Logitech Webcam C925e ▼] [Test]
+Microphone:  [USB Microphone ▼] [Test]
 Desktop Audio: [NVIDIA HDMI Audio ▼] [Test]
 
 [Re-run Setup Wizard]

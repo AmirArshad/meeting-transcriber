@@ -69,6 +69,13 @@ const {
   shouldSkipMeetingReselect,
 } = window.historyDetailHelpers;
 const {
+  isCanonicalSpeakerKey,
+  extractSpeakerSamples,
+  hasUnnamedSpeakers,
+  normalizeSpeakerName,
+  diffSpeakerNames,
+} = window.speakerLabelHelpers;
+const {
   buildHighlightSegmentsFromParts,
   fallbackFilterMeetingsByTitle,
   findClosestTranscriptSegmentIndex,
@@ -77,6 +84,14 @@ const {
   normalizeHistorySearchQuery,
   parseTimestampStringToSeconds,
 } = window.historySearchHelpers;
+const {
+  RECORDING_TAGS,
+  normalizeTag,
+  getTagMeta,
+  getUsedRecordingTags,
+  filterMeetingsByTag,
+  getSummaryTagMismatch,
+} = window.tagHelpers;
 const {
   buildUpdateViewModel,
   renderSafeReleaseNotes,
@@ -96,6 +111,8 @@ const {
   getMeetingTranscriptionStatusMessage,
   isMeetingTranscriptionRetryable,
   shouldAbortSummaryGenerationAfterPreflight,
+  shouldPromptSpeakerNamesBeforeSummary,
+  haveSummarySpeakerNamesChanged,
 } = window.summaryUiHelpers;
 const {
   applyDiarizationEngineCardDomState,
@@ -145,11 +162,16 @@ const {
   renderGroundedMarkdown,
 } = window.markdownRenderHelpers;
 const {
+  buildAssistantNoticeView,
   buildModelMemoryPillView,
   buildStarterPrompts,
   filterChatThreads,
   formatChatScopeLabel,
+  formatScopeMeetingDate,
+  formatScopeMeetingDateTooltip,
   groupThreadsByRecency,
+  resolveNoticeActionScope,
+  shouldShowChatProgressBanner,
 } = window.chatHelpers;
 
 // UI Elements
@@ -259,12 +281,15 @@ let recoveryActionBusy = false;
 let currentAudioFile = null;
 let currentRecordingDurationSeconds = 0;
 let currentMeetingId = null;
+let historySpeakers = null;
+let stopSpeakerPreview = null;
 // Tracks the meeting saved from the most recent recording (post-transcription).
 // Powers the in-place rename on the post-recording transcript card and the
 // default filename used by the "Save" button.
 let currentRecordingMeeting = null;
 let currentRecordingTranscriptMarkdown = '';
 let meetingDetailRequestEpoch = 0;
+let meetingSelectionRequestEpoch = 0;
 let summaryGenerationMeetingId = null;
 let summaryGenerationCancelling = false;
 let historyLanguageCaptionMeeting = null;
@@ -287,6 +312,11 @@ let meetingSearchQueryNormalized = '';
 let meetingSearchDebounceTimer = null;
 let meetingSearchResults = null;
 let meetingSearchEpoch = 0;
+let activeHistoryTagFilter = null;
+let selectedRecordingTag = null;
+let activeRecordingTag = null;
+let activeOpenTagPopover = null;
+const meetingTagMutationVersions = new Map();
 let pendingAudioSeekCleanup = null;
 let activeCitationHighlightTimer = null;
 const MEETING_SEARCH_DEBOUNCE_MS = 180;
@@ -347,6 +377,7 @@ function setPlaceholder(container, message, className = 'placeholder') {
 }
 
 function showSummaryMessage(message, isError = false) {
+  updateSummaryTagMismatchBanner(null);
   const summaryEl = document.getElementById('meeting-summary');
   if (!summaryEl) {
     return;
@@ -392,6 +423,7 @@ async function restoreCurrentHistorySummary(meetingId, message, { isError = fals
   } else {
     showSummaryMessage(message, isError);
   }
+  updateSummaryTagMismatchBanner(fullMeeting);
   if (showTab) activateHistoryDetailTab('summary');
 }
 
@@ -752,13 +784,28 @@ function createMeetingListItem(meeting) {
   duration.className = 'meeting-item-duration';
   duration.textContent = meeting.duration;
 
+  const tagMeta = getTagMeta(meeting && meeting.tag);
+  const tagPill = tagMeta ? document.createElement('span') : null;
+  if (tagPill) {
+    tagPill.className = 'meeting-item-tag-pill';
+    tagPill.dataset.tag = tagMeta.slug;
+    const dot = document.createElement('span');
+    dot.className = 'recording-tag-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span');
+    label.textContent = tagMeta.shortLabel;
+    tagPill.append(dot, label);
+  }
+
   if (meeting && meeting.transcriptionStatus && meeting.transcriptionStatus !== 'completed') {
     const statusTag = document.createElement('span');
     statusTag.className = 'meeting-item-duration';
     statusTag.textContent = meeting.transcriptionStatus === 'failed' ? 'Transcription failed' : 'Awaiting transcription';
     metaRow.append(date, duration, statusTag);
+    if (tagPill) metaRow.appendChild(tagPill);
   } else {
     metaRow.append(date, duration);
+    if (tagPill) metaRow.appendChild(tagPill);
   }
   info.append(title, metaRow);
   body.appendChild(info);
@@ -885,6 +932,8 @@ function renderActivityList() {
     doc: typeof document !== 'undefined' ? document : null,
   });
 
+  const openActivityMeetingId = activeOpenTagPopover?.activityMeetingId;
+  if (openActivityMeetingId != null) closeActiveTagPopover();
   clearElement(activityListEl);
   if (!rows.length) {
     const empty = document.createElement('p');
@@ -994,6 +1043,55 @@ function renderActivityList() {
       duration.textContent = row.durationLabel;
       meta.appendChild(duration);
     }
+    const rowMeeting = findMeetingById(row.meetingId);
+    if (rowMeeting) {
+      const rowTagAnchor = document.createElement('div');
+      rowTagAnchor.className = 'activity-row-tag-anchor';
+      const rowTagBtn = document.createElement('button');
+      rowTagBtn.type = 'button';
+      rowTagBtn.className = 'recording-tag-pill activity-tag-btn';
+      const rowTagDot = document.createElement('span');
+      rowTagDot.className = 'recording-tag-dot';
+      rowTagDot.setAttribute('aria-hidden', 'true');
+      const rowTagLabel = document.createElement('span');
+      const rowTagCaret = document.createElement('span');
+      rowTagCaret.className = 'recording-tag-caret';
+      rowTagCaret.setAttribute('aria-hidden', 'true');
+      rowTagCaret.textContent = '▾';
+      rowTagBtn.append(rowTagDot, rowTagLabel, rowTagCaret);
+      rowTagBtn.setAttribute('aria-haspopup', 'listbox');
+      rowTagBtn.setAttribute('aria-expanded', 'false');
+      applyTagPillView(rowTagBtn, rowTagLabel, rowMeeting.tag, { untaggedLabel: 'Tag' });
+
+      const rowTagPopover = document.createElement('div');
+      rowTagPopover.className = 'recording-tag-popover';
+      rowTagPopover.setAttribute('role', 'listbox');
+      rowTagPopover.setAttribute('aria-label', `Tag for ${row.title}`);
+      rowTagPopover.hidden = true;
+
+      rowTagBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleTagPickerPopover({
+          triggerBtn: rowTagBtn,
+          popoverEl: rowTagPopover,
+          activityMeetingId: row.meetingId,
+          currentTag: normalizeTag(findMeetingById(row.meetingId)?.tag),
+          onSelect: async (nextTag) => {
+            await commitMeetingTagChange(row.meetingId, nextTag);
+          },
+        });
+      });
+
+      rowTagAnchor.append(rowTagBtn, rowTagPopover);
+      if (openActivityMeetingId != null && meetingIdsEqual(openActivityMeetingId, row.meetingId)) {
+        toggleTagPickerPopover({
+          triggerBtn: rowTagBtn, popoverEl: rowTagPopover, activityMeetingId: row.meetingId,
+          currentTag: normalizeTag(rowMeeting.tag),
+          onSelect: (nextTag) => commitMeetingTagChange(row.meetingId, nextTag),
+        });
+      }
+      meta.appendChild(rowTagAnchor);
+    }
     main.appendChild(meta);
     item.appendChild(main);
 
@@ -1059,6 +1157,19 @@ function renderActivityList() {
         openMeetingInHistory(row.meetingId);
       });
       actions.appendChild(openBtn);
+    }
+    if (row.status === 'ready' && !isRenaming
+        && (rowMeeting?.ai?.diarization?.speakerCount > 0
+          || transcriptionQueueState.jobs.some((job) => String(job.meetingId) === String(row.meetingId) && job.speakerCount > 0))) {
+      const nameButton = document.createElement('button');
+      nameButton.type = 'button';
+      nameButton.className = 'btn btn-small';
+      nameButton.textContent = 'Name speakers';
+      nameButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void openHistorySpeakerNames(row.meetingId);
+      });
+      actions.appendChild(nameButton);
     }
     item.appendChild(actions);
 
@@ -1195,14 +1306,41 @@ function showCompletionToast(job) {
   if (!view.visible) {
     return;
   }
-  toastEl.textContent = view.message;
-  toastEl.hidden = false;
-  toastEl.classList.add('is-visible');
-  clearTimeout(showCompletionToast._timer);
-  showCompletionToast._timer = setTimeout(() => {
+  const message = document.getElementById('activity-completion-message');
+  const nameButton = document.getElementById('activity-completion-name-speakers');
+  showCompletionToast._cleanup?.();
+  const cleanup = () => {
+    clearTimeout(showCompletionToast._timer);
+    showCompletionToast._timer = null;
+    showCompletionToast._cleanup = null;
+    toastEl.removeEventListener('focusout', onFocusOut);
+  };
+  const hide = () => {
+    cleanup();
     toastEl.classList.remove('is-visible');
     toastEl.hidden = true;
-  }, 4500);
+  };
+  const onFocusOut = (event) => {
+    if (!toastEl.contains(event.relatedTarget)) hide();
+  };
+  showCompletionToast._cleanup = cleanup;
+  if (message) message.textContent = view.message;
+  if (nameButton) {
+    nameButton.hidden = !(job.speakerCount > 0);
+    nameButton.onclick = () => {
+      hide();
+      void openHistorySpeakerNames(job.meetingId);
+    };
+  }
+  toastEl.hidden = false;
+  toastEl.classList.add('is-visible');
+  showCompletionToast._timer = setTimeout(() => {
+    if (toastEl.contains(document.activeElement)) {
+      toastEl.addEventListener('focusout', onFocusOut);
+    } else {
+      hide();
+    }
+  }, job.speakerCount > 0 ? 8000 : 4500);
 }
 
 function updateBackgroundTranscriptionTip() {
@@ -1261,6 +1399,19 @@ function openMeetingInHistory(meetingId) {
   activateTab('history');
   activateHistoryDetailTab('transcript');
   void selectMeeting(meetingId);
+}
+
+async function openHistorySpeakerNames(meetingId) {
+  const id = String(meetingId);
+  if (!findMeetingById(id)) await loadMeetingHistory();
+  activateTab('history');
+  activateHistoryDetailTab('transcript');
+  if (meetingIdsEqual(currentMeetingId, id)) await refreshMeetingDetails(id);
+  else await selectMeeting(id);
+  if (!meetingIdsEqual(currentMeetingId, id)) return;
+  const samples = historySpeakers?.samples || [];
+  const speaker = samples.find((sample) => !historySpeakers.names[sample.speaker]) || samples[0];
+  if (speaker) focusHistorySpeaker(speaker.speaker);
 }
 
 async function cancelActivityTranscription(meetingId) {
@@ -1344,12 +1495,14 @@ async function resumePendingTranscriptionsFromBanner() {
 }
 
 function setMeetingAudioSource(audioPath) {
+  stopSpeakerPreview?.();
   if (typeof pendingAudioSeekCleanup === 'function') {
     pendingAudioSeekCleanup();
     pendingAudioSeekCleanup = null;
   }
   const audioPlayer = document.getElementById('audio-player');
-  audioPlayer.src = window.electronAPI.buildFileUrl(audioPath);
+  if (audioPath) audioPlayer.src = window.electronAPI.buildFileUrl(audioPath);
+  else audioPlayer.removeAttribute('src');
   audioPlayer.load();
   // Reset custom player UI when a new source loads
   if (typeof window.__resetCustomAudioPlayer === 'function') {
@@ -1357,16 +1510,17 @@ function setMeetingAudioSource(audioPath) {
   }
 }
 
-function seekMeetingAudio(targetSeconds) {
+function seekMeetingAudio(targetSeconds, { player, afterSeek } = {}) {
   const numeric = Number(targetSeconds);
   if (!Number.isFinite(numeric) || numeric < 0) {
     return;
   }
-  const audioPlayer = document.getElementById('audio-player');
+  const audioPlayer = player || document.getElementById('audio-player');
   if (!audioPlayer || !audioPlayer.getAttribute('src')) {
     return;
   }
 
+  if (!afterSeek) stopSpeakerPreview?.();
   if (typeof pendingAudioSeekCleanup === 'function') {
     pendingAudioSeekCleanup();
     pendingAudioSeekCleanup = null;
@@ -1380,9 +1534,10 @@ function seekMeetingAudio(targetSeconds) {
       ? Math.max(0, Math.min(duration, numeric))
       : Math.max(0, numeric);
     audioPlayer.currentTime = clamped;
-    if (typeof window.__syncCustomAudioPlayer === 'function') {
+    if (!player && typeof window.__syncCustomAudioPlayer === 'function') {
       window.__syncCustomAudioPlayer();
     }
+    afterSeek?.();
   };
 
   if (audioPlayer.readyState >= 1) {
@@ -1400,11 +1555,240 @@ function seekMeetingAudio(targetSeconds) {
   };
 }
 
-function renderHistoryTranscriptMarkdown(transcriptEl, markdown) {
+function playSpeakerSample(button, player, sample, updateButton) {
+  if (button.getAttribute('aria-pressed') === 'true') {
+    stopSpeakerPreview?.();
+    return;
+  }
+  stopSpeakerPreview?.();
+  const endSec = Number.isFinite(sample.endSec) && sample.endSec > sample.startSec
+    ? sample.endSec : sample.startSec + 4;
+  const stop = () => {
+    stopSpeakerPreview = null;
+    pendingAudioSeekCleanup?.();
+    pendingAudioSeekCleanup = null;
+    player.removeEventListener('timeupdate', onTime);
+    player.removeEventListener('pause', stop);
+    player.removeEventListener('ended', stop);
+    player.removeEventListener('error', stop);
+    player.pause();
+    updateButton(false);
+  };
+  const onTime = () => {
+    if (player.currentTime >= endSec) stop();
+  };
+  stopSpeakerPreview = stop;
+  updateButton(true);
+  player.addEventListener('ended', stop);
+  player.addEventListener('error', stop);
+  seekMeetingAudio(sample.startSec, {
+    player: player.id === 'audio-player' ? undefined : player,
+    afterSeek: async () => {
+      if (stopSpeakerPreview !== stop) return;
+      player.addEventListener('timeupdate', onTime);
+      try {
+        await player.play();
+        if (stopSpeakerPreview === stop) player.addEventListener('pause', stop);
+      } catch {
+        if (stopSpeakerPreview === stop) stop();
+      }
+    },
+  });
+}
+
+function buildSpeakerRow(prefix, sample, names, player, signal) {
+  const row = document.createElement('div');
+  row.className = 'speaker-row';
+  const label = document.createElement('label');
+  label.htmlFor = `${prefix}-name-${sample.speaker.replace(' ', '-')}`;
+  label.textContent = sample.speaker;
+  const field = document.createElement('input');
+  field.type = 'text';
+  field.id = label.htmlFor;
+  field.className = 'speaker-name-input';
+  field.maxLength = 64;
+  field.autocomplete = 'off';
+  field.placeholder = 'Add a name';
+  field.value = names[sample.speaker] || '';
+  row.append(label, field);
+  if (player?.getAttribute('src') && !player.error && sample.startSec !== null) {
+    const preview = document.createElement('button');
+    preview.type = 'button';
+    preview.className = 'btn btn-small speaker-preview';
+    const timestamp = formatJumpTimestamp(sample.startSec);
+    const update = (playing) => {
+      preview.setAttribute('aria-pressed', String(playing));
+      preview.setAttribute('aria-label', `Voice preview for ${sample.speaker} at ${timestamp}`);
+      preview.textContent = `${playing ? '❚❚' : '▶'} ${timestamp}`;
+    };
+    update(false);
+    preview.addEventListener('click', () => playSpeakerSample(preview, player, sample, update));
+    player.addEventListener('error', () => {
+      preview.disabled = true;
+      preview.title = 'Recording audio is unavailable';
+    }, { once: true, signal });
+    row.appendChild(preview);
+  }
+  if (sample.excerpt) {
+    const excerpt = document.createElement('p');
+    excerpt.className = 'speaker-excerpt';
+    excerpt.id = `${field.id}-excerpt`;
+    excerpt.textContent = `“${sample.excerpt}”`;
+    excerpt.title = sample.excerpt;
+    field.setAttribute('aria-describedby', excerpt.id);
+    row.appendChild(excerpt);
+  }
+  return { row, field };
+}
+
+function setHistorySpeakerLabel(button, speaker, names) {
+  const name = names[speaker] || speaker;
+  button.textContent = name;
+  button.setAttribute('aria-label', `Edit name for ${name}`);
+}
+
+function setHistorySpeakersExpanded(expanded) {
+  const toggle = document.getElementById('history-speaker-toggle');
+  const chips = document.getElementById('history-speaker-chips');
+  if (!historySpeakers || !toggle || !chips) return;
+  historySpeakers.expanded = expanded;
+  document.getElementById('history-speaker-rows').hidden = !expanded;
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.textContent = expanded ? 'Hide names' : 'Edit names';
+  chips.hidden = expanded;
+  chips.replaceChildren();
+  if (expanded) return;
+  for (const { speaker } of historySpeakers.samples) {
+    const chip = document.createElement('button');
+    chip.className = 'history-transcript-speaker';
+    chip.type = 'button';
+    setHistorySpeakerLabel(chip, speaker, historySpeakers.names);
+    chip.addEventListener('click', () => focusHistorySpeaker(speaker));
+    chips.appendChild(chip);
+  }
+}
+
+function focusHistorySpeaker(speaker) {
+  if (!historySpeakers) return;
+  setHistorySpeakersExpanded(true);
+  historySpeakers.fields.get(speaker)?.focus();
+}
+
+function clearHistorySpeakers() {
+  stopSpeakerPreview?.();
+  historySpeakers?.controller.abort();
+  historySpeakers = null;
+  const bar = document.getElementById('history-speaker-bar');
+  if (bar) bar.hidden = true;
+}
+
+function renderHistorySpeakers(meeting, segments) {
+  clearHistorySpeakers();
+  const bar = document.getElementById('history-speaker-bar');
+  const samples = extractSpeakerSamples(segments);
+  if (!bar || !samples.length) return;
+  const rows = document.getElementById('history-speaker-rows');
+  const status = document.getElementById('history-speaker-status');
+  const player = document.getElementById('audio-player');
+  const pendingSaves = new Set();
+  const state = {
+    meeting,
+    samples,
+    async flushPendingSaves() {
+      while (pendingSaves.size) await Promise.all(pendingSaves);
+    },
+    names: meeting.ai?.diarization?.speakerNames || {},
+    fields: new Map(),
+    requestedNames: new Map(),
+    controller: new AbortController(),
+    transcriptHash: null,
+  };
+  historySpeakers = state;
+  status.textContent = '';
+  rows.replaceChildren();
+  document.getElementById('history-speaker-heading').textContent = `Speakers (${samples.length})`;
+  document.getElementById('history-speaker-toggle').onclick = () => setHistorySpeakersExpanded(!state.expanded);
+  const collapseIfNamed = (nextFocus) => {
+    if (historySpeakers === state && state.expanded && !rows.contains(nextFocus)
+        && !hasUnnamedSpeakers({ ai: { diarization: { speakerNames: state.names } } }, samples)) {
+      setHistorySpeakersExpanded(false);
+    }
+  };
+  rows.addEventListener('focusout', (event) => collapseIfNamed(event.relatedTarget), { signal: state.controller.signal });
+  for (const sample of samples) {
+    const { speaker } = sample;
+    const { row, field } = buildSpeakerRow('history-speaker', sample, state.names, player, state.controller.signal);
+    state.fields.set(speaker, field);
+    rows.appendChild(row);
+    state.requestedNames.set(speaker, state.names[speaker] || '');
+    const save = async (nextFocus = document.activeElement) => {
+      const name = normalizeSpeakerName(field.value);
+      if (name === state.requestedNames.get(speaker)) {
+        collapseIfNamed(nextFocus);
+        return;
+      }
+      state.requestedNames.set(speaker, name);
+      field.value = name;
+      status.textContent = 'Saving speaker name…';
+      try {
+        const updated = await window.electronAPI.updateMeeting(meeting.id, {
+          speakerNames: { [speaker]: name },
+          expectedSourceTranscriptHash: await (state.transcriptHash ||= hashSummaryTranscript(meeting.transcript)),
+          expectedTranscriptionAttemptId: meeting.transcriptionResult?.attemptId || '',
+        });
+        syncMeetingInList(updated);
+        if (historySpeakers !== state) return;
+        state.names = updated.ai?.diarization?.speakerNames || {};
+        if (state.requestedNames.get(speaker) === name) {
+          if (field.value === name) field.value = state.names[speaker] || '';
+          state.requestedNames.set(speaker, state.names[speaker] || '');
+          status.textContent = 'Speaker name saved.';
+        }
+        updateHistorySpeakerLabels(state, updated);
+        collapseIfNamed(document.activeElement);
+        if (meetingSearchQueryNormalized) void runHistorySearch(meetingSearchQuery);
+      } catch (error) {
+        if (historySpeakers !== state || state.requestedNames.get(speaker) !== name) return;
+        state.requestedNames.set(speaker, state.names[speaker] || '');
+        status.textContent = 'Could not save the name. Press Enter to try again or Escape to restore it.';
+        console.warn('Speaker name update failed:', error.message);
+      }
+    };
+    const trackSave = (nextFocus) => {
+      const pending = save(nextFocus).finally(() => pendingSaves.delete(pending));
+      pendingSaves.add(pending);
+    };
+    field.addEventListener('blur', (event) => trackSave(event.relatedTarget));
+    field.addEventListener('keydown', (event) => {
+      if (event.isComposing) return;
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        trackSave();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        field.value = state.names[speaker] || '';
+        state.requestedNames.set(speaker, field.value);
+        status.textContent = '';
+      }
+    });
+  }
+  bar.hidden = false;
+  setHistorySpeakersExpanded(hasUnnamedSpeakers(meeting, samples));
+}
+
+function updateHistorySpeakerLabels(state, meeting) {
+  for (const badge of document.querySelectorAll('#meeting-transcript [data-speaker-key]')) {
+    setHistorySpeakerLabel(badge, badge.dataset.speakerKey, state.names);
+  }
+  updateSummaryTagMismatchBanner(meeting);
+  if (!state.expanded) setHistorySpeakersExpanded(false);
+}
+
+function renderHistoryTranscriptMarkdown(transcriptEl, markdown, segments = parseTranscriptMarkdownSegments(markdown)) {
   transcriptEl.classList.remove('markdown-body');
   clearElement(transcriptEl);
 
-  const segments = parseTranscriptMarkdownSegments(markdown);
   if (!segments.length) {
     transcriptEl.classList.add('markdown-body');
     renderMarkdownInto(transcriptEl, markdown);
@@ -1426,21 +1810,29 @@ function renderHistoryTranscriptMarkdown(transcriptEl, markdown) {
     const meta = document.createElement('div');
     meta.className = 'history-transcript-meta';
 
-    const timestamp = document.createElement(startSec !== null ? 'button' : 'span');
     if (startSec !== null) {
+      const timestamp = document.createElement('button');
       timestamp.type = 'button';
       timestamp.title = `Jump audio to ${segment.start}`;
       timestamp.setAttribute('aria-label', `Jump audio to ${segment.start}`);
       timestamp.addEventListener('click', () => seekMeetingAudio(startSec));
+      timestamp.className = 'history-transcript-timestamp';
+      timestamp.textContent = `[${segment.start} - ${segment.end}]`;
+      meta.appendChild(timestamp);
     }
-    timestamp.className = 'history-transcript-timestamp';
-    timestamp.textContent = `[${segment.start} - ${segment.end}]`;
-    meta.appendChild(timestamp);
 
     if (segment.speaker) {
-      const speaker = document.createElement('span');
+      const editable = historySpeakers && isCanonicalSpeakerKey(segment.speaker);
+      const speaker = document.createElement(editable ? 'button' : 'span');
       speaker.className = 'history-transcript-speaker';
-      speaker.textContent = segment.speaker;
+      if (editable) {
+        speaker.type = 'button';
+        speaker.dataset.speakerKey = segment.speaker;
+        setHistorySpeakerLabel(speaker, segment.speaker, historySpeakers.names);
+        speaker.addEventListener('click', () => focusHistorySpeaker(segment.speaker));
+      } else {
+        speaker.textContent = segment.speaker;
+      }
       meta.appendChild(speaker);
     }
 
@@ -1572,6 +1964,9 @@ function applySummaryActionAvailability() {
   const control = getSummaryActionControlState(summary, {
     platformSupportsSummaries: platform === 'win32' || platform === 'darwin',
   });
+  if (aiAddonStatusSnapshot?.summaryLibrary && usableSummaryModels().length) { control.enabled = true; control.title = ''; }
+  const mismatchButton = document.getElementById('summary-tag-mismatch-regenerate');
+  if (mismatchButton) mismatchButton.disabled = !control.enabled || Boolean(summaryGenerationMeetingId);
   for (const button of getSummaryGenerationButtons()) {
     button.disabled = !control.enabled;
     if (control.title) {
@@ -1583,6 +1978,8 @@ function applySummaryActionAvailability() {
 }
 
 function updateSummaryGenerationButtons() {
+  const mismatchButton = document.getElementById('summary-tag-mismatch-regenerate');
+  if (mismatchButton) mismatchButton.disabled = Boolean(summaryGenerationMeetingId);
   const view = getSummaryGenerationButtonView({
     active: Boolean(summaryGenerationMeetingId),
     cancelling: summaryGenerationCancelling,
@@ -1660,6 +2057,7 @@ function setupHistoryDetailTabs() {
 }
 
 function activateTab(targetTab) {
+  closeActiveTagPopover();
   const tabButtons = document.querySelectorAll('.tab-btn');
   const railButtons = document.querySelectorAll('.rail-btn[data-tab]');
   const tabPanes = document.querySelectorAll('.tab-pane');
@@ -2691,6 +3089,266 @@ async function loadMeetingHistory({ scan = false } = {}) {
   }
 }
 
+function applyTagPillView(btn, labelEl, rawTag, { untaggedLabel = 'Add tag' } = {}) {
+  if (!btn || !labelEl) return;
+  const meta = getTagMeta(rawTag);
+  if (meta) {
+    btn.classList.remove('is-untagged');
+    btn.dataset.tag = meta.slug;
+    labelEl.textContent = meta.label;
+    btn.title = `Tag: ${meta.label}`;
+  } else {
+    btn.classList.add('is-untagged');
+    delete btn.dataset.tag;
+    labelEl.textContent = untaggedLabel;
+    btn.title = 'Add a recording tag';
+  }
+}
+
+function closeActiveTagPopover({ restoreFocus = false } = {}) {
+  if (!activeOpenTagPopover) return;
+  const { triggerBtn, popoverEl } = activeOpenTagPopover;
+  activeOpenTagPopover = null;
+  if (popoverEl) popoverEl.hidden = true;
+  if (triggerBtn) {
+    triggerBtn.setAttribute('aria-expanded', 'false');
+    if (restoreFocus && triggerBtn.isConnected) {
+      triggerBtn.focus({ preventScroll: true });
+    }
+  }
+}
+
+function toggleTagPickerPopover({ triggerBtn, popoverEl, currentTag = null, rightAlign = false, activityMeetingId = null, onSelect }) {
+  if (!triggerBtn || !popoverEl) return;
+  if (activeOpenTagPopover && activeOpenTagPopover.popoverEl === popoverEl && !popoverEl.hidden) {
+    closeActiveTagPopover({ restoreFocus: false });
+    return;
+  }
+  closeActiveTagPopover({ restoreFocus: false });
+
+  clearElement(popoverEl);
+  popoverEl.classList.toggle('is-right-aligned', Boolean(rightAlign));
+
+  const optionButtons = [];
+  for (const tag of RECORDING_TAGS) {
+    const opt = document.createElement('button');
+    opt.type = 'button';
+    opt.className = 'recording-tag-option';
+    opt.dataset.tag = tag.slug;
+    opt.setAttribute('role', 'option');
+    const selected = currentTag === tag.slug;
+    opt.classList.toggle('is-selected', selected);
+    opt.setAttribute('aria-selected', String(selected));
+    const dot = document.createElement('span');
+    dot.className = 'recording-tag-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.className = 'recording-tag-option-label';
+    text.textContent = tag.label;
+    opt.append(dot, text);
+    opt.addEventListener('click', (event) => {
+      event.stopPropagation();
+      closeActiveTagPopover({ restoreFocus: true });
+      void Promise.resolve(onSelect(tag.slug));
+    });
+    popoverEl.appendChild(opt);
+    optionButtons.push(opt);
+  }
+
+  if (currentTag) {
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'recording-tag-clear-btn';
+    clearBtn.setAttribute('role', 'option');
+    clearBtn.setAttribute('aria-selected', 'false');
+    clearBtn.textContent = 'Clear tag';
+    clearBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      closeActiveTagPopover({ restoreFocus: true });
+      void Promise.resolve(onSelect(null));
+    });
+    popoverEl.appendChild(clearBtn);
+    optionButtons.push(clearBtn);
+  }
+
+  popoverEl.onkeydown = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      closeActiveTagPopover({ restoreFocus: true });
+      return;
+    }
+    const idx = optionButtons.indexOf(document.activeElement);
+    if (!optionButtons.length) return;
+    let nextIdx = -1;
+    if (event.key === 'ArrowRight') nextIdx = (idx + 1) % optionButtons.length;
+    else if (event.key === 'ArrowLeft') nextIdx = (idx - 1 + optionButtons.length) % optionButtons.length;
+    else if (event.key === 'ArrowDown') nextIdx = Math.min(optionButtons.length - 1, idx < 0 ? 0 : idx + 2);
+    else if (event.key === 'ArrowUp') nextIdx = Math.max(0, idx < 0 ? 0 : idx - 2);
+    else if (event.key === 'Home') nextIdx = 0;
+    else if (event.key === 'End') nextIdx = optionButtons.length - 1;
+    if (nextIdx >= 0) {
+      event.preventDefault();
+      optionButtons[nextIdx]?.focus({ preventScroll: true });
+    }
+  };
+
+  popoverEl.hidden = false;
+  triggerBtn.setAttribute('aria-expanded', 'true');
+  activeOpenTagPopover = { triggerBtn, popoverEl, activityMeetingId };
+  const positionPopover = () => {
+    if (activeOpenTagPopover?.popoverEl !== popoverEl) return;
+    const trigger = triggerBtn.getBoundingClientRect();
+    const popup = popoverEl.getBoundingClientRect();
+    const left = rightAlign ? trigger.right - popup.width : trigger.left;
+    const below = trigger.bottom + 6;
+    const top = below + popup.height <= window.innerHeight - 12 ? below : trigger.top - popup.height - 6;
+    popoverEl.style.left = `${Math.max(12, Math.min(left, window.innerWidth - popup.width - 12))}px`;
+    popoverEl.style.top = `${Math.max(12, Math.min(top, window.innerHeight - popup.height - 12))}px`;
+  };
+  positionPopover();
+  requestAnimationFrame(positionPopover);
+  const initialFocus = optionButtons.find((btn) => btn.classList.contains('is-selected')) || optionButtons[0];
+  requestAnimationFrame(() => {
+    if (activeOpenTagPopover?.popoverEl === popoverEl && initialFocus?.isConnected) {
+      initialFocus.focus({ preventScroll: true });
+    }
+  });
+}
+
+function renderRecordingTagControl() {
+  const btn = document.getElementById('recording-tag-btn');
+  const label = document.getElementById('recording-tag-btn-label');
+  applyTagPillView(btn, label, selectedRecordingTag, { untaggedLabel: 'Add tag' });
+}
+
+function renderHistoryTagFilterBar(focusedTag) {
+  const bar = document.getElementById('history-tag-filter-bar');
+  if (!bar) return;
+
+  const used = getUsedRecordingTags(meetings);
+  if (activeHistoryTagFilter && !used.some((entry) => entry.slug === activeHistoryTagFilter)) {
+    activeHistoryTagFilter = null;
+  }
+
+  if (used.length === 0) {
+    bar.hidden = true;
+    clearElement(bar);
+    return;
+  }
+
+  if (focusedTag === undefined && bar.contains(document.activeElement)) {
+    focusedTag = document.activeElement.dataset.tag;
+  }
+  bar.hidden = false;
+  clearElement(bar);
+
+  const applyFilter = (tag, triggerTag) => {
+    activeHistoryTagFilter = tag;
+    renderHistoryTagFilterBar(triggerTag);
+    if (normalizeHistorySearchQuery(meetingSearchQuery)) {
+      clearTimeout(meetingSearchDebounceTimer);
+      meetingSearchDebounceTimer = null;
+      void runHistorySearch(meetingSearchQuery);
+    } else {
+      renderMeetingList();
+    }
+  };
+
+  const allChip = document.createElement('button');
+  allChip.type = 'button';
+  allChip.className = 'history-tag-filter-chip';
+  allChip.dataset.tag = '';
+  allChip.classList.toggle('is-active', !activeHistoryTagFilter);
+  allChip.setAttribute('aria-pressed', String(!activeHistoryTagFilter));
+  allChip.textContent = 'All';
+  allChip.addEventListener('click', () => applyFilter(null, ''));
+  bar.appendChild(allChip);
+
+  let focusTarget = allChip;
+  for (const tag of used) {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'history-tag-filter-chip';
+    chip.dataset.tag = tag.slug;
+    const isActive = activeHistoryTagFilter === tag.slug;
+    chip.classList.toggle('is-active', isActive);
+    chip.setAttribute('aria-pressed', String(isActive));
+    const dot = document.createElement('span');
+    dot.className = 'recording-tag-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.textContent = tag.shortLabel;
+    chip.append(dot, text);
+    chip.addEventListener('click', () => applyFilter(isActive ? null : tag.slug, tag.slug));
+    bar.appendChild(chip);
+    if (focusedTag === tag.slug) focusTarget = chip;
+  }
+  if (focusedTag !== undefined) focusTarget.focus();
+}
+
+function updateSummaryTagMismatchBanner(meeting) {
+  const banner = document.getElementById('summary-tag-mismatch-banner');
+  const textEl = document.getElementById('summary-tag-mismatch-text');
+  const regenBtn = document.getElementById('summary-tag-mismatch-regenerate');
+  if (!banner || !textEl || !regenBtn) return;
+
+  const displayedSummary = document.getElementById('meeting-summary')?.dataset.markdown || '';
+  const mismatch = getSummaryTagMismatch(
+    meeting && typeof meeting.summary !== 'string'
+      ? { ...meeting, summary: displayedSummary }
+      : meeting,
+  );
+  const namesChanged = Boolean((meeting?.summary || displayedSummary)
+    && haveSummarySpeakerNamesChanged(meeting, meeting?.speakerNamesHash));
+  if (!mismatch && !namesChanged) {
+    banner.hidden = true;
+    return;
+  }
+
+  textEl.textContent = [
+    mismatch && `Tag changed to ${mismatch.currentLabel}.`,
+    namesChanged && 'Speaker names changed since this summary was generated.',
+  ].filter(Boolean).join(' ');
+  regenBtn.textContent = mismatch ? `Regenerate with ${mismatch.currentLabel} format` : 'Regenerate with current names';
+  banner.hidden = false;
+}
+
+async function commitMeetingTagChange(meetingId, nextTag) {
+  const targetId = String(meetingId || '');
+  if (!targetId) return;
+  const version = (meetingTagMutationVersions.get(targetId) || 0) + 1;
+  meetingTagMutationVersions.set(targetId, version);
+  try {
+    const updated = await window.electronAPI.updateMeeting(targetId, { tag: nextTag });
+    if (meetingTagMutationVersions.get(targetId) !== version) return;
+    const resolvedTag = updated ? normalizeTag(updated.tag) : normalizeTag(nextTag);
+    const idx = findMeetingIndexById(targetId);
+    const merged = { ...(idx !== -1 ? meetings[idx] : {}), ...updated, tag: resolvedTag };
+    if (idx !== -1) meetings[idx] = merged;
+    if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, targetId)) {
+      currentRecordingMeeting = { ...currentRecordingMeeting, ...updated, tag: resolvedTag };
+    }
+    if (meetingIdsEqual(currentMeetingId, targetId)) {
+      applyTagPillView(document.getElementById('meeting-tag-btn'), document.getElementById('meeting-tag-btn-label'), resolvedTag);
+      updateSummaryTagMismatchBanner(merged);
+    }
+    renderHistoryTagFilterBar();
+    renderMeetingList();
+    renderActivityList();
+    if (meetingSearchQueryNormalized || meetingSearchDebounceTimer) {
+      clearTimeout(meetingSearchDebounceTimer);
+      meetingSearchDebounceTimer = null;
+      void runHistorySearch(meetingSearchQuery);
+    }
+    if (chatState.popoverOpen) renderScopePopover();
+  } catch (error) {
+    if (meetingTagMutationVersions.get(targetId) !== version) return;
+    console.error('Failed to update recording tag:', error);
+    showAppToast(`Could not update tag: ${error.message}`, 'error');
+  }
+}
+
 async function runHistorySearch(rawQuery) {
   const normalized = normalizeHistorySearchQuery(rawQuery);
   meetingSearchQuery = rawQuery || '';
@@ -2709,6 +3367,7 @@ async function runHistorySearch(rawQuery) {
         query: normalized,
         limit: 50,
         maxMatches: 3,
+        ...(activeHistoryTagFilter ? { tags: [activeHistoryTagFilter] } : {}),
       });
       if (epoch !== meetingSearchEpoch) {
         return;
@@ -2732,12 +3391,13 @@ async function runHistorySearch(rawQuery) {
 
 // Render meeting list
 function renderMeetingList() {
+  renderHistoryTagFilterBar();
   const query = meetingSearchQueryNormalized;
   const filtered = !query
-    ? meetings
+    ? filterMeetingsByTag(meetings, activeHistoryTagFilter)
     : (Array.isArray(meetingSearchResults)
-      ? mergeSearchResultsWithMeetings(meetings, { meetings: meetingSearchResults })
-      : fallbackFilterMeetingsByTitle(meetings, query));
+      ? mergeSearchResultsWithMeetings(meetings, { meetings: meetingSearchResults }, { tag: activeHistoryTagFilter })
+      : fallbackFilterMeetingsByTitle(meetings, query, { tag: activeHistoryTagFilter }));
 
   if (filtered.length === 0) {
     setPlaceholder(
@@ -2863,6 +3523,7 @@ async function deleteCheckedMeetings() {
     meetingDetails.style.display = 'none';
     document.getElementById('meeting-details-empty').style.display = 'flex';
     currentMeetingId = null;
+    clearHistorySpeakers();
   }
 
   meetings = meetings.filter((m) => !ids.includes(String(m.id)));
@@ -2884,6 +3545,7 @@ async function deleteCheckedMeetings() {
 
 // Select meeting from history
 async function selectMeeting(meetingId) {
+  const selectionEpoch = ++meetingSelectionRequestEpoch;
   const targetId = String(meetingId);
   const meeting = meetings.find((m) => String(m.id) === targetId);
   if (!meeting) {
@@ -2899,6 +3561,11 @@ async function selectMeeting(meetingId) {
     return;
   }
 
+  if (historySpeakers) {
+    await historySpeakers.flushPendingSaves();
+    if (selectionEpoch !== meetingSelectionRequestEpoch) return;
+  }
+
   if (currentMeetingId !== null && String(currentMeetingId) !== targetId) {
     document.dispatchEvent(new Event('history-selection-changed'));
   }
@@ -2911,9 +3578,15 @@ async function selectMeeting(meetingId) {
   updateSummaryLanguageCaptions(meeting);
 
   // Show meeting details
+  closeActiveTagPopover({ restoreFocus: false });
   document.getElementById('meeting-title').textContent = meeting.title;
   document.getElementById('meeting-date').textContent = formatDate(meeting.date);
   document.getElementById('meeting-duration').textContent = meeting.duration;
+  applyTagPillView(
+    document.getElementById('meeting-tag-btn'),
+    document.getElementById('meeting-tag-btn-label'),
+    meeting.tag,
+  );
   closeInlineTitleEditor({
     headingId: 'meeting-title',
     editBtnId: 'meeting-title-edit',
@@ -2930,9 +3603,11 @@ async function selectMeeting(meetingId) {
   const retryBtn = document.getElementById('retry-transcription-btn');
   const retryWhisperBtn = document.getElementById('retry-whisper-transcription-btn');
   transcriptEl.classList.remove('markdown-body');
+  clearHistorySpeakers();
   delete transcriptEl.dataset.markdown;
   clearElement(transcriptEl);
   renderSummaryMarkdown('');
+  updateSummaryTagMismatchBanner(null);
   if (retryBtn) {
     retryBtn.style.display = isMeetingTranscriptionRetryable(meeting) ? 'inline-flex' : 'none';
     retryBtn.disabled = false;
@@ -2961,6 +3636,11 @@ async function refreshMeetingDetails(targetId) {
     if (!fullMeeting || currentMeetingId !== targetId || requestEpoch !== meetingDetailRequestEpoch) {
       return;
     }
+    applyTagPillView(
+      document.getElementById('meeting-tag-btn'),
+      document.getElementById('meeting-tag-btn-label'),
+      fullMeeting.tag,
+    );
     updateSummaryLanguageCaptions(fullMeeting);
     if (retryBtn) {
       retryBtn.style.display = isMeetingTranscriptionRetryable(fullMeeting) ? 'inline-flex' : 'none';
@@ -2979,8 +3659,11 @@ async function refreshMeetingDetails(targetId) {
       && transcript.includes('The recording was saved successfully, but a transcript is not available yet.');
     if (transcript && !(pending && generatedPlaceholder)) {
       transcriptEl.dataset.markdown = transcript;
-      renderHistoryTranscriptMarkdown(transcriptEl, transcript);
+      const segments = parseTranscriptMarkdownSegments(transcript);
+      renderHistorySpeakers(fullMeeting, segments);
+      renderHistoryTranscriptMarkdown(transcriptEl, transcript, segments);
     } else {
+      clearHistorySpeakers();
       delete transcriptEl.dataset.markdown;
       clearElement(transcriptEl);
       if (!pending) {
@@ -3018,9 +3701,11 @@ async function refreshMeetingDetails(targetId) {
     } else {
       showSummaryMessage('No summary yet. Click Generate summary once Summaries & Chat is set up in Settings.');
     }
+    updateSummaryTagMismatchBanner(fullMeeting);
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
     if (currentMeetingId === targetId && requestEpoch === meetingDetailRequestEpoch) {
+      clearHistorySpeakers();
       clearElement(transcriptEl);
       delete transcriptEl.dataset.markdown;
       const err = document.createElement('p');
@@ -3334,6 +4019,75 @@ function setupEventListeners() {
   }
 
   setupHistoryDetailTabs();
+
+  const meetingTagBtn = document.getElementById('meeting-tag-btn');
+  const meetingTagPopover = document.getElementById('meeting-tag-popover');
+  if (meetingTagBtn && meetingTagPopover) {
+    meetingTagBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const active = findMeetingById(currentMeetingId);
+      toggleTagPickerPopover({
+        triggerBtn: meetingTagBtn,
+        popoverEl: meetingTagPopover,
+        currentTag: normalizeTag(active && active.tag),
+        onSelect: async (nextTag) => {
+          if (currentMeetingId) {
+            await commitMeetingTagChange(currentMeetingId, nextTag);
+          }
+        },
+      });
+    });
+  }
+
+  const recordingTagBtn = document.getElementById('recording-tag-btn');
+  const recordingTagPopover = document.getElementById('recording-tag-popover');
+  if (recordingTagBtn && recordingTagPopover) {
+    renderRecordingTagControl();
+    recordingTagBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      toggleTagPickerPopover({
+        triggerBtn: recordingTagBtn,
+        popoverEl: recordingTagPopover,
+        currentTag: selectedRecordingTag,
+        rightAlign: true,
+        onSelect: (nextTag) => {
+          selectedRecordingTag = nextTag;
+          if (recordingState !== 'idle') {
+            activeRecordingTag = nextTag;
+          }
+          renderRecordingTagControl();
+        },
+      });
+    });
+  }
+
+  const summaryMismatchRegenBtn = document.getElementById('summary-tag-mismatch-regenerate');
+  if (summaryMismatchRegenBtn) {
+    summaryMismatchRegenBtn.addEventListener('click', () => {
+      if (summaryGenerationMeetingId || summaryMismatchRegenBtn.disabled) return;
+      const targetBtn = document.getElementById('regenerate-summary-btn') || summaryMismatchRegenBtn;
+      void handleSummaryGenerationButtonClick(currentMeetingId, targetBtn);
+    });
+  }
+
+  document.addEventListener('pointerdown', (event) => {
+    if (!activeOpenTagPopover) return;
+    const { triggerBtn, popoverEl } = activeOpenTagPopover;
+    if (popoverEl?.contains(event.target) || triggerBtn?.contains(event.target)) {
+      return;
+    }
+    closeActiveTagPopover({ restoreFocus: false });
+  });
+
+  window.addEventListener('resize', () => closeActiveTagPopover());
+  window.addEventListener('scroll', (event) => {
+    if (activeOpenTagPopover && !activeOpenTagPopover.popoverEl.contains(event.target)) closeActiveTagPopover();
+  }, true);
+  document.addEventListener('focusout', (event) => {
+    if (!activeOpenTagPopover || !event.relatedTarget) return;
+    const { triggerBtn, popoverEl } = activeOpenTagPopover;
+    if (!triggerBtn.contains(event.relatedTarget) && !popoverEl.contains(event.relatedTarget)) closeActiveTagPopover();
+  });
 
   // Meeting search filter
   const searchInput = document.getElementById('meeting-search');
@@ -4184,6 +4938,7 @@ async function startRecording(requestedCaptureMode = 'mic-and-desktop') {
   }
 
   activeCaptureMode = captureMode;
+  activeRecordingTag = selectedRecordingTag;
 
   setRecordingState('starting');
 
@@ -4197,6 +4952,7 @@ async function startRecording(requestedCaptureMode = 'mic-and-desktop') {
   // owned by a newer Start B). Main scopes cancel by generation; mirror that.
   const setIdleIfCurrentStart = () => {
     if (isCurrentStartAttempt()) {
+      activeRecordingTag = null;
       setRecordingState('idle');
     }
   };
@@ -4636,6 +5392,7 @@ async function discardRecording() {
       currentAudioFile = null;
       currentRecordingDurationSeconds = 0;
       activeRecordingTranscriptionSelection = null;
+      activeRecordingTag = null;
       setRecordingState('idle');
       return;
     }
@@ -4775,7 +5532,12 @@ function updateSummaryLanguageCaptions(meeting) {
   if (!helpers) return;
   const captions = [
     ['transcript-summary-language-caption', helpers.formatTranscriptLanguageCaption(meeting && meeting.language)],
-    ['summary-language-caption', helpers.formatSummaryLanguageCaption(meeting)],
+    ['summary-language-caption', (() => {
+      const caption = helpers.formatSummaryLanguageCaption(meeting);
+      const modelId = meeting?.ai?.summary?.modelId;
+      if (caption.visible && modelId && typeof summaryModelName === 'function') caption.value += ` · ${summaryModelName(modelId)}`;
+      return caption;
+    })()],
   ];
   for (const [id, caption] of captions) {
     const element = document.getElementById(id);
@@ -4794,13 +5556,99 @@ function updateSummaryLanguageCaptions(meeting) {
   }
 }
 
-function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = null) {
+function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash, library = null) {
+  const modelSelect = document.getElementById('summary-model-select');
+  const modelField = document.getElementById('summary-model-field');
+  const manageModels = document.getElementById('summary-manage-models');
+  const staticModelLabel = document.getElementById('summary-model-static-label');
+  const usableModels = library ? usableSummaryModels(library) : [];
+  const defaultLanguage = preferredLanguage || meeting.language;
+  const modelLanguages = (item) => item?.qualifiedLanguages || item?.languagePolicy?.languages || [];
+  let chatOnlyDefaultName = null;
+  let autoSelectedModelId = null;
+  if (modelField) modelField.hidden = !library;
+  if (!library && staticModelLabel) staticModelLabel.hidden = true;
+  if (library && modelSelect) {
+    modelSelect.replaceChildren();
+    const defaultUsable = usableModels.some((model) => model.modelId === library.defaultModelId);
+    if (!defaultUsable && usableModels.length !== 1) modelSelect.add(new Option('Choose an available model', ''));
+    for (const model of usableModels) modelSelect.add(new Option(`${model.modelName}${model.modelId === library.defaultModelId ? ' · Default' : ''}`, model.modelId));
+    let initialModelId = defaultUsable ? library.defaultModelId : '';
+    const defaultModel = defaultUsable ? usableModels.find((item) => item.modelId === library.defaultModelId) : null;
+    if (defaultModel && modelLanguages(defaultModel).length === 0) {
+      const capable = usableModels.find((item) => modelLanguages(item).includes(defaultLanguage))
+        || usableModels.find((item) => modelLanguages(item).length > 0);
+      if (capable) {
+        initialModelId = capable.modelId;
+        autoSelectedModelId = capable.modelId;
+        chatOnlyDefaultName = defaultModel.modelName;
+      }
+    }
+    if (usableModels.length === 1) {
+      modelSelect.value = usableModels[0].modelId;
+      modelSelect.hidden = true;
+      modelSelect.disabled = false;
+      if (staticModelLabel) {
+        staticModelLabel.hidden = false;
+        staticModelLabel.textContent = `${usableModels[0].modelName}${usableModels[0].modelId === library.defaultModelId ? ' · Default' : ''}`;
+      }
+    } else if (usableModels.length === 0) {
+      modelSelect.value = '';
+      modelSelect.hidden = true;
+      modelSelect.disabled = true;
+      if (staticModelLabel) staticModelLabel.hidden = true;
+    } else {
+      modelSelect.value = initialModelId;
+      modelSelect.hidden = false;
+      modelSelect.disabled = false;
+      if (staticModelLabel) staticModelLabel.hidden = true;
+    }
+  }
+  if (manageModels && library) {
+    manageModels.hidden = false;
+    manageModels.textContent = usableModels.length
+      ? 'Manage models'
+      : (library.models?.some((m) => m.installed) ? 'Manage models' : 'Set up a model');
+  }
   const modal = document.getElementById('summary-language-modal');
   const select = document.getElementById('summary-transcript-language');
   const form = document.getElementById('summary-language-form');
   const cancel = document.getElementById('summary-language-cancel');
   const submit = document.getElementById('summary-language-confirm');
   const message = document.getElementById('summary-language-message');
+  const speakerFieldset = document.getElementById('summary-speaker-fieldset');
+  const speakerRows = document.getElementById('summary-speaker-rows');
+  const tagField = document.getElementById('summary-recording-type');
+  const tagSelect = document.getElementById('summary-recording-tag');
+  const formatPreview = document.getElementById('summary-format-preview');
+  const fields = new Map();
+  const names = meeting.ai?.diarization?.speakerNames || {};
+  const samples = extractSpeakerSamples(parseTranscriptMarkdownSegments(meeting.transcript));
+  const showSpeakers = shouldPromptSpeakerNamesBeforeSummary(meeting, samples);
+  const controller = new AbortController();
+  const historyPlayer = document.getElementById('audio-player');
+  const useHistoryPlayer = meeting.id && meetingIdsEqual(meeting.id, currentMeetingId);
+  const dedicatedPlayer = showSpeakers && !useHistoryPlayer && meeting.audioPath ? new Audio() : null;
+  if (dedicatedPlayer) dedicatedPlayer.src = window.electronAPI.buildFileUrl(meeting.audioPath);
+  speakerRows.replaceChildren();
+  speakerFieldset.hidden = !showSpeakers;
+  tagField.hidden = Boolean(normalizeTag(meeting.tag));
+  tagSelect.replaceChildren(new Option('None (use general format)', ''));
+  for (const tag of RECORDING_TAGS) tagSelect.add(new Option(tag.label, tag.slug));
+  const updateFormat = () => {
+    const tag = getTagMeta(tagSelect.value || 'other');
+    formatPreview.textContent = `${tag.label} format · ${tag.formatPreview}`;
+  };
+  tagSelect.addEventListener('change', updateFormat, { signal: controller.signal });
+  updateFormat();
+  if (!speakerFieldset.hidden) {
+    const player = useHistoryPlayer ? historyPlayer : dedicatedPlayer;
+    for (const sample of samples) {
+      const { row, field } = buildSpeakerRow('summary-speaker', sample, names, player, controller.signal);
+      fields.set(sample.speaker, field);
+      speakerRows.appendChild(row);
+    }
+  }
   const previousFocus = document.activeElement;
   select.replaceChildren();
   const placeholder = document.createElement('option');
@@ -4813,21 +5661,42 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = n
     option.textContent = `${name}${policy.languages.includes(id) ? '' : ' — summaries unavailable'}`;
     select.appendChild(option);
   }
-  const defaultLanguage = preferredLanguage || meeting.language;
   select.value = Object.hasOwn(policy.names || {}, defaultLanguage) ? defaultLanguage : '';
+  let saving = false;
+  const selectedModel = () => usableModels.find((item) => item.modelId === modelSelect?.value);
+  const selectedLanguages = (model) => model?.qualifiedLanguages || model?.languagePolicy?.languages || (model && model.modelId !== library?.defaultModelId ? [] : policy.languages);
   const update = () => {
+    const model = selectedModel();
+    const languages = selectedLanguages(model);
+    for (const option of (select.options || [])) {
+      if (option.value && policy.names?.[option.value]) option.textContent = `${policy.names[option.value]}${languages.includes(option.value) ? '' : ' — summaries unavailable'}`;
+    }
     const name = policy.names?.[select.value];
-    const available = policy.languages.includes(select.value);
-    submit.disabled = !available;
-    message.textContent = !name ? 'Choose the main language spoken in this recording.'
-      : available ? `Summary will use ${name}.`
+    const available = languages.includes(select.value) && (!library || Boolean(model));
+    submit.disabled = saving || !available;
+    message.textContent = library && !model ? 'The default model is unavailable. Choose an installed model.'
+      : !languages.length ? 'This model is Chat-only on this device. Choose another model for summaries.'
+      : !name ? 'Choose the main language spoken in this recording.'
+      : available
+        ? (chatOnlyDefaultName && model?.modelId === autoSelectedModelId
+          ? `Summary will use ${name}. (${chatOnlyDefaultName} is Chat-only on this device.)`
+          : `Summary will use ${name}.`)
         : `Summaries are not available for ${name} with this model.`;
   };
   update();
   modal.classList.remove('hidden');
   select.focus();
   return new Promise((resolve) => {
+    let closed = false;
     const close = (language) => {
+      if (closed) return;
+      closed = true;
+      stopSpeakerPreview?.();
+      controller.abort();
+      if (dedicatedPlayer) {
+        dedicatedPlayer.removeAttribute('src');
+        dedicatedPlayer.load();
+      }
       modal.classList.add('hidden');
       form.removeEventListener('submit', onSubmit);
       select.removeEventListener('change', update);
@@ -4837,18 +5706,74 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = n
       if (previousFocus?.isConnected) previousFocus.focus();
       resolve(language);
     };
-    const onSubmit = (event) => {
+    const onSubmit = async (event) => {
       event.preventDefault();
-      if (policy.languages.includes(select.value)) close(select.value);
+      if (saving || submit.disabled) return;
+      const transcriptLanguage = select.value;
+      const selectedModelId = modelSelect?.value || null;
+      const editedNames = { ...names };
+      for (const [speaker, field] of fields) editedNames[speaker] = field.value;
+      const speakerNames = diffSpeakerNames(names, editedNames);
+      const updates = {};
+      if (Object.keys(speakerNames).length) {
+        updates.speakerNames = speakerNames;
+        updates.expectedSourceTranscriptHash = sourceTranscriptHash;
+        updates.expectedTranscriptionAttemptId = meeting.transcriptionResult?.attemptId || '';
+      }
+      if (!tagField.hidden && tagSelect.value) updates.tag = tagSelect.value;
+      if (Object.keys(updates).length) {
+        saving = true;
+        submit.disabled = true;
+        message.textContent = 'Saving recording details…';
+        try {
+          const updated = await window.electronAPI.updateMeeting(meeting.id, updates);
+          if (closed) return;
+          if (Object.hasOwn(updates, 'tag')) {
+            const id = String(updated.id);
+            meetingTagMutationVersions.set(id, (meetingTagMutationVersions.get(id) || 0) + 1);
+          }
+          syncMeetingInList(updated);
+          if (meetingIdsEqual(currentMeetingId, updated.id)) {
+            applyTagPillView(document.getElementById('meeting-tag-btn'), document.getElementById('meeting-tag-btn-label'), updated.tag);
+            if (!historySpeakers) updateSummaryTagMismatchBanner(updated);
+          }
+          if (historySpeakers && meetingIdsEqual(historySpeakers.meeting.id, updated.id)) {
+            historySpeakers.names = updated.ai?.diarization?.speakerNames || {};
+            for (const [speaker, field] of historySpeakers.fields) {
+              field.value = historySpeakers.names[speaker] || '';
+              historySpeakers.requestedNames.set(speaker, field.value);
+            }
+            updateHistorySpeakerLabels(historySpeakers, updated);
+            if (!hasUnnamedSpeakers(updated, historySpeakers.samples)) setHistorySpeakersExpanded(false);
+          }
+          renderHistoryTagFilterBar();
+          renderActivityList();
+          if (chatState.popoverOpen) renderScopePopover();
+          if (meetingSearchQueryNormalized || meetingSearchDebounceTimer) {
+            clearTimeout(meetingSearchDebounceTimer);
+            meetingSearchDebounceTimer = null;
+            void runHistorySearch(meetingSearchQuery);
+          }
+        } catch (error) {
+          if (closed) return;
+          saving = false;
+          update();
+          message.textContent = 'Could not save recording details. Try again, or reopen Prepare summary if the transcript changed.';
+          console.warn('Summary preparation update failed:', error.message);
+          return;
+        }
+      }
+      close(library ? { transcriptLanguage, modelId: selectedModelId } : transcriptLanguage);
     };
     const onCancel = () => close(null);
     const onKey = (event) => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(null); }
       if (event.key !== 'Tab') return;
-      const elements = [select, cancel, submit].filter((element) => !element.disabled);
+      const elements = [...modal.querySelectorAll('button:not(:disabled), input:not(:disabled), select:not(:disabled)')]
+        .filter((element) => !element.closest('[hidden]'));
       const index = elements.indexOf(document.activeElement);
       const next = event.shiftKey ? index - 1 : index + 1;
-      if (next < 0 || next >= elements.length) {
+      if (elements.length && (index === -1 || next < 0 || next >= elements.length)) {
         event.preventDefault();
         elements[event.shiftKey ? elements.length - 1 : 0].focus();
       }
@@ -4856,6 +5781,14 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage = n
     closeSummaryLanguageConfirmation = close;
     form.addEventListener('submit', onSubmit);
     select.addEventListener('change', update);
+    modelSelect?.addEventListener('change', () => {
+      if (!selectedLanguages(selectedModel()).includes(select.value)) select.value = '';
+      update();
+    }, { signal: controller.signal });
+    manageModels?.addEventListener('click', () => {
+      close(null);
+      openSettingsAtAiAddons();
+    }, { signal: controller.signal });
     cancel.addEventListener('click', onCancel);
     modal.addEventListener('keydown', onKey);
   });
@@ -4881,10 +5814,8 @@ async function generateSummaryForMeeting(meetingId) {
   addLog('Checking summary availability…');
   let aiStatus;
   try {
-    aiStatus = await window.electronAPI.getAiAddonStatus({
-      verifyChecksums: true,
-      verifyChecksumsIfChanged: true,
-    });
+    await historySpeakers?.flushPendingSaves();
+    aiStatus = await window.electronAPI.getAiAddonStatus();
   } catch (error) {
     addLog(`Summary setup status unavailable: ${error.message}`, 'error');
     summaryGenerationMeetingId = null;
@@ -4907,7 +5838,9 @@ async function generateSummaryForMeeting(meetingId) {
   }
 
   const summaryStatus = aiStatus && aiStatus.features && aiStatus.features.summary;
-  if (!summaryStatus || !summaryStatus.setupComplete || summaryStatus.status !== 'ready') {
+  const library = aiStatus?.summaryLibrary;
+  aiAddonStatusSnapshot = aiStatus;
+  if (library ? !usableSummaryModels(library).length : (!summaryStatus || !summaryStatus.setupComplete || summaryStatus.status !== 'ready')) {
     const message = getSummarySetupMessage(summaryStatus);
     addLog(message, summaryStatus && summaryStatus.status === 'unsupported' ? 'error' : 'warning');
     await restoreCurrentHistorySummary(normalizedMeetingId, message, { isError: summaryStatus?.status === 'error' });
@@ -4919,13 +5852,15 @@ async function generateSummaryForMeeting(meetingId) {
   }
 
   try {
-    const policy = summaryStatus.languagePolicy;
-    if (!policy || !policy.languages?.length) throw new Error('No transcript languages have been checked for the installed model.');
+    const policy = summaryStatus?.languagePolicy || usableSummaryModels(library)[0]?.languagePolicy;
+    if (!policy || (!library && !policy.languages?.length)) throw new Error('No transcript languages have been checked for the installed model.');
+    await historySpeakers?.flushPendingSaves();
     const meeting = await window.electronAPI.getMeeting(normalizedMeetingId);
     const sourceTranscriptHash = await hashSummaryTranscript(meeting?.transcript);
     if (summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) throw new Error('Summary generation cancelled.');
     const preferredLanguage = window.summaryLanguageHelpers.reusableSummaryLanguage(meeting, sourceTranscriptHash, policy);
-    const transcriptLanguage = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage);
+    const selection = await confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, sourceTranscriptHash, library);
+    const transcriptLanguage = typeof selection === 'string' ? selection : selection?.transcriptLanguage;
     if (!transcriptLanguage || summaryGenerationCancelling || summaryGenerationMeetingId !== normalizedMeetingId || rendererQuitCommitted) {
       await restoreCurrentHistorySummary(normalizedMeetingId, 'Summary generation cancelled. Transcript is unchanged.', { showTab: false });
       return;
@@ -4937,6 +5872,7 @@ async function generateSummaryForMeeting(meetingId) {
       meetingId: normalizedMeetingId,
       transcriptLanguage,
       sourceTranscriptHash,
+      modelId: selection?.modelId || undefined,
       profile: (summaryProfileSelect && summaryProfileSelect.value) || summaryStatus.profile || DEFAULT_SUMMARY_PROFILE,
     });
 
@@ -4946,6 +5882,7 @@ async function generateSummaryForMeeting(meetingId) {
       if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
         updateSummaryLanguageCaptions(fullMeeting);
         renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '', { stale: fullMeeting && fullMeeting.summaryStale });
+        updateSummaryTagMismatchBanner(fullMeeting);
         activateHistoryDetailTab('summary');
       }
     } else if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, normalizedMeetingId)) {
@@ -5008,6 +5945,7 @@ async function transcribeAudio(options = {}) {
   }
 
   try {
+    const capturedTag = activeRecordingTag;
     addLog(`Saving recording and queuing transcription (${language}, ${modelSize})…`);
     addLog(`File: ${currentAudioFile}`);
 
@@ -5016,9 +5954,15 @@ async function transcribeAudio(options = {}) {
       duration: currentRecordingDurationSeconds || 0,
       language,
       modelSize,
+      ...(capturedTag ? { tag: capturedTag } : {}),
       transcriptionErrorNote: stopErrorNote,
       transcriptionSelection: capturedSelection || null,
     });
+    if (!result || result.success !== false || result.meeting || result.pendingMeeting) {
+      activeRecordingTag = null;
+      selectedRecordingTag = null;
+      renderRecordingTagControl();
+    }
 
     if (result && result.success === false) {
       throw Object.assign(new Error(result.error || 'Could not save recording.'), {
@@ -5313,8 +6257,9 @@ function copyTranscript() {
 // Copy meeting transcript to clipboard
 function copyMeetingTranscript() {
   const transcriptEl = document.getElementById('meeting-transcript');
-  // Prefer the original markdown source so users get the .md they expect.
-  const text = transcriptEl.dataset.markdown || transcriptEl.textContent;
+  const text = transcriptEl.dataset.markdown
+    ? window.subtitleExportHelpers.applySpeakerNamesToMarkdown(transcriptEl.dataset.markdown, historySpeakers?.names)
+    : transcriptEl.textContent;
 
   navigator.clipboard.writeText(text).then(() => {
     // Visual feedback
@@ -5864,6 +6809,7 @@ async function deleteMeetingHandler(meetingId, fallbackTitle = '') {
         meetingDetails.style.display = 'none';
         document.getElementById('meeting-details-empty').style.display = 'flex';
         currentMeetingId = null;
+        clearHistorySpeakers();
       }
 
       // Remove from local list immediately
@@ -6121,6 +7067,17 @@ function renderAiAddonProgress(feature) {
   const progressBar = document.getElementById(`${feature}-progress-bar`);
   const progressText = document.getElementById(`${feature}-progress-text`);
   const cancelButton = document.getElementById(`cancel-${feature === 'summary' ? 'summary' : 'diarization'}-btn`);
+  if (feature === 'summary' && typeof summaryLibrary === 'function' && summaryLibrary()) {
+    if (progressEl) {
+      if (progressEl.style) progressEl.style.display = 'none';
+      progressEl.hidden = true;
+    }
+    if (cancelButton) {
+      if (cancelButton.style) cancelButton.style.display = 'none';
+      cancelButton.hidden = true;
+    }
+    return;
+  }
   const terminalMessage = /ready|failed|error|cancel|unsupported|token|not supported/i.test((state && state.message) || '');
   const showCancel = Boolean(state && state.active && !(terminalMessage && !state.cancelling));
   if (!state || !progressEl || !progressBar || !progressText) {
@@ -6154,6 +7111,13 @@ function setAiAddonProgressState(feature, updates = {}) {
     ...updates,
   };
   renderAiAddonProgress(feature);
+  if (feature === 'summary' && aiAddonStatusSnapshot?.summaryLibrary) {
+    if (typeof updateSummaryModelLibraryProgressInPlace === 'function') {
+      updateSummaryModelLibraryProgressInPlace(aiAddonStatusSnapshot.summaryLibrary);
+    } else if (typeof renderSummaryModelLibrary === 'function') {
+      renderSummaryModelLibrary(aiAddonStatusSnapshot.summaryLibrary);
+    }
+  }
 }
 
 const aiAddonProgressHideTimers = {
@@ -6215,9 +7179,11 @@ function handleAiAddonProgress(progress) {
     }
     setAiAddonProgressState(progress.feature, {
       active: holdProgress || isCancelled,
+      terminal: true,
       cancelling: false,
       percent: terminalPercent,
       message: progress.message || '',
+      modelId: progress.modelId || aiAddonDownloadState[progress.feature].modelId || null,
     });
     if (holdProgress || isCancelled) {
       hideAiAddonProgressSoon(progress.feature, progress.status === 'ready' ? 2500 : 5000);
@@ -6232,9 +7198,11 @@ function handleAiAddonProgress(progress) {
     clearAiAddonProgressHideTimer(progress.feature);
     setAiAddonProgressState(progress.feature, {
       active: true,
+      terminal: false,
       cancelling: false,
       percent: Math.max(0, Math.min(100, fallbackPercent || 0)),
       message: formatAiAddonProgressText(progress),
+      modelId: progress.modelId || aiAddonDownloadState[progress.feature].modelId || null,
     });
   }
 }
@@ -6444,9 +7412,573 @@ function shouldLogAiAddonProgress(progress) {
   return false;
 }
 
+function summaryLibrary() {
+  return aiAddonStatusSnapshot?.summaryLibrary || null;
+}
+
+function usableSummaryModels(library = summaryLibrary()) {
+  return (library?.models || []).filter((model) => model.installed && model.setupComplete && model.status === 'ready' && model.fit?.blocked !== true);
+}
+
+function summaryModelName(id, library = summaryLibrary()) {
+  return library?.models?.find((model) => model.modelId === id)?.modelName || id || 'No default';
+}
+
+function summaryModelHasFiles(model) {
+  return Boolean(model.installed || model.removalPending || model.installedBytes > 0 || /removal is incomplete/i.test(model.error || ''));
+}
+
+let summaryDeviceCheckSnapshot = null;
+let summaryDeviceCheckPending = false;
+
+function summaryFitLabel(status) {
+  return ({ fits: 'Fits this device', needs_more_memory: 'May need more memory', runtime_needed: 'Runtime setup needed', unavailable: 'Unavailable on this device', unknown: 'Couldn’t check memory' })[status] || 'Compatibility not checked';
+}
+
+function summaryDownloadConfirmation(model, library) {
+  const size = (value) => value == null ? 'unknown' : formatBytes(value);
+  const required = model.storageFit ? model.storageFit.requiredBytes : model.peakFreeBytes;
+  const available = model.storageFit
+    ? (model.storageFit.availableBytes ?? (required === 0 ? library.availableBytes : null))
+    : library.availableBytes;
+  const shortfall = available != null && required != null ? Math.max(0, required - available) : null;
+  return [
+    `Download ${model.modelName}?`,
+    '',
+    `Model download: ${size(model.downloadBytes)}`,
+    `Runtime download: ${size(model.runtimeDownloadBytes)}`,
+    `Total additional download: ${size(model.additionalDownloadBytes)}`,
+    `Peak free space needed: ${size(required)} (Available: ${size(available)})`,
+    shortfall ? `Free another ${formatBytes(shortfall)} before setup.` : '',
+  ].filter((line, index, arr) => line !== '' || index === 1 || (index < arr.length - 1 && arr[index + 1] !== '')).join('\n');
+}
+
+function formatSummaryModelCapabilities(model) {
+  if (!model || model.fit?.status === 'unavailable') return null;
+  const languages = Array.isArray(model.qualifiedLanguages)
+    ? model.qualifiedLanguages
+    : Array.isArray(model.languagePolicy?.languages)
+      ? model.languagePolicy.languages
+      : null;
+  if (!languages) return null;
+  if (languages.length === 0) return 'Chat only on this device';
+  if (languages.length === 1) {
+    const code = languages[0];
+    const name = model.languagePolicy?.names?.[code] || code;
+    return `${name} summaries & Chat`;
+  }
+  return `Summaries (${languages.length} languages) & Chat`;
+}
+
+function formatSummaryModelStateBadge(model, { activeModel, progress, removalIncomplete, installed }) {
+  if (activeModel) {
+    if (progress.cancelling) return { text: 'Cancelling…', tone: 'working' };
+    if (progress.terminal && /ready/i.test(progress.message || '')) return { text: 'Ready', tone: 'ready' };
+    if (/validat|check/i.test(progress.message || '')) return { text: 'Checking setup…', tone: 'working' };
+    if (/extract/i.test(progress.message || '')) return { text: 'Installing…', tone: 'working' };
+    if (/download/i.test(progress.message || '')) return { text: 'Downloading…', tone: 'working' };
+    return { text: 'Setting up…', tone: 'working' };
+  }
+  if (removalIncomplete) return { text: 'Removal incomplete', tone: 'error' };
+  if (installed) {
+    if (model.status === 'ready') return { text: 'Ready', tone: 'ready' };
+    if (model.status === 'error') return { text: 'Needs attention', tone: 'error' };
+    if (model.status === 'validating') return { text: 'Checking setup', tone: 'working' };
+    if (model.status === 'downloading') return { text: 'Downloading', tone: 'working' };
+    if (model.status === 'unsupported') return { text: 'Unavailable', tone: 'muted' };
+    return { text: 'Installed', tone: '' };
+  }
+  if (model.status === 'error') return { text: 'Download failed', tone: 'error' };
+  const fitStatus = model.fit?.status;
+  if (fitStatus === 'fits') return { text: 'Fits this device', tone: 'ready' };
+  if (fitStatus === 'needs_more_memory') return { text: model.fit?.blocked ? 'Needs more memory' : 'May need more memory', tone: 'error' };
+  if (fitStatus === 'runtime_needed') return { text: 'Runtime setup needed', tone: 'error' };
+  if (fitStatus === 'unavailable') return { text: 'Unavailable', tone: 'muted' };
+  if (fitStatus === 'unknown') return { text: 'Couldn’t check memory', tone: '' };
+  return { text: 'Available', tone: '' };
+}
+
+function createSummaryCardCancelButton() {
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.className = 'btn btn-small btn-secondary summary-library-cancel-btn';
+  cancel.textContent = 'Cancel setup';
+  cancel.addEventListener('click', async () => {
+    setAiAddonProgressState('summary', { cancelling: true, message: 'Cancelling and cleaning up partial files…' });
+    try {
+      await window.electronAPI.cancelSummaryModelSetup();
+    } catch (error) {
+      setAiAddonProgressState('summary', { cancelling: false, message: error.message || 'Could not cancel setup.' });
+      showAppToast(error.message || 'Could not cancel setup.', 'error');
+    }
+  });
+  return cancel;
+}
+
+function createSummaryCardProgressBox(progress) {
+  const box = document.createElement('div');
+  box.className = 'summary-library-card-progress';
+  const barWrap = document.createElement('div');
+  barWrap.className = 'progress-bar-container';
+  const bar = document.createElement('div');
+  bar.className = 'progress-bar';
+  if (bar.style) bar.style.width = `${Math.max(0, Math.min(100, progress?.percent || 0))}%`;
+  barWrap.appendChild(bar);
+  const progressText = document.createElement('p');
+  progressText.className = 'progress-text';
+  progressText.setAttribute('role', 'status');
+  progressText.textContent = `${progress?.message || 'Preparing setup…'}${Number.isFinite(progress?.percent) ? ` · ${Math.round(progress.percent)}%` : ''}`;
+  box.appendChild(barWrap);
+  box.appendChild(progressText);
+  return box;
+}
+
+function updateSummaryModelLibraryProgressInPlace(library) {
+  const container = document.getElementById('summary-model-library');
+  if (!container || !library) return;
+  if (typeof container.querySelectorAll !== 'function') {
+    renderSummaryModelLibrary(library);
+    return;
+  }
+  const cards = [...container.querySelectorAll('.summary-library-model')];
+  if (!cards.length) {
+    renderSummaryModelLibrary(library);
+    return;
+  }
+  const progress = aiAddonDownloadState.summary;
+  for (const card of cards) {
+    const modelId = card.dataset?.modelId;
+    const model = (library.models || []).find((item) => item.modelId === modelId);
+    if (!model) continue;
+    const installed = summaryModelHasFiles(model);
+    const removalIncomplete = Boolean(model.removalPending || /removal is incomplete/i.test(model.error || ''));
+    const activeModel = Boolean(progress.active && progress.modelId === model.modelId);
+    const stateBadgeInfo = typeof formatSummaryModelStateBadge === 'function'
+      ? formatSummaryModelStateBadge(model, { activeModel, progress, removalIncomplete, installed })
+      : { text: activeModel ? (progress.cancelling ? 'Cancelling…' : (progress.message || 'Preparing setup…')) : removalIncomplete ? 'Removal incomplete' : model.status === 'ready' ? 'Ready' : model.status === 'error' ? 'Needs attention' : 'Available', tone: '' };
+    const stateBadge = card.querySelector('.summary-library-state-badge');
+    if (stateBadge) {
+      stateBadge.textContent = stateBadgeInfo.text;
+      stateBadge.className = `summary-library-badge summary-library-state-badge${stateBadgeInfo.tone ? ` is-${stateBadgeInfo.tone}` : ''}`;
+    }
+    const actions = card.querySelector('.ai-addon-actions');
+    let progressBox = card.querySelector('.summary-library-card-progress');
+    if (activeModel) {
+      if (!progressBox) {
+        progressBox = createSummaryCardProgressBox(progress);
+        if (actions && typeof card.insertBefore === 'function') card.insertBefore(progressBox, actions);
+        else card.appendChild(progressBox);
+      }
+      progressBox.hidden = false;
+      const bar = progressBox.querySelector('.progress-bar');
+      if (bar?.style) bar.style.width = `${Math.max(0, Math.min(100, progress.percent || 0))}%`;
+      const progressText = progressBox.querySelector('.progress-text');
+      if (progressText) {
+        progressText.textContent = `${progress.cancelling ? 'Cancelling and cleaning up partial files…' : (progress.message || 'Preparing setup…')}${Number.isFinite(progress.percent) ? ` · ${Math.round(progress.percent)}%` : ''}`;
+      }
+    } else if (progressBox) {
+      progressBox.hidden = true;
+    }
+    if (actions) {
+      let cancelBtn = actions.querySelector('.summary-library-cancel-btn');
+      if (activeModel && !progress.terminal) {
+        if (!cancelBtn) {
+          cancelBtn = createSummaryCardCancelButton();
+          if (typeof actions.insertBefore === 'function') actions.insertBefore(cancelBtn, actions.firstChild || null);
+          else actions.appendChild(cancelBtn);
+        }
+        cancelBtn.hidden = false;
+        cancelBtn.disabled = Boolean(progress.cancelling);
+        cancelBtn.textContent = progress.cancelling ? 'Cancelling…' : 'Cancel setup';
+      } else if (cancelBtn) {
+        if (typeof cancelBtn.remove === 'function') cancelBtn.remove();
+        else cancelBtn.hidden = true;
+      }
+      for (const button of actions.querySelectorAll('button')) {
+        if (button === cancelBtn || button.className?.includes('summary-library-cancel-btn')) continue;
+        const baseDisabled = button.dataset?.baseDisabled === 'true';
+        button.disabled = baseDisabled || Boolean(progress.active);
+      }
+    }
+  }
+}
+
+function renderSummaryModelLibrary(library) {
+  const container = document.getElementById('summary-model-library');
+  if (!container) return;
+  container.replaceChildren();
+  const legacySetupBtn = document.getElementById('setup-summary-btn');
+  const legacyActionsRow = legacySetupBtn?.parentElement || null;
+  for (const id of ['summary-footprint', 'summary-status-text', 'setup-summary-btn', 'validate-summary-btn', 'remove-summary-btn', 'summary-progress', 'cancel-summary-btn']) {
+    const element = document.getElementById(id);
+    if (element) {
+      element.hidden = Boolean(library);
+      if (library && (id === 'summary-progress' || id === 'cancel-summary-btn') && element.style) {
+        element.style.display = 'none';
+      }
+    }
+  }
+  if (legacyActionsRow) {
+    legacyActionsRow.hidden = Boolean(library);
+  }
+  if (!library) return;
+  const modelsWithFiles = (library.models || []).filter(summaryModelHasFiles);
+  const releaseModelId = modelsWithFiles.some((model) => model.modelId === chatState.modelState.modelId)
+    ? chatState.modelState.modelId : library.defaultModelId;
+  const total = document.createElement('p');
+  total.className = 'summary-library-storage-bar';
+  total.textContent = `${formatBytes(library.installedBytes || 0)} used by models · ${formatBytes(library.sharedRuntimeBytes || 0)} shared runtime · ${library.availableBytes == null ? 'Free space unknown' : `${formatBytes(library.availableBytes)} free`}`;
+  container.appendChild(total);
+  const checkDevice = document.createElement('button');
+  checkDevice.type = 'button';
+  checkDevice.id = 'summary-check-device';
+  checkDevice.disabled = summaryDeviceCheckPending;
+  checkDevice.className = 'btn btn-small btn-secondary';
+  checkDevice.textContent = summaryDeviceCheckPending ? 'Checking device…' : 'Check this device';
+  checkDevice.addEventListener('click', async () => {
+    if (summaryDeviceCheckPending) return;
+    summaryDeviceCheckPending = true;
+    checkDevice.disabled = true;
+    checkDevice.textContent = 'Checking device…';
+    try {
+      const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false, checkDevice: true });
+      summaryDeviceCheckSnapshot = new Map((status?.summaryLibrary?.models || []).map((model) => [model.modelId, { fit: model.fit, storageFit: model.storageFit }]));
+      aiAddonStatusSnapshot = status;
+      summaryDeviceCheckPending = false;
+      updateAiAddonSettings(status);
+      updateHomeAiAddonCTA(status);
+    } catch (error) {
+      showAppToast(error.message || 'Could not check this device. Try again.', 'error');
+    } finally {
+      summaryDeviceCheckPending = false;
+      const currentButton = document.getElementById('summary-check-device') || checkDevice;
+      currentButton.disabled = false;
+      currentButton.textContent = 'Check this device';
+    }
+  });
+  container.appendChild(checkDevice);
+  for (const [heading, installed] of [['Installed', true], ['Available to download', false]]) {
+    const models = (library.models || []).filter((model) => summaryModelHasFiles(model) === installed);
+    if (!models.length) continue;
+    const title = document.createElement('h4'); title.className = 'summary-library-section-title'; title.textContent = heading; container.appendChild(title);
+    for (const model of models) {
+      const card = document.createElement('div');
+      const isDefault = model.modelId === library.defaultModelId;
+      const isUnavailable = !installed && model.fit?.blocked === true;
+      card.className = `summary-library-model${isDefault ? ' is-default' : ''}${isUnavailable ? ' is-unavailable' : ''}`;
+      if (card.dataset) card.dataset.modelId = model.modelId;
+      const header = document.createElement('div'); header.className = 'summary-library-model-header';
+      const name = document.createElement('strong'); name.className = 'summary-library-model-name';
+      name.textContent = model.modelName;
+      const removalIncomplete = Boolean(model.removalPending || /removal is incomplete/i.test(model.error || ''));
+      const progress = aiAddonDownloadState.summary;
+      const activeModel = Boolean(progress.active && progress.modelId === model.modelId);
+      const stateBadgeInfo = typeof formatSummaryModelStateBadge === 'function'
+        ? formatSummaryModelStateBadge(model, { activeModel, progress, removalIncomplete, installed })
+        : { text: activeModel ? (progress.cancelling ? 'Cancelling…' : (progress.message || 'Preparing setup…')) : removalIncomplete ? 'Removal incomplete' : model.status === 'ready' ? 'Ready' : model.status === 'error' ? 'Needs attention' : 'Available', tone: '' };
+      const badges = document.createElement('span'); badges.className = 'summary-library-badges';
+      const stateBadge = document.createElement('span');
+      stateBadge.className = `summary-library-badge summary-library-state-badge${stateBadgeInfo.tone ? ` is-${stateBadgeInfo.tone}` : ''}`;
+      stateBadge.textContent = stateBadgeInfo.text;
+      badges.appendChild(stateBadge);
+      if (isDefault) {
+        const defaultBadge = document.createElement('span');
+        defaultBadge.className = 'summary-library-badge is-default';
+        defaultBadge.textContent = 'Default';
+        badges.appendChild(defaultBadge);
+      }
+      if (chatState.modelState.modelId === model.modelId && chatState.modelState.status === 'loaded') {
+        const loadedBadge = document.createElement('span');
+        loadedBadge.className = 'summary-library-badge is-ready';
+        loadedBadge.textContent = 'In memory';
+        badges.appendChild(loadedBadge);
+      }
+      header.appendChild(name);
+      header.appendChild(badges);
+      card.appendChild(header);
+
+      const descParts = [model.description, formatSummaryModelCapabilities(model)].filter(Boolean);
+      if (descParts.length) {
+        const descP = document.createElement('p');
+        descP.className = 'setting-description summary-library-model-desc';
+        descP.textContent = descParts.join(' · ');
+        card.appendChild(descP);
+      }
+
+      const memorySpec = model.fit?.workingMemoryBytes != null
+        ? `${formatBytes(model.fit.workingMemoryBytes)} ${model.fit.memoryType || 'memory'} recommended`
+        : null;
+      const storageParts = installed
+        ? [
+          `${formatBytes(removalIncomplete ? (model.residualBytes ?? model.installedBytes ?? 0) : (model.installedBytes || 0))} ${removalIncomplete ? 'remaining after removal' : 'on disk'}`,
+          !removalIncomplete ? memorySpec : null,
+        ].filter(Boolean)
+        : [
+          model.downloadBytes == null ? 'Download size unknown' : `${formatBytes(model.downloadBytes)} download`,
+          model.estimatedInstalledBytes != null && model.estimatedInstalledBytes !== model.downloadBytes ? `${formatBytes(model.estimatedInstalledBytes)} installed` : null,
+          memorySpec,
+        ].filter(Boolean);
+      const storageP = document.createElement('p');
+      storageP.className = 'setting-description summary-library-model-storage';
+      storageP.textContent = storageParts.join(' · ');
+      card.appendChild(storageP);
+
+      const checked = summaryDeviceCheckSnapshot?.get(model.modelId);
+      const activeStorageFit = checked ? (model.storageFit || checked.storageFit) : null;
+      if (checked) {
+        const fit = checked.fit || {};
+        const storageFit = activeStorageFit || {};
+        const measured = (value) => value == null ? 'unknown' : formatBytes(value);
+        const recommendation = (value) => value == null ? '' : `, ${formatBytes(value)} recommended`;
+        const unified = fit.memoryType === 'unified memory';
+        const memory = `${unified ? 'Unified memory' : 'Graphics memory'} — ${measured(fit.totalMemoryBytes)} total, ${measured(unified ? fit.systemAvailableBytes : fit.availableMemoryBytes)} free${recommendation(fit.workingMemoryBytes)}`;
+        const system = unified ? null : `System RAM — ${measured(fit.systemTotalBytes)} total, ${measured(fit.systemAvailableBytes)} free${fit.systemRecommendedBytes == null ? ', minimum unverified' : recommendation(fit.systemRecommendedBytes)}`;
+        let storage = null;
+        if (activeStorageFit) {
+          storage = storageFit.requiredBytes === 0
+            ? 'Setup needs no additional disk space'
+            : `Storage — ${measured(storageFit.availableBytes)} available, ${measured(storageFit.requiredBytes)} needed for setup`;
+        }
+        const deviceDetails = document.createElement('p');
+        deviceDetails.className = 'setting-description summary-library-model-device';
+        deviceDetails.textContent = ['Last device check', memory, system, storage, fit.reason, storageFit.reason].filter(Boolean).join(' · ');
+        card.appendChild(deviceDetails);
+      }
+      if (model.storageFit?.blocked && model.storageFit.reason && model.storageFit.reason !== activeStorageFit?.reason) {
+        const storageNote = document.createElement('p');
+        storageNote.className = 'setting-description summary-library-card-error';
+        storageNote.textContent = model.storageFit.reason;
+        card.appendChild(storageNote);
+      }
+
+      const fitStatus = model.fit?.status;
+      const showFitNote = Boolean(
+        model.fit?.reason && model.fit.reason !== checked?.fit?.reason
+        && (
+          model.fit?.blocked === true || ['needs_more_memory', 'runtime_needed', 'unavailable'].includes(fitStatus)
+          || (!installed && fitStatus === 'unknown')
+        ),
+      );
+      if (showFitNote) {
+        const deviceMemoryNote = fitStatus === 'needs_more_memory' && model.fit?.totalMemoryBytes != null
+          ? `Your device: ${formatBytes(model.fit.totalMemoryBytes)} ${model.fit.memoryType || 'memory'}${model.fit.availableMemoryBytes != null ? ` (${formatBytes(model.fit.availableMemoryBytes)} free)` : ''}.`
+          : null;
+        const fitP = document.createElement('p');
+        fitP.className = 'setting-description summary-library-model-fit';
+        fitP.textContent = [model.fit.reason, deviceMemoryNote].filter(Boolean).join(' ');
+        card.appendChild(fitP);
+      }
+
+      const showError = Boolean(
+        model.error
+        && !(removalIncomplete && /removal is incomplete/i.test(model.error))
+        && model.error !== model.fit?.reason,
+      );
+      if (showError) {
+        const errorP = document.createElement('p');
+        errorP.className = 'setting-description summary-library-card-error';
+        errorP.textContent = model.error;
+        card.appendChild(errorP);
+      }
+      if (!installed && !model.storageFit && library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes) {
+        const warning = document.createElement('p');
+        warning.className = 'setting-description summary-library-card-error';
+        warning.textContent = `Free ${formatBytes(model.peakFreeBytes - library.availableBytes)} to download this model. Remove an installed model above to free space.`;
+        card.appendChild(warning);
+      }
+      if (activeModel) {
+        card.appendChild(createSummaryCardProgressBox(progress));
+      }
+      const actions = document.createElement('div'); actions.className = 'ai-addon-actions';
+      if (activeModel && !progress.cancelling && !progress.terminal) {
+        actions.appendChild(createSummaryCardCancelButton());
+      }
+      const addAction = (label, action, disabled = false, variant = 'secondary') => {
+        const button = document.createElement('button'); button.type = 'button';
+        button.className = `btn btn-small btn-${variant}${variant === 'danger' ? ' summary-library-remove-btn' : ''}`;
+        button.textContent = label;
+        if (button.dataset) button.dataset.baseDisabled = disabled ? 'true' : 'false';
+        button.disabled = disabled || aiAddonDownloadState.summary.active;
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try { await action(); await refreshAiAddonSettings(); await refreshChatEligibility(); }
+          catch (error) { showAppToast(error.message || 'Could not update the model.', 'error'); await refreshAiAddonSettings(); }
+          finally { button.disabled = false; }
+        });
+        actions.appendChild(button);
+      };
+      const confirmSetup = async () => {
+        if (!window.confirm(summaryDownloadConfirmation(model, library))) return;
+        setAiAddonProgressState('summary', { active: true, terminal: false, modelId: model.modelId, percent: 0, message: 'Preparing setup…' });
+        try { await window.electronAPI.setupSummaryModel({ modelId: model.modelId }); }
+        catch (error) {
+          setAiAddonProgressState('summary', { active: true, terminal: true, modelId: model.modelId, message: error.message || 'Setup failed.' });
+          hideAiAddonProgressSoon('summary', 5000);
+          throw error;
+        }
+      };
+      const setupBlocked = model.fit?.blocked === true || model.storageFit?.blocked === true || (!model.storageFit && library.availableBytes != null && model.peakFreeBytes != null && model.peakFreeBytes > library.availableBytes);
+      if (!installed) {
+        addAction(model.status === 'error' ? 'Retry download' : 'Download', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
+      } else {
+        if (!removalIncomplete) {
+          if (model.modelId !== library.defaultModelId) addAction('Set as default', () => window.electronAPI.setDefaultSummaryModel({ modelId: model.modelId }), !usableSummaryModels(library).includes(model), 'secondary');
+          addAction('Check setup', () => window.electronAPI.validateSummaryModel({ modelId: model.modelId }), false, 'secondary');
+          if (!model.setupComplete && model.status === 'error') addAction('Repair', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
+        }
+        if ((chatState.modelState.status === 'loaded' && chatState.modelState.modelId === model.modelId)
+          || (chatState.modelState.status === 'release_error' && releaseModelId === model.modelId)) {
+          addAction('Free memory', () => window.electronAPI.unloadHistoryQaModel(), false, 'secondary');
+        }
+        addAction(removalIncomplete ? 'Retry removal' : 'Remove model', async () => {
+          const others = usableSummaryModels(library).filter((item) => item.modelId !== model.modelId);
+          let replacementModelId = null;
+          if (model.modelId === library.defaultModelId && others.length > 1) {
+            replacementModelId = await chooseSummaryReplacement(model, others);
+            if (!replacementModelId) return;
+          } else {
+            replacementModelId = others[0]?.modelId || null;
+            const replacement = model.modelId === library.defaultModelId ? `\n${others.length ? `${others[0].modelName} will become the default.` : 'There will be no default model.'}` : '';
+            if (!window.confirm(`Remove ${model.modelName}? About ${formatBytes(model.reclaimableBytes || 0)} can be freed. Saved summaries and conversations stay available.${replacement}`)) return;
+          }
+          await window.electronAPI.removeSummaryModel({ modelId: model.modelId, replacementModelId });
+        }, false, 'danger');
+      }
+      card.appendChild(actions); container.appendChild(card);
+    }
+  }
+}
+
+function chooseSummaryReplacement(model, choices) {
+  return new Promise((resolve) => {
+    const previousFocus = document.activeElement;
+    const overlay = document.createElement('div'); overlay.className = 'modal-overlay';
+    const dialog = document.createElement('div'); dialog.className = 'modal-content';
+    dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-labelledby', 'summary-replacement-title');
+    const header = document.createElement('div'); header.className = 'modal-header';
+    const heading = document.createElement('h2'); heading.id = 'summary-replacement-title'; heading.textContent = 'Remove model';
+    header.appendChild(heading);
+    const body = document.createElement('div'); body.className = 'modal-body';
+    const text = document.createElement('p'); text.className = 'setting-description';
+    text.textContent = `Remove ${model.modelName} and free about ${formatBytes(model.reclaimableBytes || 0)}. Saved summaries and conversations stay available. Choose a new default.`;
+    const field = document.createElement('div'); field.className = 'ai-addon-field';
+    const label = document.createElement('label'); label.htmlFor = 'summary-replacement-select'; label.textContent = 'New default model';
+    const select = document.createElement('select'); select.id = 'summary-replacement-select'; select.className = 'device-select';
+    for (const choice of choices) select.add(new Option(choice.modelName, choice.modelId));
+    field.append(label, select);
+    body.append(text, field);
+    const actions = document.createElement('div'); actions.className = 'modal-actions';
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn btn-secondary'; cancel.textContent = 'Cancel';
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'btn btn-danger'; remove.textContent = 'Remove model';
+    actions.append(cancel, remove);
+    const finish = (value) => { overlay.remove(); if (previousFocus?.isConnected) previousFocus.focus(); resolve(value); };
+    cancel.onclick = () => finish(null); remove.onclick = () => finish(select.value);
+    overlay.onkeydown = (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); finish(null); return; }
+      if (event.key !== 'Tab') return;
+      const controls = [select, cancel, remove];
+      const index = controls.indexOf(document.activeElement);
+      if ((event.shiftKey && index <= 0) || (!event.shiftKey && index === controls.length - 1)) {
+        event.preventDefault(); controls[event.shiftKey ? controls.length - 1 : 0].focus();
+      }
+    };
+    dialog.append(header, body, actions); overlay.appendChild(dialog); document.body.appendChild(overlay); select.focus();
+  });
+}
+
+async function refreshChatEligibility() {
+  if (!window.electronAPI?.getHistoryQaEligibility) return;
+  chatState.eligibility = await window.electronAPI.getHistoryQaEligibility();
+  renderChatOnboardingAndComposer();
+}
+
+function renderChatModelChoice() {
+  const select = document.getElementById('chat-model-select');
+  const labelPill = document.getElementById('chat-model-label');
+  const manage = document.getElementById('chat-manage-models');
+  const library = summaryLibrary();
+  if (!select || !manage) return;
+  if (!library) {
+    select.hidden = true;
+    if (labelPill) labelPill.hidden = true;
+    manage.hidden = true;
+    return;
+  }
+  const usable = usableSummaryModels(library);
+  let saved = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || '';
+  const savedModel = library.models?.find((model) => model.modelId === saved);
+  if (saved && !summaryModelHasFiles(savedModel || {}) && usable.some((model) => model.modelId === library.defaultModelId)) {
+    const thread = chatState.activeThread;
+    if (thread && chatState.resettingRemovedModelThreadId !== thread.id) {
+      chatState.resettingRemovedModelThreadId = thread.id;
+      void window.electronAPI.updateChatThreadModel({ threadId: thread.id, modelId: null }).then((result) => {
+        if (chatState.activeThread?.id === thread.id) {
+          chatState.activeThread = result?.thread || { ...thread, modelId: null };
+          chatState.resettingRemovedModelThreadId = null;
+          showAppToast(`The removed model was replaced by the default, ${summaryModelName(library.defaultModelId, library)}.`);
+          renderChatOnboardingAndComposer();
+        }
+      }).catch((error) => showAppToast(`Could not reset the removed model: ${error.message}`, 'error'))
+        .finally(() => { chatState.resettingRemovedModelThreadId = null; });
+    } else if (!thread) chatState.pendingModelId = null;
+    saved = '';
+  }
+  const defaultUsable = usable.some((model) => model.modelId === library.defaultModelId);
+  const hasUnavailableSaved = Boolean(saved && !usable.some((model) => model.modelId === saved));
+  manage.hidden = false;
+  manage.textContent = usable.length ? 'Manage models' : (library.models?.some((m) => m.installed) ? 'Manage models' : 'Set up a model');
+  manage.onclick = openSettingsAtAiAddons;
+
+  if (usable.length === 0 && !hasUnavailableSaved) {
+    select.hidden = true;
+    if (labelPill) labelPill.hidden = true;
+    return;
+  }
+  if (usable.length === 1 && !hasUnavailableSaved) {
+    select.hidden = true;
+    if (labelPill) {
+      labelPill.hidden = false;
+      labelPill.textContent = usable[0].modelName;
+    }
+    return;
+  }
+
+  if (labelPill) labelPill.hidden = true;
+  select.hidden = false;
+  select.replaceChildren();
+  if (!defaultUsable) {
+    select.add(new Option('Choose an available model', ''));
+  }
+  for (const model of usable) {
+    const isDefault = defaultUsable && model.modelId === library.defaultModelId;
+    select.add(new Option(isDefault ? `${model.modelName} · Default` : model.modelName, isDefault ? '' : model.modelId));
+  }
+  if (hasUnavailableSaved) {
+    select.add(new Option(`${summaryModelName(saved, library)} · unavailable`, saved));
+  }
+  select.value = (saved && (!defaultUsable || saved !== library.defaultModelId)) ? saved : '';
+  select.disabled = Boolean(chatState.sending);
+  select.onchange = async () => {
+    const modelId = select.value || null;
+    try {
+      if (chatState.activeThread) {
+        const result = await window.electronAPI.updateChatThreadModel({ threadId: chatState.activeThread.id, modelId });
+        if (result?.thread) chatState.activeThread = result.thread;
+        else chatState.activeThread.modelId = modelId;
+      } else chatState.pendingModelId = modelId;
+      renderChatOnboardingAndComposer();
+    } catch (error) { showAppToast(`Could not change model: ${error.message}`, 'error'); renderChatModelChoice(); }
+  };
+}
+
 function updateAiAddonSettings(status) {
+  if (typeof renderSummaryModelLibrary === 'function') renderSummaryModelLibrary(status?.summaryLibrary);
+  if (typeof renderChatModelChoice === 'function') renderChatModelChoice();
   const diarization = status && status.features && status.features.diarization;
   const summary = status && status.features && status.features.summary;
+  const library = status && status.summaryLibrary;
+  const usableInLibrary = library ? usableSummaryModels(library) : [];
+  const hasInstalledSummaryError = Boolean(library?.models?.some((m) => summaryModelHasFiles(m) && (m.status === 'error' || m.removalPending)));
   const diarizationUnsupported = diarization && diarization.status === 'unsupported';
   const diarizationSetupLocking = isAiAddonSetupLockingControls({
     featureStatus: diarization && diarization.status,
@@ -6456,12 +7988,19 @@ function updateAiAddonSettings(status) {
     featureStatus: summary && summary.status,
     progressActive: aiAddonDownloadState.summary.active,
   });
+  const effectiveSummaryStatus = summarySetupLocking
+    ? 'downloading'
+    : (summary && summary.status === 'unsupported'
+      ? 'unsupported'
+      : library
+        ? (usableInLibrary.length > 0 ? 'ready' : (hasInstalledSummaryError ? 'error' : (summary?.status || 'notConfigured')))
+        : (summary?.status || 'notConfigured'));
   const hasActiveSetup = diarizationSetupLocking || summarySetupLocking;
   const overallStatus = hasActiveSetup
     ? 'downloading'
-    : ((diarization && diarization.status === 'ready') || (summary && summary.status === 'ready')
+    : ((diarization && diarization.status === 'ready') || effectiveSummaryStatus === 'ready'
       ? 'ready'
-      : ((diarization && diarization.status === 'error') || (summary && summary.status === 'error') ? 'error' : 'notConfigured'));
+      : ((diarization && diarization.status === 'error') || effectiveSummaryStatus === 'error' ? 'error' : 'notConfigured'));
 
   setStatusBadge(document.getElementById('ai-addons-status-badge'), overallStatus);
 
@@ -6536,7 +8075,7 @@ function updateAiAddonSettings(status) {
   }
 
   if (summary) {
-    setStatusBadge(document.getElementById('summary-status-badge'), summary.status);
+    setStatusBadge(document.getElementById('summary-status-badge'), effectiveSummaryStatus);
     const summaryControlState = buildAiAddonControlState({
       feature: summary,
       type: 'summary',
@@ -6546,7 +8085,9 @@ function updateAiAddonSettings(status) {
     if (profileSelect) {
       const savedProfile = loadSettings().summaryProfile;
       profileSelect.value = savedProfile || summary.profile || DEFAULT_SUMMARY_PROFILE;
-      profileSelect.disabled = !summaryControlState.canConfigure;
+      profileSelect.disabled = summarySetupLocking
+        || effectiveSummaryStatus === 'unsupported'
+        || (library ? usableInLibrary.length === 0 : !summaryControlState.canConfigure);
     }
 
     applyAiAddonButtonState({
@@ -6616,6 +8157,8 @@ async function refreshHomeAiAddonPrompt() {
   try {
     const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false });
     aiAddonStatusSnapshot = status;
+    if (typeof renderSummaryModelLibrary === 'function') renderSummaryModelLibrary(status?.summaryLibrary);
+    if (typeof renderChatOnboardingAndComposer === 'function') renderChatOnboardingAndComposer();
     updateHomeAiAddonCTA(status);
     updateSummaryGenerationButtons();
     return status;
@@ -9015,6 +10558,7 @@ function setupAudioImport() {
   const engine = byId('engine');
   const language = byId('language');
   const model = byId('model');
+  const tagSelect = byId('tag');
   const cancel = byId('cancel');
   const submit = byId('submit');
   const retry = byId('retry');
@@ -9072,7 +10616,9 @@ function setupAudioImport() {
     } else { modelCheckEpoch++; }
   }
   async function chooseFile() {
-    const previousDraft = phase === 'error' ? { engine: engine.value, language: language.value, model: model.value } : null;
+    const previousDraft = phase === 'error'
+      ? { engine: engine.value, language: language.value, model: model.value, tag: tagSelect ? tagSelect.value : '' }
+      : null;
     let selected;
     try {
       selected = await window.electronAPI.selectImportAudio();
@@ -9087,6 +10633,19 @@ function setupAudioImport() {
     byId('fields').hidden = false;
     language.replaceChildren(...[...languageSelect.options].map((option) => option.cloneNode(true)));
     model.replaceChildren(...[...modelSelect.options].map((option) => option.cloneNode(true)));
+    if (tagSelect) {
+      const noneOption = document.createElement('option');
+      noneOption.value = '';
+      noneOption.textContent = 'None (untagged)';
+      const tagOptions = RECORDING_TAGS.map((entry) => {
+        const opt = document.createElement('option');
+        opt.value = entry.slug;
+        opt.textContent = entry.label;
+        return opt;
+      });
+      tagSelect.replaceChildren(noneOption, ...tagOptions);
+      tagSelect.value = previousDraft?.tag ?? '';
+    }
     language.value = previousDraft?.language ?? transcriptionEnginePreferences.whisper.language;
     model.value = previousDraft?.model ?? transcriptionEnginePreferences.whisper.modelSize;
     engine.value = previousDraft?.engine ?? transcriptionEnginePreferences.activeEngine;
@@ -9109,8 +10668,16 @@ function setupAudioImport() {
     phase = 'preparing'; byId('fields').hidden = true; submit.hidden = true; retry.hidden = true;
     cancel.textContent = 'Cancel import'; cancel.disabled = false;
     status.textContent = 'Preparing audio…'; cancel.focus();
+    const selectedImportTag = tagSelect && tagSelect.value ? normalizeTag(tagSelect.value) : null;
     let result;
-    try { result = await window.electronAPI.startImportAudio({ language: selection.language, modelSize: selection.modelSize, transcriptionSelection: selection }); }
+    try {
+      result = await window.electronAPI.startImportAudio({
+        language: selection.language,
+        modelSize: selection.modelSize,
+        ...(selectedImportTag ? { tag: selectedImportTag } : {}),
+        transcriptionSelection: selection,
+      });
+    }
     catch (error) { result = { success: false, error: error.message }; }
     if (result?.code === 'IMPORT_CANCELLED') { phase = 'confirm'; close(); return; }
     if (!result?.success && !result?.meeting && !result?.pendingMeeting) {
@@ -9239,16 +10806,21 @@ const chatState = {
   listenersBound: false,
   threads: [],
   activeThread: null,
-  pendingScope: { type: 'all', meetingIds: [], dateFrom: null, dateTo: null },
+  pendingModelId: null,
+  resettingRemovedModelThreadId: null,
+  pendingScope: { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] },
   eligibility: null,
   modelState: { status: 'unloaded', modelId: null, modelName: null },
   sending: false,
+  noticeActionPending: false,
   optimisticQuestion: null,
+  streamingDraft: '',
   progress: null,
   editingThreadId: null,
   threadFilter: '',
   scopeFilter: '',
   scopeDraft: null,
+  showAllScopeTags: false,
   popoverOpen: false,
   navigation: 0,
   listRequest: 0,
@@ -9281,10 +10853,26 @@ function chatSendVisible() {
   return chatState.sending && chatState.sendingKey === chatState.draftKey;
 }
 
+function syncChatProgressBanner() {
+  const progressBanner = document.getElementById('chat-progress-banner');
+  const progressText = document.getElementById('chat-progress-text');
+  if (!progressBanner || !progressText) return;
+  const showBanner = shouldShowChatProgressBanner({
+    sendVisible: chatSendVisible(),
+    streamingDraft: chatState.streamingDraft,
+    progress: chatState.progress,
+  });
+  progressBanner.hidden = !showBanner;
+  if (showBanner) {
+    progressText.textContent = (chatState.progress && chatState.progress.message)
+      || 'Searching your transcripts…';
+  }
+}
+
 function getCurrentChatScope() {
   return (chatState.activeThread && chatState.activeThread.scope)
     || chatState.pendingScope
-    || { type: 'all', meetingIds: [], dateFrom: null, dateTo: null };
+    || { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] };
 }
 
 function getMeetingsMapById() {
@@ -9301,7 +10889,7 @@ function autoResizeChatInput() {
   const input = document.getElementById('chat-input');
   if (!input) return;
   input.style.height = 'auto';
-  input.style.height = `${Math.min(160, Math.max(24, input.scrollHeight))}px`;
+  input.style.height = `${Math.min(160, Math.max(34, input.scrollHeight))}px`;
 }
 
 function renderChatModelPill() {
@@ -9317,6 +10905,13 @@ function renderChatModelPill() {
   unloadBtn.disabled = view.busy;
 }
 
+function isChatModelEligible(library = summaryLibrary()) {
+  if (chatState.resettingRemovedModelThreadId && chatState.activeThread?.id === chatState.resettingRemovedModelThreadId) return false;
+  if (!library) return chatState.eligibility?.eligible !== false;
+  const selectedModelId = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || library.defaultModelId;
+  return usableSummaryModels(library).some((model) => model.modelId === selectedModelId);
+}
+
 function renderChatOnboardingAndComposer() {
   const onboarding = document.getElementById('chat-onboarding-card');
   const reasonEl = document.getElementById('chat-onboarding-reason');
@@ -9326,15 +10921,33 @@ function renderChatOnboardingAndComposer() {
   const headerScope = document.getElementById('chat-header-scope');
   const scopeLabel = document.getElementById('chat-scope-btn-label');
 
-  const eligible = !chatState.eligibility || chatState.eligibility.eligible !== false;
+  renderChatModelChoice();
+  const library = summaryLibrary();
+  const selectedModelId = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || library?.defaultModelId;
+  const resettingRemovedOverride = Boolean(
+    library
+    && chatState.resettingRemovedModelThreadId
+    && chatState.activeThread?.id === chatState.resettingRemovedModelThreadId
+    && usableSummaryModels(library).some((model) => model.modelId === library.defaultModelId),
+  );
+  const eligible = isChatModelEligible(library);
   if (onboarding) {
-    onboarding.hidden = eligible;
+    onboarding.hidden = eligible || resettingRemovedOverride;
   }
-  if (reasonEl && chatState.eligibility && chatState.eligibility.reason) {
-    reasonEl.textContent = `${chatState.eligibility.reason} Keyword search in History still works anytime.`;
+  for (const starter of document.getElementById('chat-starter-prompts')?.children || []) {
+    starter.disabled = !eligible || meetings.length === 0 || chatThreadDetailPending();
+  }
+  if (reasonEl) {
+    const selected = library?.models?.find((model) => model.modelId === selectedModelId);
+    const reason = selected?.error || selected?.fit?.reason || chatState.eligibility?.reason || 'Choose an available model in Settings.';
+    reasonEl.textContent = `${reason} Keyword search in History still works anytime.`;
   }
 
-  const scopeText = formatChatScopeLabel(getCurrentChatScope(), getMeetingsMapById());
+  const scopeText = formatChatScopeLabel(
+    getCurrentChatScope(),
+    getMeetingsMapById(),
+    (slug) => getTagMeta(slug)?.label || slug,
+  );
   if (headerTitle) {
     headerTitle.textContent = chatState.activeThread ? chatState.activeThread.title : 'Ask your recordings';
   }
@@ -9469,7 +11082,11 @@ function renderChatThreadSidebar() {
 
       const scopeEl = document.createElement('span');
       scopeEl.className = 'chat-thread-item-scope';
-      scopeEl.textContent = formatChatScopeLabel(thread.scope, meetingsById);
+      scopeEl.textContent = formatChatScopeLabel(
+        thread.scope,
+        meetingsById,
+        (slug) => getTagMeta(slug)?.label || slug,
+      );
 
       selectBtn.append(titleEl, scopeEl);
 
@@ -9520,8 +11137,6 @@ function renderChatStream() {
   const emptyState = document.getElementById('chat-empty-state');
   const starterGrid = document.getElementById('chat-starter-prompts');
   const messagesEl = document.getElementById('chat-messages');
-  const progressBanner = document.getElementById('chat-progress-banner');
-  const progressText = document.getElementById('chat-progress-text');
   const scrollContainer = document.getElementById('chat-stream-scroll');
   if (!messagesEl) return;
 
@@ -9538,7 +11153,7 @@ function renderChatStream() {
 
   if (!hasMessages && starterGrid) {
     clearElement(starterGrid);
-    const eligible = !chatState.eligibility || chatState.eligibility.eligible !== false;
+    const eligible = isChatModelEligible();
     const prompts = buildStarterPrompts(meetings, getCurrentChatScope());
     for (const promptText of prompts) {
       const btn = document.createElement('button');
@@ -9567,7 +11182,64 @@ function renderChatStream() {
     messagesEl.appendChild(wrap);
   };
 
-  for (const msg of threadMessages) {
+  const findPrecedingUserQuestion = (idx) => {
+    for (let j = idx - 1; j >= 0; j -= 1) {
+      if (threadMessages[j]?.role === 'user' && threadMessages[j]?.content) {
+        return String(threadMessages[j].content);
+      }
+    }
+    return '';
+  };
+
+  const handleNoticeAction = async (actionId, precedingQuestion) => {
+    if (!precedingQuestion || chatState.sending || chatState.noticeActionPending || chatThreadDetailPending()) {
+      return;
+    }
+    if (chatState.popoverOpen) {
+      toggleChatScopePopover(false);
+    }
+    const navigation = chatState.navigation;
+    const nextScope = resolveNoticeActionScope(actionId, getCurrentChatScope());
+    if (nextScope) {
+      if (chatState.activeThread && window.electronAPI?.updateChatThreadScope) {
+        let updated = false;
+        chatState.noticeActionPending = true;
+        renderChatStream();
+        try {
+          const res = await window.electronAPI.updateChatThreadScope(chatState.activeThread.id, nextScope);
+          if (navigation !== chatState.navigation) {
+            void refreshChatThreadList();
+            return;
+          }
+          if (res && res.thread) {
+            chatState.activeThread = res.thread;
+          }
+          updated = true;
+        } catch (error) {
+          if (navigation === chatState.navigation) {
+            showAppToast(`Could not update scope: ${error.message}`, 'error');
+          }
+        } finally {
+          chatState.noticeActionPending = false;
+        }
+        if (!updated) {
+          if (navigation === chatState.navigation) {
+            renderChatStream();
+          }
+          return;
+        }
+      } else {
+        chatState.pendingScope = nextScope;
+      }
+    }
+    if (navigation !== chatState.navigation) {
+      return;
+    }
+    await sendChatQuestionText(precedingQuestion, { overrideScope: nextScope });
+  };
+
+  for (let msgIdx = 0; msgIdx < threadMessages.length; msgIdx += 1) {
+    const msg = threadMessages[msgIdx];
     if (msg.role === 'user') {
       renderUserTurn(msg.content);
       continue;
@@ -9576,10 +11248,41 @@ function renderChatStream() {
     const wrap = document.createElement('article');
     wrap.className = 'chat-turn-assistant';
 
-    if (msg.status === 'insufficient_evidence') {
+    const notice = buildAssistantNoticeView(msg, getCurrentChatScope());
+    if (notice) {
       const callout = document.createElement('div');
-      callout.className = 'chat-insufficient-callout';
-      callout.textContent = msg.content || 'Not enough matching transcript text in the selected recordings to answer that.';
+      callout.className = `chat-status-callout is-${notice.variant}`;
+
+      const titleEl = document.createElement('p');
+      titleEl.className = 'chat-callout-title';
+      titleEl.textContent = notice.title;
+      callout.appendChild(titleEl);
+
+      if (notice.detail) {
+        const detailEl = document.createElement('p');
+        detailEl.className = 'chat-callout-detail';
+        detailEl.textContent = notice.detail;
+        callout.appendChild(detailEl);
+      }
+
+      const precedingQuestion = findPrecedingUserQuestion(msgIdx);
+      if (precedingQuestion && Array.isArray(notice.actions) && notice.actions.length > 0) {
+        const actionsRow = document.createElement('div');
+        actionsRow.className = 'chat-callout-actions';
+        for (const action of notice.actions) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-small btn-secondary chat-callout-action-btn';
+          btn.textContent = action.label;
+          btn.disabled = chatState.sending || chatState.noticeActionPending || chatThreadDetailPending();
+          btn.addEventListener('click', () => {
+            void handleNoticeAction(action.id, precedingQuestion);
+          });
+          actionsRow.appendChild(btn);
+        }
+        callout.appendChild(actionsRow);
+      }
+
       wrap.appendChild(callout);
     } else {
       const prose = document.createElement('div');
@@ -9594,17 +11297,25 @@ function renderChatStream() {
     }
 
     const citations = Array.isArray(msg.citations) ? msg.citations : [];
-    if (citations.length > 0) {
+    const inspectedSources = citations.length === 0
+      && notice?.showInspectedSources
+      && Array.isArray(msg.inspectedSources)
+      ? msg.inspectedSources
+      : [];
+    const drawerSources = citations.length > 0 ? citations : inspectedSources;
+    if (drawerSources.length > 0) {
       const details = document.createElement('details');
       details.className = 'chat-sources-drawer';
 
       const summary = document.createElement('summary');
-      summary.textContent = `Sources (${citations.length})`;
+      summary.textContent = citations.length > 0
+        ? `Sources (${citations.length})`
+        : `Sources inspected (${inspectedSources.length})`;
       details.appendChild(summary);
 
       const list = document.createElement('div');
       list.className = 'chat-sources-list';
-      for (const citation of citations) {
+      for (const citation of drawerSources) {
         const item = document.createElement('div');
         item.className = 'chat-source-item';
 
@@ -9623,10 +11334,22 @@ function renderChatStream() {
 
         const metaSpan = document.createElement('span');
         metaSpan.className = 'chat-turn-meta-row';
+        if (citation.tag) {
+          const tagMeta = getTagMeta(citation.tag);
+          const tagChip = document.createElement('span');
+          tagChip.className = 'chat-source-tag-chip';
+          if (tagMeta) {
+            tagChip.dataset.tag = tagMeta.slug;
+          }
+          tagChip.textContent = tagMeta ? tagMeta.label : citation.tag;
+          metaSpan.appendChild(tagChip);
+        }
         const parts = [];
         if (citation.speaker) parts.push(citation.speaker);
         if (citation.meetingDate) parts.push(formatDate(citation.meetingDate));
-        metaSpan.textContent = parts.join(' · ');
+        if (parts.length > 0) {
+          metaSpan.appendChild(document.createTextNode(parts.join(' · ')));
+        }
         head.appendChild(metaSpan);
 
         const excerpt = document.createElement('p');
@@ -9640,10 +11363,18 @@ function renderChatStream() {
       wrap.appendChild(details);
     }
 
+    const metaParts = [];
+    if (msg.modelId || msg.modelName) {
+      metaParts.push(msg.modelName || summaryModelName(msg.modelId));
+    }
     if (Number.isFinite(msg.searchedMeetingCount) && msg.searchedMeetingCount > 0) {
+      metaParts.push(`Searched ${msg.searchedMeetingCount} recording${msg.searchedMeetingCount === 1 ? '' : 's'}`);
+      metaParts.push(`${msg.evidenceCount || 0} matching excerpt${(msg.evidenceCount || 0) === 1 ? '' : 's'}`);
+    }
+    if (metaParts.length > 0) {
       const meta = document.createElement('div');
       meta.className = 'chat-turn-meta-row';
-      meta.textContent = `Searched ${msg.searchedMeetingCount} recording${msg.searchedMeetingCount === 1 ? '' : 's'} · ${msg.evidenceCount || 0} matching excerpt${(msg.evidenceCount || 0) === 1 ? '' : 's'}`;
+      meta.textContent = metaParts.join(' · ');
       wrap.appendChild(meta);
     }
 
@@ -9652,15 +11383,23 @@ function renderChatStream() {
 
   if (chatSendVisible() && chatState.optimisticQuestion) {
     renderUserTurn(chatState.optimisticQuestion);
-  }
-
-  if (progressBanner && progressText) {
-    progressBanner.hidden = !chatSendVisible();
-    if (chatSendVisible()) {
-      progressText.textContent = (chatState.progress && chatState.progress.message)
-        || 'Searching your transcripts…';
+    if (chatState.streamingDraft) {
+      const streamWrap = document.createElement('article');
+      streamWrap.className = 'chat-turn-assistant is-streaming';
+      const streamBody = document.createElement('div');
+      streamBody.id = 'chat-streaming-draft-body';
+      streamBody.className = 'chat-markdown';
+      renderGroundedMarkdown(streamBody, chatState.streamingDraft, [], {
+        markedLib: window.marked,
+        domPurifyLib: window.DOMPurify,
+        documentObj: document,
+      });
+      streamWrap.appendChild(streamBody);
+      messagesEl.appendChild(streamWrap);
     }
   }
+
+  syncChatProgressBanner();
 
   if (scrollContainer && hasMessages) {
     requestAnimationFrame(() => {
@@ -9724,6 +11463,7 @@ async function startNewChatThread(scope = null) {
       meetingIds: Array.isArray(scope.meetingIds) ? [...scope.meetingIds] : [],
       dateFrom: scope.dateFrom || null,
       dateTo: scope.dateTo || null,
+      tags: Array.isArray(scope.tags) ? [...scope.tags] : [],
     };
   }
   closeChatMobileSidebar();
@@ -9747,11 +11487,13 @@ async function deleteChatThreadWithConfirm(threadId, title) {
   }
 }
 
-function renderScopePopover() {
+function renderScopePopover(focusedTag) {
   const allBtn = document.getElementById('chat-scope-all-btn');
   const selBtn = document.getElementById('chat-scope-selected-btn');
   const selPanel = document.getElementById('chat-scope-selected-panel');
   const listEl = document.getElementById('chat-scope-meetings-list');
+  const tagsRow = document.getElementById('chat-scope-tags-row');
+  const tagsToggleBtn = document.getElementById('chat-scope-tags-toggle-btn');
   const fromEl = document.getElementById('chat-scope-date-from');
   const toEl = document.getElementById('chat-scope-date-to');
   const draft = chatState.scopeDraft || getCurrentChatScope();
@@ -9761,6 +11503,76 @@ function renderScopePopover() {
   if (selPanel) selPanel.hidden = draft.type !== 'selected_meetings';
   if (fromEl) fromEl.value = draft.dateFrom ? String(draft.dateFrom).slice(0, 10) : '';
   if (toEl) toEl.value = draft.dateTo ? String(draft.dateTo).slice(0, 10) : '';
+
+  if (tagsRow) {
+    if (focusedTag === undefined && tagsRow.contains(document.activeElement)) {
+      focusedTag = document.activeElement.dataset.tag;
+    }
+    clearElement(tagsRow);
+    const usedEntries = getUsedRecordingTags(meetings);
+    const usedSlugs = new Set(usedEntries.map((entry) => entry.slug));
+    const selectedTags = new Set(
+      (Array.isArray(draft.tags) ? draft.tags : [])
+        .map((t) => normalizeTag(t))
+        .filter(Boolean),
+    );
+    const showAll = usedEntries.length === 0 || chatState.showAllScopeTags;
+    const entriesToShow = showAll
+      ? RECORDING_TAGS
+      : RECORDING_TAGS.filter((entry) => usedSlugs.has(entry.slug) || selectedTags.has(entry.slug));
+
+    if (tagsToggleBtn) {
+      tagsToggleBtn.hidden = usedEntries.length === 0 || usedEntries.length >= RECORDING_TAGS.length;
+      tagsToggleBtn.textContent = chatState.showAllScopeTags ? 'Used tags' : 'All 11 types';
+    }
+
+    let focusTarget = tagsToggleBtn;
+    for (const entry of entriesToShow) {
+      const selected = selectedTags.has(entry.slug);
+      const pill = document.createElement('button');
+      pill.type = 'button';
+      pill.className = 'chat-scope-tag-pill';
+      pill.dataset.tag = entry.slug;
+      pill.setAttribute('aria-pressed', String(selected));
+      if (selected) {
+        pill.classList.add('is-selected');
+      }
+
+      const dot = document.createElement('span');
+      dot.className = 'recording-tag-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      pill.appendChild(dot);
+      pill.appendChild(document.createTextNode(entry.shortLabel || entry.label));
+
+      pill.addEventListener('click', () => {
+        if (!chatState.scopeDraft) {
+          chatState.scopeDraft = {
+            type: draft.type === 'selected_meetings' ? 'selected_meetings' : 'all',
+            meetingIds: Array.isArray(draft.meetingIds) ? [...draft.meetingIds] : [],
+            dateFrom: draft.dateFrom || null,
+            dateTo: draft.dateTo || null,
+            tags: [...selectedTags],
+          };
+        }
+        const nextSet = new Set(
+          (Array.isArray(chatState.scopeDraft.tags) ? chatState.scopeDraft.tags : [])
+            .map((t) => normalizeTag(t))
+            .filter(Boolean),
+        );
+        if (nextSet.has(entry.slug)) {
+          nextSet.delete(entry.slug);
+        } else {
+          nextSet.add(entry.slug);
+        }
+        chatState.scopeDraft.tags = [...nextSet];
+        renderScopePopover(entry.slug);
+      });
+
+      tagsRow.appendChild(pill);
+      if (focusedTag === entry.slug) focusTarget = pill;
+    }
+    if (focusedTag !== undefined) focusTarget?.focus({ preventScroll: true });
+  }
 
   if (listEl) {
     clearElement(listEl);
@@ -9784,10 +11596,23 @@ function renderScopePopover() {
           else nextIds.delete(String(m.id));
           chatState.scopeDraft.meetingIds = [...nextIds];
         });
+        const titleText = m.title || 'Untitled recording';
         const span = document.createElement('span');
         span.className = 'chat-scope-meeting-title';
-        span.textContent = m.title || 'Untitled recording';
+        span.textContent = titleText;
+        span.title = titleText;
         label.append(cb, span);
+        const shortDate = formatScopeMeetingDate(m.date);
+        if (shortDate) {
+          const dateEl = document.createElement('span');
+          dateEl.className = 'chat-scope-meeting-date';
+          dateEl.textContent = shortDate;
+          const fullDate = formatScopeMeetingDateTooltip(m.date);
+          if (fullDate) {
+            dateEl.title = fullDate;
+          }
+          label.appendChild(dateEl);
+        }
         listEl.appendChild(label);
       }
     }
@@ -9804,11 +11629,13 @@ function toggleChatScopePopover(forceOpen = null) {
   btn.setAttribute('aria-expanded', String(open));
   if (open) {
     const cur = getCurrentChatScope();
+    chatState.showAllScopeTags = false;
     chatState.scopeDraft = {
       type: cur.type === 'selected_meetings' ? 'selected_meetings' : 'all',
       meetingIds: Array.isArray(cur.meetingIds) ? [...cur.meetingIds] : [],
       dateFrom: cur.dateFrom || null,
       dateTo: cur.dateTo || null,
+      tags: Array.isArray(cur.tags) ? [...cur.tags] : [],
     };
     renderScopePopover();
   }
@@ -9816,6 +11643,95 @@ function toggleChatScopePopover(forceOpen = null) {
 
 function closeChatMobileSidebar() {
   document.getElementById('chat-tab')?.classList.remove('is-sidebar-drawer-open');
+}
+
+async function sendChatQuestionText(rawQuestion, { overrideScope = null, restoreInputOnError = false } = {}) {
+  if (chatState.sending || chatState.noticeActionPending || chatThreadDetailPending()) {
+    return;
+  }
+  const question = String(rawQuestion || '').replace(/\s+/g, ' ').trim();
+  if (!question) {
+    return;
+  }
+
+  const input = document.getElementById('chat-input');
+  const navigation = chatState.navigation;
+  const originKey = chatState.draftKey;
+  const originThreadId = chatState.activeThread?.id || null;
+  const library = summaryLibrary();
+  const newThreadOverride = chatState.activeThread ? null : chatState.pendingModelId;
+  const effectiveModelId = (chatState.activeThread ? chatState.activeThread.modelId : newThreadOverride) || library?.defaultModelId;
+  if (library ? !usableSummaryModels(library).some((model) => model.modelId === effectiveModelId) : (chatState.eligibility && chatState.eligibility.eligible === false)) {
+    if (restoreInputOnError && input) {
+      const currentDraft = chatState.draftKey === originKey ? input.value : (chatState.drafts.get(originKey) || '');
+      const restored = currentDraft ? `${question}\n${currentDraft}` : question;
+      chatState.drafts.set(originKey, restored);
+      if (chatState.draftKey === originKey) {
+        input.value = restored;
+        if (typeof autoResizeChatInput === 'function') autoResizeChatInput();
+      }
+    }
+    openSettingsAtAiAddons();
+    return;
+  }
+
+  const scope = overrideScope || getCurrentChatScope();
+  chatState.sending = true;
+  chatState.sendingKey = originKey;
+  chatState.optimisticQuestion = question;
+  chatState.streamingDraft = '';
+  chatState.progress = { phase: 'retrieving', message: 'Searching your transcripts…' };
+  renderChatOnboardingAndComposer();
+  renderChatStream();
+
+  try {
+    const res = await window.electronAPI.askHistory({
+      threadId: originThreadId,
+      question,
+      scope,
+      ...(effectiveModelId ? { modelId: effectiveModelId } : {}),
+      ...(!originThreadId && newThreadOverride ? { threadModelId: newThreadOverride } : {}),
+    });
+    if (res && res.thread) {
+      const threadKey = `thread:${res.thread.id}`;
+      if (originKey !== threadKey) {
+        const draft = chatState.draftKey === originKey && input ? input.value : chatState.drafts.get(originKey);
+        if (draft) chatState.drafts.set(threadKey, draft);
+        if (chatState.draftKey === originKey) chatState.draftKey = threadKey;
+        if (chatState.newDraftKey === originKey) chatState.newDraftKey = `new:${++chatState.nextDraft}`;
+      }
+      if (navigation === chatState.navigation) { chatState.activeThread = res.thread; chatState.pendingModelId = null; }
+    }
+    chatState.optimisticQuestion = null;
+    chatState.streamingDraft = '';
+    try {
+      await refreshChatThreadList();
+    } catch (error) {
+      showAppToast(`Could not refresh chats: ${error.message}`, 'error');
+    }
+  } catch (error) {
+    chatState.optimisticQuestion = null;
+    chatState.streamingDraft = '';
+    if (restoreInputOnError && input) {
+      const currentDraft = chatState.draftKey === originKey ? input.value : (chatState.drafts.get(originKey) || '');
+      const restored = currentDraft ? `${question}\n${currentDraft}` : question;
+      chatState.drafts.set(originKey, restored);
+      if (chatState.draftKey === originKey) {
+        input.value = restored;
+        autoResizeChatInput();
+      }
+    }
+    const isCancelled = error && (error.code === 'HISTORY_QA_CANCELLED' || /stopped|canceled/i.test(error.message || ''));
+    showAppToast(isCancelled ? 'Response generation stopped.' : (error?.message || 'Could not generate local answer.'), isCancelled ? 'info' : 'error');
+  } finally {
+    chatState.sending = false;
+    chatState.sendingKey = null;
+    chatState.streamingDraft = '';
+    chatState.progress = null;
+    renderChatOnboardingAndComposer();
+    renderChatStream();
+    if (navigation === chatState.navigation && input) input.focus();
+  }
 }
 
 async function sendCurrentChatQuestion() {
@@ -9836,69 +11752,18 @@ async function sendCurrentChatQuestion() {
     return;
   }
 
-  if (chatState.eligibility && chatState.eligibility.eligible === false) {
-    openSettingsAtAiAddons();
-    return;
-  }
-
-  const navigation = chatState.navigation;
   const originKey = chatState.draftKey;
-  const originThreadId = chatState.activeThread?.id || null;
-  const scope = getCurrentChatScope();
   input.value = '';
   chatState.drafts.set(originKey, '');
   autoResizeChatInput();
-  chatState.sending = true;
-  chatState.sendingKey = originKey;
-  chatState.optimisticQuestion = question;
-  chatState.progress = { phase: 'retrieving', message: 'Searching your transcripts…' };
-  renderChatOnboardingAndComposer();
-  renderChatStream();
-
-  try {
-    const res = await window.electronAPI.askHistory({ threadId: originThreadId, question, scope });
-    if (res && res.thread) {
-      const threadKey = `thread:${res.thread.id}`;
-      if (originKey !== threadKey) {
-        const draft = chatState.draftKey === originKey ? input.value : chatState.drafts.get(originKey);
-        if (draft) chatState.drafts.set(threadKey, draft);
-        if (chatState.draftKey === originKey) chatState.draftKey = threadKey;
-        if (chatState.newDraftKey === originKey) chatState.newDraftKey = `new:${++chatState.nextDraft}`;
-      }
-      if (navigation === chatState.navigation) chatState.activeThread = res.thread;
-    }
-    chatState.optimisticQuestion = null;
-    try {
-      await refreshChatThreadList();
-    } catch (error) {
-      showAppToast(`Could not refresh chats: ${error.message}`, 'error');
-    }
-  } catch (error) {
-    chatState.optimisticQuestion = null;
-    const currentDraft = chatState.draftKey === originKey ? input.value : (chatState.drafts.get(originKey) || '');
-    const restored = currentDraft ? `${question}\n${currentDraft}` : question;
-    chatState.drafts.set(originKey, restored);
-    if (chatState.draftKey === originKey) {
-      input.value = restored;
-      autoResizeChatInput();
-    }
-    const isCancelled = error && (error.code === 'HISTORY_QA_CANCELLED' || /stopped|canceled/i.test(error.message || ''));
-    showAppToast(isCancelled ? 'Response generation stopped.' : (error?.message || 'Could not generate local answer.'), isCancelled ? 'info' : 'error');
-  } finally {
-    chatState.sending = false;
-    chatState.sendingKey = null;
-    chatState.progress = null;
-    renderChatOnboardingAndComposer();
-    renderChatStream();
-    if (navigation === chatState.navigation) input.focus();
-  }
+  await sendChatQuestionText(question, { restoreInputOnError: true });
 }
 
 async function openHistoryMeetingInChat(meetingId) {
   const targetId = String(meetingId || '').trim();
   if (!targetId) return;
   const meeting = meetings.find((m) => String(m.id) === targetId);
-  const scope = { type: 'selected_meetings', meetingIds: [targetId], dateFrom: null, dateTo: null };
+  const scope = { type: 'selected_meetings', meetingIds: [targetId], dateFrom: null, dateTo: null, tags: [] };
 
   activateTab('chat');
   const navigation = ++chatState.navigation;
@@ -9912,6 +11777,7 @@ async function openHistoryMeetingInChat(meetingId) {
     && Array.isArray(t.scope.meetingIds)
     && t.scope.meetingIds.length === 1
     && String(t.scope.meetingIds[0]) === targetId
+    && (!Array.isArray(t.scope?.tags) || t.scope.tags.length === 0)
   ));
 
   if (reusable) {
@@ -9936,6 +11802,9 @@ async function initChatTab() {
     return;
   }
   try {
+    if (typeof summaryLibrary === 'function' && !summaryLibrary() && typeof refreshHomeAiAddonPrompt === 'function') {
+      await refreshHomeAiAddonPrompt();
+    }
     const [elig, mState] = await Promise.all([
       window.electronAPI.getHistoryQaEligibility(),
       window.electronAPI.getHistoryQaModelState(),
@@ -9964,24 +11833,60 @@ function setupChatWorkspace() {
       if (state) {
         chatState.modelState = state;
         renderChatModelPill();
+        renderSummaryModelLibrary(summaryLibrary());
+        if (chatState.sending && state.status === 'unloading') {
+          chatState.progress = { phase: 'releasing', message: `Releasing ${state.modelName || 'model'}…` };
+          syncChatProgressBanner();
+        }
       }
     }));
   }
 
   if (window.electronAPI && typeof window.electronAPI.onHistoryQaProgress === 'function') {
     registerCleanup(window.electronAPI.onHistoryQaProgress((progress) => {
-      if (progress) {
-        chatState.progress = progress;
-        const textEl = document.getElementById('chat-progress-text');
-        if (textEl && chatState.sending && progress.message) {
-          textEl.textContent = progress.message;
+      if (!progress || !chatState.sending) {
+        return;
+      }
+      if (progress.threadId && chatState.activeThread?.id && progress.threadId !== chatState.activeThread.id) {
+        return;
+      }
+      const selectedId = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || summaryLibrary()?.defaultModelId;
+      chatState.progress = progress.phase === 'loading_model'
+        ? { ...progress, message: `Loading ${summaryModelName(selectedId)}…` }
+        : progress.phase === 'queued' ? { ...progress, message: 'Waiting for current work…' } : progress;
+      if (typeof progress.draftMarkdown === 'string' && progress.draftMarkdown) {
+        const hadDraft = Boolean(chatState.streamingDraft);
+        chatState.streamingDraft = progress.draftMarkdown;
+        if (!chatSendVisible()) {
+          return;
         }
+        if (!hadDraft) {
+          renderChatStream();
+        } else {
+          const draftEl = document.getElementById('chat-streaming-draft-body');
+          if (draftEl) {
+            renderGroundedMarkdown(draftEl, chatState.streamingDraft, [], {
+              markedLib: window.marked,
+              domPurifyLib: window.DOMPurify,
+              documentObj: document,
+            });
+            syncChatProgressBanner();
+            const scrollContainer = document.getElementById('chat-stream-scroll');
+            if (scrollContainer) {
+              scrollContainer.scrollTop = scrollContainer.scrollHeight;
+            }
+          } else {
+            renderChatStream();
+          }
+        }
+      } else if (chatSendVisible()) {
+        syncChatProgressBanner();
       }
     }));
   }
 
   document.getElementById('chat-new-thread-btn')?.addEventListener('click', () => {
-    void startNewChatThread({ type: 'all', meetingIds: [], dateFrom: null, dateTo: null });
+    void startNewChatThread({ type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] });
   });
 
   document.getElementById('chat-sidebar-toggle')?.addEventListener('click', () => {
@@ -10069,9 +11974,22 @@ function setupChatWorkspace() {
     renderScopePopover();
   });
 
+  for (const [id, field] of [['chat-scope-date-from', 'dateFrom'], ['chat-scope-date-to', 'dateTo']]) {
+    const input = document.getElementById(id);
+    const syncDraft = () => { if (chatState.scopeDraft) chatState.scopeDraft[field] = input.value || null; };
+    input?.addEventListener('input', syncDraft);
+    input?.addEventListener('change', syncDraft);
+  }
+
+  document.getElementById('chat-scope-tags-toggle-btn')?.addEventListener('click', () => {
+    chatState.showAllScopeTags = !chatState.showAllScopeTags;
+    renderScopePopover();
+  });
+
   document.getElementById('chat-scope-clear-btn')?.addEventListener('click', () => {
-    chatState.scopeDraft = { type: 'all', meetingIds: [], dateFrom: null, dateTo: null };
+    chatState.scopeDraft = { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] };
     chatState.scopeFilter = '';
+    chatState.showAllScopeTags = false;
     const filterEl = document.getElementById('chat-scope-meeting-filter');
     if (filterEl) filterEl.value = '';
     renderScopePopover();
@@ -10085,6 +12003,7 @@ function setupChatWorkspace() {
       meetingIds: Array.isArray(chatState.scopeDraft?.meetingIds) ? [...chatState.scopeDraft.meetingIds] : [],
       dateFrom: fromVal || null,
       dateTo: toVal || null,
+      tags: Array.isArray(chatState.scopeDraft?.tags) ? [...chatState.scopeDraft.tags] : [],
     };
     if (chatState.activeThread && window.electronAPI?.updateChatThreadScope) {
       try {
@@ -10104,6 +12023,13 @@ function setupChatWorkspace() {
       renderChatStream();
     }
     toggleChatScopePopover(false);
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || event.defaultPrevented || !chatState.popoverOpen) return;
+    event.preventDefault();
+    toggleChatScopePopover(false);
+    document.getElementById('chat-scope-btn')?.focus();
   });
 
   document.addEventListener('pointerdown', (e) => {

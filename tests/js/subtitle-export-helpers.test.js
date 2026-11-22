@@ -143,10 +143,10 @@ test('serializeCuesToVtt formats WEBVTT header, plain speaker prefixes, and sani
       'WEBVTT',
       '',
       '00:00:00.000 --> 00:00:01.200',
-      'Speaker <1> & "Host": Welcome everyone.',
+      'Speaker &lt;1&gt; &amp; "Host": Welcome everyone.',
       '',
       '00:00:01.500 --> 00:00:02.600',
-      '<>&: Ready to begin.',
+      '&lt;&gt;&amp;: Ready to begin.',
       '',
     ].join('\n'),
   );
@@ -358,4 +358,42 @@ test('buildExportFormatOptions sets format availability, notices, and canRetrans
   assert.equal(staleWithoutAudio.options.find((opt) => opt.format === 'txt').available, true);
   assert.equal(staleWithoutAudio.options.find((opt) => opt.format === 'srt').available, false);
   assert.equal(staleWithoutAudio.options.find((opt) => opt.format === 'vtt').available, false);
+});
+
+test('speaker overlays are applied to markdown and subtitle formats without changing inputs', () => {
+  const helpers = require('../../src/renderer/subtitle-export-helpers');
+  const names = { 'Speaker 1': 'Alice' };
+  const markdown = '**[00:01 - 00:02]**\n**Speaker 1:** Hello';
+  assert.equal(helpers.applySpeakerNamesToMarkdown(markdown, names), '**[00:01 - 00:02]**\n**Alice:** Hello');
+  const cues = [{ startMs: 1000, endMs: 2000, speaker: 'Speaker 1', text: 'Hello' }];
+  assert.match(helpers.serializeCuesToSrt(cues, { speakerNames: names }), /Alice: Hello/);
+  assert.match(helpers.serializeCuesToVtt(cues, { speakerNames: names, useVoiceTags: true }), /<v Alice>Hello/);
+  assert.equal(cues[0].speaker, 'Speaker 1');
+});
+
+test('speaker replacement only touches label positions and escapes output markup', () => {
+  const helpers = require('../../src/renderer/subtitle-export-helpers');
+  const source = '**[00:01 - 00:02]** **Speaker 1:** Mention **Speaker 1:** in speech.\n**Speaker 1:** More';
+  const names = { 'Speaker 1': 'A_[x]<tag>&' };
+  const result = helpers.applySpeakerNamesToMarkdown(source, names);
+  assert.match(result, /Mention \*\*Speaker 1:\*\*/);
+  assert.match(result, /A\\_\\\[x\\\]\\<tag\\>&/);
+  assert.match(helpers.convertTranscriptMarkdownToPlainText(result), /A_\[x\]<tag>&: Mention/);
+  const cues = [{ startMs: 0, endMs: 1000, speaker: 'Speaker 1', text: 'Hi' }];
+  assert.match(helpers.serializeCuesToSrt(cues, { speakerNames: names }), /A_\[x\]&lt;tag&gt;&amp;: Hi/);
+  assert.doesNotMatch(helpers.serializeCuesToVtt(cues, { speakerNames: names, useVoiceTags: true }), /<tag>/);
+});
+
+
+test('speaker exports handle unbolded timestamps, nested arrows and inherited names', () => {
+  const { applySpeakerNamesToMarkdown } = require('../../src/renderer/subtitle-export-helpers');
+  const transcript = '[00:01 - 00:03] **Speaker 1:** Hello';
+  const named = applySpeakerNamesToMarkdown(transcript, { 'Speaker 1': 'A--->->B' });
+  assert.equal(named, '[00:01 - 00:03] **AB:** Hello');
+  assert.equal(convertTranscriptMarkdownToPlainText(named), '[00:01 - 00:03] AB: Hello\n');
+  assert.equal(applySpeakerNamesToMarkdown(transcript, Object.create({ 'Speaker 1': 'Inherited' })), transcript);
+  const cues = [{ start: 0, end: 1, text: 'Hi', speaker: 'Speaker 1' }];
+  assert.match(serializeCuesToVtt(cues, { useVoiceTags: true, speakerNames: { 'Speaker 1': 'A--->->B' } }), /<v AB>Hi/);
+  assert.match(serializeCuesToSrt(cues, { speakerNames: Object.create({ 'Speaker 1': 'Inherited' }) }), /Speaker 1: Hi/);
+  assert.match(serializeCuesToVtt([{ ...cues[0], speaker: 'A--->->B' }], { useVoiceTags: true }), /<v AB>Hi/);
 });

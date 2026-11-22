@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const { normalizeTagStrict } = require('../renderer/tag-helpers');
 
 // Import staging is nested so the recording scanner cannot discover unfinished files.
 function createAudioImportService({ dialog, getMainWindow, getRecordingsDir, ffmpegPath,
@@ -85,6 +86,15 @@ function createAudioImportService({ dialog, getMainWindow, getRecordingsDir, ffm
   async function start(options = {}) {
     if (active || picking || isQuitCommitted()) return { success: false, code: 'IMPORT_BUSY', error: 'An import is already in progress.' };
     if (!selected) return { success: false, error: 'Choose an audio file first.' };
+    let normalizedTag = null;
+    try {
+      if (options && Object.hasOwn(options, 'tag') && options.tag !== undefined && options.tag !== null
+        && (typeof options.tag !== 'string' || options.tag.trim())) {
+        normalizedTag = normalizeTagStrict(options.tag);
+      }
+    } catch (tagError) {
+      return { success: false, code: 'IMPORT_INVALID_TAG', error: tagError.message || 'Unsupported recording tag.' };
+    }
     const source = selected;
     const operation = { cancelled: false, child: null, phase: 'preparing', promise: null };
     active = operation;
@@ -104,7 +114,8 @@ function createAudioImportService({ dialog, getMainWindow, getRecordingsDir, ffm
         sendToRenderer('import-audio-progress', { phase: 'saving' });
         const result = await finalizeRecordingTranscription({ audioPath: output, duration,
           title: path.basename(source, path.extname(source)), language: options.language,
-          modelSize: options.modelSize, transcriptionSelection: options.transcriptionSelection });
+          modelSize: options.modelSize, transcriptionSelection: options.transcriptionSelection,
+          ...(normalizedTag ? { tag: normalizedTag } : {}) });
         if (result && (result.success || result.meeting || result.pendingMeeting)) selected = null;
         if (result && !result.success) {
           return { ...result, error: result.code === 'ENOSPC'

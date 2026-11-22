@@ -86,7 +86,7 @@ Whisper is much better on clean, turn-based speech than on several people talkin
 - Whisper uses CPU until optional managed CUDA 12 setup is admitted.
 - An installed but unusable managed runtime fails closed; use Repair or Uninstall
   to restore an admitted GPU runtime or return Whisper to CPU.
-- Parakeet, speaker labels and Qwen summaries require their supported CUDA setup;
+- Parakeet, speaker labels and Summaries & Chat require their supported CUDA setup;
   those features have no CPU/cloud fallback.
 
 ## Practical Recommendations

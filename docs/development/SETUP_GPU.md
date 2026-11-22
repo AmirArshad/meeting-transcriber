@@ -55,9 +55,8 @@ pip install nvidia-cudnn-cu12
 ### Error: "CUDA out of memory"
 
 **Solution:** Use a smaller Whisper model:
-- Try `base` instead of `medium`
-- Try `small` instead of `medium`
-- Try `tiny` for very limited VRAM
+- Try `small` (default and minimum new choice) instead of `medium` or `large-v3`
+- Close other GPU-intensive apps or click **Unload** / **Free memory** on any loaded Summaries & Chat model before transcribing
 
 ### Error: "No CUDA-capable device detected"
 
@@ -105,14 +104,14 @@ Speaker identification and Summaries & Chat are separate: Speakrs uses native CU
 ## Still Having Issues?
 
 1. Check the [faster-whisper GitHub](https://github.com/SYSTRAN/faster-whisper) for latest updates
-2. Try CPU mode first to verify the rest works: The transcriber will auto-fallback to CPU if GPU fails
+2. On Windows, try CPU mode first to verify the rest works (the transcriber falls back to CPU if CUDA is unavailable). On Linux, an installed managed CUDA tree is fail-closed; use **Repair** or **Uninstall** in Settings to restore CUDA or return to CPU.
 3. Report issues with full error logs
 
 ---
 
 **Ready to test?** Run:
 ```bash
-python test_transcribe.py
+python backend/test_transcribe.py
 ```
 
 You should see: `CUDA detected, using GPU acceleration`

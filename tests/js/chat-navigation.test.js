@@ -18,6 +18,7 @@ function fixture(api) {
     window: { electronAPI: api },
     document: { getElementById: (id) => id === 'chat-input' ? input : null },
     console, confirm: () => true, meetings: [],
+    summaryLibrary: () => null,
   });
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
   const start = source.indexOf('const chatState = {');
@@ -133,4 +134,85 @@ test('a failed list refresh after a successful send does not restore the sent qu
   await sending;
   assert.equal(f.input.value, '');
   assert.equal(f.chatState.activeThread.id, 'a');
+});
+
+test('sendCurrentChatQuestion sends thread override even when default eligibility is false and avoids pre-send createThread', async () => {
+  const requests = [];
+  let createCalls = 0;
+  const f = fixture({
+    createChatThread: async () => { createCalls += 1; return { thread: { id: 'orphan' } }; },
+    askHistory: async (req) => { requests.push(req); return { thread: { id: 'new-t', modelId: 'gemma-4-e4b', messages: [] } }; },
+    listChatThreads: async () => ({ threads: [] }),
+  });
+  f.chatState.eligibility = { eligible: false, reason: 'Default unavailable' };
+  f.chatState.pendingModelId = 'gemma-4-e4b';
+  // Inject summaryLibrary in the VM context so usableSummaryModels sees gemma-4-e4b.
+  const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
+  const libHelpers = source.slice(source.indexOf('function usableSummaryModels('), source.indexOf('function summaryModelHasFiles('));
+  const ctx = vm.createContext({
+    window: { electronAPI: {
+      createChatThread: async () => { createCalls += 1; return { thread: { id: 'orphan' } }; },
+      askHistory: async (req) => { requests.push(req); return { thread: { id: 'new-t', modelId: 'gemma-4-e4b', messages: [] } }; },
+      listChatThreads: async () => ({ threads: [] }),
+    } },
+    document: { getElementById: (id) => id === 'chat-input' ? f.input : null },
+    console, confirm: () => true, meetings: [],
+    summaryLibrary: () => ({
+      defaultModelId: 'qwen3.5-9b-q4-k-m',
+      models: [
+        { modelId: 'qwen3.5-9b-q4-k-m', installed: false, setupComplete: false, status: 'notConfigured' },
+        { modelId: 'gemma-4-e4b', modelName: 'Gemma 4 E4B', installed: true, setupComplete: true, status: 'ready' },
+      ],
+    }),
+  });
+  const start = source.indexOf('const chatState = {');
+  const end = source.indexOf('function setupChatWorkspace()', start);
+  vm.runInContext(libHelpers + '\n' + source.slice(start, end) + `
+    renderChatThreadSidebar = () => {};
+    renderChatOnboardingAndComposer = () => {};
+    renderChatStream = () => {};
+    closeChatMobileSidebar = () => {};
+    showAppToast = () => {};
+    globalThis.chat = { chatState, sendCurrentChatQuestion };
+  `, ctx);
+  ctx.chat.chatState.eligibility = { eligible: false, reason: 'Default unavailable' };
+  ctx.chat.chatState.pendingModelId = 'gemma-4-e4b';
+  f.input.value = 'Override question';
+  await ctx.chat.sendCurrentChatQuestion();
+  assert.equal(createCalls, 0);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].threadModelId, 'gemma-4-e4b');
+  assert.equal(requests[0].modelId, 'gemma-4-e4b');
+});
+
+test('renderChatOnboardingAndComposer does not flash onboarding while resetting removed thread override', () => {
+  const onboarding = { hidden: true };
+  const sendBtn = { textContent: '', disabled: false, classList: { add() {}, remove() {} } };
+  const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
+  const fnSource = source.slice(source.indexOf('function isChatModelEligible('), source.indexOf('function renderChatThreadSidebar('));
+  const ctx = vm.createContext({
+    document: { getElementById: (id) => (id === 'chat-onboarding-card' ? onboarding : id === 'chat-send-btn' ? sendBtn : null) },
+    chatState: {
+      activeThread: { id: 't1', title: 'Chat', modelId: 'removed-model' },
+      pendingModelId: null,
+      resettingRemovedModelThreadId: 't1',
+      sending: false,
+      eligibility: { eligible: true },
+    },
+    renderChatModelChoice: () => {},
+    summaryLibrary: () => ({
+      defaultModelId: 'qwen3.5-9b-q4-k-m',
+      models: [{ modelId: 'qwen3.5-9b-q4-k-m', installed: true, setupComplete: true, status: 'ready' }],
+    }),
+    usableSummaryModels: (lib) => lib.models.filter((m) => m.status === 'ready'),
+    formatChatScopeLabel: () => 'All recordings',
+    getCurrentChatScope: () => ({ type: 'all' }),
+    getMeetingsMapById: () => new Map(),
+    getTagMeta: () => null,
+    chatThreadDetailPending: () => false,
+  });
+  vm.runInContext(fnSource, ctx);
+  ctx.renderChatOnboardingAndComposer();
+  assert.equal(onboarding.hidden, true);
+  assert.equal(sendBtn.disabled, true);
 });

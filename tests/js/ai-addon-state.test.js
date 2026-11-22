@@ -29,6 +29,22 @@ const {
   resolveModelId,
 } = require('../../src/ai-addon-state');
 
+test('Gemma models share their verified platform runtimes while Inkling stays gated', () => {
+  for (const [platform, arch] of [['darwin', 'arm64'], ['win32', 'x64'], ['linux', 'x64']]) {
+    const e4b = getSummaryArtifactForPlatform('gemma-4-e4b', platform, arch);
+    const twelve = getSummaryArtifactForPlatform('gemma-4-12b', platform, arch);
+    assert.equal(e4b.inference.contextTokens, 32768);
+    assert.equal(e4b.source.sizeBytes, 4590807392);
+    assert.equal(twelve.source.sizeBytes, 7219673216);
+    const runtime = getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, e4b.modelId);
+    assert.equal(runtime.id, getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, twelve.modelId).id);
+    assert.notEqual(runtime.id, getSummaryRuntimeArtifactForPlatform(platform, arch).id);
+    if (platform === 'linux') assert.ok(runtime.artifacts[0].requiredFiles.some((file) => file.path.endsWith('/llama-server')));
+    assert.equal(getSummaryArtifactForPlatform('inkling-2-mini', platform, arch), null);
+    assert.equal(getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, 'inkling-2-mini'), null);
+  }
+});
+
 test('both managed Pyannote environments require the patched certificate bundle', () => {
   for (const [platform, arch] of [['win32', 'x64'], ['darwin', 'arm64']]) {
     const artifact = getDiarizationDependencyArtifactForPlatform(platform, arch);
@@ -487,4 +503,35 @@ test('status states include the design states', () => {
     'error',
     'unsupported',
   ]);
+});
+
+test('summary library preserves independent models and migrates a legacy ready default', () => {
+  const { normalizeAiAddonManifest, AI_MODEL_CATALOG } = require('../../src/ai-addon-state');
+  const [first, second] = AI_MODEL_CATALOG.summary.models;
+  const legacy = normalizeAiAddonManifest({ features: { summary: { status: 'ready', modelId: first.id } } });
+  assert.equal(legacy.summaryLibrary.defaultModelId, first.id);
+  assert.equal(legacy.summaryLibrary.models[first.id].status, 'ready');
+  const next = normalizeAiAddonManifest({ ...legacy, summaryLibrary: { defaultModelId: first.id, models: { ...legacy.summaryLibrary.models, [second.id]: { status: 'ready', modelId: second.id } } } });
+  assert.equal(next.summaryLibrary.defaultModelId, first.id);
+  assert.equal(next.summaryLibrary.models[second.id].status, 'ready');
+});
+
+test('catalog excludes legacy qwen3-14b placeholder and keeps features.summary synced to defaultModelId', () => {
+  assert.deepEqual(
+    AI_MODEL_CATALOG.summary.models.map((model) => model.id),
+    ['qwen3.5-9b-q4-k-m', 'qwen3.5-4b-q4-k-m', 'gemma-4-e4b', 'gemma-4-12b', 'inkling-2-mini'],
+  );
+  assert.equal(getModelById('summary', 'qwen3-14b-q4-k-m'), null);
+  const normalized = normalizeAiAddonManifest({
+    features: { summary: { status: 'notConfigured', modelId: 'qwen3.5-4b-q4-k-m' } },
+    summaryLibrary: {
+      defaultModelId: 'qwen3.5-9b-q4-k-m',
+      models: {
+        'qwen3.5-9b-q4-k-m': { status: 'ready', modelId: 'qwen3.5-9b-q4-k-m' },
+        'qwen3.5-4b-q4-k-m': { status: 'notConfigured', modelId: 'qwen3.5-4b-q4-k-m' },
+      },
+    },
+  });
+  assert.equal(normalized.features.summary.modelId, 'qwen3.5-9b-q4-k-m');
+  assert.equal(normalized.features.summary.status, 'ready');
 });

@@ -5,9 +5,25 @@ const fs = require('fs');
 const { pathToFileURL } = require('url');
 
 const TRUSTED_GITHUB_PATH_PREFIX = '/AmirArshad/meeting-transcriber';
+const TRUSTED_GITHUB_EXACT_PATHS = new Set([
+  '/avencera/speakrs',
+  '/ggml-org/llama.cpp',
+  '/ai-dock/llama.cpp-cuda',
+]);
 const TRUSTED_HUGGING_FACE_PATHS = new Set([
   '/pyannote/speaker-diarization-community-1',
   '/settings/tokens',
+  '/Qwen/Qwen3.5-9B',
+  '/ggml-org/gemma-4-E4B-it-GGUF',
+  '/ggml-org/gemma-4-12B-it-GGUF',
+  '/ggml-org/Inkling-2-Mini-GGUF',
+  '/nvidia/parakeet-tdt-0.6b-v2',
+  '/istupakov/parakeet-tdt-0.6b-v2-onnx',
+  '/mlx-community/parakeet-tdt-0.6b-v2',
+]);
+const TRUSTED_CREATIVE_COMMONS_PATHS = new Set([
+  '/licenses/by/4.0',
+  '/licenses/by/4.0/',
 ]);
 
 function buildFileUrl(filePath) {
@@ -80,8 +96,13 @@ function isTrustedExternalUrl(url) {
     }
 
     if (parsedUrl.hostname === 'github.com') {
-      return parsedUrl.pathname === TRUSTED_GITHUB_PATH_PREFIX ||
-        parsedUrl.pathname.startsWith(`${TRUSTED_GITHUB_PATH_PREFIX}/`);
+      return parsedUrl.pathname === TRUSTED_GITHUB_PATH_PREFIX
+        || parsedUrl.pathname.startsWith(`${TRUSTED_GITHUB_PATH_PREFIX}/`)
+        || TRUSTED_GITHUB_EXACT_PATHS.has(parsedUrl.pathname);
+    }
+
+    if (parsedUrl.hostname === 'creativecommons.org') {
+      return TRUSTED_CREATIVE_COMMONS_PATHS.has(parsedUrl.pathname);
     }
 
     return parsedUrl.hostname === 'huggingface.co' &&

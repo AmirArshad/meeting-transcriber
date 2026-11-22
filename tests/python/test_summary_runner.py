@@ -342,3 +342,176 @@ def test_summary_ignores_unbound_or_superseded_speaker_text(tmp_path, binding):
     segments = load_summary_segments(str(transcript), str(speakers))
     assert 'Current facts' in str(segments)
     assert 'Superseded facts' not in str(segments)
+
+
+def test_summary_runner_persists_tag_template_metadata_and_defaults_untagged_to_other(tmp_path, monkeypatch):
+    from backend.summaries.summary_runner import build_json_repair_prompt, generate_summary
+    from backend.summaries.templates import TEMPLATE_VERSION
+
+    # 1. Tagged segment generation uses matching template schema & validates fields
+    seen_prompts = []
+
+    def run_tagged(_runtime, prompt_path, _max_tokens):
+        text = Path(prompt_path).read_text(encoding='utf-8')
+        seen_prompts.append(text)
+        return json.dumps({
+            'summary': 'Product brainstorm session.',
+            'problem_or_goal': [{'goal': 'Improve onboarding', 'timestamp': '00:05'}],
+            'ideas_explored': [{'idea': 'Guided checklist', 'notes': 'Reduces drop-off', 'timestamp': '00:12'}],
+        })
+
+    res_tagged = generate_summary_from_segments(
+        meeting_id='m_tag_1',
+        segments=[{'start': 0, 'end': 10, 'speaker': 'Speaker 1', 'text': 'Let us brainstorm onboarding ideas.'}],
+        runtime={'modelName': 'Qwen-Test'},
+        profile='balanced',
+        tag='brainstorm',
+        run_prompt=run_tagged,
+    )
+    assert 'ideas_explored' in seen_prompts[0]
+    assert res_tagged['summary'] == 'Product brainstorm session.'
+    assert res_tagged['problem_or_goal'][0]['goal'] == 'Improve onboarding'
+    assert res_tagged['ideas_explored'][0]['idea'] == 'Guided checklist'
+
+    # 2. Untagged new generation resolves template schema to 'other'
+    def run_untagged(_runtime, prompt_path, _max_tokens):
+        text = Path(prompt_path).read_text(encoding='utf-8')
+        assert '"outcomes_and_takeaways"' in text
+        return json.dumps({'summary': 'General recording overview.', 'key_points': []})
+
+    res_untagged = generate_summary_from_segments(
+        meeting_id='m_untagged_1',
+        segments=[{'start': 0, 'end': 8, 'speaker': 'Speaker 1', 'text': 'General note taking.'}],
+        runtime={'modelName': 'Qwen-Test'},
+        profile='balanced',
+        tag=None,
+        run_prompt=run_untagged,
+    )
+    assert res_untagged['summary'] == 'General recording overview.'
+    assert res_untagged['key_points'] == []
+
+    # 3. build_json_repair_prompt preserves --tag schema
+    repair_prompt = build_json_repair_prompt('{bad json', 'en', 'Musical rehearsal notes.', tag='music')
+    assert 'mix_and_arrangement' in repair_prompt
+    assert 'lyrics_and_themes' in repair_prompt
+
+    # 4. generate_summary untagged metadata defaults template='other' & tag=None
+    untagged_md = tmp_path / 'untagged.md'
+    untagged_md.write_text(
+        '**[00:01 - 00:08]** **Speaker 1:**\nGeneral recording discussion covering architecture and release timeline milestones.\n',
+        encoding='utf-8',
+    )
+    untagged_hash = hash_transcript_text(untagged_md.read_text(encoding='utf-8'))
+    untagged_json = tmp_path / 'untagged.summary.json'
+    untagged_out_md = tmp_path / 'untagged.summary.md'
+
+    import backend.summaries.summary_runner as sr
+
+    monkeypatch.setattr(sr, 'resolve_llama_runtime', lambda *_a, **_kw: {'modelName': 'MockModel', 'runtime': 'llama.cpp'})
+    monkeypatch.setattr(
+        sr,
+        'run_llama_prompt',
+        lambda _runtime, prompt_path, *_args, **_kwargs: (
+            json.dumps({'language': 'en', 'certain': True, 'share': 1})
+            if 'language.prompt' in str(prompt_path)
+            else json.dumps({'summary': 'General recording overview covering architecture and release timeline milestones.', 'key_points': []})
+        ),
+    )
+
+    gen_untagged = generate_summary(
+        meeting_id='m_untagged_2',
+        transcript_path=str(untagged_md),
+        runtime_dir=str(tmp_path),
+        model_path=str(tmp_path / 'model.gguf'),
+        output_json=str(untagged_json),
+        output_markdown=str(untagged_out_md),
+        language='en',
+        source_transcript_hash=untagged_hash,
+        model_id='qwen-test',
+        tag=None,
+    )
+    assert gen_untagged['metadata']['tag'] is None
+    assert '**Tag:**' not in untagged_out_md.read_text(encoding='utf-8')
+    assert gen_untagged['metadata']['template'] == 'other'
+    assert gen_untagged['metadata']['templateVersion'] == TEMPLATE_VERSION
+
+    # 5. --tag CLI end-to-end persistence to JSON and Markdown files
+    transcript = tmp_path / 'clip.md'
+    transcript.write_text(
+        '**[00:01 - 00:09]** **Speaker 1:**\nAppointment follow-up scheduled for Tuesday morning with updated lab results.\n',
+        encoding='utf-8',
+    )
+    tx_hash = hash_transcript_text(transcript.read_text(encoding='utf-8'))
+    out_json = tmp_path / 'clip.summary.json'
+    out_md = tmp_path / 'clip.summary.md'
+
+    monkeypatch.setattr(
+        sr,
+        'run_llama_prompt',
+        lambda _runtime, prompt_path, *_args, **_kwargs: (
+            json.dumps({'language': 'en', 'certain': True, 'share': 1})
+            if 'language.prompt' in str(prompt_path)
+            else json.dumps({
+                'summary': 'Routine follow-up appointment scheduled for Tuesday morning with updated lab results.',
+                'key_findings': [{'finding': 'Metrics look stable across recent checkups', 'timestamp': '00:05'}],
+            })
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        'argv',
+        [
+            'summary_runner.py',
+            '--transcript', str(transcript),
+            '--output-json', str(out_json),
+            '--output-markdown', str(out_md),
+            '--runtime-dir', str(tmp_path),
+            '--model-path', str(tmp_path / 'model.gguf'),
+            '--language', 'en',
+            '--source-transcript-hash', tx_hash,
+            '--model-id', 'qwen3.5-9b-q4-k-m',
+            '--tag', 'appointment',
+        ],
+    )
+    sr.main()
+    saved = json.loads(out_json.read_text(encoding='utf-8'))
+    assert saved['metadata']['tag'] == 'appointment'
+    assert saved['metadata']['template'] == 'appointment'
+    assert saved['metadata']['templateVersion'] == TEMPLATE_VERSION
+    md_text = out_md.read_text(encoding='utf-8')
+    assert '## Key Findings' in md_text
+    assert '**Tag:** Appointment' in md_text
+
+
+def test_plain_and_mixed_transcripts_chunk_without_losing_text(tmp_path):
+    from backend.summaries.summary_pipeline import chunk_transcript, estimate_token_count
+
+    transcript = tmp_path / "meeting.md"
+    sentences = ["Approved calibration today.", "The group agreed to test it tomorrow."]
+    oversized_word = "驗證" * 45
+    transcript.write_text(
+        "# Audio Transcript\n\n" + "\n\n".join([" ".join(sentences * 8), oversized_word]),
+        encoding="utf-8",
+    )
+    segments = load_summary_segments(str(transcript))
+    assert len(segments) == 2
+    assert all(segment["start"] is None and segment["end"] is None for segment in segments)
+    chunks = chunk_transcript(segments, max_tokens=22, prefer_topic_boundaries=False)
+    assert len(chunks) > 2
+    assert all(estimate_token_count(chunk["text"]) == chunk["estimatedTokens"] <= 22 for chunk in chunks)
+    parts = [segment["text"] for chunk in chunks for segment in chunk["segments"]]
+    assert all(part.endswith(".") for part in parts if part.isascii())
+    assert " ".join(part for part in parts if part.isascii()) == " ".join(sentences * 8)
+    assert "".join(part for part in parts if not part.isascii()) == oversized_word
+
+    transcript.write_text(
+        "# Audio Transcript\n\nOpening remarks.\n\n**Dr. Lee:** Discussed quotas.\n"
+        "Followed up on training.\n\nUnattributed next steps.\n\n**Morgan:**",
+        encoding="utf-8",
+    )
+    segments = load_summary_segments(str(transcript))
+    assert [(segment["speaker"], segment["text"]) for segment in segments] == [
+        ("Unknown", "Opening remarks."),
+        ("Dr. Lee", "Discussed quotas. Followed up on training."),
+        ("Unknown", "Unattributed next steps."),
+    ]

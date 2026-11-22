@@ -1,6 +1,6 @@
 ---
 description: Local AI add-ons — catalog, privacy, setup, and compute queue
-globs: src/ai-addon/**,src/main/*ai*.js,src/main/*gpu*.js,src/main/*summary*.js,src/main/*transcription*.js,src/ai-addon*.js,backend/diarization/**,backend/summaries/**,tests/js/ai-addon*.test.js,docs/development/LOCAL_AI_MODEL_CATALOG.md
+globs: src/ai-addon/**,src/main/*ai*.js,src/main/*gpu*.js,src/main/*summary*.js,src/main/*transcription*.js,src/main/history-qa-service.js,src/main/chat-thread-store.js,src/ai-addon*.js,src/summary-language-policy.js,backend/diarization/**,backend/summaries/**,backend/history_qa/**,backend/summary_process_tree.py,tests/js/ai-addon*.test.js,docs/development/LOCAL_AI_MODEL_CATALOG.md
 alwaysApply: false
 ---
 

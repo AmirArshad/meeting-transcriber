@@ -44,7 +44,7 @@ Your repository can be made public, but you should address **one item** first:
 **Your email is visible in commits:**
 
 ```
-Author: shareh <[personal email redacted]>
+Author: [username redacted] <[personal email redacted]>
 Author: [name redacted] <[personal email redacted]>
 ```
 
@@ -61,7 +61,7 @@ Author: [name redacted] <[personal email redacted]>
 
 **What's exposed:**
 - Email address: `[personal email redacted]`
-- Name: "shareh" and "[name redacted]"
+- Name: "[username redacted]" and "[name redacted]"
 - Commit timestamps and messages
 
 ---
@@ -114,7 +114,7 @@ If you make the repo public, people will see:
 
 ### Git History
 - ⚠️ Your email: `[personal email redacted]`
-- ⚠️ Your name: "[name redacted]" / "shareh"
+- ⚠️ Your name: "[name redacted]" / "[username redacted]"
 - ✅ Commit messages (no sensitive info)
 - ✅ Commit timestamps
 

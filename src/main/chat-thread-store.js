@@ -5,6 +5,7 @@
  */
 
 const crypto = require('crypto');
+const { normalizeTagsFilter } = require('../renderer/tag-helpers');
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_THREAD_TITLE = 'New chat';
@@ -71,6 +72,14 @@ function sanitizeScope(rawScope) {
   if (raw.meetingId != null && (typeof raw.meetingId !== 'string' || !raw.meetingId.trim())) {
     throw new Error('Invalid chat scope meeting ID.');
   }
+  let tags = [];
+  if (raw.tags != null) {
+    try {
+      tags = normalizeTagsFilter(raw.tags);
+    } catch (_error) {
+      throw new Error('Invalid chat scope tags.');
+    }
+  }
   const type = rawType.trim().toLowerCase() === 'all' ? 'all' : 'selected_meetings';
   let meetingIds = [];
   if (type === 'selected_meetings') {
@@ -92,6 +101,7 @@ function sanitizeScope(rawScope) {
     meetingIds,
     dateFrom: sanitizeOptionalIsoDate(raw.dateFrom),
     dateTo: sanitizeOptionalIsoDate(raw.dateTo),
+    tags,
   };
 }
 
@@ -119,6 +129,8 @@ function sanitizeCitation(raw) {
     startSec: Number.isFinite(startSecNum) && startSecNum >= 0 ? startSecNum : null,
     endSec: Number.isFinite(endSecNum) && endSecNum >= 0 ? endSecNum : null,
     speaker: String(raw.speaker || '').slice(0, 120),
+    tag: String(raw.tag || '').trim().slice(0, 40),
+    kind: raw.kind === 'summary' || raw.kind === 'transcript' ? raw.kind : '',
     excerpt: String(raw.excerpt || '').slice(0, 500),
     sourceTranscriptHash: String(raw.sourceTranscriptHash || '').slice(0, 128),
   };
@@ -136,8 +148,17 @@ function sanitizeMessage(raw) {
     createdAt: sanitizeOptionalIsoDate(raw.createdAt) || nowIso(),
   };
   if (role === 'assistant') {
-    const allowedStatuses = new Set(['answered', 'insufficient_evidence', 'error', 'cancelled']);
+    const allowedStatuses = new Set([
+      'answered',
+      'no_matching_excerpts',
+      'insufficient_evidence',
+      'verification_failed',
+      'error',
+      'cancelled',
+    ]);
     entry.status = allowedStatuses.has(raw.status) ? raw.status : 'answered';
+    if (typeof raw.modelId === 'string') entry.modelId = raw.modelId.slice(0, 120);
+    if (typeof raw.modelName === 'string') entry.modelName = raw.modelName.slice(0, 160);
     entry.citations = Array.isArray(raw.citations)
       ? raw.citations.map(sanitizeCitation).filter(Boolean)
       : [];
@@ -147,6 +168,18 @@ function sanitizeMessage(raw) {
     entry.evidenceCount = Number.isFinite(Number(raw.evidenceCount))
       ? Math.max(0, Math.floor(Number(raw.evidenceCount)))
       : 0;
+    if (typeof raw.failureReason === 'string' && raw.failureReason.trim()) {
+      entry.failureReason = raw.failureReason.trim().slice(0, 80);
+    }
+    if (typeof raw.detectedDateFilter === 'string' && raw.detectedDateFilter.trim()) {
+      entry.detectedDateFilter = raw.detectedDateFilter.trim().slice(0, 64);
+    }
+    if (raw.retrievalMode === 'overview' || raw.retrievalMode === 'targeted') {
+      entry.retrievalMode = raw.retrievalMode;
+    }
+    if (Array.isArray(raw.inspectedSources) && raw.inspectedSources.length > 0) {
+      entry.inspectedSources = raw.inspectedSources.map(sanitizeCitation).filter(Boolean).slice(0, 8);
+    }
   }
   return entry;
 }
@@ -176,6 +209,7 @@ function sanitizeThreadRecord(raw) {
     createdAt,
     updatedAt,
     scope: sanitizeSavedScope(raw.scope),
+    modelId: typeof raw.modelId === 'string' ? raw.modelId.slice(0, 120) : null,
     messages: Array.isArray(raw.messages)
       ? raw.messages.map(sanitizeMessage).filter(Boolean)
       : [],
@@ -194,6 +228,7 @@ function summarizeThread(thread) {
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     scope: sanitizeScope(thread.scope),
+    modelId: thread.modelId || null,
     messageCount: messages.length,
     lastMessagePreview: preview,
   };
@@ -307,7 +342,10 @@ function createChatThreadStore(deps) {
     });
   }
 
-  function createThread({ title = DEFAULT_THREAD_TITLE, scope = null } = {}) {
+  function createThread({ title = DEFAULT_THREAD_TITLE, scope = null, modelId = null } = {}) {
+    const normalizedModelId = typeof modelId === 'string' && modelId.trim()
+      ? modelId.trim().slice(0, 120)
+      : null;
     return enqueueMutation(async () => {
       const store = await readStoreUnsafe();
       const now = nowIso();
@@ -317,6 +355,7 @@ function createChatThreadStore(deps) {
         createdAt: now,
         updatedAt: now,
         scope: sanitizeScope(scope),
+        modelId: normalizedModelId,
         messages: [],
       };
       store.threads.unshift(thread);
@@ -374,6 +413,18 @@ function createChatThreadStore(deps) {
     });
   }
 
+  function updateThreadModel(threadId, modelId) {
+    return enqueueMutation(async () => {
+      const store = await readStoreUnsafe();
+      const thread = store.threads.find((t) => t.id === String(threadId || '').trim());
+      if (!thread) throw new Error('Chat thread not found.');
+      thread.modelId = modelId;
+      thread.updatedAt = nowIso();
+      await writeStoreAtomic(store);
+      return structuredClone(thread);
+    });
+  }
+
   function appendTurn(
     threadId,
     {
@@ -383,6 +434,12 @@ function createChatThreadStore(deps) {
       citations = [],
       searchedMeetingCount = 0,
       evidenceCount = 0,
+      failureReason = null,
+      detectedDateFilter = null,
+      retrievalMode = null,
+      inspectedSources = [],
+      modelId = null,
+      modelName = null,
       scope = null,
     },
     { beforeCommit = null } = {},
@@ -411,6 +468,12 @@ function createChatThreadStore(deps) {
         citations,
         searchedMeetingCount,
         evidenceCount,
+        failureReason,
+        detectedDateFilter,
+        retrievalMode,
+        inspectedSources,
+        modelId,
+        modelName,
       });
       thread.messages.push(userMessage, assistantMessage);
       if (thread.title === DEFAULT_THREAD_TITLE && userMessage.content) {
@@ -438,6 +501,7 @@ function createChatThreadStore(deps) {
     renameThread,
     deleteThread,
     updateThreadScope,
+    updateThreadModel,
     appendTurn,
     sanitizeScope,
   };

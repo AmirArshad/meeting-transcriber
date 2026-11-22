@@ -193,15 +193,34 @@ test('isTrustedExternalUrl only allows explicit external destinations', () => {
   assert.equal(isTrustedExternalUrl('https://github.com/AmirArshad/meeting-transcriber/releases/download/v1.8.0/app.exe'), true);
   assert.equal(isTrustedExternalUrl('https://huggingface.co/pyannote/speaker-diarization-community-1'), true);
   assert.equal(isTrustedExternalUrl('https://huggingface.co/settings/tokens'), true);
+  assert.equal(isTrustedExternalUrl('https://github.com/avencera/speakrs'), true);
+  assert.equal(isTrustedExternalUrl('https://github.com/ggml-org/llama.cpp'), true);
+  assert.equal(isTrustedExternalUrl('https://github.com/ai-dock/llama.cpp-cuda'), true);
+  assert.equal(isTrustedExternalUrl('https://huggingface.co/Qwen/Qwen3.5-9B'), true);
+  assert.equal(isTrustedExternalUrl('https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF'), true);
+  assert.equal(isTrustedExternalUrl('https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF'), true);
+  assert.equal(isTrustedExternalUrl('https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF'), true);
+  assert.equal(isTrustedExternalUrl('https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2'), true);
+  assert.equal(isTrustedExternalUrl('https://creativecommons.org/licenses/by/4.0/'), true);
   assert.equal(isTrustedExternalUrl('x-apple.systempreferences:com.apple.preference.security?Privacy'), true);
   assert.equal(isTrustedExternalUrl('https://example.com'), false);
   assert.equal(isTrustedExternalUrl('https://github.com/electron/electron'), false);
+  assert.equal(isTrustedExternalUrl('https://github.com/ggml-org/llama.cpp/issues'), false);
   assert.equal(isTrustedExternalUrl('https://huggingface.co/pyannote/speaker-diarization-community-1-malicious'), false);
   assert.equal(isTrustedExternalUrl('https://huggingface.co/pyannote/other-model'), false);
+  assert.equal(isTrustedExternalUrl('https://huggingface.co/ggml-org/other-model'), false);
+  assert.equal(isTrustedExternalUrl('https://creativecommons.org/licenses/by-sa/4.0/'), false);
   assert.equal(isTrustedExternalUrl('https://github.com/AmirArshad/meeting-transcriber-malicious'), false);
   assert.equal(isTrustedExternalUrl('http://example.com'), false);
   assert.equal(isTrustedExternalUrl('file:///tmp/demo.opus'), false);
   assert.equal(isTrustedExternalUrl('not a url'), false);
+
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'index.html'), 'utf8');
+  const aboutSection = html.match(/<p class="about-credits">([\s\S]*?)<\/p>/);
+  assert.ok(aboutSection);
+  for (const match of aboutSection[1].matchAll(/href="(https:\/\/[^"]+)"/g)) {
+    assert.equal(isTrustedExternalUrl(match[1]), true, `Expected About link to be allowlisted: ${match[1]}`);
+  }
 });
 
 
@@ -626,6 +645,25 @@ test('parseAiBackendProgressLine returns redacted progress events only', () => {
   });
   assert.equal(parseAiBackendProgressLine('not json', 'diarization'), null);
   assert.equal(parseAiBackendProgressLine('{"type":"progress","feature":"summary"}', 'diarization'), null);
+
+  const qaEvent = parseAiBackendProgressLine(JSON.stringify({
+    type: 'progress',
+    feature: 'history-qa',
+    phase: 'streaming',
+    message: 'Writing answer locally…',
+    percent: 65,
+    draftMarkdown: 'Line 1\nBearer secret123',
+  }), 'history-qa');
+  assert.equal(qaEvent.draftMarkdown, 'Line 1\nBearer [redacted-token]');
+
+  const summaryWithDraft = parseAiBackendProgressLine(JSON.stringify({
+    type: 'progress',
+    feature: 'summary',
+    phase: 'generating',
+    message: 'Working…',
+    draftMarkdown: 'should not be exposed',
+  }), 'summary');
+  assert.equal(summaryWithDraft.draftMarkdown, undefined);
 });
 
 

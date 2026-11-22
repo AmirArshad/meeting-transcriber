@@ -119,9 +119,26 @@ speaker sidecars carry the committed transcript hash; summaries use speaker text
 only when that hash matches the current Markdown. Legacy or mismatched speaker
 sidecars are not used as the source for new summaries.
 
+## Recording Tags & Summary Formats (v3.1)
+
+Recordings can carry an optional tag from 11 canonical types: **Meeting**, **Appointment**, **Phone / Support Call**, **Interview**, **Lecture / Study**, **Podcast**, **Video**, **Voice Note**, **Brainstorm**, **Music**, or **Other**.
+
+- Assign or change a tag from **Record**, **Import audio**, **Activity**, the **History** detail header, or **Prepare summary** (when untagged).
+- Filter the **History** list and **Chat** search scope by tag.
+- Changing a tag updates metadata only (`meetings.json`) and never renames files or marks transcripts stale.
+- Each tag selects a dedicated summary template when generating a summary (untagged recordings use the **Other** general format). If a recording already has a summary under an older tag, the Summary panel offers a non-blocking **Regenerate** banner without overwriting the existing summary.
+
+## Speaker Naming (v3.1)
+
+When speaker identification finds speakers (`Speaker 1`, `Speaker 2`, etc.):
+
+- Use the inline **Speakers** bar above the History transcript—or the optional **Speaker names** section inside **Prepare summary**—to assign real names.
+- Each speaker row includes a 1-line transcript quote and a timestamped play button so you can identify voices quickly before naming them.
+- Saving names updates `ai.diarization.speakerNames` in metadata, refreshing History display, full-text search, Chat attribution, summaries, and `.md`/`.txt`/`.srt`/`.vtt` exports while keeping the underlying `.md` transcript file untouched.
+
 ## Current Limitations
 
-- Local SQLite FTS5 full-text search and optional local Chat Q&A are supported, while semantic/embedding search is not implemented.
+- Local SQLite FTS5 full-text search and optional local Chat Q&A (with clickable timestamp citations) are supported, while semantic/embedding search is not implemented.
 - Manual filesystem edits inside the recordings directory can still confuse recovery if files are renamed arbitrarily.
 
 ## If You Need To Recover Recordings Manually

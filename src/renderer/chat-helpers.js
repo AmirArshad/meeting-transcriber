@@ -75,9 +75,44 @@
     return '';
   }
 
-  function formatChatScopeLabel(scope, meetingsById = null) {
+  const DEFAULT_TAG_LABELS = {
+    meeting: 'Meeting',
+    appointment: 'Appointment',
+    call: 'Phone / Support Call',
+    interview: 'Interview',
+    lecture: 'Lecture / Study',
+    podcast: 'Podcast',
+    video: 'Video',
+    'voice-note': 'Voice Note',
+    brainstorm: 'Brainstorm',
+    music: 'Music',
+    other: 'Other',
+  };
+
+  function formatTagScopeSuffix(scope, tagLabelResolver = null) {
+    const tags = Array.isArray(scope?.tags)
+      ? [...new Set(scope.tags.map((t) => String(t || '').trim().toLowerCase()).filter(Boolean))]
+      : [];
+    if (tags.length === 0) {
+      return '';
+    }
+    if (tags.length === 1) {
+      const slug = tags[0];
+      if (typeof tagLabelResolver === 'function') {
+        const resolved = tagLabelResolver(slug);
+        if (resolved) {
+          return String(resolved);
+        }
+      }
+      return DEFAULT_TAG_LABELS[slug] || slug;
+    }
+    return `${tags.length} tags`;
+  }
+
+  function formatChatScopeLabel(scope, meetingsById = null, tagLabelResolver = null) {
     const normalized = scope && typeof scope === 'object' ? scope : { type: 'all' };
     const dateSuffix = formatDateWindowSuffix(normalized);
+    const tagSuffix = formatTagScopeSuffix(normalized, tagLabelResolver);
     let base = 'All recordings';
     if (normalized.type === 'selected_meetings' && Array.isArray(normalized.meetingIds)) {
       const ids = normalized.meetingIds.filter(Boolean);
@@ -93,7 +128,7 @@
         base = 'No recordings selected';
       }
     }
-    return dateSuffix ? `${base} · ${dateSuffix}` : base;
+    return [base, tagSuffix, dateSuffix].filter(Boolean).join(' · ');
   }
 
   function buildModelMemoryPillView(modelState) {
@@ -124,6 +159,15 @@
         tone: 'unloading',
         showUnload: false,
         busy: true,
+      };
+    }
+    if (status === 'release_error') {
+      return {
+        status: 'release_error',
+        label: 'Still unloading',
+        tone: 'unloading',
+        showUnload: true,
+        busy: false,
       };
     }
     return {
@@ -167,12 +211,201 @@
     return (Array.isArray(meetings) ? meetings : []).some((m) => m && String(m.id) === targetId);
   }
 
+  function isScopeFiltered(scope) {
+    if (!scope || typeof scope !== 'object') {
+      return false;
+    }
+    if (scope.type === 'selected_meetings') {
+      return true;
+    }
+    if (scope.dateFrom || scope.dateTo) {
+      return true;
+    }
+    if (Array.isArray(scope.tags) && scope.tags.length > 0) {
+      return true;
+    }
+    return false;
+  }
+
+  function buildAssistantNoticeView(message, scope = null) {
+    const status = String(message?.status || '').trim();
+    if (!['no_matching_excerpts', 'insufficient_evidence', 'verification_failed'].includes(status)) {
+      return null;
+    }
+
+    const searchedCount = Number.isFinite(Number(message?.searchedMeetingCount))
+      ? Math.max(0, Math.floor(Number(message.searchedMeetingCount)))
+      : 0;
+    const evidenceCount = Number.isFinite(Number(message?.evidenceCount))
+      ? Math.max(0, Math.floor(Number(message.evidenceCount)))
+      : 0;
+    const detectedDateFilter = String(message?.detectedDateFilter || '').trim();
+    const filtered = isScopeFiltered(scope);
+    const hasInspectedSources = Array.isArray(message?.inspectedSources) && message.inspectedSources.length > 0;
+    const searchedLabel = `Searched ${searchedCount} recording${searchedCount === 1 ? '' : 's'}`;
+
+    if (status === 'no_matching_excerpts') {
+      let title = filtered
+        ? 'No matching passages found in the selected recordings.'
+        : 'No matching passages found across your recordings.';
+      if (searchedCount === 0) {
+        title = filtered
+          ? 'No indexed recordings match the current filter.'
+          : 'No indexed recordings are available yet.';
+      } else if (detectedDateFilter) {
+        title = filtered
+          ? `No transcripts matched "${detectedDateFilter}" in the current filter.`
+          : `No recordings matched "${detectedDateFilter}".`;
+      }
+      const detailParts = [searchedLabel];
+      if (detectedDateFilter) {
+        detailParts.push(`Date filter: ${detectedDateFilter}`);
+      }
+      const actions = [];
+      if (filtered && scope?.type === 'selected_meetings') {
+        actions.push({ id: 'search_all', label: 'Search all recordings' });
+      }
+      if (filtered && (scope?.dateFrom || scope?.dateTo || (Array.isArray(scope?.tags) && scope.tags.length > 0))) {
+        actions.push({ id: 'reset_filters', label: 'Reset filters' });
+      }
+      if (!filtered) {
+        actions.push({ id: 'retry', label: 'Retry' });
+      }
+      return {
+        variant: 'no_matching_excerpts',
+        title,
+        detail: detailParts.join(' · '),
+        actions,
+        showInspectedSources: false,
+      };
+    }
+
+    if (status === 'verification_failed') {
+      const actions = [{ id: 'retry', label: 'Retry' }];
+      if (filtered) {
+        actions.push({ id: 'search_all', label: 'Search all recordings' });
+      }
+      return {
+        variant: 'verification_failed',
+        title: 'Could not verify sources for this answer.',
+        detail: 'AvaNevis skipped this reply because it could not match it to your transcripts. Try again.',
+        actions,
+        showInspectedSources: hasInspectedSources,
+      };
+    }
+
+    // insufficient_evidence
+    const title = evidenceCount > 0
+      ? `Found ${evidenceCount} matching passage${evidenceCount === 1 ? '' : 's'}, but they don't answer that specific question.`
+      : (message?.content || 'Not enough matching information in the selected transcripts or summaries to answer that.');
+    const detailParts = [];
+    if (searchedCount > 0) {
+      detailParts.push(searchedLabel);
+    }
+    if (detectedDateFilter) {
+      detailParts.push(`Date filter: ${detectedDateFilter}`);
+    }
+    const actions = [];
+    if (filtered) {
+      actions.push({ id: 'search_all', label: 'Search all recordings' });
+    }
+    actions.push({ id: 'retry', label: 'Retry' });
+    return {
+      variant: 'insufficient_evidence',
+      title,
+      detail: detailParts.join(' · '),
+      actions,
+      showInspectedSources: hasInspectedSources,
+    };
+  }
+
+  const POST_STREAM_BANNER_PHASES = new Set(['verifying', 'citation-repair', 'json-repair']);
+
+  function shouldShowChatProgressBanner({ sendVisible, streamingDraft, progress } = {}) {
+    if (!sendVisible) {
+      return false;
+    }
+    const phase = String(progress?.phase || '').trim().toLowerCase();
+    if (POST_STREAM_BANNER_PHASES.has(phase)) {
+      return true;
+    }
+    return !streamingDraft;
+  }
+
+  function resolveNoticeActionScope(actionId, currentScope = null) {
+    if (actionId === 'search_all') {
+      return { type: 'all', meetingIds: [], dateFrom: null, dateTo: null, tags: [] };
+    }
+    if (actionId === 'reset_filters') {
+      const meetingIds = Array.isArray(currentScope?.meetingIds)
+        ? currentScope.meetingIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+      const keepSelected = currentScope?.type === 'selected_meetings' && meetingIds.length > 0;
+      return {
+        type: keepSelected ? 'selected_meetings' : 'all',
+        meetingIds: keepSelected ? meetingIds : [],
+        dateFrom: null,
+        dateTo: null,
+        tags: [],
+      };
+    }
+    return null;
+  }
+
+  function formatScopeMeetingDate(dateString, now = Date.now()) {
+    if (!dateString) {
+      return '';
+    }
+    const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+    const nowDate = now instanceof Date ? now : new Date(now);
+    const sameYear = !Number.isNaN(nowDate.getTime()) && date.getFullYear() === nowDate.getFullYear();
+    if (sameYear) {
+      return date.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    }
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  }
+
+  function formatScopeMeetingDateTooltip(dateString) {
+    if (!dateString) {
+      return '';
+    }
+    const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) {
+      return '';
+    }
+    return date.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
+
   return {
+    buildAssistantNoticeView,
     buildModelMemoryPillView,
     buildStarterPrompts,
     filterChatThreads,
     formatChatScopeLabel,
+    formatScopeMeetingDate,
+    formatScopeMeetingDateTooltip,
     groupThreadsByRecency,
     isCitedMeetingAvailable,
+    isScopeFiltered,
+    resolveNoticeActionScope,
+    shouldShowChatProgressBanner,
   };
 }));

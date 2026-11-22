@@ -33,6 +33,7 @@ test('chat thread store persists atomically under userData/chat and supports ful
     meetingIds: ['m1', 'm2'],
     dateFrom: '2026-11-01',
     dateTo: null,
+    tags: [],
   });
 
   const turned = await store.appendTurn(created.id, {
@@ -67,6 +68,7 @@ test('chat thread store persists atomically under userData/chat and supports ful
     meetingIds: [],
     dateFrom: null,
     dateTo: null,
+    tags: [],
   });
 
   const fetched = await store.getThread(created.id);
@@ -145,4 +147,117 @@ test('appendTurn rejects stale evidence before committing and removes its temp f
   }), /stale/);
   assert.equal((await store.getThread(thread.id)).messages.length, 0);
   assert.deepEqual(fs.readdirSync(path.join(tmpDir, 'chat')), ['threads.json']);
+});
+
+
+test('chat thread store preserves extended v3.1 failure statuses, inspectedSources, and citation tag/kind', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-chat-v31-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const store = makeStore(tmpDir);
+  const thread = await store.createThread();
+
+  const noMatch = await store.appendTurn(thread.id, {
+    question: 'What happened on 05/09/2026?',
+    status: 'no_matching_excerpts',
+    failureReason: 'no_matching_excerpts',
+    detectedDateFilter: '2026-09-05',
+    retrievalMode: 'targeted',
+    answerMarkdown: 'No matching excerpts were found for 2026-09-05.',
+    citations: [],
+    searchedMeetingCount: 4,
+    evidenceCount: 0,
+  });
+  assert.equal(noMatch.assistantMessage.status, 'no_matching_excerpts');
+  assert.equal(noMatch.assistantMessage.detectedDateFilter, '2026-09-05');
+  assert.equal(noMatch.assistantMessage.retrievalMode, 'targeted');
+
+  const verFail = await store.appendTurn(thread.id, {
+    question: 'Summarize points',
+    status: 'verification_failed',
+    failureReason: 'missing_citations',
+    retrievalMode: 'overview',
+    answerMarkdown: 'Unverified',
+    citations: [],
+    inspectedSources: [
+      {
+        evidenceId: 'E1',
+        meetingId: 'm1',
+        meetingTitle: 'Sync',
+        tag: 'interview',
+        kind: 'summary',
+        excerpt: 'Key point',
+      },
+    ],
+    searchedMeetingCount: 1,
+    evidenceCount: 1,
+  });
+  assert.equal(verFail.assistantMessage.status, 'verification_failed');
+  assert.equal(verFail.assistantMessage.failureReason, 'missing_citations');
+  assert.equal(verFail.assistantMessage.inspectedSources[0].tag, 'interview');
+  assert.equal(verFail.assistantMessage.inspectedSources[0].kind, 'summary');
+
+  const reloaded = await makeStore(tmpDir).getThread(thread.id);
+  assert.equal(reloaded.messages[1].status, 'no_matching_excerpts');
+  assert.equal(reloaded.messages[3].status, 'verification_failed');
+  assert.equal(reloaded.messages[3].inspectedSources[0].tag, 'interview');
+});
+
+test('chat thread store normalizes, dedupes, persists, and validates scope.tags', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-chat-tags-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const store = makeStore(tmpDir);
+  const created = await store.createThread({
+    scope: { type: 'all', tags: ['Voice Note', 'call', 'voice-note'] },
+  });
+  assert.deepEqual(created.scope.tags, ['voice-note', 'call']);
+
+  const updated = await store.updateThreadScope(created.id, {
+    type: 'selected_meetings',
+    meetingIds: ['m1'],
+    tags: ['Lecture / Study', 'music'],
+  });
+  assert.deepEqual(updated.scope, {
+    type: 'selected_meetings',
+    meetingIds: ['m1'],
+    dateFrom: null,
+    dateTo: null,
+    tags: ['lecture', 'music'],
+  });
+
+  const reloaded = await makeStore(tmpDir).getThread(created.id);
+  assert.deepEqual(reloaded.scope.tags, ['lecture', 'music']);
+
+  await assert.rejects(
+    store.createThread({ scope: { type: 'all', tags: ['not-a-tag'] } }),
+    /Invalid chat scope tags/,
+  );
+  assert.throws(
+    () => store.updateThreadScope(created.id, { type: 'all', tags: ['invalid'] }),
+    /Invalid chat scope tags/,
+  );
+});
+
+test('model preference and answer provenance survive reload independently', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-chat-model-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const store = makeStore(tmpDir);
+  const thread = await store.createThread();
+  assert.equal(thread.modelId, null);
+  await store.updateThreadModel(thread.id, 'qwen3.5-4b-q4-k-m');
+  await store.appendTurn(thread.id, {
+    question: 'What happened?', answerMarkdown: 'An answer.',
+    modelId: 'qwen3.5-4b-q4-k-m', modelName: 'Qwen 4B',
+  });
+  await store.updateThreadModel(thread.id, null);
+  const reloaded = await makeStore(tmpDir).getThread(thread.id);
+  assert.equal(reloaded.modelId, null);
+  assert.equal(reloaded.messages[1].modelId, 'qwen3.5-4b-q4-k-m');
+  assert.equal(reloaded.messages[1].modelName, 'Qwen 4B');
+
+  const withOverride = await store.createThread({ title: 'Override', modelId: 'gemma-4-e4b' });
+  assert.equal(withOverride.modelId, 'gemma-4-e4b');
+  const reloadedOverride = await makeStore(tmpDir).getThread(withOverride.id);
+  assert.equal(reloadedOverride.modelId, 'gemma-4-e4b');
 });

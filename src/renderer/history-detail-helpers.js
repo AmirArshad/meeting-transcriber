@@ -1,14 +1,15 @@
 (function initHistoryDetailHelpers(root, factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
+    module.exports = factory(require('./speaker-label-helpers'));
     return;
   }
 
-  root.historyDetailHelpers = factory();
-}(typeof globalThis !== 'undefined' ? globalThis : this, function buildHistoryDetailHelpers() {
+  root.historyDetailHelpers = factory(root.speakerLabelHelpers);
+}(typeof globalThis !== 'undefined' ? globalThis : this, function buildHistoryDetailHelpers({ isCanonicalSpeakerKey, normalizeSpeakerName }) {
   const HISTORY_DETAIL_TABS = new Set(['transcript', 'summary']);
   const TRANSCRIPT_TIMESTAMP_LINE_RE = /^(?:\*\*)?\[(\d{1,2}:\d{2}(?::\d{2})?)\s+-\s+(\d{1,2}:\d{2}(?::\d{2})?)\](?:\*\*)?\s*(.*)$/;
-  const SPEAKER_PREFIX_RE = /^(Speaker\s+\d+|Unknown):\s*(.*)$/i;
+  const SPEAKER_PREFIX_RE = /^(Speaker\s+\d+|SPEAKER_\d{2}|Unknown):\s*(.*)$/i;
+  const UNTIMED_SPEAKER_RE = /^\*\*([^*\n:]{1,64}):\*\*\s*(.*)$/;
 
   function normalizeHistoryDetailTab(tab) {
     const normalized = String(tab || '').trim();
@@ -29,16 +30,22 @@
   }
 
   function normalizeSpeakerLabel(label) {
-    const cleaned = cleanMarkdownText(label);
+    const cleaned = label.trim().replace(/\s+/g, ' ');
     const speakerMatch = /^speaker\s+(\d+)$/i.exec(cleaned);
     if (speakerMatch) {
       return `Speaker ${speakerMatch[1]}`;
     }
+    if (/^speaker_\d{2}$/i.test(cleaned)) return cleaned.toUpperCase();
     return /^unknown$/i.test(cleaned) ? 'Unknown' : cleaned;
   }
 
   function splitSpeakerPrefix(value) {
-    const cleaned = cleanMarkdownText(value);
+    const raw = String(value || '').trim();
+    const boldMatch = /^\*\*([^*\n:]{1,64}):\*\*\s*(.*)$/.exec(raw);
+    if (boldMatch) {
+      return { speaker: normalizeSpeakerLabel(boldMatch[1]), text: cleanMarkdownText(boldMatch[2]) };
+    }
+    const cleaned = cleanMarkdownText(raw);
     const match = SPEAKER_PREFIX_RE.exec(cleaned);
     if (!match) {
       return { speaker: '', text: cleaned };
@@ -59,16 +66,37 @@
       || trimmed === '___';
   }
 
-  function parseTranscriptMarkdownSegments(markdown) {
+  function parseTranscriptMarkdownSegments(markdown, speakerNames = {}) {
     const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
     const segments = [];
+    let hasStructuredSegments = false;
+    const mappedSpeaker = (speaker) => {
+      if (!isCanonicalSpeakerKey(speaker) || !speakerNames || !Object.hasOwn(speakerNames, speaker)) return speaker;
+      const name = speakerNames[speaker];
+      return (typeof name === 'string' && normalizeSpeakerName(name)) || speaker;
+    };
 
     for (let index = 0; index < lines.length; index++) {
       const timestampMatch = TRANSCRIPT_TIMESTAMP_LINE_RE.exec(lines[index].trim());
       if (!timestampMatch) {
+        const line = lines[index].trim();
+        if (!line || isMarkdownBoundaryLine(line)) continue;
+        const untimed = UNTIMED_SPEAKER_RE.exec(line);
+        if (untimed) hasStructuredSegments = true;
+        const textParts = [cleanMarkdownText(untimed ? untimed[2] : line)];
+        let cursor = index + 1;
+        while (cursor < lines.length && lines[cursor].trim() && !isMarkdownBoundaryLine(lines[cursor])
+          && !UNTIMED_SPEAKER_RE.test(lines[cursor].trim())) {
+          textParts.push(cleanMarkdownText(lines[cursor]));
+          cursor += 1;
+        }
+        const speaker = untimed ? normalizeSpeakerLabel(untimed[1]) : '';
+        segments.push({ start: null, end: null, speaker: mappedSpeaker(speaker), text: textParts.filter(Boolean).join(' ') });
+        index = cursor - 1;
         continue;
       }
 
+      hasStructuredSegments = true;
       const [, start, end, tail] = timestampMatch;
       const textParts = [];
       let speaker = '';
@@ -92,6 +120,7 @@
           break;
         }
         if (trimmed) {
+          if ((speaker || textParts.length > 0) && UNTIMED_SPEAKER_RE.test(trimmed)) break;
           const line = splitSpeakerPrefix(trimmed);
           if (!speaker && line.speaker) {
             speaker = line.speaker;
@@ -106,13 +135,13 @@
       segments.push({
         start,
         end,
-        speaker,
+        speaker: mappedSpeaker(speaker),
         text: textParts.join(' ').trim(),
       });
       index = cursor - 1;
     }
 
-    return segments.filter((segment) => segment.text || segment.speaker);
+    return hasStructuredSegments ? segments.filter((segment) => segment.text) : [];
   }
 
   function featureValidationMessage(feature) {
@@ -166,6 +195,9 @@
     }
     if (status === 'unsupported') {
       return reason || 'Speaker identification is not supported on this platform.';
+    }
+    if (status === 'notConfigured') {
+      return reason || 'Enable speaker identification to add speaker labels to new transcripts.';
     }
     if (status === 'needsAccount') {
       return 'Enter your Hugging Face token and accept the pyannote model terms before enabling Pyannote.';

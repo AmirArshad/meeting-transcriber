@@ -32,7 +32,12 @@ def save_summary_outputs(
     json_target.parent.mkdir(parents=True, exist_ok=True)
     markdown_target.parent.mkdir(parents=True, exist_ok=True)
 
-    json_payload = {"summary": validate_summary_json(summary), "metadata": dict(metadata)}
+    metadata_copy = dict(metadata)
+    template_tag = metadata_copy.get("template") or metadata_copy.get("tag") or (
+        summary.get("template") if isinstance(summary, dict) else None
+    )
+    validated_summary = validate_summary_json(summary, tag=template_tag)
+    json_payload = {"summary": validated_summary, "metadata": metadata_copy}
     temp_suffix = f".{os.getpid()}.{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}.tmp"
     temp_json = json_target.with_name(f".{json_target.name}{temp_suffix}")
     temp_markdown = markdown_target.with_name(f".{markdown_target.name}{temp_suffix}")
@@ -42,7 +47,7 @@ def save_summary_outputs(
     had_markdown = markdown_target.exists()
     try:
         temp_json.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        temp_markdown.write_text(render_summary_markdown(summary, metadata), encoding="utf-8")
+        temp_markdown.write_text(render_summary_markdown(validated_summary, metadata_copy), encoding="utf-8")
         if had_json:
             json_target.replace(backup_json)
         if had_markdown:

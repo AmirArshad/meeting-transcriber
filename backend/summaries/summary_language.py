@@ -1,4 +1,4 @@
-"""Local Qwen language checking, independent of the requested output language.
+"""Local language checking, independent of the requested output language.
 
 Classify only substantive prose, never schema keys, names or fixed labels.
 The same tracked llama.cpp subprocess tree and repair budget own this work.
@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any, Dict, Optional
 
-LANGUAGE_POLICY_VERSION = "qwen-language-v2"
+from .templates import get_template
+
+LANGUAGE_POLICY_VERSION = "summary-language-v3"
 # A model-estimated share is approximate. Require a clear majority, rather than
 # treating language identity confidence as evidence that mixed input is dominant.
 INPUT_MIN_LANGUAGE_SHARE = 0.6
@@ -31,6 +34,15 @@ class SummaryLanguageError(ValueError):
     """Language mismatch or insufficient evidence; never a runtime repair error."""
 
 
+def is_model_language_supported(model_id, language, platform=None, arch=None):
+    # Match src/summary-language-policy.js and the recorded platform qualification.
+    if model_id == "qwen3.5-9b-q4-k-m":
+        return ((platform, arch) in ((None, None), ("win32", "x64"), ("darwin", "arm64"), ("linux", "x64"))
+                and language in LANGUAGE_NAMES)
+    return ((platform, arch) == ("darwin", "arm64") and language == "en"
+            and model_id in ("gemma-4-e4b", "gemma-4-12b"))
+
+
 def language_instruction(language):
     if language not in LANGUAGE_NAMES:
         raise SummaryLanguageError("Summary transcript language is not supported.")
@@ -43,15 +55,19 @@ def language_instruction(language):
     )
 
 
-def summary_prose(summary):
-    values = [summary.get("summary", "")]
-    fields = {
-        "topics": ("title", "summary"), "decisions": ("decision",),
-        "action_items": ("task",), "risks": ("risk",), "open_questions": ("question",),
-    }
-    for field, keys in fields.items():
-        for item in summary.get(field, []):
-            values.extend(str(item.get(key) or "") for key in keys)
+def summary_prose(summary: Dict[str, Any], *, tag: Optional[str] = None) -> str:
+    values = [str(summary.get("summary") or "")]
+    template_tag = tag or summary.get("template")
+    template = get_template(template_tag, fallback="meeting")
+    for field in template["array_fields"]:
+        prose_keys = template["field_schemas"][field]["prose_keys"]
+        items = summary.get(field)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            values.extend(str(item.get(key) or "") for key in prose_keys)
     return "\n".join(values)
 
 
@@ -86,10 +102,10 @@ def build_language_check_prompt(prose, *, transcript=False):
     ])
 
 
-def check_summary_language(summary, language, runtime, run_prompt, work_path, name, *, transcript=False):
+def check_summary_language(summary, language, runtime, run_prompt, work_path, name, *, transcript=False, tag: Optional[str] = None):
     from .summary_pipeline import extract_json_object
 
-    prose = summary_prose(summary)
+    prose = summary_prose(summary, tag=tag)
     # This is an evidence floor, not a script-based language detector.
     if sum(c.isalpha() for c in prose) < 40:
         raise SummaryLanguageError("Summary language is indeterminate: too little substantive prose.")

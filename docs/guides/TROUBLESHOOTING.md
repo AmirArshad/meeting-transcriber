@@ -174,15 +174,41 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 ---
 
-### Slow Or Cancelled Summary Model Download
+### Slow Or Cancelled Summaries & Chat Model Download
 
-**Symptom:** Summary setup is slow while downloading the Qwen GGUF model, or Cancel Download appears to hang briefly.
+**Symptom:** Setting up a model in **Settings → AI Add-ons → Summaries & Chat** is slow while downloading, or **Cancel setup** appears to wait briefly.
 
-**Cause:** The default summary model is about 5.7 GB and comes from Hugging Face. AvaNevis uses the bundled Python `huggingface_hub`/`hf_xet` downloader for Hugging Face-hosted summary models on Windows and macOS, but throughput still depends on the user's network route, disk speed, and Hugging Face availability.
+**Cause:** Local summary/Chat models range from ~2.7 GB (**Qwen3.5 4B**) to ~7.2 GB (**Gemma 4 12B**) plus platform `llama.cpp` runtime archives. AvaNevis uses the bundled Python `huggingface_hub` HTTP downloader with native Xet acceleration disabled (`HF_HUB_DISABLE_XET=1`) for Hugging Face-hosted models, so download speed depends on your connection, disk speed, and Hugging Face availability.
 
-**Expected behavior:** No Hugging Face token is required for public summary models, and AvaNevis does not reuse the speaker-identification token. Cancel Download terminates the downloader subprocess, waits briefly for it to exit, and removes partial setup files before returning to a non-ready state unless an older valid model/runtime was already installed.
+**Expected behavior:** No Hugging Face token is required for public Summaries & Chat models, and AvaNevis does not reuse the speaker-identification token. **Cancel setup** stops the download subprocess, waits briefly for cleanup, and removes partial files while preserving any older ready models and runtimes.
 
-**What to do:** If cancellation takes a few seconds, wait for cleanup to finish. If setup remains stuck after relaunch, use Settings > AI Add-ons > Remove Model, then start summary setup again on a stable connection.
+**What to do:** If cancellation takes a few seconds, wait for cleanup to finish. If a partial download or incomplete removal remains after relaunch, use **Remove model** (or **Retry removal**) on that model card in **Settings → AI Add-ons → Summaries & Chat**, then start **Download** again on a stable connection.
+
+---
+
+### Model Memory & Switching In Summaries & Chat
+
+**Symptom:** A model card shows **Needs more memory**, **May need more memory**, **Chat only on this device**, or switching models pauses briefly before answering.
+
+**Cause:** AvaNevis keeps one local Summaries & Chat model loaded in memory at a time across Chat and summary generation. Before loading another model (or validating setup), it waits for the previous model process to exit and release memory. Some models may also be Chat-only for certain languages or platforms until summary language checks pass.
+
+**What to do:**
+- Click **Unload** in the Chat header (or **Free memory** on the model card in Settings) if you want to release memory right away.
+- Choose a smaller installed model (such as **Qwen3.5 4B**) if your GPU or unified memory is tight.
+- If a model is **Chat only on this device**, pick another installed model (such as **Qwen3.5 9B**) in **Prepare summary** to generate summaries.
+
+---
+
+### Chat Says No Matching Excerpts Or Insufficient Evidence
+
+**Symptom:** A question in **Chat** returns a notice about no matching excerpts, insufficient evidence, or citation verification failing.
+
+**Cause:** Local Chat answers only from retrieved transcripts and summaries inside the active scope (selected recordings, date range, or recording tags) and verifies every factual claim against retrieved `[Ek]` passages before showing an answer.
+
+**What to do:**
+- Click **Search all recordings** or **Reset filters** on the notice if a date, tag, or single-recording filter excluded the recording you meant.
+- Confirm the recording has finished transcribing in **History** (untranscribed audio is not indexed).
+- Click **Retry** if citation verification failed, or try naming a specific topic, speaker, or date from the recording.
 
 ---
 
@@ -190,9 +216,9 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 **Symptom:** Speaker identification fails with "model cache is missing or incomplete" after setup previously completed.
 
-**Cause:** Runs use the engine that was installed during setup. **Pyannote** loads from the local Hugging Face cache and does not re-download the gated model during meeting processing. A related bug (fixed) could also misreport Hugging Face auth-path probe failures as a missing cache when `HF_TOKEN_PATH` was cleared to an empty string. **Speakrs** uses the setup-time model pack (and on Windows the ONNX Runtime closure); it does not use a Hugging Face token.
+**Cause:** Runs use the engine that was installed during setup. **Pyannote** loads from the local Hugging Face cache and does not re-download the gated model during recording processing. A related bug (fixed) could also misreport Hugging Face auth-path probe failures as a missing cache when `HF_TOKEN_PATH` was cleared to an empty string. **Speakrs** (0.7.0) uses its setup-time pinned native model files directly on CUDA/CoreML; it does not use a Hugging Face token.
 
-**What to do:** First update to the latest app build and retry — do **not** remove CUDA or speaker setup unless Settings still shows speaker identification as not ready. If it still fails after updating, open Settings > AI Add-ons and run Validate (or setup again). For Pyannote, confirm the Hugging Face token still has access to `pyannote/speaker-diarization-community-1`. For Speakrs, re-run setup so the model pack (and Windows ORT) can download again.
+**What to do:** First update to the latest app build and retry — do **not** remove CUDA or speaker setup unless Settings still shows speaker identification as not ready. If it still fails after updating, open Settings > AI Add-ons and run Validate (or setup again). For Pyannote, confirm the Hugging Face token still has access to `pyannote/speaker-diarization-community-1`. For Speakrs, re-run setup (or Repair) so the pinned model files can download again.
 
 ---
 
@@ -246,7 +272,7 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 ### 🎤 Recording failed with no microphone audio
 
-**Symptom:** Stop completes but there is no meeting file; you see a failure about empty or missing microphone capture.
+**Symptom:** Stop completes but there is no recording file; you see a failure about empty or missing microphone capture.
 
 **Cause:** The recorder detected no usable mic audio and returned structured `success: false` on stdout (no bogus output path).
 
@@ -285,6 +311,7 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 2. Try again - downloads are resumable
 3. If a partial model cache is corrupted, remove the platform cache and retry:
    - Windows / `faster-whisper`: `%USERPROFILE%\.cache\huggingface\hub`
+   - Linux / `faster-whisper`: `~/.cache/huggingface/hub`
    - macOS Apple Silicon / MLX: `~/Library/Caches/avanevis`
 
 ---
@@ -346,7 +373,12 @@ C:\Users\<YourUsername>\AppData\Roaming\AvaNevis\recordings\
 ~/Library/Application Support/AvaNevis/recordings/
 ```
 
-Open that path manually in File Explorer or Finder.
+**Linux:**
+```
+~/.config/avanevis/recordings/
+```
+
+Open that path manually in File Explorer, Finder, or your file manager.
 
 The app does not currently expose a `Show in Folder` action in the history UI.
 
@@ -448,4 +480,4 @@ Use **Desktop Mode** and the AppImage from home storage. Do not disable the read
 
 ---
 
-**Last Updated:** August 2026
+**Last Updated:** November 2026

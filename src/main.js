@@ -98,6 +98,8 @@ const {
   resolveSpawnDiarizationEngine,
 } = require('./ai-addon/manifest-store');
 const { createPythonRuntime } = require('./main/python-runtime');
+const { createSummaryProcessSlot } = require('./main/summary-process-slot');
+const { parseNvidiaMemory, classifyWindowsGpuAdapters } = require('./ai-addon/summary-device-fit');
 const { registerMeetingManagerClient } = require('./main/meeting-manager-client');
 const { registerDeviceIpc } = require('./main/device-ipc');
 const { registerFileExportIpc } = require('./main/file-export-ipc');
@@ -232,6 +234,113 @@ const {
   spawnParakeetPython,
 } = pythonRuntime;
 
+const summaryProcessSlot = createSummaryProcessSlot({
+  checkWindowsJob: (jobName) => new Promise((resolve) => {
+    const probe = spawnTrackedPython(getBackendModuleArgs('summary_process_tree', ['check', jobName]), {
+      windowsHide: true,
+      stdio: 'ignore',
+    });
+    const timer = setTimeout(() => {
+      probe.kill();
+      resolve(false);
+    }, 2000);
+    probe.once('close', (code) => {
+      clearTimeout(timer);
+      resolve(code === 0);
+    });
+    probe.once('error', () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  }),
+});
+
+let summaryDeviceMemoryProbe = null;
+let summaryDeviceMemorySnapshot = null;
+let summaryDeviceMemoryReadAt = 0;
+let summaryWindowsGpuCompatibility = null;
+
+async function getSummaryDeviceMemory({ live = false } = {}) {
+  const systemTotalBytes = os.totalmem();
+  // Free memory is a transient, conservative reading (it may exclude reclaimable cache).
+  const systemAvailableBytes = live ? os.freemem() : null;
+  const withSystemMemory = async (snapshot) => {
+    let gpuCompatibility = null;
+    if (snapshot) {
+      summaryWindowsGpuCompatibility = null;
+      gpuCompatibility = 'unknown';
+    } else if (process.platform === 'win32') {
+      if (live) {
+        try {
+          const gpuInfo = await app.getGPUInfo('basic');
+          summaryWindowsGpuCompatibility = classifyWindowsGpuAdapters(gpuInfo?.gpuDevice);
+        } catch { /* An unavailable probe is not evidence of incompatible hardware. */ }
+      }
+      gpuCompatibility = summaryWindowsGpuCompatibility;
+    }
+    return { ...(snapshot || {}), systemTotalBytes, systemAvailableBytes, gpuCompatibility };
+  };
+  if (process.platform === 'darwin') {
+    return withSystemMemory({ totalBytes: systemTotalBytes, availableBytes: null });
+  }
+  if (!live && Date.now() - summaryDeviceMemoryReadAt < 30000) {
+    return withSystemMemory(summaryDeviceMemorySnapshot && { totalBytes: summaryDeviceMemorySnapshot.totalBytes });
+  }
+  if (!summaryDeviceMemoryProbe) {
+    const candidates = process.platform === 'win32'
+      ? [
+        process.env.SystemRoot && path.join(process.env.SystemRoot, 'System32', 'nvidia-smi.exe'),
+        process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'NVIDIA Corporation', 'NVSMI', 'nvidia-smi.exe'),
+      ]
+      : ['/usr/bin/nvidia-smi'];
+    const executable = candidates.find((candidate) => candidate && fs.existsSync(candidate));
+    if (!executable) {
+      summaryDeviceMemorySnapshot = null;
+      summaryDeviceMemoryReadAt = Date.now();
+      return withSystemMemory(null);
+    }
+    summaryDeviceMemoryProbe = new Promise((resolve) => {
+      execFile(executable, ['--query-gpu=index,uuid,memory.total,memory.free', '--format=csv,noheader,nounits'], {
+        timeout: 3000, windowsHide: true,
+      }, (error, stdout) => {
+        summaryDeviceMemorySnapshot = error ? null : parseNvidiaMemory(stdout, process.env.CUDA_VISIBLE_DEVICES);
+        summaryDeviceMemoryReadAt = Date.now();
+        resolve(summaryDeviceMemorySnapshot);
+      });
+    }).finally(() => { summaryDeviceMemoryProbe = null; });
+  }
+  const snapshot = await summaryDeviceMemoryProbe;
+  return withSystemMemory(live ? snapshot : snapshot && { totalBytes: snapshot.totalBytes });
+}
+
+function spawnSummaryPython(args, options) {
+  return summaryProcessSlot.spawnModel((jobName) => spawnTrackedPython(
+    jobName ? getBackendModuleArgs('summary_process_tree', ['python', jobName, ...args]) : args,
+    options,
+  ));
+}
+
+function spawnSummaryServer(executable, args, options) {
+  return summaryProcessSlot.spawnModel((jobName) => {
+    const stdio = ['ignore', 'pipe', 'pipe'];
+    if (jobName) {
+      return spawnTrackedPython(getBackendModuleArgs('summary_process_tree', ['server', jobName, executable, ...args]), {
+        ...options, windowsHide: true, stdio,
+      });
+    }
+    const child = spawn(executable, args, { ...options, detached: true, stdio });
+    child.avanevisProcessGroup = true;
+    return child;
+  });
+}
+
+async function releaseSummaryModel(reason) {
+  if (historyQaService) {
+    await historyQaService.ensureUnloadedForCompetingWork(reason);
+  }
+  await summaryProcessSlot.ensureExited();
+}
+
 // ============================================================================
 // AI compute queue (no IPC — consumed by transcription/summary/ai-addon)
 // ============================================================================
@@ -251,17 +360,13 @@ const {
 const gpuResourceActionQueue = createAsyncActionQueue();
 const enqueueGpuResourceActionWithUnload = (action) => (
   gpuResourceActionQueue.enqueue(async () => {
-    if (historyQaService) {
-      await historyQaService.ensureUnloadedForCompetingWork('gpu_resource_action');
-    }
+    await releaseSummaryModel('gpu_resource_action');
     return action();
   })
 );
 const enqueueGpuExclusiveComputeAction = (action) => (
   enqueueAiComputeAction(() => gpuResourceActionQueue.enqueue(async () => {
-    if (historyQaService) {
-      await historyQaService.ensureUnloadedForCompetingWork('competing_compute');
-    }
+    await releaseSummaryModel('competing_compute');
     return action();
   }))
 );
@@ -293,9 +398,7 @@ const enqueueGpuExclusiveRemovalAction = (action) => {
       error.code = 'QUIT_IN_PROGRESS';
       throw error;
     }
-    if (historyQaService) {
-      await historyQaService.ensureUnloadedForCompetingWork('addon_removal');
-    }
+    await releaseSummaryModel('addon_removal');
     return action();
   });
 };
@@ -404,6 +507,7 @@ function hasInFlightAiWork() {
   return (audioImportService && audioImportService.hasActive()) || (aiAddonIpc ? aiAddonIpc.hasInFlightAiAddonSetup() : false)
     || (summaryService ? summaryService.hasActiveSummaryGeneration() : false)
     || (historyQaService ? historyQaService.hasLoadedOrActiveWork() : false)
+    || summaryProcessSlot.hasOutstandingProcess()
     || aiComputeActionQueue.hasPendingWork()
     || gpuResourceActionQueue.hasPendingWork()
     || (gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false);
@@ -522,7 +626,7 @@ async function drainAiWorkBeforeQuit() {
       return;
     }
     await Promise.race([
-      Promise.all(drains),
+      Promise.all(drains).then(() => summaryProcessSlot.ensureExited()),
       new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Timed out waiting for local AI work to finish.')), drainTimeoutMs);
       }),
@@ -785,6 +889,8 @@ aiAddonIpc = createAiAddonIpc({
   fs,
   pythonConfig,
   spawnTrackedPython,
+  spawnSummaryPython,
+  ensureSummaryProcessExited: summaryProcessSlot.ensureExited,
   appendSpawnLogBuffer,
   sendToRenderer,
   getSafeStorage,
@@ -796,17 +902,14 @@ aiAddonIpc = createAiAddonIpc({
   resolveSpeakrsCliPath: resolveAppSpeakrsCliPath,
   getCachedCudaStatus,
   resolveCudaStatusForTranscription,
-  beforeSummaryAddonMutation: () => (
-    historyQaService
-      ? historyQaService.ensureUnloadedForCompetingWork('addon_mutation')
-      : Promise.resolve()
-  ),
+  getSummaryDeviceMemory,
+  runExclusiveSummaryMutation: enqueueGpuResourceActionWithUnload,
   buildSummaryArgs,
   summarizeDiarizationError,
   summarizeSummaryValidationError,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   hasPendingGpuResourceWork: () => gpuResourceActionQueue.hasPendingWork(),
-  enqueueGpuResourceAction: enqueueGpuResourceActionWithUnload,
+  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
   enqueueGpuExclusiveRemovalAction,
   isQuitCommitted,
 });
@@ -892,6 +995,9 @@ summaryService = createSummaryService({
   fs,
   pythonConfig,
   spawnTrackedPython,
+  spawnSummaryPython,
+  ensureSummaryProcessExited: summaryProcessSlot.ensureExited,
+  getSummaryDeviceMemory,
   getBackendModuleArgs,
   enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
   createAiAddonCancelError,
@@ -927,6 +1033,12 @@ historyQaService = createHistoryQaService({
   fs,
   pythonConfig,
   spawnTrackedPython,
+  spawnSummaryPython,
+  spawnServerProcess: spawnSummaryServer,
+  ensureSummaryProcessExited: summaryProcessSlot.ensureExited,
+  getOutstandingSummaryProcess: summaryProcessSlot.getOutstandingProcess,
+  hasActiveSummaryGeneration: (proc) => summaryService.getActiveSummaryProcess() === proc,
+  getSummaryDeviceMemory,
   getBackendModuleArgs,
   collectPythonProcessOutput,
   enqueueAiComputeAction,
@@ -1110,7 +1222,7 @@ function buildManagedPythonModuleArgs(moduleName, extraArgs = [], managedSitePac
   ];
 }
 
-function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel, modelId, transcriptLanguage, sourceTranscriptHash, validateRuntime = false }) {
+function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel, modelId, transcriptLanguage, sourceTranscriptHash, tag = null, speakerNames, validateRuntime = false, inferenceDescriptor }) {
   const args = [
     '--meeting-id', meetingId,
     '--runtime-dir', runtimeDir,
@@ -1121,11 +1233,23 @@ function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, ou
     '--arch', process.arch,
   ];
 
+  if (modelId) {
+    args.push('--model-id', modelId);
+  }
+  if (inferenceDescriptor) {
+    args.push('--inference-json', JSON.stringify(inferenceDescriptor));
+  }
   if (validateRuntime) {
     args.push('--validate-runtime');
   } else {
     args.push('--transcript', transcriptPath, '--language', transcriptLanguage,
-      '--source-transcript-hash', sourceTranscriptHash, '--model-id', modelId);
+      '--source-transcript-hash', sourceTranscriptHash);
+    if (speakerNames && Object.keys(speakerNames).length) {
+      args.push('--speaker-names-json', JSON.stringify(speakerNames));
+    }
+    if (tag) {
+      args.push('--tag', String(tag));
+    }
   }
 
   if (outputJson) {
@@ -1816,6 +1940,14 @@ app.on('before-quit', (event) => {
       }
       if (historyQaService) {
         historyQaService.forceKillOnShutdown();
+      }
+      const summaryProcess = summaryProcessSlot.getOutstandingProcess();
+      if (summaryProcess) {
+        try {
+          signalProcessTree(summaryProcess, 'SIGKILL');
+        } catch (_error) {
+          // The process may have exited during quit.
+        }
       }
 
       const protectedProcess = getProtectedQuitProcess();

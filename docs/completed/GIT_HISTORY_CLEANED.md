@@ -10,12 +10,12 @@
 ## What Was Done
 
 ### ✅ Option 2: Updated Future Commits
-- Git config updated to use: `shareh@users.noreply.github.com`
+- Git config updated to use: `<username>@users.noreply.github.com`
 - All future commits will use GitHub private email
 
 ### ✅ Option 3: Rewrote Git History
 - **All 14 commits** in repository history rewritten
-- Old email `[personal email redacted]` → `shareh@users.noreply.github.com`
+- Old email `[personal email redacted]` → `<username>@users.noreply.github.com`
 - Old commit references purged and garbage collected
 
 ---
@@ -24,18 +24,18 @@
 
 **Before cleanup:**
 ```
-Author: shareh <[personal email redacted]>  ❌
+Author: <username> <[personal email redacted]>  ❌
 ```
 
 **After cleanup:**
 ```
-Author: shareh <shareh@users.noreply.github.com>  ✅
+Author: <username> <<username>@users.noreply.github.com>  ✅
 ```
 
 **Email search results:**
 ```bash
 $ git log --all --pretty=format:"%ae" | sort -u
-shareh@users.noreply.github.com  ✅ ONLY EMAIL IN HISTORY
+<username>@users.noreply.github.com  ✅ ONLY EMAIL IN HISTORY
 ```
 
 ---
@@ -84,7 +84,7 @@ Since you haven't pushed to a public repo yet, you're good to go!
 ## What's Protected
 
 ### ✅ Your Privacy
-- Email: `shareh@users.noreply.github.com` (GitHub private email)
+- Email: `<username>@users.noreply.github.com` (GitHub private email)
 - Real email never appears in any commit
 - Safe to share on LinkedIn, portfolio, etc.
 
@@ -132,7 +132,7 @@ Role: Solo developer - architecture, implementation, and distribution
 
 **Final stats:**
 - Total commits: 14
-- All emails: `shareh@users.noreply.github.com` ✅
+- All emails: `<username>@users.noreply.github.com` ✅
 - Personal info: NONE ✅
 - Ready to publish: YES ✅
 
@@ -173,7 +173,7 @@ git push -u origin --all
 **Check your email is private:**
 ```bash
 git log --all --pretty=format:"%ae" | sort -u
-# Should only show: shareh@users.noreply.github.com
+# Should only show: <username>@users.noreply.github.com
 ```
 
 **Check commit count:**
@@ -185,7 +185,7 @@ git rev-list --count HEAD
 **Check current config:**
 ```bash
 git config user.email
-# Should show: shareh@users.noreply.github.com
+# Should show: <username>@users.noreply.github.com
 ```
 
 ---

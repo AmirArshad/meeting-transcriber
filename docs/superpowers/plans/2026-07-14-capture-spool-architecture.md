@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11 recorders, NumPy, ffmpeg, Electron main-process recovery/gate UI, existing stdout JSON recorder contract.
 
-**Diagram:** [docs/architecture/long-recording-safety-before-after.svg](../architecture/long-recording-safety-before-after.svg)
+**Diagram:** [docs/architecture/long-recording-safety-before-after.svg](../../architecture/long-recording-safety-before-after.svg)
 
 ## Global Constraints
 

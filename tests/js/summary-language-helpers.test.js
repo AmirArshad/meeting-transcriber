@@ -24,6 +24,10 @@ test('checked language policy retains product languages and rejects replacements
   }
   assert.deepEqual(getSummaryLanguagePolicy(modelId, 'darwin', 'x64').languages, []);
   assert.deepEqual(getSummaryLanguagePolicy(modelId, 'linux', 'x64').languages, policy.languages);
+  for (const id of ['gemma-4-e4b', 'gemma-4-12b']) {
+    assert.deepEqual(getSummaryLanguagePolicy(id, 'darwin', 'arm64').languages, ['en']);
+    assert.deepEqual(getSummaryLanguagePolicy(id, 'linux', 'x64').languages, []);
+  }
 });
 
 test('real composition-root CLI builder propagates language and hash without changing setup validation', () => {
@@ -50,25 +54,62 @@ test('confirmation belongs to unchanged transcript, model and policy; legacy out
   }
 });
 
-function createDialogHarness() {
+function buildDialogElements(onFocus) {
   const elements = {};
-  const focused = [];
-  for (const id of ['summary-language-modal', 'summary-transcript-language', 'summary-language-form', 'summary-language-cancel', 'summary-language-confirm', 'summary-language-message']) {
+  for (const id of [
+    'summary-language-modal', 'summary-transcript-language', 'summary-language-form',
+    'summary-language-cancel', 'summary-language-confirm', 'summary-language-message',
+    'summary-speaker-fieldset', 'summary-speaker-rows', 'summary-recording-type',
+    'summary-recording-tag', 'summary-format-preview',
+  ]) {
     const listeners = new Map();
     elements[id] = {
       value: '', disabled: false, children: [], hidden: true,
-      replaceChildren() { this.children = []; }, appendChild(child) { this.children.push(child); },
-      focus() { focused.push(id); context.document.activeElement = this; },
+      replaceChildren(...children) { this.children = children; },
+      appendChild(child) { this.children.push(child); },
+      add(child) { this.appendChild(child); },
+      closest() { return null; },
+      focus() { onFocus(id, this); },
       classList: { add() { elements[id].hidden = true; }, remove() { elements[id].hidden = false; } },
       addEventListener(event, listener) { listeners.set(event, listener); },
       removeEventListener(event) { listeners.delete(event); },
-      dispatch(event, options = {}) { listeners.get(event)?.({ preventDefault() {}, stopPropagation() {}, ...options }); },
+      dispatch(event, options = {}) {
+        return listeners.get(event)?.({ preventDefault() {}, stopPropagation() {}, ...options });
+      },
       listeners,
     };
   }
+  elements['summary-language-modal'].querySelectorAll = () => [
+    elements['summary-transcript-language'],
+    elements['summary-language-cancel'],
+    elements['summary-language-confirm'],
+  ].filter((element) => !element.disabled);
+  return elements;
+}
+
+const prepareSummaryDialogGlobals = {
+  ...require('../../src/renderer/tag-helpers'),
+  ...require('../../src/renderer/speaker-label-helpers'),
+  ...require('../../src/renderer/summary-ui-helpers'),
+  ...require('../../src/renderer/history-detail-helpers'),
+  Option: class { constructor(label, value) { Object.assign(this, { label, value }); } },
+  AbortController,
+  meetingIdsEqual,
+  stopSpeakerPreview: null,
+  historySpeakers: null,
+};
+
+function createDialogHarness() {
+  const focused = [];
+  const elements = buildDialogElements((id, element) => {
+    focused.push(id);
+    context.document.activeElement = element;
+  });
   const priorFocus = { isConnected: true, focus() { focused.push('prior'); } };
   const context = vm.createContext({
+    ...prepareSummaryDialogGlobals,
     document: { getElementById: (id) => elements[id], createElement: () => ({}), activeElement: priorFocus },
+    currentMeetingId: null,
     closeSummaryLanguageConfirmation: null,
   });
   const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
@@ -106,6 +147,411 @@ test('real dialog accepts only explicit supported submission and traps focus', a
   assert.equal(context.document.activeElement, elements['summary-transcript-language']);
   elements['summary-language-form'].dispatch('submit');
   assert.equal(await pending, 'es');
+});
+
+const prepareMeeting = {
+  id: 'meeting-a',
+  language: 'en',
+  transcript: '**Speaker 1:** Hello\n**Speaker 2:** Hi',
+  transcriptionResult: { attemptId: 'attempt-1' },
+};
+
+function createPrepareSaveHarness(updateMeeting, withHistorySpeakers) {
+  const { context, elements } = createDialogHarness();
+  const historyFields = new Map([['Speaker 1', { value: '' }], ['Speaker 2', { value: 'old draft' }]]);
+  const refreshed = [];
+  elements['meeting-tag-btn'] = {};
+  elements['meeting-tag-btn-label'] = {};
+  Object.assign(context, {
+    window: { electronAPI: { updateMeeting } },
+    currentMeetingId: prepareMeeting.id,
+    meetingTagMutationVersions: new Map([[prepareMeeting.id, 1]]),
+    historySpeakers: withHistorySpeakers ? {
+      meeting: prepareMeeting,
+      names: {},
+      requestedNames: new Map([['Speaker 1', ''], ['Speaker 2', 'old draft']]),
+      fields: historyFields,
+      samples: [{ speaker: 'Speaker 1' }, { speaker: 'Speaker 2' }],
+    } : null,
+    buildSpeakerRow: (prefix, sample) => {
+      const field = { value: '' };
+      return { row: { speaker: sample.speaker, field }, field };
+    },
+    syncMeetingInList: (updated) => refreshed.push(['meeting', updated.id]),
+    applyTagPillView: (button, label, tag) => {
+      assert.equal(button, elements['meeting-tag-btn']);
+      assert.equal(label, elements['meeting-tag-btn-label']);
+      refreshed.push(['tag', tag]);
+    },
+    updateHistorySpeakerLabels: (state, updated) => refreshed.push(['speakers', state.names, updated.id]),
+    updateSummaryTagMismatchBanner: (updated) => refreshed.push(['banner', updated.id]),
+    setHistorySpeakersExpanded: (expanded) => refreshed.push(['expanded', expanded]),
+    renderHistoryTagFilterBar: () => refreshed.push(['filters']),
+    renderActivityList: () => refreshed.push(['activity']),
+    chatState: { popoverOpen: true },
+    renderScopePopover: () => refreshed.push(['scope']),
+    meetingSearchQuery: 'Alice',
+    meetingSearchQueryNormalized: '',
+    meetingSearchDebounceTimer: 9,
+    clearTimeout: (timer) => refreshed.push(['clear', timer]),
+    runHistorySearch: (query) => refreshed.push(['search', query]),
+  });
+  const pending = context.confirmSummaryTranscriptLanguage(prepareMeeting, policy, 'en', 'transcript-hash');
+  const rows = elements['summary-speaker-rows'].children;
+  elements['summary-recording-tag'].value = 'interview';
+  return { context, elements, pending, rows, historyFields, refreshed };
+}
+
+test('Prepare summary retries a failed save and synchronizes History fields and tag consumers', async () => {
+  const requests = [];
+  const names = { 'Speaker 1': 'Alice', 'Speaker 2': 'Bob' };
+  const { context, elements, pending, rows, historyFields, refreshed } = createPrepareSaveHarness(async (id, patch) => {
+    requests.push([id, JSON.parse(JSON.stringify(patch))]);
+    if (requests.length === 1) throw new Error('save failed');
+    return { id, tag: patch.tag, ai: { diarization: { speakerNames: names } } };
+  }, true);
+  rows[0].field.value = ' Alice ';
+  rows[1].field.value = 'Bob';
+  await elements['summary-language-form'].dispatch('submit');
+  assert.equal(elements['summary-language-modal'].hidden, false);
+  assert.equal(elements['summary-language-confirm'].disabled, false);
+  assert.match(elements['summary-language-message'].textContent, /Could not save recording details/);
+  assert.equal(rows[0].field.value, ' Alice ');
+  assert.deepEqual(refreshed, []);
+
+  await elements['summary-language-form'].dispatch('submit');
+  assert.equal(await pending, 'en');
+  const expectedPatch = {
+    speakerNames: names,
+    tag: 'interview',
+    expectedSourceTranscriptHash: 'transcript-hash',
+    expectedTranscriptionAttemptId: 'attempt-1',
+  };
+  assert.deepEqual(requests, [[prepareMeeting.id, expectedPatch], [prepareMeeting.id, expectedPatch]]);
+  assert.equal(context.meetingTagMutationVersions.get(prepareMeeting.id), 2);
+  for (const [speaker, field] of historyFields) {
+    assert.equal(field.value, names[speaker]);
+    assert.equal(context.historySpeakers.requestedNames.get(speaker), names[speaker]);
+  }
+  assert.equal(context.meetingSearchDebounceTimer, null);
+  assert.deepEqual(refreshed, [
+    ['meeting', prepareMeeting.id], ['tag', 'interview'], ['speakers', names, prepareMeeting.id],
+    ['expanded', false], ['filters'], ['activity'], ['scope'], ['clear', 9], ['search', 'Alice'],
+  ]);
+});
+
+test('Prepare summary refreshes the tag pill and filters when the History speaker bar is absent', async () => {
+  const { elements, pending, refreshed } = createPrepareSaveHarness(async (id, patch) => {
+    assert.deepEqual(Object.keys(patch), ['tag']);
+    return { id, tag: patch.tag };
+  }, false);
+  await elements['summary-language-form'].dispatch('submit');
+  assert.equal(await pending, 'en');
+  assert.deepEqual(refreshed, [
+    ['meeting', prepareMeeting.id], ['tag', 'interview'], ['banner', prepareMeeting.id],
+    ['filters'], ['activity'], ['scope'], ['clear', 9], ['search', 'Alice'],
+  ]);
+});
+
+test('a Prepare summary save settling after cancellation leaves the reopened dialog alone', async () => {
+  for (const fail of [false, true]) {
+    let settle;
+    const { context, elements, pending, refreshed } = createPrepareSaveHarness((id) =>
+      new Promise((resolve, reject) => {
+        settle = () => fail ? reject(new Error('late failure')) : resolve({ id, tag: 'interview' });
+      }), false);
+    const saving = elements['summary-language-form'].dispatch('submit');
+    elements['summary-language-cancel'].dispatch('click');
+    assert.equal(await pending, null);
+    const reopened = context.confirmSummaryTranscriptLanguage(prepareMeeting, policy, 'es', 'transcript-hash');
+    const message = elements['summary-language-message'].textContent;
+    settle();
+    await saving;
+    assert.equal(elements['summary-language-modal'].hidden, false);
+    assert.equal(elements['summary-language-message'].textContent, message);
+    assert.deepEqual(refreshed, []);
+    elements['summary-language-cancel'].dispatch('click');
+    assert.equal(await reopened, null);
+  }
+});
+
+test('Prepare summary skips allocating preview audio when all speakers are named', async () => {
+  const { context, elements } = createDialogHarness();
+  context.Audio = class { constructor() { assert.fail('Preview audio should stay unloaded'); } };
+  const pending = context.confirmSummaryTranscriptLanguage({
+    ...prepareMeeting,
+    audioPath: 'recording.opus',
+    ai: { diarization: { speakerNames: { 'Speaker 1': 'Alice', 'Speaker 2': 'Bob' } } },
+  }, policy, 'en', 'transcript-hash');
+  assert.equal(elements['summary-speaker-fieldset'].hidden, true);
+  elements['summary-language-cancel'].dispatch('click');
+  assert.equal(await pending, null);
+});
+
+function loadRendererFunctions(globals, ...names) {
+  const context = vm.createContext(globals);
+  const source = fs.readFileSync(path.join(__dirname, '../../src/renderer/app.js'), 'utf8');
+  for (const name of names) vm.runInContext(extractTopLevelFunctionSource(source, name), context);
+  return context;
+}
+
+test('History speaker blur and Escape respect the latest committed field state', async () => {
+  const ids = ['bar', 'rows', 'status', 'heading', 'toggle'];
+  const nodes = Object.fromEntries(ids.map((id) => [id, new EventTarget()]));
+  const fields = new Map();
+  const expanded = [];
+  const requests = [];
+  const meeting = { id: 'recording', transcript: 'Hello' };
+  const names = {};
+  const outside = {};
+  const context = loadRendererFunctions({
+    ...prepareSummaryDialogGlobals,
+    historySpeakers: null,
+    document: {
+      getElementById: (id) => nodes[id.replace('history-speaker-', '')],
+      activeElement: outside,
+    },
+    buildSpeakerRow: (_, { speaker }) => {
+      const field = Object.assign(new EventTarget(), { value: '' });
+      fields.set(speaker, field);
+      return { row: field, field };
+    },
+    window: { electronAPI: { updateMeeting: async (_, { speakerNames }) => {
+      requests.push(speakerNames);
+      Object.assign(names, speakerNames);
+      return { ...meeting, ai: { diarization: { speakerNames: { ...names } } } };
+    } } },
+    hashSummaryTranscript: async () => 'hash',
+    syncMeetingInList() {},
+    updateHistorySpeakerLabels() {},
+    meetingSearchQueryNormalized: '',
+    setHistorySpeakersExpanded(value) {
+      context.historySpeakers.expanded = value;
+      expanded.push(value);
+    },
+  }, 'clearHistorySpeakers', 'renderHistorySpeakers');
+  Object.assign(nodes.rows, {
+    replaceChildren() {},
+    appendChild() {},
+    contains: (element) => [...fields.values()].includes(element),
+  });
+  context.renderHistorySpeakers(meeting, [{ speaker: 'Speaker 1', text: 'Hello' }]);
+  const field = fields.get('Speaker 1');
+  const keydown = (key) => field.dispatchEvent(Object.assign(new Event('keydown'), { key }));
+  context.document.activeElement = field;
+  field.value = 'Alice';
+  keydown('Enter');
+  await new Promise(setImmediate);
+  assert.equal(context.historySpeakers.requestedNames.get('Speaker 1'), 'Alice');
+  assert.deepEqual(expanded, [true]);
+
+  field.value = 'Discard this draft';
+  keydown('Escape');
+  assert.equal(field.value, 'Alice');
+  assert.equal(nodes.status.textContent, '');
+  context.document.activeElement = outside;
+  nodes.rows.dispatchEvent(Object.assign(new Event('focusout'), { relatedTarget: outside }));
+  field.dispatchEvent(Object.assign(new Event('blur'), { relatedTarget: outside }));
+  assert.deepEqual(expanded, [true, false]);
+  assert.equal(requests.length, 1);
+});
+
+test('speaker preview ignores a queued pause and pre-seek updates, then stops at the fallback bound', async () => {
+  const player = new EventTarget();
+  player.currentTime = 99;
+  player.pause = () => {};
+  let resolvePlay;
+  player.play = () => new Promise((resolve) => { resolvePlay = resolve; });
+  let afterSeek;
+  const context = loadRendererFunctions({
+    stopSpeakerPreview: null,
+    historySpeakers: null,
+    pendingAudioSeekCleanup: null,
+    document: { getElementById: () => null },
+    seekMeetingAudio(_, options) { afterSeek = options.afterSeek; },
+  }, 'playSpeakerSample', 'clearHistorySpeakers');
+  const pressed = [];
+  const button = { getAttribute: () => 'false' };
+  const preview = (endSec) => context.playSpeakerSample(button, player, { startSec: 8, endSec }, (value) => pressed.push(value));
+  preview(9);
+  preview(8);
+  player.dispatchEvent(new Event('timeupdate'));
+  player.currentTime = 8;
+  const playing = afterSeek();
+  player.dispatchEvent(new Event('pause'));
+  resolvePlay();
+  await playing;
+  player.currentTime = 11.99;
+  player.dispatchEvent(new Event('timeupdate'));
+  assert.deepEqual(pressed, [true, false, true]);
+  player.currentTime = 12;
+  player.dispatchEvent(new Event('timeupdate'));
+  assert.equal(pressed.at(-1), false);
+
+  preview(undefined);
+  context.clearHistorySpeakers();
+  assert.equal(pressed.at(-1), false);
+  assert.equal(context.stopSpeakerPreview, null);
+});
+
+test('Name speakers refreshes the selected recording before focus and respects a changed selection', async () => {
+  const calls = [];
+  let resolveRefresh;
+  const context = loadRendererFunctions({
+    currentMeetingId: '1',
+    meetingIdsEqual,
+    findMeetingById: () => true,
+    activateTab() {},
+    activateHistoryDetailTab() {},
+    selectMeeting: () => assert.fail('Already selected'),
+    refreshMeetingDetails: () => new Promise((resolve) => { resolveRefresh = resolve; }),
+    focusHistorySpeaker: (speaker) => calls.push(speaker),
+    historySpeakers: { samples: [{ speaker: 'Speaker 1' }], names: {} },
+  }, 'openHistorySpeakerNames');
+  const opening = context.openHistorySpeakerNames(1);
+  assert.deepEqual(calls, []);
+  context.historySpeakers = { samples: [{ speaker: 'Speaker 2' }], names: {} };
+  resolveRefresh();
+  await opening;
+  assert.deepEqual(calls, ['Speaker 2']);
+
+  const changing = context.openHistorySpeakerNames(1);
+  context.currentMeetingId = '2';
+  resolveRefresh();
+  await changing;
+  assert.deepEqual(calls, ['Speaker 2']);
+});
+
+test('replacing a completion toast cleans up focusout and Name speakers hides it before navigation', () => {
+  const timers = new Map();
+  const listeners = new Map();
+  const button = {};
+  const toast = {
+    classList: { add() {}, remove() {} },
+    contains: (element) => element === button,
+    addEventListener: (name, listener) => listeners.set(listener, name),
+    removeEventListener: (_, listener) => listeners.delete(listener),
+  };
+  const opened = [];
+  const context = loadRendererFunctions({
+    document: {
+      getElementById: (id) => ({
+        'activity-completion-toast': toast, 'activity-completion-name-speakers': button,
+      }[id]),
+      activeElement: button,
+    },
+    buildCompletionToastView: () => ({ visible: true }),
+    setTimeout(callback) {
+      const id = Symbol();
+      timers.set(id, callback);
+      return id;
+    },
+    clearTimeout: (id) => timers.delete(id),
+    openHistorySpeakerNames(id) {
+      assert.equal(toast.hidden, true);
+      assert.equal(timers.size, 0);
+      assert.equal(listeners.size, 0);
+      opened.push(id);
+    },
+  }, 'showCompletionToast');
+  for (const meetingId of ['old', 'new']) {
+    context.showCompletionToast({ meetingId, speakerCount: 1 });
+    assert.equal(listeners.size, 0);
+    timers.get(context.showCompletionToast._timer)();
+    assert.equal(listeners.size, 1);
+  }
+  button.onclick();
+  assert.deepEqual(opened, ['new']);
+  assert.equal(context.showCompletionToast._timer, null);
+});
+
+test('a ready Activity row can name speakers from the queue even with completed recording metadata', () => {
+  const created = [];
+  const createElement = () => {
+    const element = {
+      classList: { add() {} }, dataset: {},
+      append() {}, appendChild() {}, setAttribute() {}, addEventListener() {},
+    };
+    created.push(element);
+    return element;
+  };
+  const row = { meetingId: '1', status: 'ready', title: 'Recording', actions: [] };
+  const context = loadRendererFunctions({
+    document: { createElement },
+    activityListEl: createElement(),
+    transcriptionQueueState: { jobs: [{ meetingId: 1, speakerCount: 2 }] },
+    meetings: [],
+    buildActivityRows: () => [row],
+    shouldRestoreInlineEditorFocus: () => false,
+    activeOpenTagPopover: null,
+    activityActionBusyMeetingId: null,
+    activityRenameMeetingId: null,
+    findMeetingById: () => ({ transcriptionStatus: 'completed' }),
+    applyTagPillView() {},
+    clearElement() {},
+    updateResumePendingBanner() {},
+    refreshIdleStatusPill() {},
+    updateSoftQueueDepthWarning() {},
+    updateBackgroundTranscriptionTip() {},
+    restoreInlineTitleEditorFocus() {},
+  }, 'renderActivityList');
+  context.renderActivityList();
+  assert.ok(created.some(({ textContent }) => textContent === 'Name speakers'));
+  created.length = 0;
+  row.status = 'pending';
+  context.renderActivityList();
+  assert.ok(!created.some(({ textContent }) => textContent === 'Name speakers'));
+});
+
+test('single and bulk deletion clear the selected speaker bar and stop its preview', async () => {
+  for (const deleteMethod of ['deleteMeetingHandler', 'deleteCheckedMeetings']) {
+    const meetingId = 'recording';
+    const bar = { hidden: false };
+    let stopped = false;
+    const controller = new AbortController();
+    const context = loadRendererFunctions({
+      meetingIdsEqual,
+      currentMeetingId: meetingId,
+      meetings: [{ id: meetingId }],
+      checkedMeetingIds: new Set([meetingId]),
+      meetingDetails: { style: {} },
+      window: { electronAPI: { deleteMeeting: async (id) => assert.equal(id, meetingId) } },
+      document: { getElementById: (id) => id === 'history-speaker-bar' ? bar : { style: {} } },
+      findMeetingById: () => ({ id: meetingId }),
+      confirm: () => true,
+      setTimeout: (callback) => callback(),
+      addLog() {},
+      renderMeetingList() {},
+      loadMeetingHistory: async () => {},
+      historySpeakers: { controller },
+      stopSpeakerPreview: () => { stopped = true; },
+    }, deleteMethod, 'clearHistorySpeakers');
+    await context[deleteMethod](meetingId);
+    assert.equal(context.currentMeetingId, null);
+    assert.equal(context.historySpeakers, null);
+    assert.equal(bar.hidden, true);
+    assert.equal(stopped, true);
+    assert.equal(controller.signal.aborted, true);
+  }
+});
+
+test('summary messages hide the mismatch banner and restoring a summary refreshes it after rendering', async () => {
+  const meeting = { id: 'recording', summary: 'Saved summary' };
+  const summaryEl = { dataset: { markdown: meeting.summary }, classList: { add() {} } };
+  const updates = [];
+  const context = loadRendererFunctions({
+    document: { getElementById: () => summaryEl },
+    currentMeetingId: meeting.id,
+    window: { electronAPI: { getMeeting: async () => meeting } },
+    meetingIdsEqual,
+    setPlaceholder() {},
+    updateSummaryActionState() {},
+    updateSummaryTagMismatchBanner: (value) => updates.push([value, summaryEl.dataset.markdown]),
+    renderSummaryMarkdown: (markdown) => { summaryEl.dataset.markdown = markdown; },
+  }, 'showSummaryMessage', 'restoreCurrentHistorySummary');
+  context.showSummaryMessage('Generating local summary…');
+  await context.restoreCurrentHistorySummary(meeting.id, 'Cancelled', { showTab: false });
+  assert.deepEqual(updates, [[null, 'Saved summary'], [meeting, 'Saved summary']]);
 });
 
 test('language captions use readable names without an add-on snapshot', () => {
@@ -248,36 +694,7 @@ function createCaptionElement(labelText, valueText) {
 }
 
 test('a deferred summary response cannot replace the selected meeting captions or their refresh replay', async () => {
-  const elements = {};
-  for (const id of [
-    'summary-language-modal',
-    'summary-transcript-language',
-    'summary-language-form',
-    'summary-language-cancel',
-    'summary-language-confirm',
-    'summary-language-message',
-  ]) {
-    const listeners = new Map();
-    elements[id] = {
-      value: '',
-      disabled: false,
-      children: [],
-      hidden: true,
-      textContent: '',
-      replaceChildren() { this.children = []; },
-      appendChild(child) { this.children.push(child); },
-      focus() { context.document.activeElement = this; },
-      classList: {
-        add() { elements[id].hidden = true; },
-        remove() { elements[id].hidden = false; },
-      },
-      addEventListener(event, listener) { listeners.set(event, listener); },
-      removeEventListener(event) { listeners.delete(event); },
-      dispatch(event, options = {}) {
-        listeners.get(event)?.({ preventDefault() {}, stopPropagation() {}, ...options });
-      },
-    };
-  }
+  const elements = buildDialogElements((_, element) => { context.document.activeElement = element; });
   elements['transcript-summary-language-caption'] = createCaptionElement('', '');
   elements['summary-language-caption'] = createCaptionElement('', '');
 
@@ -295,6 +712,7 @@ test('a deferred summary response cannot replace the selected meeting captions o
   const openedTabs = [];
   const savedSummaries = [];
   const context = vm.createContext({
+    ...prepareSummaryDialogGlobals,
     document: {
       getElementById: (id) => elements[id] || null,
       createElement: () => ({}),
@@ -463,4 +881,52 @@ test('real regeneration cannot bypass the dialog for a reusable language', async
   elements['summary-language-cancel'].dispatch('click');
   await pending;
   assert.equal(context.summaryGenerationMeetingId, null);
+});
+
+test('Prepare summary handles 0/1/2+ usable models and pre-selects summary-capable model when default is Chat-only', async () => {
+  const { context, elements } = createDialogHarness();
+  const makeControl = () => ({
+    value: '', hidden: true, disabled: false, textContent: '', children: [], listeners: new Map(),
+    replaceChildren(...items) { this.children = [...items]; },
+    add(opt) { this.children.push(opt); },
+    addEventListener(ev, fn) { this.listeners.set(ev, fn); },
+    removeEventListener(ev) { this.listeners.delete(ev); },
+    closest() { return null; },
+  });
+  Object.assign(elements, {
+    'summary-model-field': makeControl(),
+    'summary-model-select': makeControl(),
+    'summary-model-static-label': makeControl(),
+    'summary-manage-models': makeControl(),
+  });
+  context.usableSummaryModels = (lib) => (lib?.models || []).filter((m) => m.installed && m.setupComplete && m.status === 'ready');
+
+  // 1 usable model: select hidden, static label shown
+  const oneLib = {
+    defaultModelId: 'qwen3.5-9b-q4-k-m',
+    models: [{ modelId: 'qwen3.5-9b-q4-k-m', modelName: 'Qwen3.5 9B', installed: true, setupComplete: true, status: 'ready', qualifiedLanguages: ['en', 'es'] }],
+  };
+  let pending = context.confirmSummaryTranscriptLanguage({ language: 'en' }, policy, 'en', 'hash', oneLib);
+  assert.equal(elements['summary-model-select'].hidden, true);
+  assert.equal(elements['summary-model-static-label'].hidden, false);
+  assert.equal(elements['summary-model-static-label'].textContent, 'Qwen3.5 9B · Default');
+  elements['summary-language-cancel'].dispatch('click');
+  await pending;
+
+  // 2+ usable models where default is Chat-only: pre-selects summary-capable model and notes it
+  const multiLib = {
+    defaultModelId: 'qwen3.5-4b-q4-k-m',
+    models: [
+      { modelId: 'qwen3.5-4b-q4-k-m', modelName: 'Qwen3.5 4B', installed: true, setupComplete: true, status: 'ready', qualifiedLanguages: [] },
+      { modelId: 'gemma-4-e4b', modelName: 'Gemma 4 E4B', installed: true, setupComplete: true, status: 'ready', qualifiedLanguages: ['en'] },
+    ],
+  };
+  pending = context.confirmSummaryTranscriptLanguage({ language: 'en' }, policy, 'en', 'hash', multiLib);
+  assert.equal(elements['summary-model-select'].hidden, false);
+  assert.equal(elements['summary-model-static-label'].hidden, true);
+  assert.equal(elements['summary-model-select'].value, 'gemma-4-e4b');
+  assert.match(elements['summary-language-message'].textContent, /Qwen3\.5 4B is Chat-only on this device/);
+  elements['summary-language-form'].dispatch('submit');
+  const submitted = await pending;
+  assert.deepEqual({ ...submitted }, { transcriptLanguage: 'en', modelId: 'gemma-4-e4b' });
 });

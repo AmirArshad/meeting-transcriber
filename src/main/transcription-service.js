@@ -105,6 +105,7 @@ const {
   assertLinuxSpeakrsOnlyEngine,
 } = require('../ai-addon/manifest-store');
 const transcriptionPolicy = require('../transcription-policy');
+const { normalizeTagStrict } = require('../renderer/tag-helpers');
 const { runDiarizationOnlyProcess } = require('../main-process/transcription-runtime-helpers');
 
 /**
@@ -2042,7 +2043,7 @@ function createTranscriptionService(deps) {
       });
       setActiveQueueMeeting(transcriptionQueueState, null);
       upsertQueueJob(transcriptionQueueState, { meetingId, status: QUEUE_JOB_STATUSES.ready,
-        phase: QUEUE_JOB_PHASES.completed });
+        phase: QUEUE_JOB_PHASES.completed, speakerCount: result.meeting?.ai?.diarization?.speakerCount || 0 });
       publishTranscriptionQueueState();
       return result;
     } catch (error) {
@@ -2059,7 +2060,7 @@ function createTranscriptionService(deps) {
       } else if (completed) {
         if (!isQuitCommitted()) {
           upsertQueueJob(transcriptionQueueState, { meetingId, status: QUEUE_JOB_STATUSES.ready,
-            phase: QUEUE_JOB_PHASES.completed });
+            phase: QUEUE_JOB_PHASES.completed, speakerCount: updatedMeeting?.ai?.diarization?.speakerCount || 0 });
         } else {
           removeQueueJob(transcriptionQueueState, meetingId);
         }
@@ -2656,6 +2657,7 @@ function createTranscriptionService(deps) {
         meetingId,
         status: QUEUE_JOB_STATUSES.ready,
         phase: QUEUE_JOB_PHASES.completed,
+        speakerCount: result.meeting?.ai?.diarization?.speakerCount || 0,
       });
       trimSessionReadyJobs(transcriptionQueueState);
       setActiveQueueMeeting(transcriptionQueueState, null);
@@ -2742,6 +2744,7 @@ function createTranscriptionService(deps) {
             meetingId,
             status: QUEUE_JOB_STATUSES.ready,
             phase: QUEUE_JOB_PHASES.completed,
+            speakerCount: updatedMeeting?.ai?.diarization?.speakerCount || 0,
           });
           publishTranscriptionQueueState();
           return {
@@ -2799,6 +2802,7 @@ function createTranscriptionService(deps) {
           meetingId,
           status: QUEUE_JOB_STATUSES.ready,
           phase: QUEUE_JOB_PHASES.completed,
+          speakerCount: updatedMeeting?.ai?.diarization?.speakerCount || 0,
         });
         publishTranscriptionQueueState();
         return {
@@ -2998,11 +3002,15 @@ function createTranscriptionService(deps) {
     modelSize = 'small',
     transcriptionErrorNote = '',
     title = '',
+    tag = null,
     transcriptionSelection = null,
   } = {}) {
     if (typeof addMeetingToHistory !== 'function') {
       throw new Error('finalize-recording-transcription requires addMeetingToHistory');
     }
+    const normalizedTag = (tag === null || tag === undefined || (typeof tag === 'string' && !tag.trim()))
+      ? null
+      : normalizeTagStrict(tag);
 
     const request = resolveFinalizeTranscriptionRequest({
       audioPath,
@@ -3035,6 +3043,7 @@ function createTranscriptionService(deps) {
         language: normalizedLanguage,
         model: normalizedModel,
         title: title || undefined,
+        ...(normalizedTag ? { tag: normalizedTag } : {}),
         transcriptionStatus: 'pending',
         transcriptionError: transcriptionErrorNote || undefined,
         transcriptionRequest: request,

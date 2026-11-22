@@ -44,8 +44,15 @@ const {
   PYANNOTE_DIARIZATION_MODEL_ID,
   SPEAKRS_DIARIZATION_MODEL_ID,
   getDiarizationDependencyArtifactForPlatform,
-  getSummaryArtifactForPlatform,
+  getSummaryArtifactForPlatform: getRawSummaryArtifactForPlatform,
+  getSummaryRuntimeArtifactForPlatform,
 } = require('../../src/ai-addon-state');
+function getSummaryArtifactForPlatform(modelId, platform, arch, catalog) {
+  const artifact = getRawSummaryArtifactForPlatform(modelId, platform, arch, catalog);
+  const runtime = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog, modelId);
+  return artifact && { ...artifact, runtimeArtifactId: runtime?.id };
+}
+
 const {
   resolveDiarizationSetupTarget,
   uninstallSpeakrsLocalState,
@@ -1904,7 +1911,7 @@ test('summary runtime cache stays in userData and requires llama-cli', async () 
   });
   const nestedRuntimeExecutable = path.join(runtimeDir, 'extract', 'nested', 'llama-cli.exe');
 
-  assert.equal(runtimeDir, path.join('/tmp/AvaNevis', 'ai-addons', 'models', 'summary', DEFAULT_SUMMARY_MODEL_ID, 'runtime', 'win32-x64'));
+  assert.equal(runtimeDir, path.join('/tmp/AvaNevis', 'ai-addons', 'runtimes', 'llama-cpp', getSummaryRuntimeArtifactForPlatform('win32', 'x64', undefined, DEFAULT_SUMMARY_MODEL_ID).id));
   assert.equal(runtimeExecutable, path.join(runtimeDir, 'llama-cli.exe'));
 
   const missingCache = await checkSummaryRuntimeCache({
@@ -2151,10 +2158,8 @@ test('setup summary model downloads explicit runtime and model artifacts only wh
       fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n');
       onProgress({ percent: 50 });
     },
-    extractor: async (archivePath) => {
-      const archive = runtimeArtifact.artifacts[0];
-      assert.equal(archivePath, getSummaryRuntimeArchivePath('/tmp/AvaNevis', artifact, archive));
-      fsModule.writeFileSync(nestedRuntimeExecutable, 'bin');
+    extractor: async (_archivePath, extractDir) => {
+      fsModule.writeFileSync(path.join(extractDir, 'nested', 'llama-cli.exe'), 'bin');
     },
   });
 
@@ -2197,9 +2202,8 @@ test('setup summary model uses Hugging Face downloader for pinned Hugging Face m
       fsModule.writeFileSync(destinationPath, 'checksum target\n');
       onProgress({ downloaded: 1234, total: 1234, percent: 100 });
     },
-    extractor: async (archivePath) => {
-      assert.equal(archivePath, getSummaryRuntimeArchivePath('/tmp/AvaNevis', artifact, runtimeArtifact.artifacts[0]));
-      fsModule.writeFileSync(path.join(getSummaryRuntimeDir('/tmp/AvaNevis', artifact), 'extract', 'llama-cli.exe'), 'bin');
+    extractor: async (_archivePath, extractDir) => {
+      fsModule.writeFileSync(path.join(extractDir, 'llama-cli.exe'), 'bin');
     },
   });
 
@@ -2235,8 +2239,8 @@ test('setup summary model records downloader failures and removes temp model dow
       fsModule.writeFileSync(destinationPath, 'partial model');
       throw new Error('network timeout');
     },
-    extractor: async () => fsModule.writeFileSync(
-      path.join(getSummaryRuntimeDir('/tmp/AvaNevis', artifact), 'extract', 'llama-cli.exe'),
+    extractor: async (_archive, extractDir) => fsModule.writeFileSync(
+      path.join(extractDir, 'llama-cli.exe'),
       'bin',
     ),
   });
@@ -2270,8 +2274,8 @@ test('setup summary model cancellation cleans partial cache and resets state', a
         controller.abort();
       }
     },
-    extractor: async () => fsModule.writeFileSync(
-      path.join(getSummaryRuntimeDir('/tmp/AvaNevis', artifact), 'extract', 'llama-cli.exe'),
+    extractor: async (_archive, extractDir) => fsModule.writeFileSync(
+      path.join(extractDir, 'llama-cli.exe'),
       'bin',
     ),
   });
@@ -2375,13 +2379,14 @@ test('summary model cancellation preserves a previously valid runtime', async ()
   );
 });
 
-test('summary validation failure removes runtime installed during failed setup', async () => {
+test('summary smoke check failure preserves SHA-256-verified model and runtime for Check setup retry', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
     sha256: CHECKSUM_TARGET_SHA256,
   });
   const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
-  const runtimeDir = getSummaryRuntimeDir('/tmp/AvaNevis', artifact);
+  const artifactPath = getSummaryArtifactPath('/tmp/AvaNevis', artifact);
+  const runtimeDir = getSummaryRuntimeDir('/tmp/AvaNevis', artifact, fsModule, catalog);
 
   const status = await setupSummaryModel({
     userDataDir: '/tmp/AvaNevis',
@@ -2393,7 +2398,7 @@ test('summary validation failure removes runtime installed during failed setup',
     fsModule,
     catalog,
     downloader: async ({ url, destinationPath }) => fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n'),
-    extractor: async () => fsModule.writeFileSync(path.join(runtimeDir, 'extract', 'llama-cli.exe'), 'bin'),
+    extractor: async (_archive, extractDir) => fsModule.writeFileSync(path.join(extractDir, 'llama-cli.exe'), 'bin'),
     runtimeValidator: async () => {
       throw new Error('missing CUDA DLL');
     },
@@ -2401,7 +2406,22 @@ test('summary validation failure removes runtime installed during failed setup',
 
   assert.equal(status.features.summary.status, 'error');
   assert.match(status.features.summary.error, /missing CUDA DLL/);
-  assert.ok(fsModule.removed.includes(runtimeDir));
+  assert.equal(fsModule.existsSync(artifactPath), true);
+  assert.equal(fsModule.existsSync(path.join(runtimeDir, 'extract', 'llama-cli.exe')), true);
+  assert.equal(fsModule.removed.includes(runtimeDir), false);
+
+  const retried = await validateSummaryModel({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    runtimeValidator: async () => ({ ok: true }),
+  });
+  assert.equal(retried.features.summary.status, 'ready');
+  assert.equal(retried.features.summary.setupComplete, true);
 });
 
 test('summary cancellation during validation preserves pre-existing ready cache', async () => {
@@ -2467,8 +2487,8 @@ test('summary cancellation during validation preserves a valid model when runtim
     catalog,
     cancelSignal: controller.signal,
     downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, 'runtime archive\n'),
-    extractor: async () => fsModule.writeFileSync(
-      path.join(runtimeDir, 'extract', 'llama-cli.exe'),
+    extractor: async (_archive, extractDir) => fsModule.writeFileSync(
+      path.join(extractDir, 'llama-cli.exe'),
       'bin',
     ),
     runtimeValidator: async () => {
@@ -2537,8 +2557,8 @@ test('remove summary model clears cache and manifest state', async () => {
     fsModule,
     catalog,
     downloader: async ({ url, destinationPath }) => fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n'),
-    extractor: async () => fsModule.writeFileSync(
-      path.join(getSummaryRuntimeDir('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog)), 'extract', 'llama-cli.exe'),
+    extractor: async (_archive, extractDir) => fsModule.writeFileSync(
+      path.join(extractDir, 'llama-cli.exe'),
       'bin',
     ),
   });
@@ -3528,4 +3548,290 @@ test('native Speakrs repair validates staged files and preserves the old manifes
     },
   });
   assert.equal(repeated.features.diarization.setupComplete, true);
+});
+
+test('submission hashes the default weights without reading unrelated model weights', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact();
+  catalog.summary.models.push({ ...catalog.summary.models[0], id: 'other' });
+  const userDataDir = '/tmp/AvaNevis';
+  const paths = catalog.summary.models.map(({ id }) => getSummaryArtifactPath(userDataDir,
+    getSummaryArtifactForPlatform(id, 'win32', 'x64', catalog)));
+  for (const target of paths) fsModule.writeFileSync(target, 'checksum target\n');
+  const reads = [];
+  const readStream = fsModule.createReadStream.bind(fsModule);
+  fsModule.createReadStream = (target) => { reads.push(target); return readStream(target); };
+  const options = { userDataDir, platform: 'win32', arch: 'x64', fsModule, catalog, verifyChecksums: true };
+  const selected = await checkAiAddonSetupStatus({ ...options, verifySelectedSummaryOnly: true });
+  assert.equal(selected.features.summary.cache.checksumStatus, 'match');
+  assert.deepEqual(reads.filter((target) => paths.includes(target)), [paths[0]]);
+  await checkAiAddonSetupStatus(options);
+  assert.ok(reads.includes(paths[1]));
+});
+
+test('validateSummaryModel does not read unrelated library model weights', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  catalog.summary.models.push({ ...catalog.summary.models[0], id: 'other' });
+  const userDataDir = '/tmp/AvaNevis';
+  const primaryArtifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const otherArtifact = getSummaryArtifactForPlatform('other', 'win32', 'x64', catalog);
+  const primaryPath = getSummaryArtifactPath(userDataDir, primaryArtifact);
+  const otherPath = getSummaryArtifactPath(userDataDir, otherArtifact);
+  fsModule.writeFileSync(primaryPath, 'checksum target\n');
+  fsModule.writeFileSync(otherPath, 'checksum target\n');
+  const runtimeExecutable = getSummaryRuntimeExecutablePath(userDataDir, primaryArtifact, catalog.summary.runtimeArtifacts['win32-x64']);
+  fsModule.mkdirSync(path.dirname(runtimeExecutable));
+  fsModule.writeFileSync(runtimeExecutable, 'bin');
+  const reads = [];
+  const readStream = fsModule.createReadStream.bind(fsModule);
+  fsModule.createReadStream = (target) => { reads.push(target); return readStream(target); };
+  const status = await validateSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+  });
+  assert.equal(status.features.summary.status, 'ready');
+  assert.ok(reads.includes(primaryPath));
+  assert.equal(reads.includes(otherPath), false);
+});
+
+test('summary setup blocks insufficient peak disk space before downloading', async () => {
+  const fsModule = createMemoryFs();
+  fsModule.mkdirSync('/tmp/AvaNevis');
+  fsModule.statfsSync = () => ({ bavail: 1, bsize: 1 });
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  let downloads = 0;
+  await assert.rejects(setupSummaryModel({
+    userDataDir: '/tmp/AvaNevis', platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog,
+    downloader: async () => { downloads += 1; },
+  }), /free disk space/i);
+  assert.equal(downloads, 0);
+});
+
+test('legacy summary setup adopts its shared runtime and keeps ready weights offline', async () => {
+  const { getSharedSummaryRuntimeDir } = require('../../src/ai-addon/manifest-store');
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  const userDataDir = '/tmp/AvaNevis';
+  const modelId = 'summary-model';
+  const artifact = getSummaryArtifactForPlatform(modelId, 'win32', 'x64', catalog);
+  const weights = getSummaryArtifactPath(userDataDir, artifact);
+  const legacyRuntime = path.join(path.dirname(weights), 'runtime', 'win32-x64');
+  const sharedRuntime = getSharedSummaryRuntimeDir(userDataDir, artifact, catalog);
+  fsModule.writeFileSync(weights, 'checksum target\n');
+  fsModule.writeFileSync(path.join(legacyRuntime, 'extract', 'llama-cli.exe'), 'bin');
+  fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'manifest.json'), JSON.stringify({
+    features: { summary: { modelId, status: 'ready' } },
+  }));
+
+  const status = await setupSummaryModel({
+    userDataDir, platform: 'win32', arch: 'x64', modelId, fsModule, catalog,
+    downloader: async () => assert.fail('verified legacy setup must work offline'),
+    runtimeValidator: async ({ runtimeDir }) => assert.equal(runtimeDir, sharedRuntime),
+  });
+  assert.equal(status.summaryLibrary.defaultModelId, modelId);
+  assert.equal(status.features.summary.setupComplete, true);
+  assert.equal(fsModule.existsSync(legacyRuntime), false);
+  assert.equal(fsModule.readFileSync(weights, 'utf8'), 'checksum target\n');
+});
+
+test('summary removal keeps a retry record until shared runtime deletion succeeds', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  const userDataDir = '/tmp/AvaNevis';
+  await setupSummaryModel({ userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog,
+    downloader: async ({ url, destinationPath }) => fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n'),
+    extractor: async (_archive, extractDir) => fsModule.writeFileSync(path.join(extractDir, 'llama-cli.exe'), 'bin'),
+  });
+  const originalRm = fsModule.rmSync.bind(fsModule);
+  let failed = false;
+  fsModule.rmSync = (target, options) => {
+    if (!failed && target.includes(path.join('runtimes', 'llama-cpp'))) { failed = true; throw new Error('in use'); }
+    return originalRm(target, options);
+  };
+  const options = { userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog };
+  await assert.rejects(removeSummaryModel(options), /Could not remove .*Retry removal/);
+  const first = await checkAiAddonSetupStatus(options);
+  assert.match(first.summaryLibrary.models.find((model) => model.modelId === 'summary-model').error, /retry removal/i);
+  const second = await removeSummaryModel({ userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog });
+  assert.equal(second.summaryLibrary.defaultModelId, null);
+  assert.equal(second.summaryLibrary.sharedRuntimeBytes, 0);
+});
+
+test('interrupted default removal remembers the replacement and counts residual runtime staging', async () => {
+  const { saveAiAddonManifest, getSharedSummaryRuntimeDir } = require('../../src/ai-addon/manifest-store');
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  const model = catalog.summary.models[0];
+  catalog.summary.models.push({ ...model, id: 'other-1' }, { ...model, id: 'other-2' });
+  const ready = (modelId) => ({ modelId, status: 'ready' });
+  const userDataDir = '/tmp/AvaNevis';
+  saveAiAddonManifest({ userDataDir, fsModule, catalog, manifest: { features: { summary: ready('summary-model') }, summaryLibrary: { defaultModelId: 'summary-model', models: { 'summary-model': ready('summary-model'), 'other-1': ready('other-1'), 'other-2': ready('other-2') } } } });
+  const dir = getSharedSummaryRuntimeDir(userDataDir, getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), catalog);
+  fsModule.writeFileSync(path.join(`${dir}.staging`, 'partial'), '12345');
+  const originalRm = fsModule.rmSync.bind(fsModule);
+  let failed = false;
+  fsModule.rmSync = (target, options) => { if (!failed && target.includes(path.join('models', 'summary'))) { failed = true; throw new Error('busy'); } return originalRm(target, options); };
+  const options = { userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog };
+  await assert.rejects(removeSummaryModel({ ...options, replacementModelId: 'other-2' }), /Could not remove .*Retry removal/);
+  const first = await checkAiAddonSetupStatus(options);
+  assert.equal(first.summaryLibrary.defaultModelId, 'other-2');
+  assert.equal(first.summaryLibrary.models.find((item) => item.modelId === 'summary-model').removalPending, true);
+  assert.equal(first.summaryLibrary.sharedRuntimeBytes, 5);
+  const second = await removeSummaryModel({ userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog });
+  assert.equal(second.summaryLibrary.defaultModelId, 'other-2');
+});
+
+test('summary removal returns status using supplied Linux CUDA and device memory', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const status = await removeSummaryModel({
+    userDataDir, fsModule, platform: 'linux', arch: 'x64', modelId: 'qwen3.5-4b-q4-k-m',
+    cudaStatus: {
+      statusCode: 'ready', installed: true, deviceAvailable: true, runtimeLoadable: true,
+      missingLibraries: [], matchedProfile: 'cuda12',
+    },
+    deviceMemory: { totalBytes: 16 * 1024 ** 3, availableBytes: 1024 },
+  });
+  const fit = status.summaryLibrary.models.find((model) => model.modelId === 'qwen3.5-9b-q4-k-m').fit;
+  assert.equal(fit.status, 'needs_more_memory');
+  assert.equal(fit.availableMemoryBytes, 1024);
+  assert.equal(status.features.summary.availability.supported, true);
+});
+
+test('runtime peak space uses pinned expanded size with a legacy fallback', () => {
+  const { getSummaryRuntimePeakBytes } = require('../../src/ai-addon/manifest-store');
+  assert.equal(getSummaryRuntimePeakBytes({ artifacts: [{ sizeBytes: 10, expandedBytes: 90 }, { sizeBytes: 20 }] }), 160);
+});
+
+test('canceling new model setup drops ghost manifest entries and preserves existing ready default', async () => {
+  const { loadManifest } = require('../../src/ai-addon/manifest-store');
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  const firstModel = catalog.summary.models[0];
+  catalog.summary.models.push({
+    ...firstModel,
+    id: 'second-model',
+    label: 'Second Model',
+    artifact: {
+      ...firstModel.artifact,
+      fileName: 'second.gguf',
+      platformArtifacts: {
+        ...firstModel.artifact.platformArtifacts,
+        'win32-x64': { ...firstModel.artifact.platformArtifacts['win32-x64'], id: 'second-win', fileName: 'second.gguf' },
+      },
+    },
+  });
+  const userDataDir = '/tmp/AvaNevis';
+  await setupSummaryModel({
+    userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog,
+    downloader: async ({ url, destinationPath }) => fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n'),
+    extractor: async (_archive, extractDir) => fsModule.writeFileSync(path.join(extractDir, 'llama-cli.exe'), 'bin'),
+  });
+  const controller = new AbortController();
+  const status = await setupSummaryModel({
+    userDataDir, platform: 'win32', arch: 'x64', modelId: 'second-model', fsModule, catalog,
+    cancelSignal: controller.signal,
+    downloader: async ({ destinationPath }) => {
+      fsModule.writeFileSync(destinationPath, 'partial');
+      controller.abort();
+    },
+  });
+  const manifest = loadManifest({ userDataDir, fsModule, catalog });
+  assert.equal(Object.hasOwn(manifest.summaryLibrary.models, 'second-model'), false);
+  assert.equal(status.features.summary.modelId, 'summary-model');
+  assert.equal(status.features.summary.status, 'ready');
+});
+
+test('stale notConfigured entries do not block shared runtime removal or reclaimable byte reporting', async () => {
+  const { saveAiAddonManifest, getSharedSummaryRuntimeDir } = require('../../src/ai-addon/manifest-store');
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  const firstModel = catalog.summary.models[0];
+  catalog.summary.models.push({ ...firstModel, id: 'stale-model' });
+  const userDataDir = '/tmp/AvaNevis';
+  await setupSummaryModel({
+    userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog,
+    downloader: async ({ url, destinationPath }) => fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n'),
+    extractor: async (_archive, extractDir) => fsModule.writeFileSync(path.join(extractDir, 'llama-cli.exe'), 'bin'),
+  });
+  const current = JSON.parse(fsModule.readFileSync(path.join(userDataDir, 'ai-addons', 'manifest.json'), 'utf8'));
+  current.summaryLibrary.models['stale-model'] = { modelId: 'stale-model', status: 'notConfigured' };
+  saveAiAddonManifest({ userDataDir, manifest: current, fsModule, catalog });
+  const sharedDir = getSharedSummaryRuntimeDir(userDataDir, getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), catalog);
+  const statusBefore = await checkAiAddonSetupStatus({ userDataDir, platform: 'win32', arch: 'x64', fsModule, catalog });
+  const entry = statusBefore.summaryLibrary.models.find((m) => m.modelId === 'summary-model');
+  assert.ok(entry.reclaimableBytes > entry.installedBytes);
+  const afterRemove = await removeSummaryModel({ userDataDir, platform: 'win32', arch: 'x64', modelId: 'summary-model', fsModule, catalog });
+  assert.equal(fsModule.existsSync(sharedDir), false);
+  assert.equal(afterRemove.summaryLibrary.sharedRuntimeBytes, 0);
+});
+
+test('getSharedSummaryRuntimeDir returns null for gated artifacts and status walks shared runtimes once', async () => {
+  const { getSharedSummaryRuntimeDir, buildSummaryRuntimeEnv, getSummaryRuntimeDir } = require('../../src/ai-addon/manifest-store');
+  const { AI_MODEL_CATALOG } = require('../../src/ai-addon-state');
+  const userDataDir = '/tmp/AvaNevis';
+  assert.equal(getSharedSummaryRuntimeDir(userDataDir, null, AI_MODEL_CATALOG), null);
+  assert.equal(getSharedSummaryRuntimeDir(userDataDir, getSummaryArtifactForPlatform('inkling-2-mini', 'win32', 'x64', AI_MODEL_CATALOG), AI_MODEL_CATALOG), null);
+
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const sharedDir = getSharedSummaryRuntimeDir(userDataDir, artifact, catalog);
+  fsModule.writeFileSync(path.join(sharedDir, 'extract', 'llama-cli.exe'), 'bin');
+  const readdirCalls = [];
+  const origReaddir = fsModule.readdirSync.bind(fsModule);
+  fsModule.readdirSync = (dir, opts) => {
+    if (dir === sharedDir) readdirCalls.push(dir);
+    return origReaddir(dir, opts);
+  };
+  await checkAiAddonSetupStatus({ userDataDir, platform: 'win32', arch: 'x64', fsModule, catalog });
+  assert.equal(readdirCalls.length, 1);
+
+  assert.equal(getSummaryRuntimeDir(userDataDir, artifact, fsModule, catalog), sharedDir);
+  const fsWithRealpath = {
+    ...fsModule,
+    realpathSync: (p) => {
+      if (!fsModule.existsSync(p)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return p;
+    },
+  };
+  assert.throws(() => buildSummaryRuntimeEnv({ userDataDir, artifact, platform: 'linux', arch: 'x64', fsModule: fsWithRealpath, catalog }), /not installed/i);
+});
+
+test('verified shared runtime cleans up unreferenced legacy private runtime directory under exclusive mutation', async () => {
+  const { getSharedSummaryRuntimeDir, getLegacySummaryRuntimeDir } = require('../../src/ai-addon/manifest-store');
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  const userDataDir = '/tmp/AvaNevis';
+  const modelId = 'summary-model';
+  const artifact = getSummaryArtifactForPlatform(modelId, 'win32', 'x64', catalog);
+  const weights = getSummaryArtifactPath(userDataDir, artifact);
+  const sharedRuntime = getSharedSummaryRuntimeDir(userDataDir, artifact, catalog);
+  const legacyRuntime = getLegacySummaryRuntimeDir(userDataDir, artifact);
+  fsModule.writeFileSync(weights, 'checksum target\n');
+  fsModule.writeFileSync(path.join(sharedRuntime, 'extract', 'llama-cli.exe'), 'bin');
+  fsModule.writeFileSync(path.join(legacyRuntime, 'extract', 'llama-cli.exe'), 'old-bin');
+  let exclusiveCalls = 0;
+  await validateSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId,
+    fsModule,
+    catalog,
+    runtimeValidator: async () => ({ ok: true }),
+    runExclusiveMutation: async (op) => {
+      exclusiveCalls += 1;
+      return op();
+    },
+  });
+  assert.equal(exclusiveCalls, 1);
+  assert.equal(fsModule.existsSync(legacyRuntime), false);
+  assert.equal(fsModule.existsSync(path.join(sharedRuntime, 'extract', 'llama-cli.exe')), true);
 });

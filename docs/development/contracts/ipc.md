@@ -25,19 +25,20 @@ Not inferable from the tree, and the highest-risk surface in the repo. Renaming 
 
 | Service in `src/main/` | Channels |
 |---|---|
-| `recorder-service.js` | `run-recording-preflight`, `start-recording`, `stop-recording`, `cancel-recording`, `get-recording-state` |
-| `transcription-service.js` | `check-model-downloaded`, `download-model`, `transcribe-audio`, `transcribe-audio-with-speakers`, `diarize-transcript`, `retry-transcription`, `finalize-recording-transcription`, `cancel-pending-transcription` |
+| `recorder-service.js` | `run-recording-preflight`, `start-recording`, `stop-recording`, `cancel-recording`, `get-recording-state`, `get-recording-recovery-state`, `recover-recording`, `defer-recording-recovery` |
+| `transcription-service.js` | `get-transcription-engine-status`, `setup-transcription-engine`, `cancel-transcription-engine-setup`, `validate-transcription-engine`, `remove-transcription-engine`, `check-model-downloaded`, `download-model`, `cancel-download-model`, `transcribe-audio`, `transcribe-audio-with-speakers`, `diarize-transcript`, `retry-transcription`, `finalize-recording-transcription`, `cancel-pending-transcription`, `resume-pending-transcriptions`, `get-transcription-queue-state` |
 | `audio-import-service.js` | `select-import-audio`, `start-import-audio`, `cancel-import-audio`, `import-audio-progress` (event) |
 | `summary-service.js` | `generate-summary`, `cancel-summary-generation` |
 | `history-search-service.js` | `search-history`, `rebuild-history-index`, `get-history-index-status` |
-| `history-qa-service.js` | `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, plus `history-qa-model-state` / `history-qa-progress` events |
+| `history-qa-service.js` | `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, `update-chat-thread-model`, plus `history-qa-model-state` / `history-qa-progress` events |
 | `meeting-manager-client.js` | `list-meetings`, `get-meeting`, `delete-meeting`, `scan-recordings`, `add-meeting`, `update-meeting`, `update-meeting-ai` |
 | `device-ipc.js` | `validate-devices`, `check-disk-space`, `check-audio-output`, `get-audio-devices`, `warm-up-audio-system`, `get-macos-permission-status` |
 | `file-export-ipc.js` | `save-transcript-file`, `save-speaker-segments-file`, `save-transcript-as`, `open-legal-notices` |
 | `gpu-runtime-service.js` | `check-gpu`, `check-cuda`, `install-gpu`, `ensure-compatible-gpu-runtime`, `uninstall-gpu` |
-| `ai-addon-ipc.js` | AI add-on status, diarization token, diarization/summary setup/cancel/validate/remove |
+| `ai-addon-ipc.js` | AI add-on status, diarization token, diarization/summary setup/cancel/validate/remove, `set-default-summary-model` |
 | `updater-service.js` | `get-update-state`, `check-for-updates`, `download-update`, `cancel-update-download`, `install-update-now`, `set-auto-download-updates`, `open-update-release-page`, plus `update-state-changed` (event) |
 | `ai-compute-queue.js` | none (no IPC) — owns the compute queue itself |
+| `summary-process-slot.js` | none (no IPC) — enforces one loaded Summaries & Chat model process across Chat, summaries, and setup smoke |
 | `recording-presence-service.js` | none — tray/Dock/taskbar presentation only |
 
 Phase 0 source-scan tests treat `src/main.js` + `src/main/**/*.js` as one combined surface, so channel names and payloads stay pinned across the split.
@@ -49,12 +50,27 @@ The native picker returns the basename of one selected MP3, WAV or Opus file. Ma
 ### Summary language payload
 
 `generate-summary` requires `{ meetingId, transcriptLanguage,
-sourceTranscriptHash, profile? }`, with optional `modelId` constrained to the
-installed model. Main validates eligibility and the current on-disk transcript;
-it passes `--language`, `--source-transcript-hash` and `--model-id` to the local
-runner. Successful `ai.summary` metadata may add `language`, `languageSource`
-(`userConfirmed`), `modelId`, and `languagePolicyVersion`. Missing fields mean
-legacy/unconfirmed output. Channel names and preload export shape are unchanged.
+sourceTranscriptHash, profile? }`, with optional `modelId` constrained to an
+installed ready model. Main validates eligibility and the current on-disk transcript
+and reads the recording's authoritative `tag` from `meeting_manager get`;
+it passes `--language`, `--source-transcript-hash`, `--model-id`, and optional
+`--tag` to the local runner. Successful `ai.summary` metadata may add
+`language`, `languageSource` (`userConfirmed`), `modelId`,
+`languagePolicyVersion`, `tag` (canonical slug or `null` for untagged recordings),
+and `templateVersion`. Main passes the recording's speaker-name snapshot to
+the runner for attribution, and completed summary metadata stores
+`speakerNamesHash` alongside the transcript hash.
+Missing fields mean legacy/unconfirmed output. Channel names and preload export
+shape are unchanged.
+
+### Speaker labels
+
+`update-meeting` accepts a per-speaker `speakerNames` patch with
+`expectedSourceTranscriptHash` and optional `expectedTranscriptionAttemptId`.
+An empty attempt ID represents a recording with no committed attempt ID.
+Ready `transcription-queue-state` jobs include `speakerCount` when speaker
+identification found speakers. Transcript exports with a meeting ID apply the
+current speaker names to Markdown, text, and subtitle output.
 
 ### Transcript & subtitle export
 
@@ -62,7 +78,21 @@ legacy/unconfirmed output. Channel names and preload export shape are unchanged.
 
 ### Local History search & threaded Chat
 
-`history-search-service.js` owns the disposable SQLite FTS5 cache (`userData/search/history-index.sqlite`) and exposes `search-history` (debounced renderer search returning BM25-ranked meetings with highlighted `snippetParts` and `[MM:SS]` timestamp jump coordinates), `rebuild-history-index`, and `get-history-index-status`. `history-qa-service.js` owns `userData/chat/threads.json` (`chat-thread-store.js`) and exposes `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, plus renderer push listeners `onHistoryQaModelState` (`history-qa-model-state`) and `onHistoryQaProgress` (`history-qa-progress`). The renderer renders Chat responses exclusively via bundled offline `marked` + strict-allowlist `DOMPurify` (`src/renderer/markdown-render-helpers.js`) and never sends bearer tokens, ports, or arbitrary file paths over IPC.
+`history-search-service.js` owns the disposable SQLite FTS5 cache (`userData/search/history-index.sqlite`) and exposes `search-history` (debounced renderer search supporting optional `tags` filtering and returning BM25-ranked meetings with highlighted `snippetParts` and `[MM:SS]` timestamp jump coordinates), `rebuild-history-index`, and `get-history-index-status`. `history-qa-service.js` owns `userData/chat/threads.json` (`chat-thread-store.js`, where `scope` supports `{ type, meetingIds, dateFrom, dateTo, tags }`) and exposes `list-chat-threads`, `get-chat-thread`, `create-chat-thread`, `rename-chat-thread`, `delete-chat-thread`, `update-chat-thread-scope`, `get-history-qa-eligibility`, `get-history-qa-model-state`, `unload-history-qa-model`, `ask-history`, `cancel-history-qa`, plus renderer push listeners `onHistoryQaModelState` (`history-qa-model-state`) and `onHistoryQaProgress` (`history-qa-progress`). Recording creation/update payloads (`add-meeting`, `update-meeting`, `finalize-recording-transcription`, `start-import-audio`) accept optional canonical `tag` values validated symmetrically in main and Python (`meeting_manager.py`). The renderer renders Chat responses exclusively via bundled offline `marked` + strict-allowlist `DOMPurify` (`src/renderer/markdown-render-helpers.js`) and never sends bearer tokens, ports, or arbitrary file paths over IPC.
+
+### Summaries & Chat model library
+
+`get-ai-addon-status` includes `summaryLibrary` with the saved default,
+model-specific installation, fit, language, download and reclaimable storage,
+and total managed/shared storage. `set-default-summary-model` takes `{modelId}`.
+Summary setup, validation and removal take a catalog `modelId`. Removal also
+accepts `replacementModelId` when the default is being removed. Main owns all
+resolved paths and checks readiness before applying a default.
+
+`update-chat-thread-model` takes `{threadId, modelId}`. Null follows the shared
+default. Chat submission includes the effective `modelId` observed by the picker
+so the service can detect a changed preference. A summary uses its requested
+model for that run. Completed messages and summaries retain model provenance.
 
 ### In-app auto-updater
 

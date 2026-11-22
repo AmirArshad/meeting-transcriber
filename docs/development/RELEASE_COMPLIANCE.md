@@ -8,7 +8,7 @@ This is maintainer guidance only, not legal advice.
 
 On tag push, the publish job:
 
-1. Builds Windows `.exe` and macOS `.dmg` installers.
+1. Builds Windows `.exe`, macOS `.dmg` + `.zip`, and Linux `.AppImage`, `.pkg.tar.zst`, and experimental `.deb` installers plus differential update metadata (`latest.yml`, `latest-mac.yml`, `latest-linux.yml`, `*.blockmap`).
 2. Runs `node scripts/stage-release-legal-assets.js`, which:
    - Verifies and attaches **`ffmpeg-8.1.2.tar.xz`** (SHA-256 pinned in `build/download-manifest.js`).
    - Attaches **`THIRD_PARTY_NOTICES.md`** and **`avanevis-legal-<version>.zip`** (notices + legal snippets).
@@ -29,7 +29,7 @@ On tag push, the publish job:
 node scripts/generate-python-sbom.js
 
 # Dry-run legal assets (downloads ffmpeg source; requires network)
-RELEASE_VERSION=v2.1.0 node scripts/stage-release-legal-assets.js
+RELEASE_VERSION=v3.1.0 node scripts/stage-release-legal-assets.js
 ```
 
 ## Installer contents

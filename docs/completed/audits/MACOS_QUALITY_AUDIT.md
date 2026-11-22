@@ -558,21 +558,21 @@ print(f"  Device: Metal GPU (Apple Silicon)", file=sys.stderr)
 ## Appendix: File References
 
 ### Audio Implementations
-- **Windows**: `d:\Projects\meeting-transcriber\backend\audio\windows_recorder.py`
-- **macOS**: `d:\Projects\meeting-transcriber\backend\audio\macos_recorder.py`
-- **ScreenCaptureKit Helper**: `d:\Projects\meeting-transcriber\backend\audio\screencapture_helper.py`
+- **Windows**: `backend/audio/windows_recorder.py`
+- **macOS**: `backend/audio/macos_recorder.py`
+- **ScreenCaptureKit Helper**: `backend/audio/screencapture_helper.py`
 
 ### Transcription Implementations
-- **Windows/faster-whisper**: `d:\Projects\meeting-transcriber\backend\transcription\faster_whisper_transcriber.py`
-- **macOS/MLX**: `d:\Projects\meeting-transcriber\backend\transcription\mlx_whisper_transcriber.py`
+- **Windows/faster-whisper**: `backend/transcription/faster_whisper_transcriber.py`
+- **macOS/MLX**: `backend/transcription/mlx_whisper_transcriber.py`
 
 ### Requirements
-- **Windows**: `d:\Projects\meeting-transcriber\requirements-windows.txt`
-- **macOS**: `d:\Projects\meeting-transcriber\requirements-macos.txt`
+- **Windows**: `requirements-windows.txt`
+- **macOS**: `requirements-macos.txt`
 
 ### Build Configuration
-- **Package Definition**: `d:\Projects\meeting-transcriber\package.json`
-- **Resource Preparation**: `d:\Projects\meeting-transcriber\build\prepare-resources.js`
+- **Package Definition**: `package.json`
+- **Resource Preparation**: `build/prepare-resources.js`
 
 ---
 

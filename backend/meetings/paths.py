@@ -9,6 +9,7 @@ from typing import Dict, List, Optional
 
 from common.sensitive_text import redact_sensitive_text
 from meetings import normalization as meeting_norm
+from meetings.speaker_names import normalize_speaker_names
 
 
 def is_recordings_path(manager, file_path: Path) -> bool:
@@ -74,6 +75,7 @@ def normalize_ai_feature_metadata(manager, feature: str, metadata: Dict) -> Dict
             'model',
             'completedAt',
             'speakerCount',
+            'speakerNames',
             'segmentsPath',
             'error',
         ),
@@ -85,8 +87,11 @@ def normalize_ai_feature_metadata(manager, feature: str, metadata: Dict) -> Dict
             'modelId',
             'modelProfile',
             'model',
+            'tag',
+            'templateVersion',
             'generatedAt',
             'sourceTranscriptHash',
+            'speakerNamesHash',
             'jsonPath',
             'markdownPath',
             'error',
@@ -104,7 +109,16 @@ def normalize_ai_feature_metadata(manager, feature: str, metadata: Dict) -> Dict
             continue
 
         value = metadata[field]
-        if value is None:
+        if field == 'speakerNames':
+            normalized[field] = normalize_speaker_names(value, strict=True)
+        elif field == 'speakerNamesHash':
+            if value is None or value == '':
+                normalized[field] = ''
+            elif isinstance(value, str) and re.fullmatch(r'sha256:[a-f0-9]{64}', value):
+                normalized[field] = value
+            else:
+                raise ValueError('Invalid speakerNamesHash')
+        elif value is None:
             normalized[field] = None
         elif field == 'speakerCount':
             try:
@@ -119,9 +133,16 @@ def normalize_ai_feature_metadata(manager, feature: str, metadata: Dict) -> Dict
             normalized_path = manager._normalize_sidecar_path(value, ('.md',))
             if normalized_path is not None:
                 normalized[field] = normalized_path
-        elif field in ('language', 'languageSource', 'languagePolicyVersion', 'modelId'):
+        elif field == 'tag':
+            if isinstance(value, str) and not value.strip():
+                normalized[field] = None
+                continue
+            normalized_tag = meeting_norm.normalize_recording_tag(value, strict=False)
+            if normalized_tag is not None:
+                normalized[field] = normalized_tag
+        elif field in ('language', 'languageSource', 'languagePolicyVersion', 'modelId', 'templateVersion'):
             text = meeting_norm.normalize_text(value)
-            if len(text) <= 64 and re.fullmatch(r'[a-zA-Z0-9.-]+', text):
+            if len(text) <= 64 and re.fullmatch(r'[a-zA-Z0-9._-]+', text):
                 normalized[field] = text
         elif field == 'sourceTranscriptHash':
             text = meeting_norm.normalize_text(value)
