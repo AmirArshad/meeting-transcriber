@@ -72,17 +72,18 @@ Canonical bodies: `.agents/skills/<name>/SKILL.md`. Load matching skills once; p
 | finishing-a-development-branch | Explicitly requested integration/cleanup decision |
 | verification-before-completion | Before claiming completion, a fix or passing checks |
 | systematic-debugging | Investigate a bug, failed test or unexpected behavior |
-| requesting-code-review | A targeted review would materially reduce risk |
+| requesting-code-review | Targeted review would materially reduce risk |
 | gh-fix-ci | Diagnose failing GitHub Actions checks for a PR |
 | gh-address-comments | Address GitHub PR review or issue comments |
-| security-best-practices | Explicitly requested security best-practices review |
+| security-best-practices | Explicitly requested security practices review |
 | security-threat-model | Explicitly requested repository threat model |
 | grill-me | Explicitly requested design interview |
 | grill-with-docs | Explicitly requested design interview with ADR/glossary capture |
 | handoff | Explicitly requested conversation handoff |
 | to-spec | Explicitly requested spec synthesis and issue publication |
 | skill-creator | Author or update a project skill |
-| frontend-design | Visual-system, layout, HTML or CSS work in src/renderer |
+| release-runbook | Sequenced build/review prompts with model routing |
+| frontend-design | Visual, layout, HTML or CSS work in src/renderer |
 
 ## Deeper docs
 

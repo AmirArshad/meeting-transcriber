@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Runbook"
+  short_description: "Generate sequenced micro-slice build and review prompts"
+  default_prompt: "Use $release-runbook to turn our release plan into a token-optimized sequence of build and review prompts for my current subscriptions."
