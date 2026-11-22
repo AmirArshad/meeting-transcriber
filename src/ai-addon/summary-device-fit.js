@@ -12,16 +12,17 @@ function getSummaryModelFit({ model, artifact, availability, runtimeArtifact, de
   const workingMemoryBytes = model?.memoryGuidance?.[unified ? 'unified' : 'gpu'] * GiB || null;
   const effectiveRecommendedBytes = unified ? workingMemoryBytes : Math.round(workingMemoryBytes * NOMINAL_GPU_TIER_RATIO);
   const weightBytes = Number(artifact?.estimatedSizeBytes) || 0;
-  // The catalog's runtime samples are Apple Silicon process RSS readings.
-  // Discrete CUDA devices use the independent weights and context estimate.
-  const measuredFloor = unified ? Number(model?.memoryGuidance?.minRuntimeBytes) || 0 : 0;
+  // Apple Silicon uses process RSS. Linux CUDA can raise the weights and
+  // context estimate with a measured device allocation under the pinned build.
+  const unifiedFloor = unified ? Number(model?.memoryGuidance?.minRuntimeBytes) || 0 : 0;
+  const linuxCudaFloor = platform === 'linux' ? Number(model?.memoryGuidance?.minLinuxCudaRuntimeBytes) || 0 : 0;
   const contextTokens = artifact?.inference?.contextTokens || null;
   const estimatedReserve = weightBytes
     ? Math.max(768 * MiB, Math.round(weightBytes * (contextTokens && contextTokens >= 32768 ? 0.16 : 0.12)))
     : 0;
-  const minimumRuntimeBytes = measuredFloor > 0
-    ? Math.max(measuredFloor, weightBytes)
-    : (weightBytes ? weightBytes + estimatedReserve : null);
+  const minimumRuntimeBytes = unifiedFloor > 0
+    ? Math.max(unifiedFloor, weightBytes)
+    : (Math.max(linuxCudaFloor, weightBytes + estimatedReserve) || null);
   const total = deviceMemory?.totalBytes || null;
   const available = deviceMemory?.availableBytes ?? null;
   const residentModelId = deviceMemory?.residentModelId ?? null;

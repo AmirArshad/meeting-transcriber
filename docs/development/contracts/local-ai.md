@@ -52,7 +52,8 @@ on a supported runtime.
 **Check this device** reads the local machine before download. It probes current
 free GPU memory where the NVIDIA device can be identified and reports host RAM
 separately on discrete GPUs. CUDA memory estimates use model weights and context
-headroom. Apple Silicon reports one unified pool and uses its measured model
+headroom. A measured Linux CUDA allocation raises that estimate when available.
+Apple Silicon reports one unified pool and uses its measured model
 footprint where available. OS free RAM
 is a snapshot. Discrete-GPU host RAM has no qualified per-model minimum. An
 inconclusive hardware reading leaves explicit setup available. Linux refreshes

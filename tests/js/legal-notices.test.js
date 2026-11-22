@@ -18,6 +18,10 @@ test('THIRD_PARTY_NOTICES.md exists and documents key optional models', () => {
   assert.match(contents, /speakrs-cli/i);
   assert.match(contents, /avencera\/speakrs/i);
   assert.match(contents, /Qwen/i);
+  assert.match(contents, /Prism ML/i);
+  assert.match(contents, /Bonsai 2/i);
+  assert.match(contents, /Mistral AI/i);
+  assert.match(contents, /Ministral 3/i);
   assert.match(contents, /parakeet-tdt-0\.6b-v2/i);
   assert.match(contents, /marked/i);
   assert.match(contents, /dompurify/i);
@@ -67,7 +71,7 @@ test('getLegalNoticesPath falls back to repository root in development', () => {
   assert.equal(resolved, path.join(repoRoot, 'THIRD_PARTY_NOTICES.md'));
 });
 
-test('Settings About credits name Speakrs, pyannote, and Parakeet', () => {
+test('Settings About credits identify speaker engines and optional model sources', () => {
   const aboutHtml = fs.readFileSync(path.join(repoRoot, 'src', 'renderer', 'index.html'), 'utf8');
   assert.match(aboutHtml, /class="about-credits"/);
   assert.match(aboutHtml, /NVIDIA Parakeet/);
@@ -76,5 +80,9 @@ test('Settings About credits name Speakrs, pyannote, and Parakeet', () => {
   assert.match(aboutHtml, />Speakrs</);
   assert.match(aboutHtml, /Apache-2\.0/);
   assert.match(aboutHtml, /pyannote Speaker Diarization Community-1/);
+  assert.match(aboutHtml, /Prism ML Bonsai 2/);
+  assert.match(aboutHtml, /Mistral AI Ministral 3/);
+  assert.match(aboutHtml, /href="https:\/\/huggingface\.co\/unsloth\/Qwen3\.8-27B-GGUF"/);
+  assert.match(aboutHtml, /href="https:\/\/huggingface\.co\/ggml-org\/gemma-4-26B-A4B-it-GGUF"/);
   assert.match(aboutHtml, /Speakrs CLI/);
 });

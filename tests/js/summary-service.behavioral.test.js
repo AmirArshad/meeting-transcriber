@@ -70,7 +70,7 @@ function createHarness({
       generatedAt: '2026-07-10T00:00:00.000Z',
       sourceTranscriptHash: confirmedHash,
       language: 'en', languageSource: 'userConfirmed',
-      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'summary-language-v3',
+      modelId: 'qwen3.5-9b-q4-k-m', languagePolicyVersion: 'summary-language-v4',
       ...summaryMetadata,
     },
     summary: { overview: 'new summary' },
@@ -394,7 +394,7 @@ for (const platform of ['win32', 'darwin']) {
     assert.equal(args[args.indexOf('--source-transcript-hash') + 1], confirmedHash);
     assert.equal(result.meeting.ai.summary.language, 'en');
     assert.equal(result.meeting.ai.summary.languageSource, 'userConfirmed');
-    assert.equal(result.meeting.ai.summary.languagePolicyVersion, 'summary-language-v3');
+    assert.equal(result.meeting.ai.summary.languagePolicyVersion, 'summary-language-v4');
   });
 }
 

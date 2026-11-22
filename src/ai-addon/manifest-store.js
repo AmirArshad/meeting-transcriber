@@ -2760,6 +2760,7 @@ async function checkAiAddonSetupStatus({
     return {
       modelId: model.id,
       modelName: model.label,
+      tier: model.tier || null,
       description: model.description || '',
       languagePolicy: getSummaryLanguagePolicy(model.id, platform, arch),
       installed: Boolean(cache.installed || bytes || entry.removalPending),

@@ -52,4 +52,53 @@ Confirmed via `llama-cli --help` and `llama-server --help`:
   - **Linux CUDA:** This CachyOS host has 12 GiB VRAM (RTX 4070), below Inkling 2 Mini's 17.6 GB weight / 19.2 GB (`minRuntimeBytes`) footprint; requires a 24+ GiB CUDA host for native 32k Inkling setup, Chat, and English summary qualification.
   - **macOS arm64:** Requires repeating the v3.1 M4 Pro 32k setup, Chat, and English summary deadline-preservation (`"before Tuesday"`) checks using the published `llama-b12631-bin-macos-arm64.tar.gz` archive.
   - **Windows x64 CUDA:** Requires native 32k setup, Chat, and English summary verification on a 24+ GiB Windows CUDA host using `llama-b12631-bin-win-cuda-12.4-x64.zip`.
-- **Summary language policy (`src/summary-language-policy.js`):** Remains at `summary-language-v3` until Inkling 2 Mini and Gemma 4 platform/language checks pass natively.
+- **Summary language policy (`src/summary-language-policy.js`):** At C1, the language allowlist remained at `summary-language-v3`. C2 advances the policy revision to track platform admission without expanding the language allowlist.
+
+## Slice C2: Bonsai 2 and peer models
+
+### Verified Hugging Face metadata
+
+The Hugging Face tree API at each pinned commit reports the exact filename,
+byte size and LFS SHA-256 below. Both the file size and LFS size match the
+catalog. The revision links point to the checked API responses.
+
+| GGUF file | Pinned revision | Size (bytes) | LFS SHA-256 |
+|---|---|---:|---|
+| `Ternary-Bonsai-2-9B-Q2_0.gguf` | [`82265ccc78ddaac4700286a35e9badcc32376dd9`](https://huggingface.co/api/models/prism-ml/Ternary-Bonsai-2-9B-gguf/tree/82265ccc78ddaac4700286a35e9badcc32376dd9?expand=true) | 2,556,640,128 | `1f884aa56aacd2bbbb2e4b7abaead2b1102b74a9c75a23fc33dab916813a384d` |
+| `Ternary-Bonsai-2-27B-Q2_0.gguf` | [`839bd57023c1558945afea70a74fa83c054f35f9`](https://huggingface.co/api/models/prism-ml/Ternary-Bonsai-2-27B-gguf/tree/839bd57023c1558945afea70a74fa83c054f35f9?expand=true) | 7,626,008,928 | `4f99aed01b8a877e153f9aa6569a4440fe17c59701cc0953e36d7f460549e70e` |
+| `Ministral-3-14B-Instruct-2512-Q4_K_M.gguf` | [`9b948841b705cc11285ff274b84ba6c885908b19`](https://huggingface.co/api/models/unsloth/Ministral-3-14B-Instruct-2512-GGUF/tree/9b948841b705cc11285ff274b84ba6c885908b19?expand=true) | 8,239,067,840 | `76ce697c065f2e40f1e8e958118b02cab38e2c10a6015f7d7908036a292dc8c8` |
+| `gemma-4-26B-A4B-it-Q4_0.gguf` | [`1ca99aae748b4b01f609fa51eb23682ee5f00b85`](https://huggingface.co/api/models/ggml-org/gemma-4-26B-A4B-it-GGUF/tree/1ca99aae748b4b01f609fa51eb23682ee5f00b85?expand=true) | 14,618,145,824 | `d208665ab1cd3a69f7a9a4bc59430e8448c8093d9b06334f566ac59d6d504a03` |
+| `Qwen3.8-27B-UD-Q4_K_M.gguf` | [`4af51b3542f775b0a8e4b310bfb3f17e01c306c9`](https://huggingface.co/api/models/unsloth/Qwen3.8-27B-GGUF/tree/4af51b3542f775b0a8e4b310bfb3f17e01c306c9?expand=true) | 16,564,259,744 | `1bce504dfecd84153666928a41d8a66706f0158d3a317bc5196b72819d7dc529` |
+
+### Platform and language admission
+
+These models use the pinned stock `b12631` runtime. Bonsai uses `Q2_0`, and
+both Bonsai models and Qwen 3.8 pass `--reasoning off --reasoning-budget 0`.
+The catalog memory recommendations are advisory. None of the new peers has a
+measured 32k Apple Silicon RSS floor yet. Summary languages stay gated pending
+native language qualification.
+
+### Native Linux CUDA 32k checks
+
+Host: CachyOS x86_64 (`7.3.5-2-cachyos`), NVIDIA RTX 4070 (12,282 MiB,
+driver `620.73.04`), stock `b12631` CUDA 12.8. SHA-256 of both downloaded
+Bonsai files and the Ministral file matched their pinned LFS digests.
+
+| Model | 32k setup and Chat results | CUDA memory |
+|---|---|---:|
+| Bonsai 2 9B | App setup smoke passed with full GPU offload. CLI returned `READY`. General Chat answered `Paris`. Grounded Chat answered `Friday` and the verifier accepted the citation at 45 seconds. | 3,429 MiB allocated by the CLI |
+| Bonsai 2 27B | App setup smoke passed with full GPU offload. CLI returned `READY`. General Chat answered `Paris`. Grounded Chat answered `Friday` and the verifier accepted the citation at 45 seconds. | 9,306 MiB allocated by the CLI |
+| Ministral 3 14B | Setup exhausted VRAM after offloading all 41 layers. Native 32k setup and Chat remain gated. | 7,489.86 MiB weights, then a failed 5,120 MiB context allocation |
+
+Both Bonsai models used an authenticated loopback server and returned answers
+without `<think>` output. Linux Chat is enabled for those two models. Windows
+and macOS remain gated. Gemma 4 26B-A4B and Qwen 3.8 27B still need a larger GPU
+or suitable Apple Silicon hardware.
+
+Ministral's CLI fallback answered `Paris` at 8,192 context using the native
+GGUF template. The catalog still requires 32,768 context.
+
+An English synthetic summary probe produced valid structured output for both
+Bonsai models. Both preserved “before Thursday at noon” in key points and
+shortened it to “Thursday at noon” in the action-item due field. English
+summaries remain gated for both models.

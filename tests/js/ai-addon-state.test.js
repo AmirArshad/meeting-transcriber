@@ -536,7 +536,18 @@ test('summary library preserves independent models and migrates a legacy ready d
 test('catalog excludes legacy qwen3-14b placeholder and keeps features.summary synced to defaultModelId', () => {
   assert.deepEqual(
     AI_MODEL_CATALOG.summary.models.map((model) => model.id),
-    ['qwen3.5-9b-q4-k-m', 'qwen3.5-4b-q4-k-m', 'gemma-4-e4b', 'gemma-4-12b', 'inkling-2-mini'],
+    [
+      'qwen3.5-9b-q4-k-m',
+      'qwen3.5-4b-q4-k-m',
+      'bonsai-2-9b-q2-0',
+      'gemma-4-e4b',
+      'gemma-4-12b',
+      'bonsai-2-27b-q2-0',
+      'ministral-3-14b',
+      'gemma-4-26b-a4b',
+      'qwen3.8-27b',
+      'inkling-2-mini',
+    ],
   );
   assert.equal(getModelById('summary', 'qwen3-14b-q4-k-m'), null);
   const normalized = normalizeAiAddonManifest({
@@ -551,4 +562,101 @@ test('catalog excludes legacy qwen3-14b placeholder and keeps features.summary s
   });
   assert.equal(normalized.features.summary.modelId, 'qwen3.5-9b-q4-k-m');
   assert.equal(normalized.features.summary.status, 'ready');
+});
+
+test('Bonsai 2 and v3.2 peer models pin immutable HF artifacts on shared b12631 with tier metadata and reasoning-off flags', () => {
+  const { SUMMARY_LANGUAGE_POLICY_VERSION, getSummaryLanguagePolicy } = require('../../src/summary-language-policy');
+  assert.equal(SUMMARY_LANGUAGE_POLICY_VERSION, 'summary-language-v4');
+
+  const expectedPeers = [
+    {
+      id: 'bonsai-2-9b-q2-0', tier: 'compact', sizeBytes: 2556640128,
+      repo: 'prism-ml/Ternary-Bonsai-2-9B-gguf',
+      fileName: 'Ternary-Bonsai-2-9B-Q2_0.gguf',
+      revision: '82265ccc78ddaac4700286a35e9badcc32376dd9',
+      sha256: '1f884aa56aacd2bbbb2e4b7abaead2b1102b74a9c75a23fc33dab916813a384d',
+      reasoningBudget: 0, reasoningEffort: 'none', linuxChatReady: true,
+    },
+    {
+      id: 'bonsai-2-27b-q2-0', tier: 'balanced', sizeBytes: 7626008928,
+      repo: 'prism-ml/Ternary-Bonsai-2-27B-gguf',
+      fileName: 'Ternary-Bonsai-2-27B-Q2_0.gguf',
+      revision: '839bd57023c1558945afea70a74fa83c054f35f9',
+      sha256: '4f99aed01b8a877e153f9aa6569a4440fe17c59701cc0953e36d7f460549e70e',
+      reasoningBudget: 0, reasoningEffort: 'none', linuxChatReady: true,
+    },
+    {
+      id: 'ministral-3-14b', tier: 'balanced', sizeBytes: 8239067840,
+      repo: 'unsloth/Ministral-3-14B-Instruct-2512-GGUF',
+      fileName: 'Ministral-3-14B-Instruct-2512-Q4_K_M.gguf',
+      revision: '9b948841b705cc11285ff274b84ba6c885908b19',
+      sha256: '76ce697c065f2e40f1e8e958118b02cab38e2c10a6015f7d7908036a292dc8c8',
+      reasoningBudget: undefined, reasoningEffort: undefined,
+    },
+    {
+      id: 'gemma-4-26b-a4b', tier: 'high-capability', sizeBytes: 14618145824,
+      repo: 'ggml-org/gemma-4-26B-A4B-it-GGUF',
+      fileName: 'gemma-4-26B-A4B-it-Q4_0.gguf',
+      revision: '1ca99aae748b4b01f609fa51eb23682ee5f00b85',
+      sha256: 'd208665ab1cd3a69f7a9a4bc59430e8448c8093d9b06334f566ac59d6d504a03',
+      reasoningBudget: undefined, reasoningEffort: undefined,
+    },
+    {
+      id: 'qwen3.8-27b', tier: 'high-capability', sizeBytes: 16564259744,
+      repo: 'unsloth/Qwen3.8-27B-GGUF',
+      fileName: 'Qwen3.8-27B-UD-Q4_K_M.gguf',
+      revision: '4af51b3542f775b0a8e4b310bfb3f17e01c306c9',
+      sha256: '1bce504dfecd84153666928a41d8a66706f0158d3a317bc5196b72819d7dc529',
+      reasoningBudget: 0, reasoningEffort: 'none',
+    },
+  ];
+
+  for (const model of AI_MODEL_CATALOG.summary.models) {
+    assert.ok(['compact', 'balanced', 'high-capability'].includes(model.tier), `${model.id} must declare a valid tier`);
+  }
+
+  for (const spec of expectedPeers) {
+    const model = getModelById('summary', spec.id);
+    assert.ok(model, `${spec.id} must exist in catalog`);
+    assert.equal(model.tier, spec.tier);
+    assert.equal(model.runtimeCatalog, 'b12631');
+    assert.equal(model.inference.contextTokens, 32768);
+    assert.equal(model.inference.disableThinking, true);
+    assert.equal(model.inference.singleTurnOnly, true);
+    assert.equal(model.inference.reasoningBudget, spec.reasoningBudget);
+    assert.equal(model.inference.reasoningEffort, spec.reasoningEffort);
+    assert.equal(model.memoryGuidance.minRuntimeBytes, undefined);
+    assert.equal(model.artifact.source.repo, spec.repo);
+    assert.equal(model.artifact.source.fileName, spec.fileName);
+    assert.equal(model.artifact.source.sizeBytes, spec.sizeBytes);
+    assert.equal(model.artifact.source.revision, spec.revision);
+    assert.equal(model.artifact.source.lfsSha256, spec.sha256);
+    assert.equal(model.artifact.source.gated, false);
+    assert.equal(model.artifact.source.license, 'apache-2.0');
+    assert.equal(model.artifact.validationStatus, 'ready');
+    assert.equal(model.artifact.downloadUrl, `https://huggingface.co/${spec.repo}/resolve/${spec.revision}/${spec.fileName}`);
+
+    const candidateCatalog = {
+      ...AI_MODEL_CATALOG,
+      summary: { ...AI_MODEL_CATALOG.summary, models: [{ ...model, supportedPlatforms: undefined }] },
+    };
+    for (const [platform, arch] of [['win32', 'x64'], ['darwin', 'arm64'], ['linux', 'x64']]) {
+      const chatReady = platform === 'linux' && spec.linuxChatReady === true;
+      assert.equal(Boolean(getSummaryArtifactForPlatform(spec.id, platform, arch)), chatReady);
+      assert.equal(Boolean(getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, spec.id)), chatReady);
+      const artifact = getSummaryArtifactForPlatform(spec.id, platform, arch, candidateCatalog);
+      const runtime = getSummaryRuntimeArtifactForPlatform(platform, arch, candidateCatalog, spec.id);
+      assert.ok(artifact, `${spec.id} artifact must resolve on ${platform}-${arch}`);
+      assert.ok(runtime, `${spec.id} runtime must resolve on ${platform}-${arch}`);
+      assert.equal(runtime.version, 'b12631');
+      assert.equal(artifact.llamaCpp.version, 'b12631');
+      assert.equal(artifact.llamaCpp.commit, runtime.commit);
+      const policy = getSummaryLanguagePolicy(spec.id, platform, arch);
+      assert.equal(policy.version, 'summary-language-v4');
+      assert.equal(policy.chatReady, chatReady);
+      assert.deepEqual(policy.languages, []);
+    }
+  }
+  assert.equal(getSummaryLanguagePolicy('inkling-2-mini', 'linux', 'x64').chatReady, false);
+  assert.equal(getSummaryLanguagePolicy('unknown', 'linux', 'x64').chatReady, false);
 });

@@ -43,6 +43,16 @@ test('fit distinguishes unreadable, tight, and insufficient memory', () => {
   }
 });
 
+test('measured Linux CUDA allocations raise the estimated VRAM floor', () => {
+  const device = { totalBytes: 12282 * MiB, availableBytes: 9000 * MiB };
+  assert.equal(fit(device).blocked, false);
+  const assessment = fit(device, { gpu: 12, minLinuxCudaRuntimeBytes: 9306 * MiB });
+  assert.equal(assessment.minimumRuntimeBytes, 9306 * MiB);
+  assert.equal(assessment.status, 'needs_more_memory');
+  assert.equal(assessment.blocked, true);
+  assert.equal(fit(device, { gpu: 12, minLinuxCudaRuntimeBytes: 1 }).minimumRuntimeBytes, fit(device).minimumRuntimeBytes);
+});
+
 test('a resident model makes low free VRAM conditional on unloading', () => {
   const assessment = fit({
     totalBytes: 12282 * MiB,

@@ -7415,6 +7415,35 @@ button.history-transcript-timestamp:focus-visible {
   color: var(--text-tertiary);
 }
 
+.summary-library-tier-heading {
+  margin: 12px 0 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+}
+
+.summary-library-badge.summary-library-tier-badge {
+  background: var(--surface-1);
+  border-color: var(--hairline-soft);
+  color: var(--text-secondary);
+}
+
+.summary-library-badge.is-tier-compact {
+  color: var(--sky);
+  border-color: rgba(168, 176, 200, 0.35);
+}
+
+.summary-library-badge.is-tier-balanced {
+  color: var(--emerald);
+  border-color: rgba(101, 173, 138, 0.3);
+}
+
+.summary-library-badge.is-tier-high-capability {
+  color: var(--accent-strong);
+  border-color: rgba(184, 168, 201, 0.38);
+}
+
 .summary-library-model {
   padding: 14px;
   margin-bottom: 10px;

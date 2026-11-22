@@ -803,6 +803,9 @@ function createHistoryQaService(deps) {
       '--reasoning',
       'off',
     ];
+    if (Number.isInteger(artifact.inference?.reasoningBudget)) {
+      args.push('--reasoning-budget', String(artifact.inference.reasoningBudget));
+    }
     if (artifact.inference?.singleTurnOnly) args.push('--fit', 'off');
     const spawnEnv = buildRuntimeSpawnEnv({
       userDataDir,

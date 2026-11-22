@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from .templates import get_template
 
-LANGUAGE_POLICY_VERSION = "summary-language-v3"
+LANGUAGE_POLICY_VERSION = "summary-language-v4"
 # A model-estimated share is approximate. Require a clear majority, rather than
 # treating language identity confidence as evidence that mixed input is dominant.
 INPUT_MIN_LANGUAGE_SHARE = 0.6

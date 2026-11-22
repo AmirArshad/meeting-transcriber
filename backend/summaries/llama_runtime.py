@@ -30,7 +30,9 @@ def apply_inference_descriptor(runtime: Dict[str, Any], descriptor: Optional[Dic
     prompt_format = descriptor.get("promptFormat", "chatml")
     if not isinstance(context, int) or isinstance(context, bool) or not 4096 <= context <= 131072:
         raise ValueError("Invalid inference context budget.")
-    if family not in ("qwen", "gemma", "inkling") or prompt_format not in ("chatml", "gemma"):
+    if (family, prompt_format) not in (
+        ("qwen", "chatml"), ("gemma", "gemma"), ("inkling", "chatml"), ("mistral", "mistral"),
+    ):
         raise ValueError("Unsupported inference format.")
     return {**runtime, "contextTokens": context, "inference": dict(descriptor)}
 
@@ -165,7 +167,11 @@ def build_llama_cli_args(
         "--reasoning",
         "off",
     ]
-    if runtime.get("inference", {}).get("singleTurnOnly"):
+    inference = runtime.get("inference") or {}
+    reasoning_budget = inference.get("reasoningBudget")
+    if isinstance(reasoning_budget, int) and not isinstance(reasoning_budget, bool):
+        args.extend(("--reasoning-budget", str(reasoning_budget)))
+    if inference.get("singleTurnOnly"):
         args.extend(("--fit", "off"))
     elif runtime.get("platform") in ("win32", "darwin"):
         args.insert(args.index("--single-turn"), "--no-conversation")

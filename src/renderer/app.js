@@ -7798,11 +7798,14 @@ function renderSummaryModelLibrary(library) {
     }
   });
   container.appendChild(checkDevice);
-  for (const [heading, installed] of [['Installed', true], ['Available to download', false]]) {
-    const models = (library.models || []).filter((model) => summaryModelHasFiles(model) === installed);
-    if (!models.length) continue;
-    const title = document.createElement('h4'); title.className = 'summary-library-section-title'; title.textContent = heading; container.appendChild(title);
-    for (const model of models) {
+  const tierOrder = ['compact', 'balanced', 'high-capability'];
+  const tierLabels = {
+    compact: 'Compact',
+    balanced: 'Balanced',
+    'high-capability': 'High-Capability',
+  };
+  const resolveModelTier = (model) => tierOrder.includes(model.tier) ? model.tier : null;
+  const renderModelCard = (model, installed) => {
       const card = document.createElement('div');
       const isDefault = model.modelId === library.defaultModelId;
       const blockedOnlyByLoadedModel = isSummaryModelBlockedOnlyByLoadedModel(model);
@@ -7820,6 +7823,13 @@ function renderSummaryModelLibrary(library) {
         ? formatSummaryModelStateBadge(model, { activeModel, progress, removalIncomplete, installed })
         : { text: activeModel ? (progress.cancelling ? 'Cancelling…' : (progress.message || 'Preparing setup…')) : removalIncomplete ? 'Removal incomplete' : model.status === 'ready' ? 'Ready' : model.status === 'error' ? 'Needs attention' : 'Available', tone: '' };
       const badges = document.createElement('span'); badges.className = 'summary-library-badges';
+      const tier = resolveModelTier(model);
+      if (tier) {
+        const tierBadge = document.createElement('span');
+        tierBadge.className = `summary-library-badge summary-library-tier-badge is-tier-${tier}`;
+        tierBadge.textContent = tierLabels[tier];
+        badges.appendChild(tierBadge);
+      }
       const stateBadge = document.createElement('span');
       stateBadge.className = `summary-library-badge summary-library-state-badge${stateBadgeInfo.tone ? ` is-${stateBadgeInfo.tone}` : ''}`;
       stateBadge.textContent = stateBadgeInfo.text;
@@ -8071,7 +8081,31 @@ function renderSummaryModelLibrary(library) {
         }, false, 'danger');
       }
       card.appendChild(actions); container.appendChild(card);
+  };
+  for (const [heading, installed] of [['Installed', true], ['Available to download', false]]) {
+    const models = (library.models || []).filter((model) => summaryModelHasFiles(model) === installed);
+    if (!models.length) continue;
+    const title = document.createElement('h4'); title.className = 'summary-library-section-title'; title.textContent = heading; container.appendChild(title);
+    if (installed) {
+      for (const model of models) renderModelCard(model, installed);
+      continue;
     }
+    const untiered = models.filter((model) => !resolveModelTier(model));
+    const hasTiered = models.length > untiered.length;
+    if (!hasTiered) {
+      for (const model of models) renderModelCard(model, installed);
+      continue;
+    }
+    for (const tier of tierOrder) {
+      const tierModels = models.filter((model) => resolveModelTier(model) === tier);
+      if (!tierModels.length) continue;
+      const tierHeading = document.createElement('h5');
+      tierHeading.className = `summary-library-tier-heading is-tier-${tier}`;
+      tierHeading.textContent = tierLabels[tier];
+      container.appendChild(tierHeading);
+      for (const model of tierModels) renderModelCard(model, installed);
+    }
+    for (const model of untiered) renderModelCard(model, installed);
   }
 }
 
