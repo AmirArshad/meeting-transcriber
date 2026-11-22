@@ -102,3 +102,60 @@ An English synthetic summary probe produced valid structured output for both
 Bonsai models. Both preserved “before Thursday at noon” in key points and
 shortened it to “Thursday at noon” in the action-item due field. English
 summaries remain gated for both models.
+
+## Slice C3: Dependency Sweep, Security Audits & Contract Sync (2026-11-22)
+
+Executed on branch `chore/v3.2-c3-deps-qual` cut from `release/3.2` (`17c773c`) in the main repository checkout (non-symlinked `node_modules` / `.venv`) on CachyOS Linux x86_64 (`7.3.5-2-cachyos`, Node `v26.13.1`, npm `11.20.0`, repo `.venv` Python `3.11.16`, Rust `1.89.0`). `package.json` stays at `3.1.0` pending Task 5.3 cross-platform qualification and release cut authorization.
+
+### Applied dependency & legal updates
+
+- **npm (`package.json`, `package-lock.json`, `THIRD_PARTY_NOTICES.md`):** Updated `dompurify` `3.4.18` → `3.5.0` (2026-11-22 security release; no further `3.4.x` releases). Kept `electron-builder@^26.18.0` (`26.18.0`), `electron-updater@6.8.11`, `marked@18.2.1`, `adm-zip@0.6.1`, and security `overrides` intact.
+- **Python (`requirements-windows-build.txt`, `requirements-linux-build.txt`, `requirements-macos-build.txt`, `requirements-common.txt`, `requirements-windows.txt`, `requirements-linux.txt`, `requirements-macos.txt`, `requirements.txt`, `requirements-dev.txt`):** Updated `filelock` `4.2.12` → `4.3.0` (`py3-none-any`, `requires_python >=3.11`, zero transitive dependencies; POSIX atomic-exchange/permission fixes and Windows `release_with_timeout` support).
+- **Rust (`native/speakrs-cli/Cargo.lock`):** Updated compatible patch crate `hashbrown` `0.17.1` → `0.17.2` under Rust `1.89.0` while keeping `speakrs = "=0.7.0"` and vendored `ndarray-npy` (`zip = "=9.0.5"`). `native/speakrs-cpu-smoke/Cargo.lock` had no compatible patch updates.
+- **Legal SBOM (`legal/PYTHON-BUNDLED-PACKAGES.md`):** Regenerated via `npm run legal:sbom` (`68` direct pins).
+- **Contract docs synced:** Updated `docs/development/contracts/local-ai.md`, `docs/development/contracts/ipc.md`, and `docs/development/contracts/meeting-persistence.md` to match the integrated v3.2 surfaces (device fit states + `0.94` nominal GPU tolerance, `unloadLoadedModel` / `SUMMARY_MODEL_LOADED_IN_MEMORY`, unified `b12631` Linux CUDA 12.8 runtime without NCCL, 3-tier `direct_full`/two-stage Chat routing, General Chat `scope.type = 'none'` + mode-switch boundary + `[E\d+]` stripping, and `ai.summary.template` persistence).
+
+### Documented holds (verified live on 2026-11-22)
+
+- **Electron (`46.0.0-alpha.11`):** Held because npm still has no stable `46.x` release (`npm view electron dist-tags`: `latest: 45.4.1`, `beta: 45.0.0-beta.7`, `alpha-46-x-y: 46.0.0-alpha.12`). Linux `safeStorage` version-pinned guards (`src/ai-addon-token-store.js`, `src/main-process/linux-electron-bootstrap.js`) remain unchanged until a stable `46.x` release is published and qualified.
+- **FFmpeg (`8.1.2`):** Held across Windows, macOS, Linux, and source (`build/download-manifest.js`) because `shaka-project/static-ffmpeg-binaries` still tops at `n8.1.2-2` (`8.1.2`) while `GyanD/codexffmpeg` is at `9.1`, so no matched cross-platform release `> 8.1.2` exists.
+- **Bundled CPython (`3.11.18+20261110`) & `pip` (`26.3`):** Already current against `astral-sh/python-build-standalone` (`20261110`) and PyPI (`pip 26.3`).
+- **Held Python upgrades & Python 3.11 ceilings:**
+  - `onnxruntime==1.31.1` (latest `1.32.0`): held pending native Windows active ETW telemetry verification (unsuppressed positive control + guarded VAD) and Linux `strace --check-network` VAD parity.
+  - `ctranslate2==4.8.5` (latest `4.9.1`): held pending native Windows and Linux CPU (`int8`) + CUDA (`float16`) Whisper transcript parity.
+  - `pyobjc-*==12.2.2` (latest `13.0`): held pending native macOS ScreenCaptureKit / CoreAudio permission smoke.
+  - Python 3.11 / upstream ceilings: `numpy==2.4.6` (`2.5.5` requires `>=3.12`), `scipy==1.17.1` (`1.18.1` requires `>=3.12`), `av==18.1.1` (`19.0.2` requires `>=3.12`), `networkx==3.6.1` (`3.7` requires `>=3.12`), `huggingface-hub==1.33.0` (`<2`), `mpmath==1.3.0` (`sympy==1.14.0` requires `<1.4`), and `tiktoken==0.3.3` (`lightning-whisper-mlx` compatibility); Parakeet lockfiles and Pyannote runtime pins retained.
+- **Rust `speakrs` (`=0.7.0`):** Held because `speakrs 0.8.0` switches to `ort ^2.0.0-rc.15`, requiring full Windows CUDA, Linux CUDA, and macOS CoreML CLI requalification.
+
+### Linux Electron `safeStorage` smoke (`tests/fixtures/electron/token-migration-smoke.js`)
+
+Run directly under Electron `46.0.0-alpha.11` with isolated temporary profiles on CachyOS Linux (`gnome_libsecret` desktop keyring active):
+
+| Case | Mode | Backend switch | D-Bus | Exit | `backend` | `format` | `available` | `protectedByAppPolicy` | `roundTrip` |
+|---|---|---|---|---:|---|---|---|---|---|
+| Keyring roundtrip | `async-roundtrip` | `gnome-libsecret` | active | `0` | `gnome_libsecret` | `v11` | `true` | `true` | `true` |
+| Keyring persist | `async-write` → `restart` | `gnome-libsecret` | active | `0` | `gnome_libsecret` | `v11` | `true` | `true` | `true` |
+| Basic store reject | `async-roundtrip` | `basic` | active | `0` | `basic_text` | `v10` | `true` | `false` | `true` |
+| Unavailable keyring reject | `async-write` → `restart` | `gnome-libsecret` | disabled | `0` | `gnome_libsecret` | `v10` | `true` | `false` | `true` |
+
+Confirmed `v11` keyring encryption is accepted while `v10` fixed-key fallbacks (`basic_text` and unavailable-D-Bus `gnome_libsecret`) are rejected by `isTokenEncryptionAvailable`.
+
+### Audit, closure & test results
+
+- **GitHub Dependabot:** `gh api repos/AmirArshad/meeting-transcriber/dependabot/alerts?state=open --jq 'length'` returned `0`.
+- **npm audits:** `npm audit --omit=dev` and `npm audit` both exited `0` (`found 0 vulnerabilities`).
+- **Python closure (`scripts/check-build-requirements-closure.py`):**
+  - `requirements-linux-build.txt`: `ok` (exit `0`).
+  - `requirements-windows-build.txt`: `ok` (cross-host check from Linux, exit `0`).
+  - `requirements-macos-build.txt`: cross-host check from Linux cannot resolve `torch==2.15.0` because `pip --dry-run` evaluates `cuda-bindings<14,>=13.0.3; platform_system == "Linux" and python_version < "3.15"` against the Linux host; native macOS host closure check remains an open Task 5.3 gate.
+- **`pip-audit` (`scripts/pip_audit_inventory.py`):** `0` findings across `requirements-windows-build.txt`, `requirements-linux-build.txt`, `requirements-macos-build.txt`, `parakeet-linux-cuda`, `parakeet-macos-metal`, `parakeet-windows-cuda`, and `bootstrap` (`pip 26.3`); the intentionally vulnerable canary (`tests/fixtures/dependency-inventory/vulnerable-parakeet.lock.json`) detected all `8` expected CVEs (`exit 0` with `--expect-findings`).
+- **Rust (`cargo audit --deny warnings` & tests):** `0` findings on `native/speakrs-cli/Cargo.lock` (110 crate dependencies) and `native/speakrs-cpu-smoke/Cargo.lock` (72 crate dependencies); `cargo +1.89.0 test --locked` in `native/speakrs-cli` passed (`8` unit + `1` integration test).
+- **Full automated suite & setup checks:**
+  - `npm run test:all`: exit `0` (JS `1,398` tests: `1,397 passed, 0 failed, 1 skipped`, including real Chromium strict CSP `DOMPurify 3.5.0` XSS test; Python `1,006 passed, 4 skipped` with `filelock 4.3.0`; JS and Python syntax checks clean).
+  - `python3 scripts/agents/validate_setup.py`: exit `0`.
+
+### Remaining cross-platform gates (Task 5.3)
+
+- **macOS arm64:** Native `scripts/check-build-requirements-closure.py macos`, `tests/fixtures/electron/token-migration-smoke.js` (Keychain), `build:mac` + `verify:mac:packaged`/`verify:mac:installer`, and Task 4.1/4.2 native `b12631` model checks.
+- **Windows 10/11 x64:** `tests/fixtures/electron/token-migration-smoke.js` (`DPAPI`), `build` + `verify-windows-installer.ps1`, and native CUDA model/Job Object checks.
+- **Linux x86_64:** `build:linux` + `verify:linux:packaged`, `npm run legal:release-assets` at release version cut, and interactive desktop acceptance.
