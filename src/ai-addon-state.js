@@ -523,9 +523,29 @@ const SUMMARY_MODEL_SOURCES = deepFreeze({
     repo: 'ggml-org/Inkling-2-Mini-GGUF', revision: 'e8a2cecf0e78914f07cc27b9be711a9b2c7561d9',
     fileName: 'Inkling-2-Mini-IQ4_NL.gguf', sha256: 'cbdf3fa9dc50a4124977980f37da4f1fa764b0cfe800d275cd43d26ce2a81af4', sizeBytes: 17627940768,
   }),
+  'bonsai-2-9b-q2-0': buildHuggingFaceModelSource({
+    repo: 'prism-ml/Ternary-Bonsai-2-9B-gguf', revision: '82265ccc78ddaac4700286a35e9badcc32376dd9',
+    fileName: 'Ternary-Bonsai-2-9B-Q2_0.gguf', sha256: '1f884aa56aacd2bbbb2e4b7abaead2b1102b74a9c75a23fc33dab916813a384d', sizeBytes: 2556640128,
+  }),
+  'bonsai-2-27b-q2-0': buildHuggingFaceModelSource({
+    repo: 'prism-ml/Ternary-Bonsai-2-27B-gguf', revision: '839bd57023c1558945afea70a74fa83c054f35f9',
+    fileName: 'Ternary-Bonsai-2-27B-Q2_0.gguf', sha256: '4f99aed01b8a877e153f9aa6569a4440fe17c59701cc0953e36d7f460549e70e', sizeBytes: 7626008928,
+  }),
+  'ministral-3-14b': buildHuggingFaceModelSource({
+    repo: 'unsloth/Ministral-3-14B-Instruct-2512-GGUF', revision: '9b948841b705cc11285ff274b84ba6c885908b19',
+    fileName: 'Ministral-3-14B-Instruct-2512-Q4_K_M.gguf', sha256: '76ce697c065f2e40f1e8e958118b02cab38e2c10a6015f7d7908036a292dc8c8', sizeBytes: 8239067840,
+  }),
+  'gemma-4-26b-a4b': buildHuggingFaceModelSource({
+    repo: 'ggml-org/gemma-4-26B-A4B-it-GGUF', revision: '1ca99aae748b4b01f609fa51eb23682ee5f00b85',
+    fileName: 'gemma-4-26B-A4B-it-Q4_0.gguf', sha256: 'd208665ab1cd3a69f7a9a4bc59430e8448c8093d9b06334f566ac59d6d504a03', sizeBytes: 14618145824,
+  }),
+  'qwen3.8-27b': buildHuggingFaceModelSource({
+    repo: 'unsloth/Qwen3.8-27B-GGUF', revision: '4af51b3542f775b0a8e4b310bfb3f17e01c306c9',
+    fileName: 'Qwen3.8-27B-UD-Q4_K_M.gguf', sha256: '1bce504dfecd84153666928a41d8a66706f0158d3a317bc5196b72819d7dc529', sizeBytes: 16564259744,
+  }),
 });
 
-function buildSummaryArtifact({ modelId, label, runtimeArchitecture }) {
+function buildSummaryArtifact({ modelId, label, runtimeArchitecture, runtimeCatalog = null }) {
   const artifactBaseId = `${modelId}-gguf`;
   const source = SUMMARY_MODEL_SOURCES[modelId];
   const validationStatus = source && source.lfsSha256 && source.downloadUrl ? 'ready' : 'pendingPinnedArtifact';
@@ -540,7 +560,7 @@ function buildSummaryArtifact({ modelId, label, runtimeArchitecture }) {
     source: source || null,
     validationStatus,
     llamaCpp: {
-      ...(runtimeArchitecture === 'gemma4' || runtimeArchitecture === 'inkling2_loop'
+      ...(runtimeCatalog === 'b12631' || runtimeArchitecture === 'gemma4' || runtimeArchitecture === 'inkling2_loop'
         ? B12631_LLAMA_CPP_RUNTIME
         : PINNED_LLAMA_CPP_RUNTIME),
       validationStatus: 'ready',
@@ -592,13 +612,14 @@ function buildSummaryArtifact({ modelId, label, runtimeArchitecture }) {
   };
 }
 
-function gemmaSummaryModel(id, label, description, memoryGuidance) {
+function gemmaSummaryModel(id, label, description, memoryGuidance, { tier = 'balanced', runtimeCatalog = 'gemma' } = {}) {
   return {
     id, label, description, memoryGuidance,
+    tier,
     family: 'Gemma 4',
     runtime: 'llama.cpp',
-    runtimeCatalog: 'gemma',
-    artifact: buildSummaryArtifact({ modelId: id, label, runtimeArchitecture: 'gemma4' }),
+    runtimeCatalog,
+    artifact: buildSummaryArtifact({ modelId: id, label, runtimeArchitecture: 'gemma4', runtimeCatalog }),
     inference: { contextTokens: 32768, family: 'gemma', promptFormat: 'gemma', disableThinking: true, singleTurnOnly: true },
     profiles: SUMMARY_PROFILES.map((profile) => profile.id),
   };
@@ -700,6 +721,7 @@ const AI_MODEL_CATALOG = deepFreeze({
         id: DEFAULT_SUMMARY_MODEL_ID,
         label: 'Qwen3.5 9B',
         description: 'Balanced choice for everyday questions and summaries.',
+        tier: 'balanced',
         memoryGuidance: { gpu: 8, unified: 16 },
         family: 'Qwen3.5',
         runtime: 'llama.cpp',
@@ -726,6 +748,7 @@ const AI_MODEL_CATALOG = deepFreeze({
         id: 'qwen3.5-4b-q4-k-m',
         label: 'Qwen3.5 4B',
         description: 'Uses less memory for quick recaps and simple questions.',
+        tier: 'compact',
         memoryGuidance: { gpu: 6, unified: 8 },
         family: 'Qwen3.5',
         runtime: 'llama.cpp',
@@ -748,12 +771,120 @@ const AI_MODEL_CATALOG = deepFreeze({
         }),
         profiles: SUMMARY_PROFILES.map((profile) => profile.id),
       },
-      gemmaSummaryModel('gemma-4-e4b', 'Gemma 4 E4B', 'An option for follow-up questions about details across recordings.', { gpu: 8, unified: 16, minRuntimeBytes: 5331582976 }),
-      gemmaSummaryModel('gemma-4-12b', 'Gemma 4 12B', 'An option for pulling together themes and decisions from longer recordings.', { gpu: 12, unified: 16, minRuntimeBytes: 8409792512 }),
+      {
+        id: 'bonsai-2-9b-q2-0',
+        label: 'Bonsai 2 9B',
+        description: 'Compact ternary 9B model for quick questions on lower-memory devices.',
+        tier: 'compact',
+        memoryGuidance: { gpu: 6, unified: 8, minRuntimeBytes: 3489660928 },
+        family: 'Bonsai 2',
+        runtime: 'llama.cpp',
+        runtimeCatalog: 'b12631',
+        inference: {
+          contextTokens: 32768,
+          family: 'bonsai',
+          promptFormat: 'chatml',
+          architecture: 'qwen35',
+          disableThinking: true,
+          singleTurnOnly: true,
+          reasoningEffort: 'none',
+          reasoningBudget: 0,
+        },
+        artifact: buildSummaryArtifact({
+          modelId: 'bonsai-2-9b-q2-0',
+          label: 'Bonsai 2 9B Q2_0 GGUF',
+          runtimeArchitecture: 'qwen35',
+          runtimeCatalog: 'b12631',
+        }),
+        profiles: SUMMARY_PROFILES.map((profile) => profile.id),
+      },
+      gemmaSummaryModel('gemma-4-e4b', 'Gemma 4 E4B', 'An option for follow-up questions about details across recordings.', { gpu: 8, unified: 16, minRuntimeBytes: 5331582976 }, { tier: 'balanced', runtimeCatalog: 'gemma' }),
+      gemmaSummaryModel('gemma-4-12b', 'Gemma 4 12B', 'An option for pulling together themes and decisions from longer recordings.', { gpu: 12, unified: 16, minRuntimeBytes: 8409792512 }, { tier: 'balanced', runtimeCatalog: 'gemma' }),
+      {
+        id: 'bonsai-2-27b-q2-0',
+        label: 'Bonsai 2 27B',
+        description: '27B-class ternary model packed into a 12 GB GPU footprint with a compact 32k context cache.',
+        tier: 'balanced',
+        memoryGuidance: { gpu: 12, unified: 16, minRuntimeBytes: 9126805504 },
+        family: 'Bonsai 2',
+        runtime: 'llama.cpp',
+        runtimeCatalog: 'b12631',
+        inference: {
+          contextTokens: 32768,
+          family: 'bonsai',
+          promptFormat: 'chatml',
+          architecture: 'qwen35',
+          disableThinking: true,
+          singleTurnOnly: true,
+          reasoningEffort: 'none',
+          reasoningBudget: 0,
+        },
+        artifact: buildSummaryArtifact({
+          modelId: 'bonsai-2-27b-q2-0',
+          label: 'Bonsai 2 27B Q2_0 GGUF',
+          runtimeArchitecture: 'qwen35',
+          runtimeCatalog: 'b12631',
+        }),
+        profiles: SUMMARY_PROFILES.map((profile) => profile.id),
+      },
+      {
+        id: 'ministral-3-14b',
+        label: 'Ministral 3 14B',
+        description: 'Fast non-reasoning 14B instruction model for crisp answers and recaps.',
+        tier: 'balanced',
+        memoryGuidance: { gpu: 12, unified: 16, minRuntimeBytes: 9663676416 },
+        family: 'Ministral 3',
+        runtime: 'llama.cpp',
+        runtimeCatalog: 'b12631',
+        inference: {
+          contextTokens: 32768,
+          family: 'mistral',
+          promptFormat: 'mistral',
+          architecture: 'mistral3',
+          disableThinking: true,
+          singleTurnOnly: true,
+        },
+        artifact: buildSummaryArtifact({
+          modelId: 'ministral-3-14b',
+          label: 'Ministral 3 14B Q4_K_M GGUF',
+          runtimeArchitecture: 'mistral3',
+          runtimeCatalog: 'b12631',
+        }),
+        profiles: SUMMARY_PROFILES.map((profile) => profile.id),
+      },
+      gemmaSummaryModel('gemma-4-26b-a4b', 'Gemma 4 26B-A4B', 'Mixture-of-experts model with fast 4B-active decode for deeper cross-recording questions.', { gpu: 16, unified: 24, minRuntimeBytes: 16106127360 }, { tier: 'high-capability', runtimeCatalog: 'b12631' }),
+      {
+        id: 'qwen3.8-27b',
+        label: 'Qwen 3.8 27B',
+        description: 'High-capability 27B hybrid-attention model for demanding analysis on workstation hardware.',
+        tier: 'high-capability',
+        memoryGuidance: { gpu: 24, unified: 32, minRuntimeBytes: 18253611008 },
+        family: 'Qwen3.8',
+        runtime: 'llama.cpp',
+        runtimeCatalog: 'b12631',
+        inference: {
+          contextTokens: 32768,
+          family: 'qwen',
+          promptFormat: 'chatml',
+          architecture: 'qwen38',
+          disableThinking: true,
+          singleTurnOnly: true,
+          reasoningEffort: 'none',
+          reasoningBudget: 0,
+        },
+        artifact: buildSummaryArtifact({
+          modelId: 'qwen3.8-27b',
+          label: 'Qwen 3.8 27B UD-Q4_K_M GGUF',
+          runtimeArchitecture: 'qwen38',
+          runtimeCatalog: 'b12631',
+        }),
+        profiles: SUMMARY_PROFILES.map((profile) => profile.id),
+      },
       {
         id: 'inkling-2-mini',
         label: 'Inkling 2 Mini',
         description: 'Intended for longer, more involved questions on high-memory devices.',
+        tier: 'high-capability',
         memoryGuidance: { gpu: 24, unified: 32, minRuntimeBytes: 19217088512 },
         family: 'Inkling 2',
         runtime: 'llama.cpp',
@@ -767,7 +898,7 @@ const AI_MODEL_CATALOG = deepFreeze({
           reasoningEffort: 'none',
           reasoningBudget: 0,
         },
-        artifact: buildSummaryArtifact({ modelId: 'inkling-2-mini', label: 'Inkling 2 Mini', runtimeArchitecture: 'inkling2_loop' }),
+        artifact: buildSummaryArtifact({ modelId: 'inkling-2-mini', label: 'Inkling 2 Mini', runtimeArchitecture: 'inkling2_loop', runtimeCatalog: 'b12631' }),
         profiles: SUMMARY_PROFILES.map((profile) => profile.id),
         supportedPlatforms: {
           win32: { status: 'gated', reason: 'Not enabled on Windows yet — llama.cpp b12631 is pinned; awaiting native 32k Windows CUDA verification.' },
@@ -869,14 +1000,15 @@ function getSummaryArtifactForPlatform(modelId, platform = process.platform, arc
     return null;
   }
 
-  const gemmaRuntime = model.runtimeCatalog === 'gemma' && catalog.summary.gemmaRuntimeArtifacts?.[platformKey];
-  const llamaCpp = gemmaRuntime ? {
-    runtime: gemmaRuntime.runtime,
-    version: gemmaRuntime.version,
-    repository: gemmaRuntime.repository,
-    commit: gemmaRuntime.commit,
-    releaseUrl: gemmaRuntime.releaseUrl,
-    validationStatus: gemmaRuntime.validationStatus,
+  const selectedRuntime = (model.runtimeCatalog === 'gemma' && catalog.summary.gemmaRuntimeArtifacts?.[platformKey])
+    || (model.runtimeCatalog === 'b12631' && catalog.summary.b12631RuntimeArtifacts?.[platformKey]);
+  const llamaCpp = selectedRuntime ? {
+    runtime: selectedRuntime.runtime,
+    version: selectedRuntime.version,
+    repository: selectedRuntime.repository,
+    commit: selectedRuntime.commit,
+    releaseUrl: selectedRuntime.releaseUrl,
+    validationStatus: selectedRuntime.validationStatus,
   } : artifact.llamaCpp || null;
 
   return {

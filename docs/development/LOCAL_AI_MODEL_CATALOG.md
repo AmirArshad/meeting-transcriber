@@ -15,12 +15,13 @@ The installed `qwen3.5-9b-q4-k-m` model has bounded local synthetic evidence for
 `en/es/fr/de/zh/ja/it/pa/hi/ko/pt`, including Chinese and Panjabi script cases.
 See [the recorded checks and limits](V2_10_SUMMARY_QUALIFICATION.md).
 `src/summary-language-policy.js` owns eligibility and policy revision
-(`summary-language-v3`); add-on status exposes it without inference or downloads.
-`qwen3.5-4b-q4-k-m` is installable for local Chat, while its summary languages
-remain gated pending qualification. Gemma 4 E4B and 12B offer English summaries
-on Apple Silicon after the [v3.1 checks](V3_1_QUALIFICATION.md). Other Gemma
-language and platform combinations remain gated. Existing platform runtime
-admission still applies.
+(`summary-language-v4`); add-on status exposes it without inference or downloads.
+`qwen3.5-4b-q4-k-m`, `bonsai-2-9b-q2-0`, `bonsai-2-27b-q2-0`, `ministral-3-14b`,
+`gemma-4-26b-a4b`, and `qwen3.8-27b` are installable for local Chat, while their
+summary languages remain gated pending native qualification. Gemma 4 E4B and 12B
+offer English summaries on Apple Silicon after the [v3.1 checks](V3_1_QUALIFICATION.md).
+Other Gemma language and platform combinations remain gated. Existing platform
+runtime admission still applies.
 Generation requires transcript-language confirmation tied to its hash; chunk,
 merge and repair share that language, and the selected local model checks prose
 language before committing sidecars.
@@ -43,15 +44,35 @@ language before committing sidecars.
 
 ### Summaries & Chat model library
 
-The two Qwen3.5 weights retain their existing pins. Gemma 4 E4B and 12B use the
-official ggml-org instruction-tuned `Q4_0` weights and a 32,768-token context.
-The pinned upstream repositories publish that quantization, with download sizes
-of 4,590,807,392 and 7,219,673,216 bytes respectively. Only text weights are used.
+The catalog is organized into three hardware tiers (`Compact`, `Balanced`, and
+`High-Capability`) so Settings stays scannable across 10 curated models:
+
+- **Compact:** `qwen3.5-4b-q4-k-m` (2.74 GB) and Prism ML `bonsai-2-9b-q2-0`
+  (`prism-ml/Ternary-Bonsai-2-9B-gguf` `Q2_0`, 2,556,640,128 bytes).
+- **Balanced:** `qwen3.5-9b-q4-k-m` (5.68 GB, default), official ggml-org
+  `gemma-4-e4b` (`Q4_0`, 4,590,807,392 bytes) and `gemma-4-12b` (`Q4_0`,
+  7,219,673,216 bytes), Prism ML `bonsai-2-27b-q2-0`
+  (`prism-ml/Ternary-Bonsai-2-27B-gguf` `Q2_0`, 7,626,008,928 bytes), and
+  Mistral AI `ministral-3-14b` (`unsloth/Ministral-3-14B-Instruct-2512-GGUF`
+  `Q4_K_M`, 8,239,067,840 bytes).
+- **High-Capability:** official ggml-org `gemma-4-26b-a4b` (`Q4_0`,
+  14,618,145,824 bytes), `qwen3.8-27b` (`unsloth/Qwen3.8-27B-GGUF` `UD-Q4_K_M`,
+  16,564,259,744 bytes), and `inkling-2-mini` (`IQ4_NL`, 17,627,940,768 bytes,
+  platform-gated pending 24+ GiB qualification).
+
+Bonsai 2 (`9B` and `27B`) uses stock `Q2_0` (which runs on upstream
+`llama.cpp b12631` without a custom Prism ML fork) and sets `--reasoning off`
+plus `--reasoning-budget 0` alongside `qwen3.8-27b` and `inkling-2-mini` so
+structured summaries and Chat JSON never exhaust output tokens inside `<think>`
+blocks. Only text weights are used across all catalog models, with a 32,768-token
+context window.
 
 Gemma 4 E4B and 12B use official `ggml-org/llama.cpp` `b12631` on Linux x64
-CUDA 12.8. Gemma 4 keeps `b12606` on macOS arm64 Metal and Windows x64 CUDA
-12.4 while the pinned `b12631` builds await native qualification. Qwen3.5
-retains its qualified runtime pins (`b9173` on Windows/macOS,
+CUDA 12.8. Gemma 4 E4B and 12B keep `b12606` on macOS arm64 Metal and Windows
+x64 CUDA 12.4 while the pinned `b12631` builds await native qualification.
+Bonsai 2 (`9B`, `27B`), Ministral 3 14B, Gemma 4 26B-A4B, Qwen 3.8 27B, and
+Inkling 2 Mini share the official `b12631` runtime across Windows, macOS, and
+Linux. Qwen3.5 retains its qualified runtime pins (`b9173` on Windows/macOS,
 ai-dock `v0.3.0` on Linux) for zero-redownload continuity while the library
 shares each runtime version among compatible models. Existing private runtimes
 remain readable until verified adoption. Check the hardware results and

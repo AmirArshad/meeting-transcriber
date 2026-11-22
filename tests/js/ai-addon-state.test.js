@@ -536,7 +536,18 @@ test('summary library preserves independent models and migrates a legacy ready d
 test('catalog excludes legacy qwen3-14b placeholder and keeps features.summary synced to defaultModelId', () => {
   assert.deepEqual(
     AI_MODEL_CATALOG.summary.models.map((model) => model.id),
-    ['qwen3.5-9b-q4-k-m', 'qwen3.5-4b-q4-k-m', 'gemma-4-e4b', 'gemma-4-12b', 'inkling-2-mini'],
+    [
+      'qwen3.5-9b-q4-k-m',
+      'qwen3.5-4b-q4-k-m',
+      'bonsai-2-9b-q2-0',
+      'gemma-4-e4b',
+      'gemma-4-12b',
+      'bonsai-2-27b-q2-0',
+      'ministral-3-14b',
+      'gemma-4-26b-a4b',
+      'qwen3.8-27b',
+      'inkling-2-mini',
+    ],
   );
   assert.equal(getModelById('summary', 'qwen3-14b-q4-k-m'), null);
   const normalized = normalizeAiAddonManifest({
@@ -551,4 +562,54 @@ test('catalog excludes legacy qwen3-14b placeholder and keeps features.summary s
   });
   assert.equal(normalized.features.summary.modelId, 'qwen3.5-9b-q4-k-m');
   assert.equal(normalized.features.summary.status, 'ready');
+});
+
+test('Bonsai 2 and v3.2 peer models pin immutable HF artifacts on shared b12631 with tier metadata and reasoning-off flags', () => {
+  const { SUMMARY_LANGUAGE_POLICY_VERSION, getSummaryLanguagePolicy } = require('../../src/summary-language-policy');
+  assert.equal(SUMMARY_LANGUAGE_POLICY_VERSION, 'summary-language-v4');
+
+  const expectedPeers = [
+    { id: 'bonsai-2-9b-q2-0', tier: 'compact', sizeBytes: 2556640128, reasoningBudget: 0, reasoningEffort: 'none' },
+    { id: 'bonsai-2-27b-q2-0', tier: 'balanced', sizeBytes: 7626008928, reasoningBudget: 0, reasoningEffort: 'none' },
+    { id: 'ministral-3-14b', tier: 'balanced', sizeBytes: 8239067840, reasoningBudget: undefined, reasoningEffort: undefined },
+    { id: 'gemma-4-26b-a4b', tier: 'high-capability', sizeBytes: 14618145824, reasoningBudget: undefined, reasoningEffort: undefined },
+    { id: 'qwen3.8-27b', tier: 'high-capability', sizeBytes: 16564259744, reasoningBudget: 0, reasoningEffort: 'none' },
+  ];
+
+  for (const model of AI_MODEL_CATALOG.summary.models) {
+    assert.ok(['compact', 'balanced', 'high-capability'].includes(model.tier), `${model.id} must declare a valid tier`);
+  }
+
+  for (const spec of expectedPeers) {
+    const model = getModelById('summary', spec.id);
+    assert.ok(model, `${spec.id} must exist in catalog`);
+    assert.equal(model.tier, spec.tier);
+    assert.equal(model.runtimeCatalog, 'b12631');
+    assert.equal(model.inference.contextTokens, 32768);
+    assert.equal(model.inference.disableThinking, true);
+    assert.equal(model.inference.singleTurnOnly, true);
+    assert.equal(model.inference.reasoningBudget, spec.reasoningBudget);
+    assert.equal(model.inference.reasoningEffort, spec.reasoningEffort);
+    assert.equal(model.artifact.source.sizeBytes, spec.sizeBytes);
+    assert.match(model.artifact.source.revision, /^[0-9a-f]{40}$/);
+    assert.match(model.artifact.source.lfsSha256, /^[0-9a-f]{64}$/);
+    assert.equal(model.artifact.source.gated, false);
+    assert.equal(model.artifact.source.license, 'apache-2.0');
+    assert.equal(model.artifact.validationStatus, 'ready');
+    assert.ok(model.artifact.downloadUrl.includes(`/resolve/${model.artifact.source.revision}/`));
+
+    for (const [platform, arch] of [['win32', 'x64'], ['darwin', 'arm64'], ['linux', 'x64']]) {
+      const artifact = getSummaryArtifactForPlatform(spec.id, platform, arch);
+      const runtime = getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, spec.id);
+      assert.ok(artifact, `${spec.id} artifact must resolve on ${platform}-${arch}`);
+      assert.ok(runtime, `${spec.id} runtime must resolve on ${platform}-${arch}`);
+      assert.equal(runtime.version, 'b12631');
+      assert.equal(artifact.llamaCpp.version, 'b12631');
+      assert.equal(artifact.llamaCpp.commit, runtime.commit);
+      const policy = getSummaryLanguagePolicy(spec.id, platform, arch);
+      assert.equal(policy.version, 'summary-language-v4');
+      assert.equal(policy.chatReady, true);
+      assert.deepEqual(policy.languages, []);
+    }
+  }
 });

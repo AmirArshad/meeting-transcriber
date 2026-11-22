@@ -106,15 +106,17 @@ same source notices are installed under
 
 | Item | License (typical) | Source |
 |------|-------------------|--------|
-| Qwen3 / Qwen3.5 GGUF weights (catalog pins) | **Apache-2.0** | e.g. [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B), community GGUF repos such as `unsloth/Qwen3.5-9B-GGUF` |
-| Gemma 4 E4B and 12B GGUF weights | **Apache-2.0** | [Gemma 4 E4B](https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF), [Gemma 4 12B](https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF) |
+| Qwen3 / Qwen3.5 / Qwen3.8 GGUF weights (catalog pins) | **Apache-2.0** | e.g. [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B), community GGUF repos such as `unsloth/Qwen3.5-9B-GGUF` and [`unsloth/Qwen3.8-27B-GGUF`](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) |
+| Gemma 4 E4B, 12B, and 26B-A4B GGUF weights | **Apache-2.0** | [Gemma 4 E4B](https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF), [Gemma 4 12B](https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF), [Gemma 4 26B-A4B](https://huggingface.co/ggml-org/gemma-4-26B-A4B-it-GGUF) |
+| Prism ML Bonsai 2 (`9B`, `27B` `Q2_0`) GGUF weights | **Apache-2.0** | [prism-ml/Ternary-Bonsai-2-9B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-9B-gguf), [prism-ml/Ternary-Bonsai-2-27B-gguf](https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf) |
+| Mistral AI Ministral 3 14B GGUF weights | **Apache-2.0** | [`unsloth/Ministral-3-14B-Instruct-2512-GGUF`](https://huggingface.co/unsloth/Ministral-3-14B-Instruct-2512-GGUF) |
 | Inkling 2 Mini GGUF weights (where supported) | **Apache-2.0** | [ggml-org/Inkling-2-Mini-GGUF](https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF) |
-| [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime binaries | MIT | Downloaded from pinned GitHub releases during summary setup. Windows/macOS use `b9173` for legacy Qwen3.5 and `b12606` for Gemma 4. Official `b12631` is active for Gemma 4 on Linux CUDA 12.8 and pinned for future Windows/macOS qualification. |
+| [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime binaries | MIT | Downloaded from pinned GitHub releases during summary setup. Windows/macOS use `b9173` for legacy Qwen3.5 and `b12606` for Gemma 4 E4B/12B. Official `b12631` is active for Gemma 4 on Linux CUDA 12.8 and shared across Bonsai 2, Ministral 3 14B, Gemma 4 26B-A4B, Qwen 3.8 27B, and Inkling 2 Mini. |
 | [ai-dock/llama.cpp-cuda](https://github.com/ai-dock/llama.cpp-cuda) Linux CUDA build scripts | MIT | Used by the legacy Linux Qwen3.5 summary runtime (`v0.3.0`); the contained llama.cpp binaries remain MIT |
 | NVIDIA CUDA runtime | [NVIDIA CUDA Toolkit EULA](https://docs.nvidia.com/cuda/eula/index.html) | Used in optional user-triggered managed CUDA runtime and Linux/Windows summary setup. The official `b12631` CUDA runtime pins are `cudart-llama-b12631-bin-ubuntu-cuda-12.8-x64.tar.gz` and `cudart-llama-bin-win-cuda-12.4-x64.zip`. |
 | [NVIDIA NCCL wheel](https://pypi.org/project/nvidia-nccl-cu12/2.31.2/) | NVIDIA Software License Agreement (`nvidia/nccl/lib/LICENSE.txt`) | Used only by the legacy Linux Qwen3.5 summary runtime. |
 
-**Trademark:** “Qwen” is associated with Alibaba Cloud; “Gemma” with Google; and “Inkling” with Thinking Machines Lab. AvaNevis is not affiliated with or endorsed by these organizations.
+**Trademark:** “Qwen” is associated with Alibaba Cloud; “Gemma” with Google; “Bonsai” with Prism ML; “Mistral” and “Ministral” with Mistral AI; and “Inkling” with Thinking Machines Lab. AvaNevis is not affiliated with or endorsed by these organizations.
 
 ---
 
@@ -126,7 +128,7 @@ same source notices are installed under
 
 ## 4. Trademarks
 
-Names such as **Whisper**, **Parakeet**, **Qwen**, **Gemma**, **Inkling**, **pyannote**, **Speakrs**, **Hugging Face**, **Electron**, **NVIDIA**, and **CUDA** are trademarks of their respective owners. AvaNevis uses them only to describe compatible components and does not claim endorsement.
+Names such as **Whisper**, **Parakeet**, **Qwen**, **Gemma**, **Bonsai**, **Mistral**, **Ministral**, **Inkling**, **pyannote**, **Speakrs**, **Hugging Face**, **Electron**, **NVIDIA**, and **CUDA** are trademarks of their respective owners. AvaNevis uses them only to describe compatible components and does not claim endorsement.
 
 ---
 

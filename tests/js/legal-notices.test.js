@@ -18,6 +18,10 @@ test('THIRD_PARTY_NOTICES.md exists and documents key optional models', () => {
   assert.match(contents, /speakrs-cli/i);
   assert.match(contents, /avencera\/speakrs/i);
   assert.match(contents, /Qwen/i);
+  assert.match(contents, /Prism ML/i);
+  assert.match(contents, /Bonsai 2/i);
+  assert.match(contents, /Mistral AI/i);
+  assert.match(contents, /Ministral 3/i);
   assert.match(contents, /parakeet-tdt-0\.6b-v2/i);
   assert.match(contents, /marked/i);
   assert.match(contents, /dompurify/i);
@@ -76,5 +80,7 @@ test('Settings About credits name Speakrs, pyannote, and Parakeet', () => {
   assert.match(aboutHtml, />Speakrs</);
   assert.match(aboutHtml, /Apache-2\.0/);
   assert.match(aboutHtml, /pyannote Speaker Diarization Community-1/);
+  assert.match(aboutHtml, /Prism ML Bonsai 2/);
+  assert.match(aboutHtml, /Mistral AI Ministral 3/);
   assert.match(aboutHtml, /Speakrs CLI/);
 });

@@ -165,7 +165,11 @@ def build_llama_cli_args(
         "--reasoning",
         "off",
     ]
-    if runtime.get("inference", {}).get("singleTurnOnly"):
+    inference = runtime.get("inference") or {}
+    reasoning_budget = inference.get("reasoningBudget")
+    if isinstance(reasoning_budget, int) and not isinstance(reasoning_budget, bool):
+        args.extend(("--reasoning-budget", str(reasoning_budget)))
+    if inference.get("singleTurnOnly"):
         args.extend(("--fit", "off"))
     elif runtime.get("platform") in ("win32", "darwin"):
         args.insert(args.index("--single-turn"), "--no-conversation")
