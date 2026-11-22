@@ -135,6 +135,7 @@ function createHarness({
       '--model-id', options.modelId,
       '--speaker-names-json', JSON.stringify(options.speakerNames),
       ...(options.tag ? ['--tag', options.tag] : []),
+      ...(options.template ? ['--template', options.template] : []),
     ],
     collectPythonProcessOutput(python) {
       let stdout = '';
@@ -415,22 +416,24 @@ test('incorrect provenance or transcript change before finalization keeps prior 
   }
 });
 
-test('generate-summary forwards authoritative meeting.tag to Python and persists tag + templateVersion', async () => {
+test('generate-summary passes and persists the recording tag and format override separately', async () => {
   const harness = createHarness({
     meetingTag: 'interview',
     summaryMetadata: {
       tag: 'interview',
-      template: 'interview',
+      template: 'meeting',
       templateVersion: 'tag-templates-v1',
     },
   });
 
-  const result = await harness.handlers['generate-summary']({}, confirmedOptions);
+  const result = await harness.handlers['generate-summary']({}, { ...confirmedOptions, template: 'meeting' });
   const runnerArgs = harness.getSpawnedArgs()[1];
+  assert.equal(runnerArgs[runnerArgs.indexOf('--template') + 1], 'meeting');
   const tagIdx = runnerArgs.indexOf('--tag');
   assert.notEqual(tagIdx, -1);
   assert.equal(runnerArgs[tagIdx + 1], 'interview');
   assert.equal(result.meeting.ai.summary.tag, 'interview');
+  assert.equal(result.meeting.ai.summary.template, 'meeting');
   assert.equal(result.meeting.ai.summary.templateVersion, 'tag-templates-v1');
 });
 
@@ -439,6 +442,7 @@ test('untagged regeneration clears a previous summary tag', async () => {
   const harness = createHarness({ previousSummary: { status: 'completed', tag: 'interview' }, summaryMetadata: { tag: null } });
   const result = await harness.handlers['generate-summary']({}, confirmedOptions);
   assert.equal(result.meeting.ai.summary.tag, null);
+  assert.equal(result.meeting.ai.summary.template, 'other');
   const args = harness.getSpawnedArgs().find((entry) => entry.includes('update-ai'));
   assert.equal(JSON.parse(args[args.indexOf('--summary-json') + 1]).tag, null);
 });
@@ -550,4 +554,15 @@ test('summary service awaits ensureSummaryProcessExited and passes inferenceDesc
   assert.equal(exitWaitCalls, 1);
   assert.deepEqual(capturedBuildOptions.inferenceDescriptor, { contextTokens: 32768, family: 'qwen' });
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('generate-summary rejects unknown and noncanonical formats before starting preflight', async () => {
+  const harness = createHarness();
+  for (const template of ['unknown', 'Voice Note', '', 42, null]) {
+    await assert.rejects(
+      harness.handlers['generate-summary']({}, { ...confirmedOptions, template }),
+      /Unsupported summary format/,
+    );
+  }
+  assert.deepEqual(harness.getSpawnedArgs(), []);
 });

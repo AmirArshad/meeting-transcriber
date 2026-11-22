@@ -177,9 +177,12 @@ function createSummaryService(deps) {
     ipcMain.handle('generate-summary', async (event, options = {}) => {
       assertTrustedRendererSender(event);
 
-      const { meetingId, profile, modelId, transcriptLanguage, sourceTranscriptHash } = options;
+      const { meetingId, profile, modelId, transcriptLanguage, sourceTranscriptHash, template } = options;
       if (!meetingId) {
         throw new Error('generate-summary requires a meetingId');
+      }
+      if (template !== undefined && (typeof template !== 'string' || normalizeTag(template) !== template)) {
+        throw new Error('Unsupported summary format.');
       }
       const normalizedMeetingId = String(meetingId);
 
@@ -393,6 +396,7 @@ function createSummaryService(deps) {
 
       const transcriptBase = transcriptPath.replace(/\.md$/i, '');
       const meetingTag = normalizeTag(meeting.tag);
+      const requestedTemplate = template || meetingTag || 'other';
       const attemptId = `${Date.now()}-${process.pid}-${++summaryAttemptCounter}`;
       const outputJson = `${transcriptBase}.${attemptId}.summary.json`;
       const outputMarkdown = `${transcriptBase}.${attemptId}.summary.md`;
@@ -534,7 +538,8 @@ function createSummaryService(deps) {
           transcriptLanguage,
           sourceTranscriptHash,
           inferenceDescriptor: artifact.inference || { contextTokens: 32768, family: 'qwen', promptFormat: 'chatml', disableThinking: true },
-          ...(meetingTag ? { tag: meetingTag } : {}),
+          tag: meetingTag,
+          template: requestedTemplate,
         });
         const python = spawnSummaryPython(summaryArgs, { cwd: pythonConfig.backendPath, env: summaryEnv });
         spawnedSummary = true;
@@ -655,7 +660,6 @@ function createSummaryService(deps) {
               return;
             }
 
-            const committedTag = normalizeTag(result.metadata.tag) || meetingTag || null;
             const templateVersion = typeof result.metadata.templateVersion === 'string' && result.metadata.templateVersion.trim()
               ? result.metadata.templateVersion.trim()
               : null;
@@ -667,7 +671,8 @@ function createSummaryService(deps) {
               modelId: selectedModelId,
               modelProfile: result.metadata.profile,
               model: result.metadata.model,
-              tag: committedTag,
+              tag: meetingTag,
+              template: requestedTemplate,
               ...(templateVersion ? { templateVersion } : {}),
               generatedAt: result.metadata.generatedAt,
               sourceTranscriptHash: result.metadata.sourceTranscriptHash,

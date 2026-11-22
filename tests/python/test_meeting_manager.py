@@ -2557,10 +2557,15 @@ def test_recording_tag_normalization_persistence_cli_and_summary_staleness(tmp_p
             'status': 'completed',
             'sourceTranscriptHash': tx_hash,
             'tag': 'voice-note',
-            'template': 'voice-note',
+            'template': ' Interview ',
             'templateVersion': 'tag-templates-v1',
         },
     )
+
+    hydrated = manager.get_meeting(added['id'])
+    assert hydrated['tag'] == 'voice-note'
+    assert hydrated['ai']['summary']['tag'] == 'voice-note'
+    assert hydrated['ai']['summary']['template'] == 'interview'
 
     updated = manager.update_meeting(added['id'], tag='lecture')
     assert updated['tag'] == 'lecture'

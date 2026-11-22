@@ -34,10 +34,12 @@ test('real composition-root CLI builder propagates language and hash without cha
   const source = fs.readFileSync(path.join(__dirname, '../../src/main.js'), 'utf8');
   const context = vm.createContext({ process: { platform: 'win32', arch: 'x64' }, getBackendModuleArgs: (name, args) => ['-m', name, ...args] });
   vm.runInContext(extractTopLevelFunctionSource(source, 'buildSummaryArgs'), context);
-  const args = context.buildSummaryArgs({ meetingId: 'id', transcriptPath: 'meeting.md', runtimeDir: 'runtime', modelPath: 'model.gguf', modelId, transcriptLanguage: 'es', sourceTranscriptHash: 'sha256:fixture' });
+  const args = context.buildSummaryArgs({ meetingId: 'id', transcriptPath: 'meeting.md', runtimeDir: 'runtime', modelPath: 'model.gguf', modelId, transcriptLanguage: 'es', sourceTranscriptHash: 'sha256:fixture', tag: 'meeting', template: 'interview' });
   assert.equal(args[args.indexOf('--language') + 1], 'es');
   assert.equal(args[args.indexOf('--source-transcript-hash') + 1], 'sha256:fixture');
   assert.equal(args[args.indexOf('--model-id') + 1], modelId);
+  assert.equal(args[args.indexOf('--tag') + 1], 'meeting');
+  assert.equal(args[args.indexOf('--template') + 1], 'interview');
   const validation = context.buildSummaryArgs({ meetingId: 'setup', runtimeDir: 'runtime', modelPath: 'model.gguf', validateRuntime: true });
   assert.ok(validation.includes('--validate-runtime'));
   assert.equal(validation.includes('--language'), false);
@@ -146,7 +148,7 @@ test('real dialog accepts only explicit supported submission and traps focus', a
   elements['summary-language-modal'].dispatch('keydown', { key: 'Tab' });
   assert.equal(context.document.activeElement, elements['summary-transcript-language']);
   elements['summary-language-form'].dispatch('submit');
-  assert.equal(await pending, 'es');
+  assert.deepEqual({ ...await pending }, { transcriptLanguage: 'es', modelId: null, template: 'other' });
 });
 
 const prepareMeeting = {
@@ -208,7 +210,7 @@ test('Prepare summary retries a failed save and synchronizes History fields and 
   const { context, elements, pending, rows, historyFields, refreshed } = createPrepareSaveHarness(async (id, patch) => {
     requests.push([id, JSON.parse(JSON.stringify(patch))]);
     if (requests.length === 1) throw new Error('save failed');
-    return { id, tag: patch.tag, ai: { diarization: { speakerNames: names } } };
+    return { id, tag: null, ai: { diarization: { speakerNames: names } } };
   }, true);
   rows[0].field.value = ' Alice ';
   rows[1].field.value = 'Bob';
@@ -220,46 +222,48 @@ test('Prepare summary retries a failed save and synchronizes History fields and 
   assert.deepEqual(refreshed, []);
 
   await elements['summary-language-form'].dispatch('submit');
-  assert.equal(await pending, 'en');
+  assert.deepEqual({ ...await pending }, { transcriptLanguage: 'en', modelId: null, template: 'interview' });
   const expectedPatch = {
     speakerNames: names,
-    tag: 'interview',
     expectedSourceTranscriptHash: 'transcript-hash',
     expectedTranscriptionAttemptId: 'attempt-1',
   };
   assert.deepEqual(requests, [[prepareMeeting.id, expectedPatch], [prepareMeeting.id, expectedPatch]]);
-  assert.equal(context.meetingTagMutationVersions.get(prepareMeeting.id), 2);
+  assert.equal(context.meetingTagMutationVersions.get(prepareMeeting.id), 1);
   for (const [speaker, field] of historyFields) {
     assert.equal(field.value, names[speaker]);
     assert.equal(context.historySpeakers.requestedNames.get(speaker), names[speaker]);
   }
   assert.equal(context.meetingSearchDebounceTimer, null);
   assert.deepEqual(refreshed, [
-    ['meeting', prepareMeeting.id], ['tag', 'interview'], ['speakers', names, prepareMeeting.id],
+    ['meeting', prepareMeeting.id], ['tag', null], ['speakers', names, prepareMeeting.id],
     ['expanded', false], ['filters'], ['activity'], ['scope'], ['clear', 9], ['search', 'Alice'],
   ]);
 });
 
-test('Prepare summary refreshes the tag pill and filters when the History speaker bar is absent', async () => {
-  const { elements, pending, refreshed } = createPrepareSaveHarness(async (id, patch) => {
-    assert.deepEqual(Object.keys(patch), ['tag']);
-    return { id, tag: patch.tag };
-  }, false);
+test('Prepare summary defaults to the recording tag and submits a format override without editing the recording', async () => {
+  const { context, elements } = createDialogHarness();
+  context.window = { electronAPI: { updateMeeting: () => assert.fail('Format selection must not edit recording details') } };
+  const pending = context.confirmSummaryTranscriptLanguage({ tag: 'meeting', language: 'en' }, policy);
+  const formatSelect = elements['summary-recording-tag'];
+  assert.equal(formatSelect.value, 'meeting');
+  assert.equal(formatSelect.children.length, 11);
+  assert.equal(formatSelect.children.find(({ value }) => value === 'other').label, 'General (Other)');
+  formatSelect.value = 'interview';
+  formatSelect.dispatch('change');
+  assert.equal(elements['summary-format-preview'].textContent, context.getTagMeta('interview').formatPreview);
   await elements['summary-language-form'].dispatch('submit');
-  assert.equal(await pending, 'en');
-  assert.deepEqual(refreshed, [
-    ['meeting', prepareMeeting.id], ['tag', 'interview'], ['banner', prepareMeeting.id],
-    ['filters'], ['activity'], ['scope'], ['clear', 9], ['search', 'Alice'],
-  ]);
+  assert.deepEqual({ ...await pending }, { transcriptLanguage: 'en', modelId: null, template: 'interview' });
 });
 
 test('a Prepare summary save settling after cancellation leaves the reopened dialog alone', async () => {
   for (const fail of [false, true]) {
     let settle;
-    const { context, elements, pending, refreshed } = createPrepareSaveHarness((id) =>
+    const { context, elements, pending, refreshed, rows } = createPrepareSaveHarness((id) =>
       new Promise((resolve, reject) => {
         settle = () => fail ? reject(new Error('late failure')) : resolve({ id, tag: 'interview' });
       }), false);
+    rows[0].field.value = 'Alice';
     const saving = elements['summary-language-form'].dispatch('submit');
     elements['summary-language-cancel'].dispatch('click');
     assert.equal(await pending, null);
@@ -704,6 +708,7 @@ test('rendered history captions replace previous meetings and ignore add-on name
   const context = vm.createContext({
     document: { getElementById: (id) => elements[id] || null },
     window: { summaryLanguageHelpers: require('../../src/renderer/summary-language-helpers') },
+    getTagMeta: prepareSummaryDialogGlobals.getTagMeta,
     aiAddonStatusSnapshot: {
       features: { summary: { languagePolicy: { names: { en: 'Should not appear', fr: 'Pas français' } } } },
     },
@@ -717,7 +722,7 @@ test('rendered history captions replace previous meetings and ignore add-on name
   context.updateSummaryLanguageCaptions({
     language: 'en',
     summary: 'Saved summary',
-    ai: { summary: { language: 'zh-HK', markdownPath: 'summary.md' } },
+    ai: { summary: { language: 'zh-HK', markdownPath: 'summary.md', template: 'interview' } },
   });
   assert.equal(elements['transcript-summary-language-caption'].hidden, false);
   assert.equal(elements['transcript-summary-language-caption'].label.textContent, 'Language:');
@@ -725,7 +730,7 @@ test('rendered history captions replace previous meetings and ignore add-on name
   assert.equal(elements['summary-language-caption'].hidden, false);
   assert.equal(elements['summary-language-caption'].label.textContent, 'Summary language:');
   assert.match(elements['summary-language-caption'].value.textContent, /Chinese/);
-  assert.match(elements['summary-language-caption'].value.textContent, /Hong Kong/);
+  assert.match(elements['summary-language-caption'].value.textContent, /Hong Kong.*Interview format/);
   assert.equal(elements['summary-language-caption'].value.textContent.includes('Should not appear'), false);
 
   context.updateSummaryLanguageCaptions({ language: 'und' });
@@ -806,7 +811,10 @@ test('a deferred summary response cannot replace the selected meeting captions o
             });
           });
         },
-        generateSummary: async () => ({ meeting: { id: 'meeting-a' } }),
+        generateSummary: async ({ template }) => {
+          assert.equal(template, 'interview');
+          return { meeting: { id: 'meeting-a' } };
+        },
         saveTranscriptAs: async (payload) => { savedSummaries.push(payload); },
       },
     },
@@ -859,6 +867,7 @@ test('a deferred summary response cannot replace the selected meeting captions o
   const pending = context.generateSummaryForMeeting('meeting-a');
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(elements['summary-language-modal'].hidden, false);
+  elements['summary-recording-tag'].value = 'interview';
   elements['summary-language-form'].dispatch('submit');
   for (let attempt = 0; attempt < 20 && !releaseLateMeeting; attempt += 1) {
     await new Promise((resolve) => setImmediate(resolve));
@@ -910,7 +919,7 @@ test('regeneration shows the prior confirmation as an editable default', async (
   elements['summary-transcript-language'].value = 'pt';
   elements['summary-transcript-language'].dispatch('change');
   elements['summary-language-form'].dispatch('submit');
-  assert.equal(await pending, 'pt');
+  assert.deepEqual({ ...await pending }, { transcriptLanguage: 'pt', modelId: null, template: 'other' });
 });
 
 test('real regeneration cannot bypass the dialog for a reusable language', async () => {
@@ -986,5 +995,5 @@ test('Prepare summary handles 0/1/2+ usable models and pre-selects summary-capab
   assert.match(elements['summary-language-message'].textContent, /Qwen3\.5 4B is Chat-only on this device/);
   elements['summary-language-form'].dispatch('submit');
   const submitted = await pending;
-  assert.deepEqual({ ...submitted }, { transcriptLanguage: 'en', modelId: 'gemma-4-e4b' });
+  assert.deepEqual({ ...submitted }, { transcriptLanguage: 'en', modelId: 'gemma-4-e4b', template: 'other' });
 });

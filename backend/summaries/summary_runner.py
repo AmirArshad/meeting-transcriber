@@ -267,6 +267,7 @@ def generate_summary(
     profile: str = DEFAULT_PROFILE,
     language: Optional[str] = None,
     tag: Optional[str] = None,
+    template: Optional[str] = None,
     speaker_names: Optional[Dict[str, str]] = None,
     model_label: str = "local-summary-model",
     model_id: Optional[str] = None,
@@ -278,7 +279,7 @@ def generate_summary(
 ) -> Dict[str, Any]:
     emit_progress(meeting_id, "loading-transcript", "Loading transcript for local summary.")
     normalized_tag = normalize_recording_tag(tag, strict=False)
-    template_id = resolve_template_id(normalized_tag, fallback="other")
+    template_id = resolve_template_id(template or normalized_tag, fallback="other")
     transcript_text = read_transcript_text(transcript_path)
     source_hash = hash_transcript_text(transcript_text)
     if source_transcript_hash is not None and source_hash != source_transcript_hash:
@@ -367,6 +368,7 @@ def main() -> None:
     parser.add_argument("--profile", default=DEFAULT_PROFILE)
     parser.add_argument("--language")
     parser.add_argument("--tag", default=None)
+    parser.add_argument("--template")
     parser.add_argument("--source-transcript-hash")
     parser.add_argument("--model-id")
     parser.add_argument("--inference-json", default="{}")
@@ -411,6 +413,7 @@ def main() -> None:
             model_label=args.model_label,
             language=args.language,
             tag=normalized_tag,
+            template=args.template,
             source_transcript_hash=args.source_transcript_hash,
             model_id=args.model_id,
             inference_descriptor=json.loads(args.inference_json),

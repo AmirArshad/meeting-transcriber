@@ -533,3 +533,34 @@ def test_custom_speaker_labels_without_words_do_not_count_as_speech():
     labels = "Alexandra Rivera:\n[00:01] Benjamin Martin:\n[00:05 - 00:09] Dr. Li: ... 42"
     assert not transcript_chunk_has_speech(labels)
     assert transcript_chunk_has_speech(labels + "\nMorgan: Approved calibration yesterday.")
+
+
+def test_summary_runner_uses_format_override_and_preserves_recording_tag(tmp_path, monkeypatch):
+    from backend.summaries import summary_runner
+
+    transcript = tmp_path / 'recording.md'
+    transcript.write_text('[00:00] Hello', encoding='utf-8')
+    monkeypatch.setattr(summary_runner, 'resolve_llama_runtime', lambda **kwargs: {})
+
+    def summarize(**kwargs):
+        assert kwargs['tag'] == 'brainstorm'
+        return {'summary': 'Overview', 'problem_or_goal': [{'goal': 'Ship release'}]}
+
+    monkeypatch.setattr(summary_runner, 'generate_summary_from_segments', summarize)
+    result = summary_runner.generate_summary(
+        meeting_id='recording',
+        transcript_path=str(transcript),
+        runtime_dir='runtime',
+        model_path='model.gguf',
+        tag='meeting',
+        template='brainstorm',
+    )
+
+    assert result['metadata']['tag'] == 'meeting'
+    assert result['metadata']['template'] == 'brainstorm'
+    markdown = render_summary_markdown(result['summary'], result['metadata'])
+    assert '**Tag:** Meeting' in markdown
+    assert '**Format:** Brainstorm' in markdown
+    assert 'Ship release' in markdown
+    assert '**Format:**' not in render_summary_markdown({'summary': 'Overview'}, {'tag': 'meeting', 'template': 'meeting'})
+    assert '**Format:**' not in render_summary_markdown({'summary': 'Overview'}, {'tag': None, 'template': 'other'})
