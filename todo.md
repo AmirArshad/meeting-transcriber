@@ -9,11 +9,11 @@ See the [release notes](docs/releases/v3.1.0.md) and [qualification record](docs
 
 Planned on `release/3.2` (not yet cut): [v3.2.0 release plan](docs/superpowers/plans/2026-11-22-v3.2-release-plan.md). Delivered via **10 micro-slices across 3 integration checkpoints** (Waves A–C) to keep diffs ~120–400 lines, optimize review/build token budgets across Antigravity (`Neon`/`Argon`/`Terra`) and Codex (`Sol`) via `t3code`, and batch full-suite runs to checkpoints:
 
-- [ ] **Wave A (Slices A1–A4 → Checkpoint 1):**
-  - [ ] **A1** — ≥5 s speaker audio samples + `"Sample"` caption below preview buttons (`#8`, `#9`).
-  - [ ] **A2** — Always-available Summary format dropdown + decoupled `ai.summary.template` persistence (`#10`).
-  - [ ] **A3** — Device compatibility fit states (`likely_fits`/`tight`/`unknown`), Gemma 4 12B 12 GB calibration with nominal-tier tolerance (`12,282 MiB`), and hardened Linux `nvidia-smi` probe (`#1`, `#2`).
-  - [ ] **A4** — Unload-before-download confirmation prompt (`unloadLoadedModel: true` + `SUMMARY_MODEL_LOADED_IN_MEMORY`) and unload UI state sync (`#6`).
+- [x] **Wave A (Slices A1–A4 → Checkpoint 1):** `npm run test:all` exit `0` on `release/3.2` (`76f03e8`: JS `1,381 passed, 0 failed, 1 skipped`; Python `992 passed, 8 skipped`; JS/Python syntax clean).
+  - [x] **A1** — ≥5 s speaker audio samples + `"Sample"` caption below preview buttons (`#8`, `#9`).
+  - [x] **A2** — Always-available Summary format dropdown + decoupled `ai.summary.template` persistence (`#10`).
+  - [x] **A3** — Device compatibility fit states (`likely_fits`/`tight`/`unknown`), Gemma 4 12B 12 GB calibration with nominal-tier tolerance (`12,282 MiB`), and hardened Linux `nvidia-smi` probe (`#1`, `#2`).
+  - [x] **A4** — Unload-before-download confirmation prompt (`unloadLoadedModel: true` + `SUMMARY_MODEL_LOADED_IN_MEMORY`) and unload UI state sync (`#6`).
 - [ ] **Wave B (Slices B1–B3 → Checkpoint 2):**
   - [ ] **B1** — Python 3-tier Chat context router (direct full-transcript fit, `lastQuestion` follow-up resolution, adaptive caps, rolling compaction) + granular timestamp chunks (`#3`, `#4`, `#11`).
   - [ ] **B2** — General chat mode backend (`scope.type = 'none'`), fail-closed verifier guardrails, and helpful grounded `insufficient_evidence` handling (`#5`, `#11`).
