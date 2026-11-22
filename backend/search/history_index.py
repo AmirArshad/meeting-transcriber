@@ -16,7 +16,7 @@ import tempfile
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import AbstractSet, Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from meeting_manager import MeetingManager
 from meetings import normalization as meeting_norm
@@ -1377,6 +1377,7 @@ def _query_passages(
     tags: Optional[Sequence[str]] = None,
     limit_rows: int,
     max_matches_per_meeting: int = 3,
+    qa_stopwords: Optional[AbstractSet[str]] = None,
 ) -> Tuple[List[sqlite3.Row], List[str]]:
     scope_clauses, scope_params = build_scope_sql_filters(
         meeting_ids=meeting_ids,
@@ -1385,16 +1386,61 @@ def _query_passages(
         tags=tags,
     )
     per_meeting_cap = max(1, int(max_matches_per_meeting))
+    # Q&A routes by recording first, using body/speaker matches, summary matches
+    # and the density of hits relative to recording length. Ordinary search
+    # keeps its passage-first ranking and literal query semantics.
+    route_cte = ""
+    route_join = ""
+    route_order = ""
+    body_filter = ""
+    if qa_stopwords is not None:
+        body_filter = "WHERE body_tier = 0"
+        route_cte = """,
+            recordings AS (
+                SELECT meeting_id,
+                       MIN(rank_score) AS best_rank,
+                       AVG(rank_score) AS mean_rank,
+                       MAX(kind = 'summary') AS summary_match,
+                       COUNT(*) * 60.0 / MAX(60.0, MAX(meeting_duration_sec)) AS hits_per_minute
+                FROM matched
+                WHERE body_tier = 0
+                GROUP BY meeting_id
+            )
+        """
+        route_join = "JOIN recordings USING (meeting_id)"
+        route_order = """best_rank + mean_rank - 0.25 * summary_match
+                         - 0.1 * min(hits_per_minute, 10) ASC, meeting_id ASC,"""
+
+    def select_ranked(passage_order: str, result_order: str) -> str:
+        return f"""
+            ranked AS (
+                SELECT *,
+                       ROW_NUMBER() OVER (PARTITION BY meeting_id ORDER BY {passage_order}) AS rn
+                FROM matched
+                {body_filter}
+            )
+            {route_cte}
+            SELECT ranked.*
+            FROM ranked
+            {route_join}
+            WHERE rn <= ?
+            ORDER BY {route_order} {result_order}
+            LIMIT ?
+        """
 
     match_and, tokens = build_fts5_query(raw_query, mode="and", prefix_last=True)
     if not match_and or not tokens:
+        return [], []
+    fallback_tokens = [token for token in tokens if token.casefold() not in (qa_stopwords or ())]
+    if not fallback_tokens:
         return [], []
 
     def run_fts(match_expr: str) -> List[sqlite3.Row]:
         where_parts = ["passages_fts MATCH ?", *scope_clauses]
         where_sql = " AND ".join(where_parts)
+        materialize = "MATERIALIZED" if qa_stopwords is not None else ""
         sql = f"""
-            WITH matched AS (
+            WITH matched AS {materialize} (
                 SELECT
                     p.passage_id,
                     p.meeting_id,
@@ -1427,51 +1473,20 @@ def _query_passages(
                 JOIN indexed_meetings m ON m.meeting_id = p.meeting_id
                 WHERE {where_sql}
             ),
-            ranked AS (
-                SELECT
-                    *,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY meeting_id
-                        ORDER BY body_tier ASC, kind_tier ASC, rank_score ASC, seq_index ASC
-                    ) AS rn
-                FROM matched
-            )
-            SELECT
-                passage_id,
-                meeting_id,
-                kind,
-                seq_index,
-                start_ms,
-                end_ms,
-                speaker,
-                text,
-                source_transcript_hash,
-                meeting_title,
-                meeting_date,
-                meeting_language,
-                meeting_duration_sec,
-                meeting_tag,
-                rank_score,
-                title_snippet,
-                speaker_snippet,
-                text_snippet
-            FROM ranked
-            WHERE rn <= ?
-            ORDER BY
-                body_tier ASC,
-                kind_tier ASC,
-                rank_score ASC,
-                meeting_date DESC,
-                seq_index ASC
-            LIMIT ?
+            {select_ranked(
+                "body_tier, kind_tier, rank_score, seq_index",
+                "body_tier, kind_tier, rank_score, meeting_date DESC, seq_index",
+            )}
         """
         return conn.execute(sql, [match_expr, *scope_params, per_meeting_cap, limit_rows]).fetchall()
 
     rows = run_fts(match_and)
     if not rows and len(tokens) > 1:
-        match_or, _ = build_fts5_query(raw_query, mode="or", prefix_last=True)
+        match_or, _ = build_fts5_query(" ".join(fallback_tokens), mode="or", prefix_last=True)
         if match_or:
             rows = run_fts(match_or)
+            if rows:
+                return rows, fallback_tokens
 
     # CJK queries without word boundaries fall back to parameterized LIKE matching
     # because SQLite's unicode61 tokenizer treats unspaced CJK runs as one token.
@@ -1522,42 +1537,10 @@ def _query_passages(
                 JOIN indexed_meetings m ON m.meeting_id = p.meeting_id
                 WHERE {where_sql}
             ),
-            ranked AS (
-                SELECT
-                    *,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY meeting_id
-                        ORDER BY body_tier ASC, kind_tier ASC, seq_index ASC
-                    ) AS rn
-                FROM matched
-            )
-            SELECT
-                passage_id,
-                meeting_id,
-                kind,
-                seq_index,
-                start_ms,
-                end_ms,
-                speaker,
-                text,
-                source_transcript_hash,
-                meeting_title,
-                meeting_date,
-                meeting_language,
-                meeting_duration_sec,
-                meeting_tag,
-                rank_score,
-                title_snippet,
-                speaker_snippet,
-                text_snippet
-            FROM ranked
-            WHERE rn <= ?
-            ORDER BY
-                body_tier ASC,
-                kind_tier ASC,
-                meeting_date DESC,
-                seq_index ASC
-            LIMIT ?
+            {select_ranked(
+                "body_tier, kind_tier, seq_index",
+                "body_tier, kind_tier, meeting_date DESC, seq_index",
+            )}
         """
         rows = conn.execute(
             sql,
@@ -1581,6 +1564,7 @@ def search_history_index(
     tags: Optional[Sequence[str]] = None,
     sync: bool = True,
     conn: Optional[sqlite3.Connection] = None,
+    qa_stopwords: Optional[AbstractSet[str]] = None,
 ) -> Dict[str, Any]:
     """Search meeting titles, transcripts, speakers, and summaries via SQLite FTS5."""
     rec_dir = Path(recordings_dir)
@@ -1626,6 +1610,7 @@ def search_history_index(
             tags=tags,
             limit_rows=row_limit,
             max_matches_per_meeting=capped_matches,
+            qa_stopwords=qa_stopwords,
         )
 
         grouped: Dict[str, Dict[str, Any]] = {}
@@ -1783,6 +1768,26 @@ def _row_to_passage_record(row: sqlite3.Row) -> Dict[str, Any]:
         "excerpt": text if len(text) <= 220 else f"{text[:219]}…",
         "sourceTranscriptHash": str(row["source_transcript_hash"] or ""),
     }
+
+
+def estimate_meeting_transcripts(
+    conn: sqlite3.Connection, meeting_ids: Sequence[str]
+) -> Dict[str, Tuple[int, int]]:
+    """Return (passage count, UTF-8 text bytes) before loading full transcripts."""
+    if not meeting_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in meeting_ids)
+    rows = conn.execute(
+        f"""
+        SELECT meeting_id, COUNT(*) AS passage_count,
+               SUM(length(CAST(text AS BLOB))) AS text_bytes
+        FROM passages
+        WHERE kind = 'transcript' AND meeting_id IN ({placeholders})
+        GROUP BY meeting_id
+        """,
+        list(meeting_ids),
+    )
+    return {row["meeting_id"]: (row["passage_count"], row["text_bytes"]) for row in rows}
 
 
 def fetch_meeting_passages(

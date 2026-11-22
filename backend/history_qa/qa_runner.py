@@ -37,7 +37,10 @@ from .citation_verifier import (
 from .retrieval import estimate_token_count, retrieve_evidence
 
 MAX_HISTORY_TOKENS = 4_000
-MAX_GENERATION_TOKENS = 1_024
+MAX_GENERATION_TOKENS = 2_048
+DEFAULT_CONTEXT_TOKENS = 32_768
+CONTEXT_SAFETY_TOKENS = 1_024
+MIN_GENERATION_TOKENS = 128
 MAX_REPAIR_ATTEMPTS = 1
 DEFAULT_HTTP_TIMEOUT_SECONDS = 300
 MAX_INSPECTED_SOURCES = 6
@@ -174,29 +177,68 @@ def bound_conversation_history(
     *,
     max_tokens: int = MAX_HISTORY_TOKENS,
 ) -> List[Dict[str, str]]:
-    """Keep the most recent thread turns within the configured token budget."""
-    if not history:
-        return []
-
-    kept_reversed: List[Dict[str, str]] = []
-    used = 0
-    for turn in reversed(list(history)):
+    """Keep recent turn pairs intact and digest older turns within the same budget."""
+    pairs: List[List[Dict[str, Any]]] = []
+    for turn in history or ():
         if not isinstance(turn, dict):
             continue
         role = str(turn.get("role") or "").strip().lower()
         content = str(turn.get("content") or "").strip()
         if role not in ("user", "assistant") or not content:
             continue
-        cost = estimate_token_count(content) + 12
-        if used + cost > max_tokens:
-            break
-        kept_reversed.append({"role": role, "content": content})
-        used += cost
+        if role == "user":
+            pairs.append([])
+        if pairs:
+            pairs[-1].append({**turn, "role": role, "content": content})
 
-    kept = list(reversed(kept_reversed))
-    while kept and kept[0]["role"] != "user":
-        kept.pop(0)
-    return kept
+    kept: List[List[Dict[str, str]]] = []
+    remaining = max_tokens
+    for index, pair in enumerate(reversed(pairs)):
+        cost = sum(estimate_token_count(turn["content"]) + 12 for turn in pair)
+        reserve = min(400, max_tokens // 10) if index >= 2 and index < len(pairs) - 1 else 0
+        if len(kept) == 4 or cost + reserve > remaining:
+            break
+        kept.append([{"role": turn["role"], "content": turn["content"]} for turn in pair])
+        remaining -= cost
+
+    def compact(text: str, limit: int) -> str:
+        cleaned = " ".join(_STREAM_CITATION_RE.sub("", text).split())
+        encoded = cleaned.encode("utf-8", errors="replace")
+        if len(encoded) <= limit:
+            return cleaned
+        return encoded[:limit].decode("utf-8", errors="ignore") + "…"
+
+    header = "Earlier conversation for resolving follow-ups:"
+    remaining -= estimate_token_count(header) + 12
+    summaries = []
+    for pair in reversed(pairs[:len(pairs) - len(kept)]):
+        if remaining <= 0:
+            break
+        question = compact(pair[0]["content"], 100)
+        topic = compact(pair[1]["content"], 100) if len(pair) > 1 else ""
+        titles = dict.fromkeys(
+            cite["meetingTitle"]
+            for turn in pair[1:]
+            for cite in (turn.get("citations") or [])
+            if isinstance(cite, dict) and isinstance(cite.get("meetingTitle"), str) and cite["meetingTitle"]
+        )
+        sources = compact(", ".join(titles), 100)
+        parts = [question]
+        if topic:
+            parts.append(f"Topics: {topic}")
+        if sources:
+            parts.append(f"Recordings: {sources}")
+        for details in (parts, [question]):
+            digest = f"[Prior Q → {' | '.join(details)}]"
+            cost = estimate_token_count(digest + "\n")
+            if cost <= remaining:
+                summaries.append(digest)
+                remaining -= cost
+                break
+
+    turns = [{"role": "context", "content": "\n".join([header, *reversed(summaries)])}] if summaries else []
+    turns.extend(turn for pair in reversed(kept) for turn in pair)
+    return turns
 
 
 def build_qa_messages(
@@ -204,6 +246,7 @@ def build_qa_messages(
     question: str,
     evidence: Sequence[Dict[str, Any]],
     history: Optional[Sequence[Dict[str, Any]]] = None,
+    history_max_tokens: int = MAX_HISTORY_TOKENS,
 ) -> List[Dict[str, str]]:
     system_prompt = "\n".join(
         [
@@ -215,7 +258,9 @@ def build_qa_messages(
             "3. Format cleanly with concise Markdown headings, bullet lists, or GFM tables when helpful.",
             "4. Place inline square-bracket citations like [E1] or [E1] [E2] on the SAME line at the end of EVERY factual paragraph, bullet point, blockquote, and table data row (for example: '- Approved the calibration [E1].'). NEVER put [E1] on a separate line or standalone bullet like '- [E1]'. [E1]..[En] numbering applies specifically to the current turn's `Evidence passages` list (never earlier turns). (Headings, table header/separator rows, and short colon-terminated lead-in lines before a list or table do not need citations.)",
             "5. NEVER invent facts, decisions, numbers, quotes, recording names, speakers, or timestamps not present in the evidence.",
+            "Cite the specific timestamped [Ek] that supports each claim. If adjacent verses or speaker turns support different claims, cite each at its matching timestamp. Prefer timestamped transcript passages when a summary repeats the same facts.",
             "For transcript attribution, the Speaker label in the passage header identifies who said the following words. A per-excerpt speaker label takes precedence for its excerpt. A name spoken in the passage may refer to somebody else. If saved summary attribution differs, use the transcript's current speaker label.",
+            "Use earlier conversation to resolve references and focus follow-up questions. Support every factual claim with this turn's evidence.",
             "6. Only set insufficientEvidence to true when none of the retrieved passages address the question at all.",
             "7. Respond ONLY with a valid JSON object matching this exact schema (no prose outside JSON, no markdown code fences):",
             '{"answerMarkdown": "<Markdown answer with inline [Ek] citations>", "citedEvidenceIds": ["E1"], "insufficientEvidence": false}',
@@ -232,12 +277,16 @@ def build_qa_messages(
         date = str(item.get("meetingDate") or "")[:10]
         ts = _format_evidence_timestamp(item)
         speaker = str(item.get("speaker") or "").strip()
-        meta_parts = [part for part in (date, ts, f"Speaker: {speaker}" if speaker else "") if part]
-        header = f"[{eid}] Recording: {title}{tag_label} ({', '.join(meta_parts)})"
+        meta_parts = [part for part in (date, f"Speaker: {speaker}" if speaker else "") if part]
+        metadata = f" ({', '.join(meta_parts)})" if meta_parts else ""
+        header = f"[{eid}] {ts} — Recording: {title}{tag_label}{metadata}"
         evidence_lines.append(f"{header}\n{item.get('text') or ''}")
 
+    turns = bound_conversation_history(history, max_tokens=history_max_tokens)
+    digest = next((turn["content"] for turn in turns if turn["role"] == "context"), "")
     user_content = "\n\n".join(
         [
+            *([digest] if digest else []),
             "Evidence passages from local recording history:",
             "\n\n".join(evidence_lines),
             f"User question:\n{str(question or '').strip()}",
@@ -245,9 +294,71 @@ def build_qa_messages(
     )
 
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
-    messages.extend(bound_conversation_history(history))
+    messages.extend(turn for turn in turns if turn["role"] != "context")
     messages.append({"role": "user", "content": user_content})
     return messages
+
+
+class QAPromptBudget:
+    """Share the context limit between retrieval, history and both generation calls."""
+
+    def __init__(self, payload: Dict[str, Any], question: str):
+        descriptor = payload.get("inferenceDescriptor")
+        descriptor_context = descriptor.get("contextTokens") if isinstance(descriptor, dict) else None
+        context_tokens = int(
+            payload.get("modelContextTokens") or payload.get("contextTokens")
+            or descriptor_context or DEFAULT_CONTEXT_TOKENS
+        )
+        self.context_limit = max(0, context_tokens - CONTEXT_SAFETY_TOKENS)
+        self.generation_reserve = max(
+            MIN_GENERATION_TOKENS, min(MAX_GENERATION_TOKENS, int(payload.get("maxTokens") or MAX_GENERATION_TOKENS))
+        )
+        self.evidence_limit = payload.get("maxEvidenceTokens")
+        self.question = question
+        self.history = payload.get("history")
+        fixed_tokens = self.message_tokens(build_qa_messages(question=question, evidence=[]))
+        available = self.context_limit - fixed_tokens
+        self.history_limit = max(0, min(MAX_HISTORY_TOKENS, (available - self._reserve_for_evidence(available)) // 4))
+
+    @staticmethod
+    def message_tokens(messages: Sequence[Dict[str, str]]) -> int:
+        return sum(estimate_token_count(message["content"]) + 12 for message in messages)
+
+    def messages(self, evidence: Sequence[Dict[str, Any]]) -> List[Dict[str, str]]:
+        return build_qa_messages(
+            question=self.question, evidence=evidence, history=self.history,
+            history_max_tokens=self.history_limit,
+        )
+
+    def generation_tokens(self, messages: Sequence[Dict[str, str]]) -> int:
+        return max(0, min(self.generation_reserve, self.context_limit - self.message_tokens(messages)))
+
+    def _reserve_for_evidence(self, available: int) -> int:
+        return min(self.generation_reserve, max(MIN_GENERATION_TOKENS, available // 2))
+
+    def evidence_tokens(self) -> int:
+        # Allow small-context models to retain some evidence by reducing their generation reserve.
+        available = self.context_limit - self.message_tokens(self.messages([]))
+        reserve = self._reserve_for_evidence(available)
+        available -= reserve
+        if self.evidence_limit is not None:
+            available = min(available, int(self.evidence_limit))
+        return max(0, available)
+
+    def fit_evidence(
+        self, evidence: Sequence[Dict[str, Any]],
+    ) -> Tuple[Sequence[Dict[str, Any]], List[Dict[str, str]]]:
+        messages = self.messages(evidence)
+        if self.generation_tokens(messages) >= MIN_GENERATION_TOKENS:
+            return evidence, messages
+        low, high = 0, len(evidence)
+        while low < high:
+            middle = (low + high + 1) // 2
+            if self.generation_tokens(self.messages(evidence[:middle])) >= MIN_GENERATION_TOKENS:
+                low = middle
+            else:
+                high = middle - 1
+        return evidence[:low], self.messages(evidence[:low])
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -414,6 +525,7 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not question:
         raise ValueError("Question must not be empty.")
 
+    budget = QAPromptBudget(payload, question)
     evidence = payload.get("evidence")
     searched_meeting_count = int(payload.get("searchedMeetingCount") or 0)
     detected_date_filter = str(payload.get("detectedDateFilter") or "")
@@ -430,6 +542,9 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
             question=question,
             scope=payload.get("scope"),
             thread_context=payload.get("threadContext"),
+            prior_turn_context=payload.get("priorTurnContext"),
+            max_evidence_blocks=payload.get("maxEvidenceBlocks"),
+            max_evidence_tokens=budget.evidence_tokens(),
             sync=bool(payload.get("sync", True)),
         )
         evidence = retrieval["evidence"]
@@ -437,6 +552,11 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
         detected_date_filter = str(retrieval.get("detectedDateFilter") or "")
         retrieval_mode = str(retrieval.get("retrievalMode") or "")
 
+    if evidence:
+        fitted_evidence, messages = budget.fit_evidence(evidence)
+        if retrieval_mode == "direct_full" and len(fitted_evidence) < len(evidence):
+            retrieval_mode = "overview"
+        evidence = fitted_evidence
     if not evidence:
         return {
             "status": "no_matching_excerpts",
@@ -452,15 +572,10 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     mode = str(payload.get("executionMode") or "server").strip().lower()
     use_stream = bool(payload.get("stream", False)) and mode == "server"
-    max_tokens = max(128, min(2048, int(payload.get("maxTokens") or MAX_GENERATION_TOKENS)))
     temperature = float(payload.get("temperature") if payload.get("temperature") is not None else 0.1)
-    messages = build_qa_messages(
-        question=question,
-        evidence=evidence,
-        history=payload.get("history"),
-    )
 
     def complete(turn_messages: Sequence[Dict[str, str]], *, allow_stream: bool = False) -> str:
+        max_tokens = budget.generation_tokens(turn_messages)
         if mode == "server":
             on_draft = (
                 (lambda preview: emit_progress(
@@ -503,10 +618,6 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if verified.get("needsRepair") and MAX_REPAIR_ATTEMPTS > 0:
         repair_reason = str(verified.get("reason") or "malformed_json")
-        if repair_reason == "missing_citations":
-            emit_progress("citation-repair", "Adding inline citations…", percent=92)
-        else:
-            emit_progress("json-repair", "Formatting answer…", percent=92)
         clipped_prev = clip_repair_output(raw_output) or "(empty response)"
         repair_messages = [
             *messages,
@@ -521,8 +632,15 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
                 ),
             },
         ]
-        repaired_output = complete(repair_messages, allow_stream=False)
-        verified = verify_grounded_response(repaired_output, evidence)
+        if len(messages) > 2 and budget.generation_tokens(repair_messages) < MIN_GENERATION_TOKENS:
+            repair_messages = [messages[0], *repair_messages[-3:]]
+        if budget.generation_tokens(repair_messages) >= MIN_GENERATION_TOKENS:
+            if repair_reason == "missing_citations":
+                emit_progress("citation-repair", "Adding inline citations…", percent=92)
+            else:
+                emit_progress("json-repair", "Formatting answer…", percent=92)
+            repaired_output = complete(repair_messages, allow_stream=False)
+            verified = verify_grounded_response(repaired_output, evidence)
 
     emit_progress("completed", "Done.", percent=100)
 
