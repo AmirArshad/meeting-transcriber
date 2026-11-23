@@ -158,4 +158,22 @@ Confirmed `v11` keyring encryption is accepted while `v10` fixed-key fallbacks (
 
 - **macOS arm64:** Native `scripts/check-build-requirements-closure.py macos`, `tests/fixtures/electron/token-migration-smoke.js` (Keychain), `build:mac` + `verify:mac:packaged`/`verify:mac:installer`, and Task 4.1/4.2 native `b12631` model checks.
 - **Windows 10/11 x64:** `tests/fixtures/electron/token-migration-smoke.js` (`DPAPI`), `build` + `verify-windows-installer.ps1`, and native CUDA model/Job Object checks.
-- **Linux x86_64:** `build:linux` + `verify:linux:packaged`, `npm run legal:release-assets` at release version cut, and interactive desktop acceptance.
+- **Linux x86_64:** Interactive desktop acceptance and `npm run legal:release-assets` at the release version cut remain open. The pre-cut package build and verifier passed as recorded below.
+
+## Task 5.3: integrated pre-release gate (2026-11-22)
+
+On clean `release/3.2` at `735bd5d5777196d85cf1106086c2d0af094d6f3e` after Waves A–C, CachyOS Linux x86_64 kernel `7.3.5-2-cachyos`, Node `v26.13.1`, npm `11.20.0`, and repo `.venv` Python `3.11.16`:
+
+- `npm run test:all` exited `0`: JavaScript `1,397 passed, 0 failed, 1 skipped` of `1,398`; Python `1,006 passed, 4 skipped`; JavaScript and Python syntax checks passed.
+- `python3 scripts/agents/validate_setup.py` exited `0`; 16 canonical skills validated.
+- `npm audit --omit=dev` and `npm audit` each exited `0` with `0 vulnerabilities`.
+- `npm run legal:release-assets` exited `0`, verified FFmpeg `8.1.2` source, and staged the `3.1.0` legal archive (SHA-256 `812328c609b9bbd58ba12d7b78d218738397e0af7942954beb494500a3926b94`). This must be repeated for the authorized release version.
+- `npm run build:linux` and `npm run verify:linux:packaged` each exited `0`; the verifier checked unpacked resources and all three packages, including pacman and deb dependencies. Artifacts are pre-cut `3.1.0` builds, not `3.2.0` release artifacts:
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| `AvaNevis-Setup-3.1.0.AppImage` | 379183505 | `1515dd720a59dd4b762a74347a73963ba4d7d27d7d5ae54f62fe0ac55c6b34ad` |
+| `AvaNevis-Setup-3.1.0.pkg.tar.zst` | 346914438 | `6c8f3cfcac78a52f211595d7a2342b1f62668142d4339b05c23f2acf3c741dae` |
+| `AvaNevis-Setup-3.1.0.deb` | 284843604 | `fa6189733d323a9c58ba3b16deb89b701284806f4b88ecec3be38cef5cb0b624` |
+
+Command logs are retained locally under ignored `logs/v3.2-task-5.3/`. This gate does not establish interactive Linux hardware acceptance or native Windows/macOS qualification. The remaining gates above, including the native macOS dependency closure and model checks, remain open; no new cross-platform limits were accepted in this run. Prior C3 Python and Rust audit evidence is recorded above. Version bump, release-version artifacts, merge, and tag await release-cut authorization.
