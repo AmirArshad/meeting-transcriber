@@ -7,7 +7,7 @@ See the [release notes](docs/releases/v3.1.0.md) and [qualification record](docs
 
 ### v3.2.0 release plan · 2026-11-22
 
-Planned on `release/3.2` (not yet cut): [v3.2.0 release plan](docs/superpowers/plans/2026-11-22-v3.2-release-plan.md). Delivered via **10 micro-slices across 3 integration checkpoints** (Waves A–C) to keep diffs ~120–400 lines, optimize review/build token budgets across Antigravity (`Neon`/`Argon`/`Terra`) and Codex (`Sol`) via `t3code`, and batch full-suite runs to checkpoints:
+Planned on `release/3.2` (not yet cut; latest code commit `51c49b5`): [v3.2.0 release plan](docs/superpowers/plans/2026-11-22-v3.2-release-plan.md) · [qualification record](docs/development/V3_2_QUALIFICATION.md). Delivered via **10 micro-slices across 3 integration checkpoints** (Waves A–C) to keep diffs ~120–400 lines, optimize review/build token budgets across Antigravity (`Neon`/`Argon`/`Terra`) and Codex (`Sol`) via `t3code`, and batch full-suite runs to checkpoints:
 
 - [x] **Wave A (Slices A1–A4 → Checkpoint 1):** `npm run test:all` exit `0` on `release/3.2` (`76f03e8`: JS `1,381 passed, 0 failed, 1 skipped`; Python `992 passed, 8 skipped`; JS/Python syntax clean).
   - [x] **A1** — ≥5 s speaker audio samples + `"Sample"` caption below preview buttons (`#8`, `#9`).
@@ -19,10 +19,43 @@ Planned on `release/3.2` (not yet cut): [v3.2.0 release plan](docs/superpowers/p
   - [x] **B2** — General chat mode backend (`scope.type = 'none'`), fail-closed verifier guardrails, and helpful grounded `insufficient_evidence` handling (`#5`, `#11`).
   - [x] **B3** — Chat renderer UI (`General chat`, Clear recording context, `Title · Summary` pills, notice recovery buttons) (`#5`, `#11`).
 - [ ] **Wave C (Slices C1–C3 → Checkpoint 3 & Release Cut):**
-  - [ ] **Task 5.3 pre-cut gate:** On `release/3.2` `735bd5d`, `test:all`, setup validation, both npm audits, legal staging, Linux AppImage/pacman/deb build and packaged verification all exited `0`. Windows/macOS native gates and Linux interactive acceptance remain open; no new cross-platform limits accepted. The artifacts and legal bundle use `3.1.0`; release-version staging/build and the authorized release cut remain. [Exact evidence](docs/development/V3_2_QUALIFICATION.md#task-53-integrated-pre-release-gate-2026-11-22).
-  - [ ] **C1** — The shared `b12631` archives are pinned and Linux Gemma 4 uses the CUDA 12.8 build. Native macOS and Windows adoption and **Inkling 2 Mini** qualification are pending. [Qualification record](docs/development/V3_2_QUALIFICATION.md)
-  - [ ] **C2** — Both **Bonsai 2** sizes passed Linux CUDA Chat. The peers and **Inkling 2 Mini** can run setup on compatible devices. Further maintainer hardware checks and summary language qualification remain pending. [Qualification record](docs/development/V3_2_QUALIFICATION.md) (`#7`).
-  - [ ] **C3** — Electron `46.x` stable migration (`safeStorage` verification), FFmpeg recheck, held Python/Rust sweeps (`onnxruntime`, `ctranslate2`, `pyobjc`, `speakrs`), `V3_2_QUALIFICATION.md`, and `v3.2.0` release cut.
+  - [ ] **C1 (runtime & Inkling 2 Mini):** Shared `b12631` archives are pinned across all three platforms; Linux Gemma 4 uses the CUDA 12.8 build; macOS arm64 `b12631` Metal **Inkling 2 Mini** setup, Grounded/General Chat, and English summary deadline check passed (`51c49b5`, after reasoning-mode fix). Windows/macOS Gemma 4 `b12631` adoption, Windows/Linux Inkling qualification, and a pre-release runtime re-check remain open. [Qualification record](docs/development/V3_2_QUALIFICATION.md)
+  - [ ] **C2 (Bonsai 2 & peer catalog):** All 5 new models (`bonsai-2-9b-q2-0`, `bonsai-2-27b-q2-0`, `ministral-3-14b`, `gemma-4-26b-a4b`, `qwen3.8-27b`) are pinned and enabled for device-gated Chat setup (`#7`). Both **Bonsai 2** sizes passed 32k Chat on Linux CUDA and macOS Metal (plus macOS English summary deadline check). Windows checks, native checks for `ministral-3-14b` / `gemma-4-26b-a4b` / `qwen3.8-27b`, and cross-platform summary language qualification remain open. [Qualification record](docs/development/V3_2_QUALIFICATION.md)
+  - [ ] **C3 (dependencies & audits — must be re-run before release):** Initial sweep (`785a868`: `dompurify 3.5.0`, `filelock 4.3.0`, `hashbrown 0.17.2`, SBOM, contracts) and partial Linux/macOS pre-cut gates ([Linux `735bd5d`](docs/development/V3_2_QUALIFICATION.md#task-53-integrated-pre-release-gate-2026-11-22), [macOS `51c49b5`](docs/development/V3_2_QUALIFICATION.md#macos-arm64-qualification-2026-11-23)) passed on pre-cut `3.1.0` artifacts. The full dependency/advisory sweep and local runtime pin check must be redone before cutting `v3.2.0`.
+
+**Remaining before `v3.2.0` release**
+
+- [ ] **Re-run dependency & security sweep before release:** Repeat live upstream checks and audits before cutting `v3.2.0` to pick up any newer releases, patches, or advisories published since the 2026-11-22 sweep:
+  - **Electron:** Re-check `npm view electron dist-tags` for stable `46.x` (held on `46.0.0-alpha.11`); if upgraded, re-audit Linux `safeStorage` provider prefix mapping / `v10` fixed-key rejection and re-run `tests/fixtures/electron/token-migration-smoke.js` on Linux, Windows, and macOS.
+  - **Bundled binaries:** Re-check matched cross-platform **FFmpeg** (`shaka-project/static-ffmpeg-binaries` + `GyanD/codexffmpeg` + `ffmpeg.org` source `> 8.1.2`), **CPython** (`astral-sh/python-build-standalone` `>= 3.11.18`), and `pip` (`>= 26.3`).
+  - **npm, Python & Rust:** Re-check npm packages/overrides, Python build pins & held upgrades (`onnxruntime`, `ctranslate2`, `pyobjc-*`, security/patch pins), and Rust (`speakrs` `0.8.0` vs `=0.7.0` + `Cargo.lock` patch updates). Re-run GitHub Dependabot alert check, `npm audit` & `npm audit --omit=dev`, `scripts/check-build-requirements-closure.py` (Windows, macOS, Linux), `scripts/pip_audit_inventory.py` (+ vulnerable canary), `cargo audit --deny warnings`, and `npm run legal:sbom` if Python pins change.
+- [ ] **Re-check local model runtimes before release:** Re-check upstream `ggml-org/llama.cpp` releases beyond `b12631` (and other managed local AI runtimes, including Speakrs, Parakeet, Pyannote, and Linux CUDA runtime components) for newer stable builds or fixes affecting Inkling 2 Mini, Bonsai 2, Gemma 4, Qwen 3.8, or Ministral 3. If any runtime pin changes, re-verify SHA-256 digests, asset IDs, Linux ELF closure, CLI/server flags, and native smokes.
+- [ ] **Windows 10/11 x64 native qualification (entire native gate open):**
+  - Run `npm run test:all`, `python3 scripts/agents/validate_setup.py`, and `tests/fixtures/electron/token-migration-smoke.js` (`DPAPI`).
+  - Build and verify the Windows installer (`npm run build` + `verify-windows-installer.ps1`).
+  - Run native CUDA `b12631` (or refreshed runtime) setup, Chat, Job Object exit, and cancellation checks for Bonsai 2 9B/27B, Gemma 4 E4B/12B (for unified runtime adoption), and available larger models (`ministral-3-14b`, `gemma-4-26b-a4b`, `qwen3.8-27b`, `inkling-2-mini` on 24+ GiB CUDA).
+  - Complete interactive v3.2 desktop acceptance (device fit badges, unload-before-download modal, Chat direct fit / follow-ups / granular timestamps / General Chat guardrails, ≥5 s speaker samples + `"Sample"` label, always-available Summary format dropdown).
+  - If qualifying held Python upgrades, run Windows active ETW telemetry verification (`onnxruntime`) and CPU/CUDA Whisper parity (`ctranslate2`).
+- [ ] **macOS arm64 remaining qualification:**
+  - Complete microphone-only and mixed-source (mic + system audio) hardware capture acceptance with macOS microphone TCC permission granted.
+  - Run native Metal checks for `ministral-3-14b`, `gemma-4-26b-a4b`, `qwen3.8-27b`, and Gemma 4 E4B/12B on `b12631` (or refreshed runtime) for unified runtime adoption.
+  - Complete interactive v3.2 desktop UI acceptance across Settings, History, Prepare summary, and Chat.
+  - If qualifying `pyobjc` `13.x`, run ScreenCaptureKit / CoreAudio permission smoke.
+- [ ] **Linux x86_64 (CachyOS / Omarchy) remaining qualification:**
+  - Re-run `npm run test:all`, `npm run build:linux`, and `npm run verify:linux:packaged` after `51c49b5` and any refreshed dependency/runtime updates (prior Linux gate was at `735bd5d`).
+  - Complete interactive desktop acceptance on CachyOS/Omarchy (RTX 4070 `12,282 MiB` device fit + Gemma 4 12B, unload-before-download modal, Chat modes/citations/follow-ups, ≥5 s speaker samples + `"Sample"` label, Summary format picker).
+  - Run 16–24+ GiB Linux CUDA checks for `ministral-3-14b` (32k), `gemma-4-26b-a4b`, `qwen3.8-27b`, and `inkling-2-mini`, or document as explicitly accepted hardware limits.
+  - If qualifying held Python upgrades, run Linux `strace --check-network` VAD parity (`onnxruntime`) and CPU/CUDA Whisper parity (`ctranslate2`).
+- [ ] **Runtime consolidation, summary language policy & doc sync:**
+  - Decide Gemma 4 E4B/12B promotion from `b12606` to the unified `llama.cpp` runtime on macOS and Windows once native checks pass.
+  - Complete cross-platform summary language qualification (`src/summary-language-policy.js`, currently `summary-language-v4`) for Inkling 2 Mini, Bonsai 2 9B/27B, Gemma 4 E4B/12B (Windows/Linux CUDA), and peers — or keep unverified combinations gated as documented limits.
+  - Evaluate or formally defer optional KV-cache quantization (`-fa on --cache-type-k q8_0 --cache-type-v q8_0`) from Task 2.1.
+  - Sync `docs/development/LOCAL_AI_MODEL_CATALOG.md` (including `inkling-2-mini`'s updated `--reasoning auto` / `reasoningEffort: 'minimal'` / `reasoningBudget: 256` settings from `51c49b5`) and canonical contracts for any refreshed runtime/dependency pins.
+- [ ] **Release-version (`3.2.0`) cut & publication:**
+  - Record final cross-platform evidence and any explicitly accepted limits in `docs/development/V3_2_QUALIFICATION.md`.
+  - Write curated release notes in `docs/releases/v3.2.0.md` and update `docs/initiatives/ROADMAP.md` and `todo.md`.
+  - On release-cut authorization: bump `package.json` and `package-lock.json` from `3.1.0` to `3.2.0`, re-run final `npm run test:all`, `python3 scripts/agents/validate_setup.py`, security audits, `npm run legal:release-assets` (`3.2.0` legal archive), and release-version `3.2.0` package builds/verifiers (replacing pre-cut `3.1.0` artifacts).
+  - Merge `release/3.2` into `master` via PR with green CI and push the authorized `v3.2.0` tag.
 
 ### v3.1.0 release cut · 2026-11-22
 
