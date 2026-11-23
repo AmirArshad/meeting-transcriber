@@ -476,6 +476,7 @@ def call_llama_server(
     timeout_seconds: int = DEFAULT_HTTP_TIMEOUT_SECONDS,
     stream: bool = False,
     json_mode: bool = True,
+    disable_thinking: bool = True,
     on_draft_update: Optional[Callable[[str], None]] = None,
 ) -> str:
     """Call resident loopback llama-server bypassing ambient HTTP proxy env vars."""
@@ -490,8 +491,9 @@ def call_llama_server(
         "temperature": float(temperature),
         "max_tokens": int(max_tokens),
         "stream": bool(stream),
-        "chat_template_kwargs": {"enable_thinking": False},
     }
+    if disable_thinking:
+        request_payload["chat_template_kwargs"] = {"enable_thinking": False}
     if json_mode:
         request_payload["response_format"] = {"type": "json_object"}
     body = json.dumps(request_payload).encode("utf-8")
@@ -640,6 +642,9 @@ def execute_qa_request(payload: Dict[str, Any]) -> Dict[str, Any]:
             }
             if not json_mode:
                 server_kwargs["json_mode"] = False
+            descriptor = payload.get("inferenceDescriptor")
+            if isinstance(descriptor, dict) and descriptor.get("disableThinking") is False:
+                server_kwargs["disable_thinking"] = False
             return call_llama_server(**server_kwargs)
         runtime_dir = str(payload.get("runtimeDir") or "")
         model_path = str(payload.get("modelPath") or "")

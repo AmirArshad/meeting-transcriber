@@ -603,3 +603,32 @@ def test_summary_runner_untagged_format_selection_and_strict_validation(tmp_path
                 tag=None,
                 template=bad_template,
             )
+
+
+def test_inkling_reasoning_auto_and_strip_model_reasoning():
+    from summaries.llama_runtime import build_llama_cli_args
+    from summaries.summary_pipeline import _strip_model_reasoning
+
+    assert _strip_model_reasoning("[Start thinking]\nplan\n[End thinking]\n\n{\"summary\": \"ok\"}") == '{"summary": "ok"}'
+    assert _strip_model_reasoning("[Start thinking]\nunclosed") == ""
+
+    auto_args = build_llama_cli_args(
+        {
+            "executable": "/tmp/llama-cli",
+            "modelPath": "/tmp/inkling.gguf",
+            "inference": {"disableThinking": False, "reasoningBudget": 256, "singleTurnOnly": True},
+        },
+        prompt_path="/tmp/prompt.txt",
+    )
+    assert auto_args[auto_args.index("--reasoning") + 1] == "auto"
+    assert auto_args[auto_args.index("--reasoning-budget") + 1] == "256"
+
+    off_args = build_llama_cli_args(
+        {
+            "executable": "/tmp/llama-cli",
+            "modelPath": "/tmp/qwen.gguf",
+            "inference": {"disableThinking": True, "reasoningBudget": 0, "singleTurnOnly": True},
+        },
+        prompt_path="/tmp/prompt.txt",
+    )
+    assert off_args[off_args.index("--reasoning") + 1] == "off"

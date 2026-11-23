@@ -801,7 +801,7 @@ function createHistoryQaService(deps) {
       '1',
       '--no-webui',
       '--reasoning',
-      'off',
+      artifact.inference?.disableThinking === false ? 'auto' : 'off',
     ];
     if (Number.isInteger(artifact.inference?.reasoningBudget)) {
       args.push('--reasoning-budget', String(artifact.inference.reasoningBudget));

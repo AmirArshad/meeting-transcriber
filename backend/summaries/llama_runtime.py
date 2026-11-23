@@ -164,10 +164,12 @@ def build_llama_cli_args(
         # legacy switch; --single-turn is its equivalent.
         "--single-turn",
         "--simple-io",
-        "--reasoning",
-        "off",
     ]
     inference = runtime.get("inference") or {}
+    args.extend((
+        "--reasoning",
+        "auto" if inference.get("disableThinking") is False else "off",
+    ))
     reasoning_budget = inference.get("reasoningBudget")
     if isinstance(reasoning_budget, int) and not isinstance(reasoning_budget, bool):
         args.extend(("--reasoning-budget", str(reasoning_budget)))

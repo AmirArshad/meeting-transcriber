@@ -29,6 +29,8 @@ _UNCLOSED_GEMMA_THOUGHT_RE = re.compile(
     r"<\|channel>thought[\s\S]*$",
     re.IGNORECASE,
 )
+_INKLING_THINK_BLOCK_RE = re.compile(r"\[Start thinking\][\s\S]*?\[End thinking\]", re.IGNORECASE)
+_UNCLOSED_INKLING_THINK_RE = re.compile(r"\[Start thinking\][\s\S]*$", re.IGNORECASE)
 _CODE_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$", re.IGNORECASE)
 _EVIDENCE_GROUP_RE = re.compile(r"\[((?:E\d+)(?:\s*[,;/]\s*E\d+)+)\]")
 _EVIDENCE_MARKER_RE = re.compile(r"\[(E\d+(?:\s*[,;/]\s*E\d+)*)\]")
@@ -48,12 +50,14 @@ _BOLD_LEAD_IN_RE = re.compile(r"^\*\*[^*\n]{1,120}\*\*:?$")
 
 
 def strip_reasoning_blocks(raw_text: Any) -> str:
-    """Remove Qwen/Gemma reasoning blocks while preserving Markdown content and fences."""
+    """Remove Qwen/Gemma/Inkling reasoning blocks while preserving Markdown content and fences."""
     cleaned = str(raw_text or "").strip()
     cleaned = _THINK_BLOCK_RE.sub("", cleaned)
     cleaned = _UNCLOSED_THINK_RE.sub("", cleaned)
     cleaned = _GEMMA_THOUGHT_BLOCK_RE.sub("", cleaned)
-    cleaned = _UNCLOSED_GEMMA_THOUGHT_RE.sub("", cleaned).strip()
+    cleaned = _UNCLOSED_GEMMA_THOUGHT_RE.sub("", cleaned)
+    cleaned = _INKLING_THINK_BLOCK_RE.sub("", cleaned)
+    cleaned = _UNCLOSED_INKLING_THINK_RE.sub("", cleaned).strip()
     return cleaned
 
 

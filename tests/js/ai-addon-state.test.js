@@ -59,8 +59,9 @@ test('Gemma uses its platform runtimes and Inkling uses the shared b12631 runtim
   assert.equal(inkling.runtimeCatalog, 'b12631');
   assert.equal(inkling.artifact.llamaCpp.version, 'b12631');
   assert.equal(inkling.artifact.llamaCpp.commit, 'e300919cc704ddde3a8a8346a8714f57eeeee71b');
-  assert.equal(inkling.inference.reasoningEffort, 'none');
-  assert.equal(inkling.inference.reasoningBudget, 0);
+  assert.equal(inkling.inference.disableThinking, false);
+  assert.equal(inkling.inference.reasoningEffort, 'minimal');
+  assert.equal(inkling.inference.reasoningBudget, 256);
   assert.equal(inkling.inference.singleTurnOnly, true);
 });
 

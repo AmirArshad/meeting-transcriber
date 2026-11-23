@@ -41,6 +41,8 @@ _THINK_BLOCK_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
 _UNCLOSED_THINK_RE = re.compile(r"<think>[\s\S]*$", re.IGNORECASE)
 _GEMMA_THOUGHT_BLOCK_RE = re.compile(r"<\|channel>thought[\s\S]*?<channel\|>", re.IGNORECASE)
 _UNCLOSED_GEMMA_THOUGHT_RE = re.compile(r"<\|channel>thought[\s\S]*$", re.IGNORECASE)
+_INKLING_THINK_BLOCK_RE = re.compile(r"\[Start thinking\][\s\S]*?\[End thinking\]", re.IGNORECASE)
+_UNCLOSED_INKLING_THINK_RE = re.compile(r"\[Start thinking\][\s\S]*$", re.IGNORECASE)
 _CHAT_CONTROL_TOKEN_RE = re.compile(
     r"<start_of_turn>|<end_of_turn>|<\|im_start\|>|<\|im_end\|>|<\|channel>|<channel\|>",
     re.IGNORECASE,
@@ -106,6 +108,8 @@ def _strip_model_reasoning(raw_output: str) -> str:
     cleaned = _UNCLOSED_THINK_RE.sub("", cleaned)
     cleaned = _GEMMA_THOUGHT_BLOCK_RE.sub("", cleaned)
     cleaned = _UNCLOSED_GEMMA_THOUGHT_RE.sub("", cleaned)
+    cleaned = _INKLING_THINK_BLOCK_RE.sub("", cleaned)
+    cleaned = _UNCLOSED_INKLING_THINK_RE.sub("", cleaned)
     return cleaned.strip()
 
 

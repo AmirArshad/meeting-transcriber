@@ -1848,3 +1848,46 @@ def test_retrieval_scope_none_and_general_chat_direct_markdown_sse(tmp_path, cap
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_inkling_disable_thinking_false_omits_enable_thinking_and_strips_start_thinking():
+    from history_qa.citation_verifier import strip_reasoning_blocks
+
+    assert strip_reasoning_blocks('[Start thinking]\nthinking\n[End thinking]\n\n{"ok": true}') == '{"ok": true}'
+    assert strip_reasoning_blocks("[Start thinking]\nunclosed") == ""
+
+    seen_payloads = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            seen_payloads.append(json.loads(self.rfile.read(length).decode("utf-8")))
+            body = json.dumps({"choices": [{"message": {"content": "Answer"}}]}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        res = execute_qa_request(
+            {
+                "question": "Hi",
+                "scope": {"type": "none"},
+                "stream": False,
+                "serverUrl": f"http://127.0.0.1:{port}",
+                "serverToken": "tok",
+                "inferenceDescriptor": {"disableThinking": False, "reasoningBudget": 256},
+            }
+        )
+        assert res["status"] == "answered"
+        assert "chat_template_kwargs" not in seen_payloads[0]
+    finally:
+        server.shutdown()
+        server.server_close()
