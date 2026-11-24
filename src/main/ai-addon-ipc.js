@@ -34,7 +34,9 @@ const {
 } = require('../ai-addon/manifest-store');
 const {
   getDiarizationAvailability,
+  getKnownSummaryModelById,
   getModelById,
+  getRetiredSummaryModelById,
   getSummaryAvailability,
   getSummaryArtifactForPlatform,
   getSummaryRuntimeArtifactForPlatform,
@@ -363,10 +365,11 @@ function createAiAddonIpc(deps) {
 
   function resolveTargetSummaryModelId(requestedModelId) {
     if (requestedModelId) {
-      return getModelById('summary', requestedModelId) ? requestedModelId : null;
+      return getKnownSummaryModelById(requestedModelId) ? requestedModelId : null;
     }
     const manifest = loadManifest({ userDataDir: app.getPath('userData'), fsModule: fs });
-    return resolveModelId('summary', manifest.summaryLibrary.defaultModelId);
+    const defaultId = manifest.summaryLibrary.defaultModelId;
+    return defaultId && getKnownSummaryModelById(defaultId) ? defaultId : resolveModelId('summary', defaultId);
   }
 
   function attachResidentModelToDeviceMemory(deviceMemory) {
@@ -389,7 +392,7 @@ function createAiAddonIpc(deps) {
     if (!resident || resident.status !== 'loaded') return;
     const targetModelId = resolveTargetSummaryModelId(modelId);
     if (!targetModelId) return;
-    const model = getModelById('summary', targetModelId);
+    const model = getKnownSummaryModelById(targetModelId);
     const artifact = getSummaryArtifactForPlatform(targetModelId, process.platform, process.arch);
     const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(process.platform, process.arch, undefined, targetModelId);
     const availability = getSummaryAvailability(process.platform, process.arch, { cudaStatus });
@@ -677,7 +680,7 @@ function createAiAddonIpc(deps) {
             ? (getCachedCudaStatus({ allowStale: true }) || getCachedCudaStatus())
             : null);
         const fit = getSummaryModelFit({
-          model: getModelById('summary', modelId), artifact, runtimeArtifact, deviceMemory, platform,
+          model: getKnownSummaryModelById(modelId), artifact, runtimeArtifact, deviceMemory, platform,
           availability: getSummaryAvailability(platform, process.arch, { cudaStatus: effectiveCudaStatus }),
         });
         if (deviceMemory && fit.blocked) throw new Error(fit.reason);
@@ -949,8 +952,17 @@ function createAiAddonIpc(deps) {
       assertTrustedRendererSender(event);
       const safeOptions = options && typeof options === 'object' ? options : {};
       return runCancellableAiAddonSetup('summary', async (cancelSignal) => {
+        const requestedRetired = safeOptions.modelId ? getRetiredSummaryModelById(safeOptions.modelId) : null;
+        if (requestedRetired) {
+          throw new Error(`${requestedRetired.label} has been replaced by ${requestedRetired.replacedByLabel || 'a newer model'}. Download ${requestedRetired.replacedByLabel || 'the replacement model'} in Settings instead.`);
+        }
         if (safeOptions.modelId && !getModelById('summary', safeOptions.modelId)) {
           throw new Error('Unknown summary model.');
+        }
+        const effectiveTargetId = resolveTargetSummaryModelId(safeOptions.modelId);
+        const targetRetired = effectiveTargetId ? getRetiredSummaryModelById(effectiveTargetId) : null;
+        if (targetRetired) {
+          throw new Error(`${targetRetired.label} has been replaced by ${targetRetired.replacedByLabel || 'a newer model'}. Download ${targetRetired.replacedByLabel || 'the replacement model'} in Settings instead.`);
         }
         const { cudaStatus, deviceMemory } = await readSummaryModelAdmission(safeOptions, {
           cancelSignal,
@@ -989,8 +1001,19 @@ function createAiAddonIpc(deps) {
       return runCancellableAiAddonSetup('summary', async (cancelSignal) => {
         let admission;
         try {
-          if (safeOptions.modelId && !getModelById('summary', safeOptions.modelId)) {
-            throw new Error('Unknown summary model.');
+          if (safeOptions.modelId) {
+            const knownModel = getKnownSummaryModelById(safeOptions.modelId);
+            if (!knownModel) {
+              throw new Error('Unknown summary model.');
+            }
+            if (knownModel.retired) {
+              const manifest = loadManifest({ userDataDir: app.getPath('userData'), fsModule: fs });
+              const retiredArtifact = getSummaryArtifactForPlatform(knownModel.id, process.platform, process.arch);
+              const retiredPath = retiredArtifact ? getSummaryArtifactPath(app.getPath('userData'), retiredArtifact) : null;
+              if (!manifest.summaryLibrary.models[knownModel.id] && !(retiredPath && fs.existsSync(retiredPath))) {
+                throw new Error('Unknown summary model.');
+              }
+            }
           }
           admission = await readSummaryModelAdmission(safeOptions, {
             cancelSignal,
@@ -1066,7 +1089,7 @@ function createAiAddonIpc(deps) {
       const safeOptions = options && typeof options === 'object' ? options : {};
       return enqueueAiAddonAction(async () => {
         assertSummaryModelActionCanRun();
-        if (!getModelById('summary', safeOptions.modelId)) throw new Error('Unknown summary model.');
+        if (!getKnownSummaryModelById(safeOptions.modelId)) throw new Error('Unknown summary model.');
         const hasCachedCudaStatus = typeof getCachedCudaStatus === 'function'
           && Boolean(getCachedCudaStatus({ allowStale: true }) || getCachedCudaStatus());
         const shouldProbeCuda = process.platform === 'linux'

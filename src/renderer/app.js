@@ -7866,6 +7866,12 @@ function renderSummaryModelLibrary(library) {
         defaultBadge.textContent = 'Default';
         badges.appendChild(defaultBadge);
       }
+      if (model.retired) {
+        const legacyBadge = document.createElement('span');
+        legacyBadge.className = 'summary-library-badge';
+        legacyBadge.textContent = 'Legacy';
+        badges.appendChild(legacyBadge);
+      }
       if (chatState.modelState.modelId === model.modelId && chatState.modelState.status === 'loaded') {
         const loadedBadge = document.createElement('span');
         loadedBadge.className = 'summary-library-badge is-ready';
@@ -8086,14 +8092,16 @@ function renderSummaryModelLibrary(library) {
               ...(unloadLoadedModel ? { unloadLoadedModel: true } : {}),
             }),
           }), false, 'secondary');
-          if (!model.setupComplete && model.status === 'error') addAction('Repair', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
+          if (!model.retired && !model.setupComplete && model.status === 'error') addAction('Repair', confirmSetup, setupBlocked, setupBlocked ? 'secondary' : 'primary');
         }
         if ((chatState.modelState.status === 'loaded' && chatState.modelState.modelId === model.modelId)
           || (chatState.modelState.status === 'release_error' && releaseModelId === model.modelId)) {
           addAction('Free memory', unloadSummaryModelFromUi, false, 'secondary');
         }
         addAction(removalIncomplete ? 'Retry removal' : 'Remove model', async () => {
-          const others = usableSummaryModels(library).filter((item) => item.modelId !== model.modelId);
+          const others = usableSummaryModels(library)
+            .filter((item) => item.modelId !== model.modelId)
+            .sort((a, b) => (b.modelId === model.replacedByModelId ? 1 : 0) - (a.modelId === model.replacedByModelId ? 1 : 0));
           let replacementModelId = null;
           if (model.modelId === library.defaultModelId && others.length > 1) {
             replacementModelId = await chooseSummaryReplacement(model, others);
@@ -8193,21 +8201,31 @@ function renderChatModelChoice() {
   const usable = usableSummaryModels(library);
   let saved = (chatState.activeThread ? chatState.activeThread.modelId : chatState.pendingModelId) || '';
   const savedModel = library.models?.find((model) => model.modelId === saved);
-  if (saved && !summaryModelHasFiles(savedModel || {}) && usable.some((model) => model.modelId === library.defaultModelId)) {
+  const replacementModel = saved && !summaryModelHasFiles(savedModel || {}) && saved === 'bonsai-2-27b-q2-0'
+    ? usable.find((model) => model.modelId === 'bonsai-2.5-27b-q2-0')
+    : null;
+  if (saved && !summaryModelHasFiles(savedModel || {}) && (replacementModel || usable.some((model) => model.modelId === library.defaultModelId))) {
+    const nextModelId = replacementModel
+      ? (replacementModel.modelId === library.defaultModelId ? null : replacementModel.modelId)
+      : null;
     const thread = chatState.activeThread;
     if (thread && chatState.resettingRemovedModelThreadId !== thread.id) {
       chatState.resettingRemovedModelThreadId = thread.id;
-      void window.electronAPI.updateChatThreadModel({ threadId: thread.id, modelId: null }).then((result) => {
+      void window.electronAPI.updateChatThreadModel({ threadId: thread.id, modelId: nextModelId }).then((result) => {
         if (chatState.activeThread?.id === thread.id) {
-          chatState.activeThread = result?.thread || { ...thread, modelId: null };
+          chatState.activeThread = result?.thread || { ...thread, modelId: nextModelId };
           chatState.resettingRemovedModelThreadId = null;
-          showAppToast(`The removed model was replaced by the default, ${summaryModelName(library.defaultModelId, library)}.`);
+          showAppToast(
+            replacementModel
+              ? `Bonsai 2 27B was replaced by ${replacementModel.modelName}.`
+              : `The removed model was replaced by the default, ${summaryModelName(library.defaultModelId, library)}.`,
+          );
           renderChatOnboardingAndComposer();
         }
       }).catch((error) => showAppToast(`Could not reset the removed model: ${error.message}`, 'error'))
         .finally(() => { chatState.resettingRemovedModelThreadId = null; });
-    } else if (!thread) chatState.pendingModelId = null;
-    saved = '';
+    } else if (!thread) chatState.pendingModelId = nextModelId;
+    saved = nextModelId || '';
   }
   const defaultUsable = usable.some((model) => model.modelId === library.defaultModelId);
   const hasUnavailableSaved = Boolean(saved && !usable.some((model) => model.modelId === saved));

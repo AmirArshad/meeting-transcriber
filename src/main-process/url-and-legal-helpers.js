@@ -19,7 +19,7 @@ const TRUSTED_HUGGING_FACE_PATHS = new Set([
   '/ggml-org/gemma-4-12B-it-GGUF',
   '/ggml-org/gemma-4-26B-A4B-it-GGUF',
   '/prism-ml/Ternary-Bonsai-2-9B-gguf',
-  '/prism-ml/Ternary-Bonsai-2-27B-gguf',
+  '/prism-ml/Ternary-Bonsai-2.5-27B-GGUF',
   '/unsloth/Ministral-3-14B-Instruct-2512-GGUF',
   '/ggml-org/Inkling-2-Mini-GGUF',
   '/nvidia/parakeet-tdt-0.6b-v2',

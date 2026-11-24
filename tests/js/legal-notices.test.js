@@ -20,6 +20,7 @@ test('THIRD_PARTY_NOTICES.md exists and documents key optional models', () => {
   assert.match(contents, /Qwen/i);
   assert.match(contents, /Prism ML/i);
   assert.match(contents, /Bonsai 2/i);
+  assert.match(contents, /Bonsai 2\.5/i);
   assert.match(contents, /Mistral AI/i);
   assert.match(contents, /Ministral 3/i);
   assert.match(contents, /parakeet-tdt-0\.6b-v2/i);
@@ -80,7 +81,8 @@ test('Settings About credits identify speaker engines and optional model sources
   assert.match(aboutHtml, />Speakrs</);
   assert.match(aboutHtml, /Apache-2\.0/);
   assert.match(aboutHtml, /pyannote Speaker Diarization Community-1/);
-  assert.match(aboutHtml, /Prism ML Bonsai 2/);
+  assert.match(aboutHtml, /Prism ML Bonsai 2 9B/);
+  assert.match(aboutHtml, /href="https:\/\/huggingface\.co\/prism-ml\/Ternary-Bonsai-2\.5-27B-GGUF"[^>]*>Bonsai 2\.5 27B</);
   assert.match(aboutHtml, /Mistral AI Ministral 3/);
   assert.match(aboutHtml, /href="https:\/\/huggingface\.co\/unsloth\/Qwen3\.8-27B-GGUF"/);
   assert.match(aboutHtml, /href="https:\/\/huggingface\.co\/ggml-org\/gemma-4-26B-A4B-it-GGUF"/);

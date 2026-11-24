@@ -4045,3 +4045,168 @@ test('validateSummaryRuntimeArtifact requires the audited Linux CUDA archive and
 
   assert.match(validateSummaryRuntimeArtifact({ ...candidate, commit: '0'.repeat(40) }), /NCCL/);
 });
+
+test('retired bonsai-2-27b-q2-0 is hidden on fresh profiles, stays valid when installed, blocks setup, and cleans up safely', async () => {
+  const { saveAiAddonManifest, getSharedSummaryRuntimeDir, getSummaryModelCacheDir } = require('../../src/ai-addon/manifest-store');
+  const { AI_MODEL_CATALOG } = require('../../src/ai-addon-state');
+
+  const freshFs = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const freshStatus = await checkAiAddonSetupStatus({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    fsModule: freshFs,
+    catalog: AI_MODEL_CATALOG,
+  });
+  assert.equal(freshStatus.summaryLibrary.models.some((m) => m.modelId === 'bonsai-2-27b-q2-0'), false);
+  assert.equal(freshStatus.summaryLibrary.models.some((m) => m.modelId === 'bonsai-2.5-27b-q2-0'), true);
+
+  // Build a fast-hashing catalog preserving real retiredModels / b12631 structure.
+  const fsModule = createMemoryFs();
+  const baseCatalog = createCatalogWithPinnedSummaryArtifact({ sha256: CHECKSUM_TARGET_SHA256 });
+  const baseModel = baseCatalog.summary.models[0];
+  const bonsai25 = {
+    ...structuredClone(baseModel),
+    id: 'bonsai-2.5-27b-q2-0',
+    label: 'Bonsai 2.5 27B',
+    artifact: {
+      ...structuredClone(baseModel.artifact),
+      fileName: 'Ternary-Bonsai-2.5-27B-Q2_0.gguf',
+      platformArtifacts: {
+        ...structuredClone(baseModel.artifact.platformArtifacts),
+        'win32-x64': {
+          ...structuredClone(baseModel.artifact.platformArtifacts['win32-x64']),
+          id: 'bonsai-2.5-27b-q2-0-gguf-win32-x64-cuda',
+          fileName: 'Ternary-Bonsai-2.5-27B-Q2_0.gguf',
+        },
+      },
+    },
+  };
+  const retiredBonsai2 = {
+    ...structuredClone(baseModel),
+    id: 'bonsai-2-27b-q2-0',
+    label: 'Bonsai 2 27B',
+    retired: true,
+    replacedByModelId: 'bonsai-2.5-27b-q2-0',
+    replacedByLabel: 'Bonsai 2.5 27B',
+    artifact: {
+      ...structuredClone(baseModel.artifact),
+      fileName: 'Ternary-Bonsai-2-27B-Q2_0.gguf',
+      platformArtifacts: {
+        ...structuredClone(baseModel.artifact.platformArtifacts),
+        'win32-x64': {
+          ...structuredClone(baseModel.artifact.platformArtifacts['win32-x64']),
+          id: 'bonsai-2-27b-q2-0-gguf-win32-x64-cuda',
+          fileName: 'Ternary-Bonsai-2-27B-Q2_0.gguf',
+        },
+      },
+    },
+  };
+  const catalog = {
+    ...baseCatalog,
+    summary: {
+      ...baseCatalog.summary,
+      models: [baseModel, bonsai25],
+      retiredModels: [retiredBonsai2],
+    },
+  };
+
+  // Install Bonsai 2.5 27B and pre-populate an existing ready Bonsai 2 27B install sharing the same runtime.
+  await setupSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'bonsai-2.5-27b-q2-0',
+    fsModule,
+    catalog,
+    downloader: async ({ url, destinationPath }) => fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n'),
+    extractor: async (_archive, extractDir) => fsModule.writeFileSync(path.join(extractDir, 'llama-cli.exe'), 'bin'),
+  });
+  const retiredArtifact = getSummaryArtifactForPlatform('bonsai-2-27b-q2-0', 'win32', 'x64', catalog);
+  fsModule.writeFileSync(getSummaryArtifactPath(userDataDir, retiredArtifact), 'checksum target\n');
+  saveAiAddonManifest({
+    userDataDir,
+    fsModule,
+    catalog,
+    manifest: {
+      features: { summary: { status: 'ready', modelId: 'bonsai-2-27b-q2-0' } },
+      summaryLibrary: {
+        defaultModelId: 'bonsai-2-27b-q2-0',
+        models: {
+          'bonsai-2-27b-q2-0': { status: 'ready', modelId: 'bonsai-2-27b-q2-0' },
+          'bonsai-2.5-27b-q2-0': { status: 'ready', modelId: 'bonsai-2.5-27b-q2-0' },
+        },
+      },
+    },
+  });
+
+  const installedStatus = await checkAiAddonSetupStatus({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    fsModule,
+    catalog,
+    verifyChecksums: true,
+  });
+  assert.equal(installedStatus.summaryLibrary.defaultModelId, 'bonsai-2-27b-q2-0');
+  const retiredEntry = installedStatus.summaryLibrary.models.find((m) => m.modelId === 'bonsai-2-27b-q2-0');
+  assert.ok(retiredEntry);
+  assert.equal(retiredEntry.retired, true);
+  assert.equal(retiredEntry.replacedByModelId, 'bonsai-2.5-27b-q2-0');
+  assert.equal(retiredEntry.setupComplete, true);
+
+  // Check setup works for existing retired install.
+  const validated = await validateSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'bonsai-2-27b-q2-0',
+    fsModule,
+    catalog,
+    runtimeValidator: async () => ({ ok: true }),
+  });
+  assert.equal(validated.summaryLibrary.models.find((m) => m.modelId === 'bonsai-2-27b-q2-0').status, 'ready');
+
+  // New downloads of retired model are blocked without touching disk or manifest.
+  await assert.rejects(
+    () => setupSummaryModel({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      modelId: 'bonsai-2-27b-q2-0',
+      fsModule,
+      catalog,
+    }),
+    /replaced by Bonsai 2\.5 27B/i,
+  );
+
+  // Uninstalled retired ID cannot be validated onto disk/manifest.
+  await assert.rejects(
+    () => validateSummaryModel({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      modelId: 'bonsai-2-27b-q2-0',
+      fsModule: createMemoryFs(),
+      catalog,
+    }),
+    /Unknown summary model/i,
+  );
+
+  // Removing retired model with replacement preserves shared runtime and omits retired card afterward.
+  const sharedRuntimeDir = getSharedSummaryRuntimeDir(userDataDir, retiredArtifact, catalog);
+  const afterRemove = await removeSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'bonsai-2-27b-q2-0',
+    replacementModelId: 'bonsai-2.5-27b-q2-0',
+    fsModule,
+    catalog,
+  });
+  assert.equal(afterRemove.summaryLibrary.defaultModelId, 'bonsai-2.5-27b-q2-0');
+  assert.equal(afterRemove.summaryLibrary.models.some((m) => m.modelId === 'bonsai-2-27b-q2-0'), false);
+  assert.equal(fsModule.existsSync(getSummaryModelCacheDir(userDataDir, 'bonsai-2-27b-q2-0')), false);
+  assert.equal(fsModule.existsSync(path.join(sharedRuntimeDir, 'extract', 'llama-cli.exe')), true);
+});

@@ -16,7 +16,7 @@ The installed `qwen3.5-9b-q4-k-m` model has bounded local synthetic evidence for
 See [the recorded checks and limits](V2_10_SUMMARY_QUALIFICATION.md).
 `src/summary-language-policy.js` owns eligibility and policy revision
 (`summary-language-v4`); add-on status exposes it without inference or downloads.
-`qwen3.5-4b-q4-k-m`, Bonsai 2, Ministral 3 14B, Gemma 4 26B-A4B,
+`qwen3.5-4b-q4-k-m`, Bonsai 2 (`9B`), Bonsai 2.5 (`27B`), Ministral 3 14B, Gemma 4 26B-A4B,
 Qwen 3.8 27B, and Inkling 2 Mini support local Chat after the device passes
 32k setup. Their summary languages require separate native qualification.
 Gemma 4 E4B and 12B
@@ -52,29 +52,36 @@ The catalog is organized into three hardware tiers (`Compact`, `Balanced`, and
   (`prism-ml/Ternary-Bonsai-2-9B-gguf` `Q2_0`, 2,556,640,128 bytes).
 - **Balanced:** `qwen3.5-9b-q4-k-m` (5.68 GB, default), official ggml-org
   `gemma-4-e4b` (`Q4_0`, 4,590,807,392 bytes) and `gemma-4-12b` (`Q4_0`,
-  7,219,673,216 bytes), Prism ML `bonsai-2-27b-q2-0`
-  (`prism-ml/Ternary-Bonsai-2-27B-gguf` `Q2_0`, 7,626,008,928 bytes), and
+  7,219,673,216 bytes), Prism ML `bonsai-2.5-27b-q2-0`
+  (`prism-ml/Ternary-Bonsai-2.5-27B-GGUF` `Q2_0`, 7,673,194,848 bytes; replaces
+  `bonsai-2-27b-q2-0`, which remains usable for existing installs until removed
+  and migrates uninstalled Chat threads), and
   Mistral AI `ministral-3-14b` (`unsloth/Ministral-3-14B-Instruct-2512-GGUF`
   `Q4_K_M`, 8,239,067,840 bytes).
 - **High-Capability:** official ggml-org `gemma-4-26b-a4b` (`Q4_0`,
   14,618,145,824 bytes), `qwen3.8-27b` (`unsloth/Qwen3.8-27B-GGUF` `UD-Q4_K_M`,
   16,564,259,744 bytes), and `inkling-2-mini` (`IQ4_NL`, 17,627,940,768 bytes).
 
-Bonsai 2 (`9B` and `27B`) uses stock `Q2_0` on upstream `llama.cpp b12631`.
-Both Bonsai 2 models (`9B` and `27B`) and `qwen3.8-27b` pass `--reasoning off`,
+Bonsai 2 (`9B` — the smallest tier available upstream; Bonsai 2.5 shipped at `27B`
+only) and Bonsai 2.5 (`27B`) use stock `Q2_0` on upstream `llama.cpp b12631`
+(while `PTQ1_0`, `PQ2_0`, and `-mtp` speculative variants target the custom
+`PrismML-Eng/llama.cpp` fork). Both Bonsai models (`2 9B` and `2.5 27B`) and
+`qwen3.8-27b` pass `--reasoning off`,
 `--reasoning-effort none`, and `--reasoning-budget 0` to preserve output tokens
 for structured responses, whereas `inkling-2-mini` on `b12631` passes
 `--reasoning auto`, `--reasoning-effort minimal`, and `--reasoning-budget 256`
 (with `[Start thinking]...[End thinking]` output stripping).
 The catalog uses text weights with a 32,768-token context window. Memory tiers
-are advisory, and Linux CUDA fit uses measured allocation floors for both Bonsai
-models. The [qualification record](V3_2_QUALIFICATION.md) lists verified pins,
+are advisory, and Linux CUDA fit uses measured allocation floors for Bonsai 2
+`9B` (and legacy `bonsai-2-27b-q2-0`); `bonsai-2.5-27b-q2-0` uses advisory
+`12 GiB GPU / 16 GiB unified` guidance pending native device measurements. The
+[qualification record](V3_2_QUALIFICATION.md) lists verified pins,
 measurements and platform checks.
 
 Gemma 4 E4B and 12B use official `ggml-org/llama.cpp` `b12631` on Linux x64
 CUDA 12.8. Gemma 4 E4B and 12B keep `b12606` on macOS arm64 Metal and Windows
 x64 CUDA 12.4 while the pinned `b12631` builds await native qualification.
-Bonsai 2 (`9B`, `27B`), Ministral 3 14B, Gemma 4 26B-A4B, Qwen 3.8 27B, and
+Bonsai 2 (`9B`), Bonsai 2.5 (`27B`), Ministral 3 14B, Gemma 4 26B-A4B, Qwen 3.8 27B, and
 Inkling 2 Mini share the official `b12631` runtime across Windows, macOS, and
 Linux. Qwen3.5 retains its qualified runtime pins (`b9173` on Windows/macOS,
 ai-dock `v0.3.0` on Linux) for zero-redownload continuity while the library

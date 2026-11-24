@@ -1244,3 +1244,153 @@ test('ensureServerRunning passes valid reasoningEffort before reasoningBudget an
   await hBad.handlers.get('ask-history')({}, { question: 'Hello', scope: { type: 'none' } });
   assert.equal(hBad.spawnedServers[0].args.includes('--reasoning-effort'), false);
 });
+
+test('retired bonsai-2-27b-q2-0 threads stay usable when installed, migrate to bonsai-2.5-27b-q2-0 when replaced, and cannot be newly created uninstalled', async (t) => {
+  const { getModelById, getRetiredSummaryModelById, getSummaryArtifactForPlatform } = require('../../src/ai-addon-state');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-qa-bonsai-mig-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const model2Path = path.join(tmpDir, 'Ternary-Bonsai-2-27B-Q2_0.gguf');
+  const model25Path = path.join(tmpDir, 'Ternary-Bonsai-2.5-27B-Q2_0.gguf');
+  fs.writeFileSync(model2Path, 'gguf2');
+  fs.writeFileSync(model25Path, 'gguf25');
+
+  const extractDir = path.join(tmpDir, 'runtime', 'extract');
+  fs.mkdirSync(extractDir, { recursive: true });
+  fs.mkdirSync(path.join(tmpDir, 'ai-addons', 'cuda', 'python'), { recursive: true });
+  fs.writeFileSync(path.join(extractDir, 'llama-cli'), 'cli');
+  const serverPath = path.join(extractDir, 'llama-server');
+  fs.writeFileSync(serverPath, 'srv');
+  const serverBytes = fs.readFileSync(serverPath);
+
+  let installedModels = new Set(['bonsai-2-27b-q2-0']);
+  const chatThreadStore = createChatThreadStore({ app: { getPath: () => tmpDir }, path, fs });
+  const handlers = new Map();
+  const service = createHistoryQaService({
+    app: { getPath: () => tmpDir },
+    path,
+    fs,
+    platform: 'linux',
+    arch: 'x64',
+    pinnedLinuxServer: {
+      runtimeId: 'llama-cpp-b12631-linux-x64-cuda-12.8',
+      sha256: createHash('sha256').update(serverBytes).digest('hex'),
+      sizeBytes: serverBytes.length,
+    },
+    pythonConfig: { backendPath: path.join(tmpDir, 'backend') },
+    getBackendModuleArgs: (mod, args) => ['-m', mod, ...args],
+    getAiAddonRuntimeOptions: (opts) => opts || {},
+    checkAiAddonSetupStatus: async (opts = {}) => {
+      const id = opts.summaryModelId || 'qwen3.5-9b-q4-k-m';
+      const ready = installedModels.has(id);
+      return {
+        features: {
+          summary: {
+            status: ready ? 'ready' : 'notConfigured',
+            setupComplete: ready,
+            modelId: id,
+            cache: { valid: ready },
+            runtimeCache: {
+              valid: true,
+              runtimeDir: path.dirname(extractDir),
+              runtimeArtifact: { id: 'llama-cpp-b12631-linux-x64-cuda-12.8' },
+            },
+          },
+        },
+        summaryLibrary: { defaultModelId: 'qwen3.5-9b-q4-k-m', models: [] },
+      };
+    },
+    getSummaryArtifactForPlatform: (id, p, a) => getSummaryArtifactForPlatform(id, p, a),
+    getSummaryRuntimeArtifactForPlatform: () => ({ id: 'llama-cpp-b12631-linux-x64-cuda-12.8' }),
+    getModelById: (feature, id) => getModelById(feature, id),
+    getRetiredSummaryModelById: (id) => getRetiredSummaryModelById(id),
+    getSummaryArtifactPath: (_dir, artifact) => (artifact.modelId === 'bonsai-2-27b-q2-0' ? model2Path : model25Path),
+    getSummaryRuntimeDir: () => path.dirname(extractDir),
+    buildSummaryRuntimeEnv: () => ({}),
+    resolveCudaStatusForTranscription: async () => ({
+      statusCode: 'ready',
+      installed: true,
+      deviceAvailable: true,
+      runtimeLoadable: true,
+      missingLibraries: [],
+      matchedProfile: 'cuda12',
+    }),
+    historySearchService: {
+      getGeneration: () => 1,
+      enqueueOperation: (action) => action(),
+      retainProcessUntilExit: () => {},
+      getIndexPath: () => path.join(tmpDir, 'search.sqlite'),
+      async ensureSynced() { return { synced: true }; },
+    },
+    chatThreadStore,
+    enqueueAiComputeAction: (fn) => fn(),
+    allocateLoopbackPort: async () => 45123,
+    probeServerHealth: async () => true,
+    spawnServerProcess: () => {
+      const proc = createFakeProcess();
+      proc.pid = 4242;
+      return proc;
+    },
+    spawnTrackedPython: (_args) => {
+      const proc = createFakeProcess();
+      process.nextTick(() => {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({
+          status: 'answered',
+          chatMode: 'general',
+          answerMarkdown: 'OK',
+          citations: [],
+        })));
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      let stderr = '';
+      python.stdout.on('data', (d) => { stdout += String(d); });
+      python.stderr.on('data', (d) => { stderr += String(d); });
+      return {
+        getStdout: () => stdout,
+        getStderr: () => stderr,
+        assertStdoutWithinLimit() {},
+      };
+    },
+    terminateProcessBestEffort: async (proc) => {
+      if (proc && typeof proc.kill === 'function') {
+        proc.kill('SIGTERM');
+      }
+    },
+  });
+  service.registerIpc({ handle: (ch, fn) => handlers.set(ch, fn) });
+
+  // Installed legacy Bonsai 2 27B thread continues to run without migration.
+  const created = await handlers.get('create-chat-thread')({}, { modelId: 'bonsai-2-27b-q2-0', scope: { type: 'none' } });
+  assert.equal(created.thread.modelId, 'bonsai-2-27b-q2-0');
+  const turn1 = await handlers.get('ask-history')({}, {
+    threadId: created.thread.id,
+    modelId: 'bonsai-2-27b-q2-0',
+    question: 'Hi',
+  });
+  assert.equal(turn1.thread.modelId, 'bonsai-2-27b-q2-0');
+  assert.equal(turn1.thread.messages.at(-1).modelId, 'bonsai-2-27b-q2-0');
+
+  // After removing Bonsai 2 27B and installing Bonsai 2.5 27B, eligibility and thread migrate cleanly.
+  installedModels = new Set(['bonsai-2.5-27b-q2-0']);
+  const elig = await handlers.get('get-history-qa-eligibility')({}, { modelId: 'bonsai-2-27b-q2-0' });
+  assert.equal(elig.eligible, true);
+  assert.equal(elig.modelId, 'bonsai-2.5-27b-q2-0');
+
+  const turn2 = await handlers.get('ask-history')({}, {
+    threadId: created.thread.id,
+    modelId: 'bonsai-2-27b-q2-0',
+    question: 'Follow up',
+  });
+  assert.equal(turn2.thread.modelId, 'bonsai-2.5-27b-q2-0');
+  assert.equal(turn2.thread.messages.at(-1).modelId, 'bonsai-2.5-27b-q2-0');
+
+  // Creating or updating a thread to an uninstalled retired ID is rejected.
+  await assert.rejects(() => handlers.get('create-chat-thread')({}, { modelId: 'bonsai-2-27b-q2-0' }), /Invalid Chat model selection/);
+  await assert.rejects(() => handlers.get('update-chat-thread-model')({}, { threadId: created.thread.id, modelId: 'bonsai-2-27b-q2-0' }), /Invalid Chat model selection/);
+
+  await service.unloadModel('test_cleanup');
+});

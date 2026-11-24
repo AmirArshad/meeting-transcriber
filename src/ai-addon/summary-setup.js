@@ -6,6 +6,8 @@ const { getSummaryModelFit } = require('./summary-device-fit');
 
 const {
   AI_MODEL_CATALOG,
+  getKnownSummaryModelById,
+  getRetiredSummaryModelById,
   getSummaryArtifactForPlatform,
   getSummaryAvailability,
   getSummaryRuntimeArtifactForPlatform,
@@ -369,8 +371,20 @@ async function validateSummaryModel({
   getDeviceMemory = null,
   runExclusiveMutation = async (operation) => operation(),
 } = {}) {
-  if (modelId && !catalog.summary.models.some((model) => model.id === modelId)) throw new Error('Unknown summary model.');
-  const selectedModelId = resolveModelId('summary', modelId || loadManifest({ userDataDir, fsModule, catalog }).summaryLibrary.defaultModelId, catalog);
+  const requestedId = modelId || loadManifest({ userDataDir, fsModule, catalog }).summaryLibrary.defaultModelId;
+  const knownModel = requestedId ? getKnownSummaryModelById(requestedId, catalog) : null;
+  if (modelId && !knownModel) throw new Error('Unknown summary model.');
+  const selectedModelId = knownModel ? knownModel.id : resolveModelId('summary', requestedId, catalog);
+  const selectedModel = getKnownSummaryModelById(selectedModelId, catalog);
+  if (selectedModel?.retired) {
+    const manifest = loadManifest({ userDataDir, fsModule, catalog });
+    const retiredArtifact = getSummaryArtifactForPlatform(selectedModelId, platform, arch, catalog);
+    const retiredPath = retiredArtifact ? getSummaryArtifactPath(userDataDir, retiredArtifact) : null;
+    const existsSync = bindFsMethod(fsModule, 'existsSync');
+    if (!manifest.summaryLibrary.models[selectedModelId] && !(retiredPath && existsSync?.(retiredPath))) {
+      throw new Error('Unknown summary model.');
+    }
+  }
   throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
   emitSafeProgress(emitProgress, {
     feature: 'summary',
@@ -514,8 +528,17 @@ async function setupSummaryModel({
   getDeviceMemory = null,
   runExclusiveMutation = async (operation) => operation(),
 } = {}) {
+  const requestedRetired = modelId ? getRetiredSummaryModelById(modelId, catalog) : null;
+  if (requestedRetired) {
+    throw new Error(`${requestedRetired.label} has been replaced by ${requestedRetired.replacedByLabel || 'a newer model'}. Download ${requestedRetired.replacedByLabel || 'the replacement model'} in Settings instead.`);
+  }
   if (modelId && !catalog.summary.models.some((model) => model.id === modelId)) throw new Error('Unknown summary model.');
-  const selectedModelId = resolveModelId('summary', modelId || loadManifest({ userDataDir, fsModule, catalog }).summaryLibrary.defaultModelId, catalog);
+  const defaultModelId = loadManifest({ userDataDir, fsModule, catalog }).summaryLibrary.defaultModelId;
+  const defaultRetired = !modelId && defaultModelId ? getRetiredSummaryModelById(defaultModelId, catalog) : null;
+  if (defaultRetired) {
+    throw new Error(`${defaultRetired.label} has been replaced by ${defaultRetired.replacedByLabel || 'a newer model'}. Download ${defaultRetired.replacedByLabel || 'the replacement model'} in Settings instead.`);
+  }
+  const selectedModelId = resolveModelId('summary', modelId || defaultModelId, catalog);
   throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
   const sourceArtifact = getSummaryArtifactForPlatform(selectedModelId, platform, arch, catalog);
   const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog, selectedModelId);
@@ -1106,7 +1129,7 @@ function validateSummaryModelRemovalRequest({
 } = {}) {
   const manifest = loadManifest({ userDataDir, fsModule, catalog });
   const selectedModelId = modelId || manifest.summaryLibrary.defaultModelId || resolveModelId('summary', null, catalog);
-  if (!catalog.summary.models.some((model) => model.id === selectedModelId)) {
+  if (!getKnownSummaryModelById(selectedModelId, catalog)) {
     throw new Error('Unknown summary model.');
   }
   const pending = manifest.summaryLibrary.models[selectedModelId];

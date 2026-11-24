@@ -557,3 +557,152 @@ test('syncSummaryRuntimeCheckingPoll schedules refresh on runtime_checking and s
   ctx.syncSummaryRuntimeCheckingPoll(pendingStatus);
   assert.equal(scheduled.length, 2);
 });
+
+test('retired library cards show Legacy badge, omit Repair, prioritize Bonsai 2.5 replacement, and migrate uninstalled Chat model choice', async () => {
+  const elements = [];
+  const makeElement = (tag = 'div') => ({
+    tag,
+    className: '',
+    children: [],
+    dataset: {},
+    hidden: false,
+    disabled: false,
+    textContent: '',
+    value: '',
+    add(item) { this.children.push(item); },
+    appendChild(child) { this.children.push(child); return child; },
+    replaceChildren(...items) { this.children = [...items]; },
+    setAttribute() {},
+    addEventListener(type, fn) { this[type] = fn; },
+  });
+  const container = makeElement('div');
+  const chatEls = {
+    'summary-model-library': container,
+    'chat-model-select': makeElement('select'),
+    'chat-model-label': makeElement('span'),
+    'chat-manage-models': makeElement('button'),
+  };
+  let replacementCandidates = null;
+  const removedPayloads = [];
+  const threadUpdates = [];
+  const toasts = [];
+  const ctx = vm.createContext({
+    document: {
+      createElement: (tag) => { const el = makeElement(tag); elements.push(el); return el; },
+      getElementById: (id) => chatEls[id] || null,
+    },
+    Option: function Option(text, value) { this.text = text; this.value = value; },
+    aiAddonDownloadState: { summary: { active: false } },
+    aiAddonStatusSnapshot: null,
+    chatState: { modelState: {}, activeThread: null, pendingModelId: null, sending: false },
+    formatBytes: (n) => `${n} B`,
+    refreshAiAddonSettings: async () => {},
+    refreshChatEligibility: async () => {},
+    openSettingsAtAiAddons: () => {},
+    renderChatOnboardingAndComposer: () => {},
+    showAppToast: (msg) => { toasts.push(msg); },
+    window: {
+      confirm: () => true,
+      electronAPI: {
+        removeSummaryModel: async (payload) => { removedPayloads.push({ ...payload }); },
+        updateChatThreadModel: async (payload) => {
+          threadUpdates.push({ ...payload });
+          return { thread: { id: payload.threadId, modelId: payload.modelId } };
+        },
+      },
+    },
+  });
+  vm.runInContext(
+    source.slice(source.indexOf('function summaryLibrary()'), source.indexOf('function updateAiAddonSettings(')),
+    ctx,
+  );
+  ctx.chooseSummaryReplacement = (_model, others) => {
+    replacementCandidates = others.map((item) => item.modelId);
+    return others[0]?.modelId || null;
+  };
+
+  // 1. Retired error/installed card renders Legacy badge, omits Repair, and sorts Bonsai 2.5 first on Remove model.
+  const retiredLibrary = {
+    defaultModelId: 'bonsai-2-27b-q2-0',
+    models: [
+      {
+        modelId: 'bonsai-2-27b-q2-0',
+        modelName: 'Bonsai 2 27B',
+        retired: true,
+        replacedByModelId: 'bonsai-2.5-27b-q2-0',
+        installed: true,
+        setupComplete: false,
+        status: 'error',
+        installedBytes: 100,
+        reclaimableBytes: 100,
+        fit: { status: 'fits' },
+      },
+      {
+        modelId: 'gemma-4-e4b',
+        modelName: 'Gemma 4 E4B',
+        installed: true,
+        setupComplete: true,
+        status: 'ready',
+        installedBytes: 50,
+        fit: { status: 'fits' },
+      },
+      {
+        modelId: 'bonsai-2.5-27b-q2-0',
+        modelName: 'Bonsai 2.5 27B',
+        installed: true,
+        setupComplete: true,
+        status: 'ready',
+        installedBytes: 120,
+        fit: { status: 'fits' },
+      },
+    ],
+  };
+  ctx.aiAddonStatusSnapshot = { summaryLibrary: retiredLibrary };
+  ctx.renderSummaryModelLibrary(retiredLibrary);
+  assert.ok(elements.some((el) => el.textContent === 'Legacy'));
+  assert.equal(elements.some((el) => el.textContent === 'Repair'), false);
+  const removeButtons = elements.filter((el) => el.tag === 'button' && el.textContent === 'Remove model');
+  assert.equal(removeButtons.length, 3);
+  await removeButtons[0].click();
+  assert.deepEqual(toasts, []);
+  assert.deepEqual(replacementCandidates, ['bonsai-2.5-27b-q2-0', 'gemma-4-e4b']);
+  assert.deepEqual(removedPayloads, [{ modelId: 'bonsai-2-27b-q2-0', replacementModelId: 'bonsai-2.5-27b-q2-0' }]);
+
+  // 2. Uninstalled Bonsai 2 27B Chat thread migrates to ready Bonsai 2.5 27B (and clears pendingModelId when Bonsai 2.5 is default).
+  const activeLibrary = {
+    defaultModelId: 'gemma-4-e4b',
+    models: [
+      {
+        modelId: 'gemma-4-e4b',
+        modelName: 'Gemma 4 E4B',
+        installed: true,
+        setupComplete: true,
+        status: 'ready',
+        fit: { status: 'fits' },
+      },
+      {
+        modelId: 'bonsai-2.5-27b-q2-0',
+        modelName: 'Bonsai 2.5 27B',
+        installed: true,
+        setupComplete: true,
+        status: 'ready',
+        fit: { status: 'fits' },
+      },
+    ],
+  };
+  ctx.aiAddonStatusSnapshot = { summaryLibrary: activeLibrary };
+  ctx.chatState.activeThread = { id: 'thread-legacy', modelId: 'bonsai-2-27b-q2-0' };
+  ctx.renderChatModelChoice();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(threadUpdates, [{ threadId: 'thread-legacy', modelId: 'bonsai-2.5-27b-q2-0' }]);
+  assert.equal(ctx.chatState.activeThread.modelId, 'bonsai-2.5-27b-q2-0');
+  assert.deepEqual(toasts, ['Bonsai 2 27B was replaced by Bonsai 2.5 27B.']);
+
+  // When Bonsai 2.5 27B is the library default, pendingModelId migrates cleanly to null (default).
+  activeLibrary.defaultModelId = 'bonsai-2.5-27b-q2-0';
+  ctx.chatState.activeThread = null;
+  ctx.chatState.pendingModelId = 'bonsai-2-27b-q2-0';
+  ctx.renderChatModelChoice();
+  assert.equal(ctx.chatState.pendingModelId, null);
+});

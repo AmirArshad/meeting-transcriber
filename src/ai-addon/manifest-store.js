@@ -12,6 +12,8 @@ const {
   buildAiAddonStatus,
   getAiAddonPaths,
   getDiarizationDependencyArtifactForPlatform,
+  getKnownSummaryModelById,
+  getRetiredSummaryModelList,
   getSpeakrsSetupArtifactsForPlatform,
   getSummaryArtifactForPlatform,
   getSummaryRuntimeArtifactForPlatform,
@@ -2563,7 +2565,7 @@ async function checkAiAddonSetupStatus({
   });
   const requestedSummary = summaryModelId || manifest.summaryLibrary.defaultModelId;
   if (requestedSummary) {
-    const model = (catalog.summary?.models || []).find((item) => item.id === requestedSummary);
+    const model = getKnownSummaryModelById(requestedSummary, catalog);
     if (!model) throw new Error('Unknown summary model.');
     status.features.summary = {
       ...status.features.summary,
@@ -2724,7 +2726,14 @@ async function checkAiAddonSetupStatus({
     modelDirSizeCache.set(id, size);
     return size;
   };
-  const libraryModels = await Promise.all((catalog.summary?.models || []).map(async (model) => {
+  const activeRetiredModels = getRetiredSummaryModelList(catalog).filter((retired) => (
+    Boolean(manifest.summaryLibrary.models[retired.id] || getCachedModelDirSizeBytes(retired.id) > 0)
+  ));
+  const libraryCatalogModels = [
+    ...(catalog.summary?.models || []),
+    ...activeRetiredModels,
+  ];
+  const libraryModels = await Promise.all(libraryCatalogModels.map(async (model) => {
     const modelOptions = {
       userDataDir, platform, arch, modelId: model.id, fsModule, catalog,
       verifyChecksum: verifyLibraryChecksums,
@@ -2778,11 +2787,16 @@ async function checkAiAddonSetupStatus({
       installedBytes: bytes,
       peakFreeBytes,
       reclaimableBytes,
+      ...(model.retired ? {
+        retired: true,
+        replacedByModelId: model.replacedByModelId || null,
+        replacedByModelName: model.replacedByLabel || null,
+      } : {}),
     };
   }));
   summaryWithStorage.fit = libraryModels.find((item) => item.modelId === summary.modelId)?.fit || null;
   const sharedRuntimeDirs = new Set(
-    (catalog.summary?.models || [])
+    [...(catalog.summary?.models || []), ...getRetiredSummaryModelList(catalog)]
       .map((model) => getSharedSummaryRuntimeDir(userDataDir, getSummaryArtifactForPlatform(model.id, platform, arch, catalog), catalog))
       .filter(Boolean),
   );
@@ -2886,6 +2900,7 @@ function hasOtherActiveSummaryRuntimeReference({
   const libraryModels = manifest?.summaryLibrary?.models || {};
   const candidateIds = new Set([
     ...((catalog?.summary?.models || []).map((model) => model.id)),
+    ...(getRetiredSummaryModelList(catalog).map((model) => model.id)),
     ...Object.keys(libraryModels),
   ]);
   for (const id of candidateIds) {

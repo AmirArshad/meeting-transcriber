@@ -37,6 +37,7 @@ const {
   getSummaryArtifactForPlatform: defaultGetSummaryArtifactForPlatform,
   getSummaryRuntimeArtifactForPlatform: defaultGetSummaryRuntimeArtifactForPlatform,
   getModelById: defaultGetModelById,
+  getRetiredSummaryModelById: defaultGetRetiredSummaryModelById,
 } = require('../ai-addon-state');
 const {
   buildSummaryRuntimeEnv: defaultBuildSummaryRuntimeEnv,
@@ -371,6 +372,7 @@ function createHistoryQaService(deps) {
     getSummaryArtifactForPlatform = defaultGetSummaryArtifactForPlatform,
     getSummaryRuntimeArtifactForPlatform = defaultGetSummaryRuntimeArtifactForPlatform,
     getModelById = defaultGetModelById,
+    getRetiredSummaryModelById = defaultGetRetiredSummaryModelById,
     getSummaryArtifactPath = defaultGetSummaryArtifactPath,
     getSummaryRuntimeDir = defaultGetSummaryRuntimeDir,
     buildSummaryRuntimeEnv = defaultBuildSummaryRuntimeEnv,
@@ -510,7 +512,7 @@ function createHistoryQaService(deps) {
       if (checkFit && modelFit?.blocked === true) {
         return { eligible: false, reason: modelFit.reason || 'This model cannot run safely on this device.', setupTarget: 'ai-addons', modelId };
       }
-      const modelMeta = modelId ? getModelById('summary', modelId) : null;
+      const modelMeta = modelId ? (getModelById('summary', modelId) || getRetiredSummaryModelById(modelId)) : null;
       const modelName = (modelMeta && (modelMeta.label || modelMeta.name)) || modelId || null;
       const artifact = modelId ? getSummaryArtifactForPlatform(modelId, platform, arch) : null;
       const runtimeArtifact = summaryStatus.runtimeCache?.runtimeArtifact || getSummaryRuntimeArtifactForPlatform(platform, arch, undefined, modelId);
@@ -612,6 +614,19 @@ function createHistoryQaService(deps) {
       }
     }
     return primary;
+  }
+
+  async function resolveRetiredReplacementEligibility(requestedModelId, options = {}, { allowMigration = true } = {}) {
+    const primary = await resolveEligibility({ ...options, summaryModelId: requestedModelId });
+    const retired = requestedModelId ? getRetiredSummaryModelById(requestedModelId) : null;
+    if (!allowMigration || primary.eligible || !retired?.replacedByModelId) {
+      return { eligibility: primary, migratedFromModelId: null };
+    }
+    const replacement = await resolveEligibility({ ...options, summaryModelId: retired.replacedByModelId });
+    if (replacement.eligible) {
+      return { eligibility: replacement, migratedFromModelId: requestedModelId };
+    }
+    return { eligibility: primary, migratedFromModelId: null };
   }
 
   function sanitizeEligibilityResponse(full) {
@@ -1122,23 +1137,33 @@ function createHistoryQaService(deps) {
     try {
     checkCurrent();
     const requestedThreadModelId = options.threadModelId == null ? null : String(options.threadModelId).trim() || null;
-    if (requestedThreadModelId !== null && (typeof options.threadModelId !== 'string' || !getModelById('summary', requestedThreadModelId))) {
+    if (
+      requestedThreadModelId !== null
+      && (typeof options.threadModelId !== 'string'
+        || (!getModelById('summary', requestedThreadModelId) && !getRetiredSummaryModelById(requestedThreadModelId)))
+    ) {
       throw new Error('Invalid Chat model selection.');
     }
     if (options.threadId) {
       thread = await chatThreadStore.getThread(options.threadId);
     }
     const targetModelId = (thread ? thread.modelId : requestedThreadModelId) || null;
-    const eligibility = await awaitAbortable(resolveEligibility({
+    const allowRetiredMigration = Boolean(thread && targetModelId);
+    const { eligibility, migratedFromModelId } = await awaitAbortable(resolveRetiredReplacementEligibility(targetModelId, {
       verifyChecksums: true,
       verifyChecksumsIfChanged: true,
-      summaryModelId: targetModelId,
-    }), controller.signal);
-    if (!eligibility.eligible || (targetModelId && eligibility.modelId !== targetModelId)) {
+    }, { allowMigration: allowRetiredMigration }), controller.signal);
+    if (!eligibility.eligible || (targetModelId && eligibility.modelId !== targetModelId && migratedFromModelId !== targetModelId)) {
+      if (targetModelId && !getModelById('summary', targetModelId) && !allowRetiredMigration) {
+        throw new Error('Invalid Chat model selection.');
+      }
       throw new Error(eligibility.reason || 'The selected Chat model is unavailable. Choose another model in Settings.');
     }
-    if (options.modelId && options.modelId !== eligibility.modelId) {
+    if (options.modelId && options.modelId !== eligibility.modelId && options.modelId !== migratedFromModelId) {
       throw new Error('The Chat model changed. Review the model selection and retry.');
+    }
+    if (thread && migratedFromModelId) {
+      thread = await chatThreadStore.updateThreadModel(thread.id, eligibility.modelId);
     }
     if (!thread) {
       thread = await chatThreadStore.createThread({ scope: requestedScope, modelId: requestedThreadModelId });
@@ -1674,15 +1699,20 @@ function createHistoryQaService(deps) {
       const requestedModelId = typeof options?.modelId === 'string' && options.modelId.trim()
         ? options.modelId.trim()
         : null;
-      if (requestedModelId !== null && !getModelById('summary', requestedModelId)) {
+      if (requestedModelId !== null && !getModelById('summary', requestedModelId) && !getRetiredSummaryModelById(requestedModelId)) {
         throw new Error('Invalid Chat model selection.');
       }
-      const result = await resolveEligibility({
-        verifyChecksums: false,
-        verifyChecksumsIfChanged: true,
-        summaryModelId: requestedModelId,
-        fallbackToUsableLibraryModel: !requestedModelId,
-      });
+      const result = requestedModelId
+        ? (await resolveRetiredReplacementEligibility(requestedModelId, {
+          verifyChecksums: false,
+          verifyChecksumsIfChanged: true,
+        })).eligibility
+        : await resolveEligibility({
+          verifyChecksums: false,
+          verifyChecksumsIfChanged: true,
+          summaryModelId: null,
+          fallbackToUsableLibraryModel: true,
+        });
       return sanitizeEligibilityResponse(result);
     });
 
@@ -1725,8 +1755,19 @@ function createHistoryQaService(deps) {
     ipcMain.handle('create-chat-thread', async (event, options = {}) => {
       assertTrustedRendererSender(event);
       const modelId = options?.modelId ?? null;
-      if (modelId !== null && (typeof modelId !== 'string' || !getModelById('summary', modelId))) {
-        throw new Error('Invalid Chat model selection.');
+      if (modelId !== null) {
+        if (typeof modelId !== 'string') {
+          throw new Error('Invalid Chat model selection.');
+        }
+        if (!getModelById('summary', modelId)) {
+          if (!getRetiredSummaryModelById(modelId)) {
+            throw new Error('Invalid Chat model selection.');
+          }
+          const retiredStatus = await resolveEligibility({ verifyChecksums: false, summaryModelId: modelId });
+          if (!retiredStatus.eligible) {
+            throw new Error('Invalid Chat model selection.');
+          }
+        }
       }
       const thread = await chatThreadStore.createThread({ ...(options || {}), modelId });
       return { thread };
@@ -1747,8 +1788,19 @@ function createHistoryQaService(deps) {
     ipcMain.handle('update-chat-thread-model', async (event, options = {}) => {
       assertTrustedRendererSender(event);
       const modelId = options?.modelId;
-      if (modelId !== null && (typeof modelId !== 'string' || !getModelById('summary', modelId))) {
-        throw new Error('Invalid Chat model selection.');
+      if (modelId !== null) {
+        if (typeof modelId !== 'string') {
+          throw new Error('Invalid Chat model selection.');
+        }
+        if (!getModelById('summary', modelId)) {
+          if (!getRetiredSummaryModelById(modelId)) {
+            throw new Error('Invalid Chat model selection.');
+          }
+          const retiredStatus = await resolveEligibility({ verifyChecksums: false, summaryModelId: modelId });
+          if (!retiredStatus.eligible) {
+            throw new Error('Invalid Chat model selection.');
+          }
+        }
       }
       const thread = await chatThreadStore.updateThreadModel(options?.threadId, modelId);
       return { thread };

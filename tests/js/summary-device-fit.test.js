@@ -57,7 +57,7 @@ test('measured Linux CUDA allocations raise the estimated VRAM floor', () => {
 test('the 48 GiB Apple Silicon fit check admits the peers and Inkling', () => {
   const platform = 'darwin';
   const arch = 'arm64';
-  for (const id of ['bonsai-2-9b-q2-0', 'bonsai-2-27b-q2-0', 'ministral-3-14b', 'gemma-4-26b-a4b', 'qwen3.8-27b', 'inkling-2-mini']) {
+  for (const id of ['bonsai-2-9b-q2-0', 'bonsai-2.5-27b-q2-0', 'ministral-3-14b', 'gemma-4-26b-a4b', 'qwen3.8-27b', 'inkling-2-mini']) {
     const model = getModelById('summary', id);
     const assessment = getSummaryModelFit({
       model,
@@ -87,6 +87,33 @@ test('Inkling fit depends on the CUDA device memory', () => {
   assert.equal(smaller.blocked, true);
   const larger = getSummaryModelFit({ ...options, deviceMemory: { totalBytes: 24 * GiB, availableBytes: 23 * GiB } });
   assert.equal(larger.blocked, false);
+});
+
+test('Bonsai 2.5 27B fits nominal 12 GiB NVIDIA CUDA and 48 GiB Apple Silicon without invented runtime floor', () => {
+  const model = getModelById('summary', 'bonsai-2.5-27b-q2-0');
+  assert.equal(model.memoryGuidance.minLinuxCudaRuntimeBytes, undefined);
+  assert.equal(model.memoryGuidance.minRuntimeBytes, undefined);
+
+  const linuxFit = getSummaryModelFit({
+    model,
+    artifact: getSummaryArtifactForPlatform('bonsai-2.5-27b-q2-0', 'linux', 'x64'),
+    runtimeArtifact: getSummaryRuntimeArtifactForPlatform('linux', 'x64', undefined, 'bonsai-2.5-27b-q2-0'),
+    availability: { supported: true },
+    deviceMemory: { totalBytes: 12282 * MiB, availableBytes: 11800 * MiB },
+    platform: 'linux',
+  });
+  assert.equal(linuxFit.blocked, false);
+  assert.equal(linuxFit.status, 'likely_fits');
+
+  const macFit = getSummaryModelFit({
+    model,
+    artifact: getSummaryArtifactForPlatform('bonsai-2.5-27b-q2-0', 'darwin', 'arm64'),
+    runtimeArtifact: getSummaryRuntimeArtifactForPlatform('darwin', 'arm64', undefined, 'bonsai-2.5-27b-q2-0'),
+    availability: getSummaryAvailability('darwin', 'arm64'),
+    deviceMemory: { totalBytes: 48 * GiB },
+    platform: 'darwin',
+  });
+  assert.equal(macFit.blocked, false);
 });
 
 test('a resident model makes low free VRAM conditional on unloading', () => {

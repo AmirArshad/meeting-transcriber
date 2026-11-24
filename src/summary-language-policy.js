@@ -11,7 +11,7 @@ const SUMMARY_LANGUAGE_NAMES = Object.freeze({
 
 const CHAT_MODELS = new Set([
   'qwen3.5-9b-q4-k-m', 'qwen3.5-4b-q4-k-m', 'gemma-4-e4b', 'gemma-4-12b',
-  'bonsai-2-9b-q2-0', 'bonsai-2-27b-q2-0', 'ministral-3-14b',
+  'bonsai-2-9b-q2-0', 'bonsai-2-27b-q2-0', 'bonsai-2.5-27b-q2-0', 'ministral-3-14b',
   'gemma-4-26b-a4b', 'qwen3.8-27b', 'inkling-2-mini',
 ]);
 

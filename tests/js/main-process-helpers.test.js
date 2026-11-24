@@ -200,6 +200,9 @@ test('isTrustedExternalUrl only allows explicit external destinations', () => {
   assert.equal(isTrustedExternalUrl('https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF'), true);
   assert.equal(isTrustedExternalUrl('https://huggingface.co/ggml-org/gemma-4-12B-it-GGUF'), true);
   assert.equal(isTrustedExternalUrl('https://huggingface.co/ggml-org/Inkling-2-Mini-GGUF'), true);
+  assert.equal(isTrustedExternalUrl('https://huggingface.co/prism-ml/Ternary-Bonsai-2-9B-gguf'), true);
+  assert.equal(isTrustedExternalUrl('https://huggingface.co/prism-ml/Ternary-Bonsai-2.5-27B-GGUF'), true);
+  assert.equal(isTrustedExternalUrl('https://huggingface.co/prism-ml/Ternary-Bonsai-2-27B-gguf'), false);
   assert.equal(isTrustedExternalUrl('https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2'), true);
   assert.equal(isTrustedExternalUrl('https://creativecommons.org/licenses/by/4.0/'), true);
   assert.equal(isTrustedExternalUrl('x-apple.systempreferences:com.apple.preference.security?Privacy'), true);

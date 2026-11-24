@@ -532,6 +532,10 @@ const SUMMARY_MODEL_SOURCES = deepFreeze({
     repo: 'prism-ml/Ternary-Bonsai-2-27B-gguf', revision: '839bd57023c1558945afea70a74fa83c054f35f9',
     fileName: 'Ternary-Bonsai-2-27B-Q2_0.gguf', sha256: '4f99aed01b8a877e153f9aa6569a4440fe17c59701cc0953e36d7f460549e70e', sizeBytes: 7626008928,
   }),
+  'bonsai-2.5-27b-q2-0': buildHuggingFaceModelSource({
+    repo: 'prism-ml/Ternary-Bonsai-2.5-27B-GGUF', revision: '28a7093cc25bc151cc2b284c5570f12ce343fdcf',
+    fileName: 'Ternary-Bonsai-2.5-27B-Q2_0.gguf', sha256: '84496171ca79d4d33fb45612a2afd8303ec494baf916281023b7dc9cb3b3b9fa', sizeBytes: 7673194848,
+  }),
   'ministral-3-14b': buildHuggingFaceModelSource({
     repo: 'unsloth/Ministral-3-14B-Instruct-2512-GGUF', revision: '9b948841b705cc11285ff274b84ba6c885908b19',
     fileName: 'Ministral-3-14B-Instruct-2512-Q4_K_M.gguf', sha256: '76ce697c065f2e40f1e8e958118b02cab38e2c10a6015f7d7908036a292dc8c8', sizeBytes: 8239067840,
@@ -626,6 +630,39 @@ function gemmaSummaryModel(id, label, description, memoryGuidance, { tier = 'bal
   };
 }
 
+const RETIRED_SUMMARY_MODELS = deepFreeze([
+  {
+    id: 'bonsai-2-27b-q2-0',
+    label: 'Bonsai 2 27B',
+    description: 'Replaced by Bonsai 2.5 27B. Existing local files stay usable until removed.',
+    retired: true,
+    replacedByModelId: 'bonsai-2.5-27b-q2-0',
+    replacedByLabel: 'Bonsai 2.5 27B',
+    tier: 'balanced',
+    memoryGuidance: { gpu: 12, unified: 16, minLinuxCudaRuntimeBytes: 9306 * MiB },
+    family: 'Bonsai 2',
+    runtime: 'llama.cpp',
+    runtimeCatalog: 'b12631',
+    inference: {
+      contextTokens: 32768,
+      family: 'qwen',
+      promptFormat: 'chatml',
+      architecture: 'qwen35',
+      disableThinking: true,
+      singleTurnOnly: true,
+      reasoningEffort: 'none',
+      reasoningBudget: 0,
+    },
+    artifact: buildSummaryArtifact({
+      modelId: 'bonsai-2-27b-q2-0',
+      label: 'Bonsai 2 27B Q2_0 GGUF',
+      runtimeArchitecture: 'qwen35',
+      runtimeCatalog: 'b12631',
+    }),
+    profiles: SUMMARY_PROFILES.map((profile) => profile.id),
+  },
+]);
+
 const AI_MODEL_CATALOG = deepFreeze({
   version: 1,
   diarization: {
@@ -717,6 +754,7 @@ const AI_MODEL_CATALOG = deepFreeze({
     runtimeArtifacts: SUMMARY_RUNTIME_ARTIFACTS,
     gemmaRuntimeArtifacts: GEMMA_SUMMARY_RUNTIME_ARTIFACTS,
     b12631RuntimeArtifacts: B12631_SUMMARY_RUNTIME_ARTIFACTS,
+    retiredModels: RETIRED_SUMMARY_MODELS,
     models: [
       {
         id: DEFAULT_SUMMARY_MODEL_ID,
@@ -802,12 +840,12 @@ const AI_MODEL_CATALOG = deepFreeze({
       gemmaSummaryModel('gemma-4-e4b', 'Gemma 4 E4B', 'An option for follow-up questions about details across recordings.', { gpu: 8, unified: 16, minRuntimeBytes: 5331582976 }, { tier: 'balanced', runtimeCatalog: 'gemma' }),
       gemmaSummaryModel('gemma-4-12b', 'Gemma 4 12B', 'An option for pulling together themes and decisions from longer recordings.', { gpu: 12, unified: 16, minRuntimeBytes: 8409792512 }, { tier: 'balanced', runtimeCatalog: 'gemma' }),
       {
-        id: 'bonsai-2-27b-q2-0',
-        label: 'Bonsai 2 27B',
-        description: 'Ternary model for more involved questions and longer recordings.',
+        id: 'bonsai-2.5-27b-q2-0',
+        label: 'Bonsai 2.5 27B',
+        description: 'Ternary 27B model for more involved questions and longer recordings.',
         tier: 'balanced',
-        memoryGuidance: { gpu: 12, unified: 16, minLinuxCudaRuntimeBytes: 9306 * MiB },
-        family: 'Bonsai 2',
+        memoryGuidance: { gpu: 12, unified: 16 },
+        family: 'Bonsai 2.5',
         runtime: 'llama.cpp',
         runtimeCatalog: 'b12631',
         inference: {
@@ -821,8 +859,8 @@ const AI_MODEL_CATALOG = deepFreeze({
           reasoningBudget: 0,
         },
         artifact: buildSummaryArtifact({
-          modelId: 'bonsai-2-27b-q2-0',
-          label: 'Bonsai 2 27B Q2_0 GGUF',
+          modelId: 'bonsai-2.5-27b-q2-0',
+          label: 'Bonsai 2.5 27B Q2_0 GGUF',
           runtimeArchitecture: 'qwen35',
           runtimeCatalog: 'b12631',
         }),
@@ -929,6 +967,23 @@ function getModelById(feature, modelId, catalog = AI_MODEL_CATALOG) {
   return getModelList(feature, catalog).find((model) => model.id === modelId) || null;
 }
 
+function getRetiredSummaryModelList(catalog = AI_MODEL_CATALOG) {
+  const retired = catalog && catalog.summary && catalog.summary.retiredModels;
+  return Array.isArray(retired) ? retired : [];
+}
+
+function getRetiredSummaryModelById(modelId, catalog = AI_MODEL_CATALOG) {
+  const requested = typeof modelId === 'string' ? modelId.trim() : '';
+  if (!requested) {
+    return null;
+  }
+  return getRetiredSummaryModelList(catalog).find((model) => model.id === requested) || null;
+}
+
+function getKnownSummaryModelById(modelId, catalog = AI_MODEL_CATALOG) {
+  return getModelById('summary', modelId, catalog) || getRetiredSummaryModelById(modelId, catalog);
+}
+
 function getDiarizationModelRef(modelId, catalog = AI_MODEL_CATALOG) {
   const resolvedModelId = resolveModelId('diarization', modelId, catalog);
   const model = getModelById('diarization', resolvedModelId, catalog);
@@ -986,8 +1041,10 @@ function getSpeakrsSetupArtifactsForPlatform(platform = process.platform, arch =
 }
 
 function getSummaryArtifactForPlatform(modelId, platform = process.platform, arch = process.arch, catalog = AI_MODEL_CATALOG) {
-  const resolvedModelId = resolveModelId('summary', modelId, catalog);
-  const model = getModelById('summary', resolvedModelId, catalog);
+  const requested = typeof modelId === 'string' && modelId.trim() ? modelId.trim() : null;
+  const retiredModel = requested ? getRetiredSummaryModelById(requested, catalog) : null;
+  const resolvedModelId = retiredModel ? retiredModel.id : resolveModelId('summary', modelId, catalog);
+  const model = retiredModel || getModelById('summary', resolvedModelId, catalog);
   const artifact = model && model.artifact;
   const platformKey = `${platform}-${arch}`;
   const platformArtifact = artifact && artifact.platformArtifacts && artifact.platformArtifacts[platformKey];
@@ -1031,7 +1088,7 @@ function getSummaryArtifactForPlatform(modelId, platform = process.platform, arc
 }
 
 function getSummaryRuntimeArtifactForPlatform(platform = process.platform, arch = process.arch, catalog = AI_MODEL_CATALOG, modelId) {
-  const model = modelId && getModelById('summary', modelId, catalog);
+  const model = modelId && getKnownSummaryModelById(modelId, catalog);
   if (model?.supportedPlatforms && model.supportedPlatforms[platform]?.status !== 'enabled') return null;
   let runtimeArtifacts = catalog?.summary?.runtimeArtifacts || SUMMARY_RUNTIME_ARTIFACTS;
   if (model?.runtimeCatalog === 'gemma') {
@@ -1189,10 +1246,17 @@ function normalizeDiarizationState(value, catalog = AI_MODEL_CATALOG) {
 
 function normalizeSummaryState(value, catalog = AI_MODEL_CATALOG) {
   const state = asPlainObject(value);
+  const status = normalizeStatus(state.status);
+  const requested = typeof state.modelId === 'string' && state.modelId.trim() ? state.modelId.trim() : null;
+  const retired = requested ? getRetiredSummaryModelById(requested, catalog) : null;
+  const keepRetired = Boolean(retired && (status !== 'notConfigured' || state.removalPending === true));
+  const modelId = keepRetired
+    ? retired.id
+    : resolveModelId('summary', retired ? retired.replacedByModelId : state.modelId, catalog);
 
   return {
-    status: normalizeStatus(state.status),
-    modelId: resolveModelId('summary', state.modelId, catalog),
+    status,
+    modelId,
     artifactId: normalizeNullableString(state.artifactId),
     profile: normalizeSummaryProfile(state.profile),
     lastValidation: normalizeLastValidation(state.lastValidation),
@@ -1211,6 +1275,12 @@ function normalizeAiAddonManifest(value = {}, catalog = AI_MODEL_CATALOG) {
   const models = {};
   for (const model of getModelList('summary', catalog)) {
     if (sourceModels[model.id]) models[model.id] = normalizeSummaryState(sourceModels[model.id], catalog);
+  }
+  for (const retired of getRetiredSummaryModelList(catalog)) {
+    const entry = sourceModels[retired.id];
+    if (entry && (normalizeStatus(entry.status) !== 'notConfigured' || entry.removalPending === true)) {
+      models[retired.id] = normalizeSummaryState({ ...entry, modelId: retired.id }, catalog);
+    }
   }
   // A legacy ready installation remains available without downloading it again.
   if (!Object.hasOwn(manifest, 'summaryLibrary') && summary.status === 'ready') models[summary.modelId] = summary;
@@ -1545,6 +1615,9 @@ module.exports = {
   getDiarizationModelRef,
   getSpeakrsSetupArtifactsForPlatform,
   getModelById,
+  getRetiredSummaryModelList,
+  getRetiredSummaryModelById,
+  getKnownSummaryModelById,
   getModelList,
   getSummaryArtifactForPlatform,
   getSummaryRuntimeArtifactForPlatform,

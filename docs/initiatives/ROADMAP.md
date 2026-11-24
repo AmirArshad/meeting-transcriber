@@ -127,7 +127,7 @@ Full implementation plan: [v3.2.0 release plan](../superpowers/plans/2026-11-22-
 - **Model compatibility & install UX** — Fix device compatibility assessment (`likely_fits` / `tight` / `needs_more_memory` / `unknown` separation, nominal GPU-tier rounding tolerance so 12 GB GPUs reporting `12,282 MiB` pass, hardened Linux `nvidia-smi` probing), recalibrate Gemma 4 12B for 12 GB VRAM, and prompt to unload a resident Chat model before downloading or switching models instead of throwing a VRAM error.
 - **Smarter Chat context, precise citations & optional general chat** — Add a 3-tier local context router (direct full-transcript fit for single/small scopes within 32k context, conversation-aware two-stage retrieval with follow-up entity carry-over, and rolling history compaction), keep evidence chunks timestamp-granular with `Title · Summary` pill labels, and add an explicit recording-free **General chat** mode (`scope.type = 'none'`) plus a **Clear recording context** option with clear visual/citation guardrails.
 - **Speaker samples & Summary format picker** — Pick ≥5-second speaker voice samples (falling back to the longest available segment) with a subtle `"Sample"` caption below the preview button, and make the **Summary format** dropdown always available in Prepare summary for both tagged and untagged recordings without silently mutating the recording tag.
-- **Unified `llama.cpp >= b12631` runtime, Inkling 2 Mini & expanded model library** — Pin official `ggml-org/llama.cpp >= b12631` binaries across macOS arm64, Windows CUDA 12.4, and Linux CUDA 12.8 to unblock **Inkling 2 Mini** across all three platforms, and expand the curated catalog with **Bonsai 2** (`27B` & `9B` `Q2_0` on stock `llama.cpp`) plus mainstream peers (**Gemma 4 26B-A4B**, **Qwen 3.8 27B**, **Ministral 3 14B**, evaluating **Qwen 3.6 35B-A3B**).
+- **Unified `llama.cpp >= b12631` runtime, Inkling 2 Mini & expanded model library** — Pin official `ggml-org/llama.cpp >= b12631` binaries across macOS arm64, Windows CUDA 12.4, and Linux CUDA 12.8 to unblock **Inkling 2 Mini** across all three platforms, and expand the curated catalog with **Bonsai 2** (`9B` `Q2_0`) & **Bonsai 2.5** (`27B` `Q2_0` on stock `llama.cpp`) plus mainstream peers (**Gemma 4 26B-A4B**, **Qwen 3.8 27B**, **Ministral 3 14B**, evaluating **Qwen 3.6 35B-A3B**).
 - **Platform & dependency sweep** — Migrate Electron `46.0.0-alpha.11` toward stable `46.x` with cross-platform `safeStorage` verification, recheck matched cross-platform FFmpeg `> 8.1.2`, qualify held Python/Rust updates (`onnxruntime`, `ctranslate2`, `pyobjc`, `speakrs`), and verify zero `npm`/`pip`/`cargo` audit findings.
 
 ### Transcription
@@ -138,7 +138,7 @@ Full implementation plan: [v3.2.0 release plan](../superpowers/plans/2026-11-22-
 ### Summaries & Chat
 
 - **Inkling 2 Mini qualification (scheduled for v3.2.0).** Official `ggml-org/llama.cpp` `b12631` includes the loop-layer scale fix and publishes macOS arm64, Windows CUDA 12.4, and Linux CUDA 12.8 archives; qualify natively across all three platforms and resolve the English summary language check.
-- **Expanded Gemma 4 & new-model language checks.** Extend Gemma 4 summaries beyond Apple Silicon English and qualify Bonsai 2 / new catalog models per platform.
+- **Expanded Gemma 4 & new-model language checks.** Extend Gemma 4 summaries beyond Apple Silicon English and qualify Bonsai 2 / Bonsai 2.5 / new catalog models per platform.
 
 ### Audio
 

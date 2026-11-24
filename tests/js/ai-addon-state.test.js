@@ -545,7 +545,7 @@ test('catalog excludes legacy qwen3-14b placeholder and keeps features.summary s
       'bonsai-2-9b-q2-0',
       'gemma-4-e4b',
       'gemma-4-12b',
-      'bonsai-2-27b-q2-0',
+      'bonsai-2.5-27b-q2-0',
       'ministral-3-14b',
       'gemma-4-26b-a4b',
       'qwen3.8-27b',
@@ -581,11 +581,11 @@ test('Bonsai 2 and v3.2 peer models pin immutable HF artifacts on shared b12631 
       reasoningBudget: 0, reasoningEffort: 'none',
     },
     {
-      id: 'bonsai-2-27b-q2-0', tier: 'balanced', sizeBytes: 7626008928,
-      repo: 'prism-ml/Ternary-Bonsai-2-27B-gguf',
-      fileName: 'Ternary-Bonsai-2-27B-Q2_0.gguf',
-      revision: '839bd57023c1558945afea70a74fa83c054f35f9',
-      sha256: '4f99aed01b8a877e153f9aa6569a4440fe17c59701cc0953e36d7f460549e70e',
+      id: 'bonsai-2.5-27b-q2-0', tier: 'balanced', sizeBytes: 7673194848,
+      repo: 'prism-ml/Ternary-Bonsai-2.5-27B-GGUF',
+      fileName: 'Ternary-Bonsai-2.5-27B-Q2_0.gguf',
+      revision: '28a7093cc25bc151cc2b284c5570f12ce343fdcf',
+      sha256: '84496171ca79d4d33fb45612a2afd8303ec494baf916281023b7dc9cb3b3b9fa',
       reasoningBudget: 0, reasoningEffort: 'none',
     },
     {
@@ -658,4 +658,61 @@ test('Bonsai 2 and v3.2 peer models pin immutable HF artifacts on shared b12631 
   assert.deepEqual(inklingPolicy.languages, []);
   assert.equal(getSummaryLanguagePolicy('inkling-2-mini', 'darwin', 'x64').chatReady, false);
   assert.equal(getSummaryLanguagePolicy('unknown', 'linux', 'x64').chatReady, false);
+});
+
+test('retired bonsai-2-27b-q2-0 stays resolvable for existing installs and normalizes safely', () => {
+  const {
+    getKnownSummaryModelById,
+    getRetiredSummaryModelById,
+    getRetiredSummaryModelList,
+  } = require('../../src/ai-addon-state');
+  const { getSummaryLanguagePolicy } = require('../../src/summary-language-policy');
+
+  assert.equal(getModelById('summary', 'bonsai-2-27b-q2-0'), null);
+  const retired = getRetiredSummaryModelById('bonsai-2-27b-q2-0');
+  assert.ok(retired);
+  assert.equal(retired.retired, true);
+  assert.equal(retired.replacedByModelId, 'bonsai-2.5-27b-q2-0');
+  assert.equal(getKnownSummaryModelById('bonsai-2-27b-q2-0').id, 'bonsai-2-27b-q2-0');
+  assert.equal(getRetiredSummaryModelList().length, 1);
+
+  for (const [platform, arch] of [['win32', 'x64'], ['darwin', 'arm64'], ['linux', 'x64']]) {
+    const artifact = getSummaryArtifactForPlatform('bonsai-2-27b-q2-0', platform, arch);
+    const runtime = getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG, 'bonsai-2-27b-q2-0');
+    assert.equal(artifact.modelId, 'bonsai-2-27b-q2-0');
+    assert.equal(runtime.version, 'b12631');
+    assert.equal(getSummaryLanguagePolicy('bonsai-2-27b-q2-0', platform, arch).chatReady, true);
+  }
+
+  // Legacy ready manifest without summaryLibrary preserves retired Bonsai 2 27B without migration/download.
+  const legacyReady = normalizeAiAddonManifest({
+    features: { summary: { status: 'ready', modelId: 'bonsai-2-27b-q2-0' } },
+  });
+  assert.equal(legacyReady.summaryLibrary.defaultModelId, 'bonsai-2-27b-q2-0');
+  assert.equal(legacyReady.summaryLibrary.models['bonsai-2-27b-q2-0'].status, 'ready');
+  assert.equal(legacyReady.features.summary.modelId, 'bonsai-2-27b-q2-0');
+
+  // Existing library ready entry stays intact; notConfigured retired entry is pruned and mapped to replacement.
+  const libraryPreserved = normalizeAiAddonManifest({
+    features: { summary: { status: 'ready', modelId: 'bonsai-2-27b-q2-0' } },
+    summaryLibrary: {
+      defaultModelId: 'bonsai-2-27b-q2-0',
+      models: {
+        'bonsai-2-27b-q2-0': { status: 'ready', modelId: 'bonsai-2-27b-q2-0' },
+        'bonsai-2.5-27b-q2-0': { status: 'ready', modelId: 'bonsai-2.5-27b-q2-0' },
+      },
+    },
+  });
+  assert.equal(libraryPreserved.summaryLibrary.defaultModelId, 'bonsai-2-27b-q2-0');
+  assert.equal(libraryPreserved.summaryLibrary.models['bonsai-2-27b-q2-0'].status, 'ready');
+
+  const postRemoval = normalizeAiAddonManifest({
+    features: { summary: { status: 'notConfigured', modelId: 'bonsai-2-27b-q2-0' } },
+    summaryLibrary: {
+      defaultModelId: null,
+      models: { 'bonsai-2-27b-q2-0': { status: 'notConfigured', modelId: 'bonsai-2-27b-q2-0' } },
+    },
+  });
+  assert.equal(Object.hasOwn(postRemoval.summaryLibrary.models, 'bonsai-2-27b-q2-0'), false);
+  assert.equal(postRemoval.features.summary.modelId, 'bonsai-2.5-27b-q2-0');
 });

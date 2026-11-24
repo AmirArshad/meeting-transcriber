@@ -54,7 +54,7 @@ platforms after local device and runtime checks. Maintainer hardware results
 record which configurations have been tested. Summary language eligibility
 requires separate qualification. Unified stock `llama.cpp` `b12631` runtime
 artifacts (`B12631_SUMMARY_RUNTIME_ARTIFACTS` in `src/ai-addon-state.js`) back
-Inkling 2 Mini, Bonsai 2 (`Q2_0`), Linux Gemma 4, and v3.2 peer models; the
+Inkling 2 Mini, Bonsai 2 (`9B` `Q2_0`), Bonsai 2.5 (`27B` `Q2_0`), Linux Gemma 4, and v3.2 peer models; the
 audited Linux CUDA 12.8 `b12631` archive has no `libnccl.so.2` dependency and
 pins `libcudart.so.12`, `libcublas.so.12`, and `libcublasLt.so.12` from the
 official `cudart` archive while preserving the legacy NCCL validator path for
