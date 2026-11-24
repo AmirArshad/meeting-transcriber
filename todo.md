@@ -50,7 +50,7 @@ Planned on `release/3.2` (not yet cut; latest code commit `51c49b5`): [v3.2.0 re
   - Decide Gemma 4 E4B/12B promotion from `b12606` to the unified `llama.cpp` runtime on macOS and Windows once native checks pass.
   - Complete cross-platform summary language qualification (`src/summary-language-policy.js`, currently `summary-language-v4`) for Inkling 2 Mini, Bonsai 2 9B/27B, Gemma 4 E4B/12B (Windows/Linux CUDA), and peers — or keep unverified combinations gated as documented limits.
   - Evaluate or formally defer optional KV-cache quantization (`-fa on --cache-type-k q8_0 --cache-type-v q8_0`) from Task 2.1.
-  - Sync `docs/development/LOCAL_AI_MODEL_CATALOG.md` (including `inkling-2-mini`'s updated `--reasoning auto` / `reasoningEffort: 'minimal'` / `reasoningBudget: 256` settings from `51c49b5`) and canonical contracts for any refreshed runtime/dependency pins.
+  - `docs/development/LOCAL_AI_MODEL_CATALOG.md` and `docs/development/contracts/local-ai.md` are synced for `inkling-2-mini`'s `b12631` reasoning flags (`--reasoning auto`, `reasoningEffort: 'minimal'`, `reasoningBudget: 256`); re-sync catalog and canonical contracts if runtime or dependency pins change during the pre-release refresh.
 - [ ] **Release-version (`3.2.0`) cut & publication:**
   - Record final cross-platform evidence and any explicitly accepted limits in `docs/development/V3_2_QUALIFICATION.md`.
   - Write curated release notes in `docs/releases/v3.2.0.md` and update `docs/initiatives/ROADMAP.md` and `todo.md`.

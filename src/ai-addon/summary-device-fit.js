@@ -113,9 +113,24 @@ function parseNvidiaMemory(output, visibleDevices) {
     devices.push({ index, uuid, totalBytes, availableBytes });
   }
   const selector = typeof visibleDevices === 'string' ? visibleDevices.trim() : '';
-  const match = selector
-    ? devices.find(({ index, uuid }) => selector === index || selector === uuid)
-    : devices.sort((left, right) => right.totalBytes - left.totalBytes || Number(left.index) - Number(right.index))[0];
+  let pool = devices;
+  if (selector) {
+    const visible = [];
+    const seen = new Set();
+    for (const rawToken of selector.split(',')) {
+      const tok = rawToken.trim();
+      if (!tok || tok === '-1' || tok === 'NoDevFiles') break;
+      const matched = devices.find(({ index, uuid }) => (
+        index === tok || uuid === tok || (tok.startsWith('GPU-') && uuid.startsWith(tok))
+      ));
+      if (matched && !seen.has(matched)) {
+        seen.add(matched);
+        visible.push(matched);
+      }
+    }
+    pool = visible;
+  }
+  const match = pool.sort((left, right) => right.totalBytes - left.totalBytes || Number(left.index) - Number(right.index))[0];
   if (!match) return null;
   const { totalBytes, availableBytes } = match;
   return { totalBytes, availableBytes, ...(devices.length > 1 ? { multiGpu: true } : {}) };

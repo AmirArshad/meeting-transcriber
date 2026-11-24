@@ -722,3 +722,150 @@ test('renderer Settings prompts to unload loaded model, retries on SUMMARY_MODEL
   assert.equal(chatCtx.summaryDeviceCheckSnapshot, null);
   assert.equal(chatRefreshCount, 2);
 });
+
+test('set-default-summary-model probes managed CUDA when Linux cache is cold', async (t) => {
+  await withPlatform('linux', 'x64', async () => {
+    const userDataDir = createTempUserData(t);
+    const manifestDir = path.join(userDataDir, 'ai-addons');
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(path.join(manifestDir, 'manifest.json'), JSON.stringify({
+      version: 1,
+      features: {
+        summary: { status: 'ready', modelId: 'qwen3.5-9b-q4-k-m' },
+      },
+      summaryLibrary: {
+        defaultModelId: 'qwen3.5-9b-q4-k-m',
+        models: {
+          'qwen3.5-9b-q4-k-m': { status: 'ready', modelId: 'qwen3.5-9b-q4-k-m' },
+          'qwen3.5-4b-q4-k-m': { status: 'ready', modelId: 'qwen3.5-4b-q4-k-m' },
+        },
+      },
+    }));
+
+    let cudaProbeCalls = 0;
+    const statusCudaInputs = [];
+    const { handlers } = registerHandlers({
+      getCachedCudaStatus: () => null,
+      resolveCudaStatusForTranscription: async () => {
+        cudaProbeCalls += 1;
+        return READY_LINUX_CUDA;
+      },
+      getSummaryDeviceMemory: async () => ({ totalBytes: 12 * GiB, availableBytes: 11 * GiB }),
+      checkAiAddonSetupStatus: async ({ summaryModelId, cudaStatus, deviceMemory }) => {
+        statusCudaInputs.push(cudaStatus);
+        const { getSummaryModelFit } = require('../../src/ai-addon/summary-device-fit');
+        const { getModelById, getSummaryArtifactForPlatform, getSummaryRuntimeArtifactForPlatform, getSummaryAvailability } = require('../../src/ai-addon-state');
+        const targetId = summaryModelId || 'qwen3.5-4b-q4-k-m';
+        const availability = getSummaryAvailability('linux', 'x64', { cudaStatus });
+        const fit = getSummaryModelFit({
+          model: getModelById('summary', targetId),
+          artifact: getSummaryArtifactForPlatform(targetId, 'linux', 'x64'),
+          runtimeArtifact: getSummaryRuntimeArtifactForPlatform('linux', 'x64', undefined, targetId),
+          availability,
+          deviceMemory,
+          platform: 'linux',
+        });
+        return {
+          features: {
+            summary: {
+              modelId: targetId,
+              setupComplete: true,
+              status: 'ready',
+              fit,
+            },
+          },
+          summaryLibrary: { defaultModelId: targetId, models: [] },
+        };
+      },
+    }, userDataDir);
+
+    const result = await handlers.get('set-default-summary-model')(
+      { sender: {} },
+      { modelId: 'qwen3.5-4b-q4-k-m' },
+    );
+    assert.equal(cudaProbeCalls, 1);
+    assert.deepEqual(statusCudaInputs, [READY_LINUX_CUDA, READY_LINUX_CUDA]);
+    assert.equal(result.features.summary.fit.blocked, false);
+    assert.equal(result.summaryLibrary.defaultModelId, 'qwen3.5-4b-q4-k-m');
+  });
+});
+
+test('set-default-summary-model preserves residentModelId on returned status when setting a smaller model while another model is loaded', async (t) => {
+  await withPlatform('linux', 'x64', async () => {
+    const userDataDir = createTempUserData(t);
+    const manifestDir = path.join(userDataDir, 'ai-addons');
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(path.join(manifestDir, 'manifest.json'), JSON.stringify({
+      version: 1,
+      features: {
+        summary: { status: 'ready', modelId: 'qwen3.5-9b-q4-k-m' },
+      },
+      summaryLibrary: {
+        defaultModelId: 'qwen3.5-9b-q4-k-m',
+        models: {
+          'qwen3.5-9b-q4-k-m': { status: 'ready', modelId: 'qwen3.5-9b-q4-k-m' },
+          'qwen3.5-4b-q4-k-m': { status: 'ready', modelId: 'qwen3.5-4b-q4-k-m' },
+          'gemma-4-12b': { status: 'ready', modelId: 'gemma-4-12b' },
+        },
+      },
+    }));
+
+    const statusDeviceMemories = [];
+    const { handlers } = registerHandlers({
+      getResidentSummaryModelState: () => ({
+        status: 'loaded',
+        modelId: 'qwen3.5-9b-q4-k-m',
+        modelName: 'Qwen3.5 9B',
+      }),
+      getSummaryDeviceMemory: async () => ({ totalBytes: 12 * GiB, availableBytes: 5 * GiB }),
+      checkAiAddonSetupStatus: async ({ summaryModelId, cudaStatus, deviceMemory }) => {
+        statusDeviceMemories.push(deviceMemory);
+        const { getSummaryModelFit } = require('../../src/ai-addon/summary-device-fit');
+        const { getModelById, getSummaryArtifactForPlatform, getSummaryRuntimeArtifactForPlatform, getSummaryAvailability } = require('../../src/ai-addon-state');
+        const availability = getSummaryAvailability('linux', 'x64', { cudaStatus });
+        const buildFit = (id) => getSummaryModelFit({
+          model: getModelById('summary', id),
+          artifact: getSummaryArtifactForPlatform(id, 'linux', 'x64'),
+          runtimeArtifact: getSummaryRuntimeArtifactForPlatform('linux', 'x64', undefined, id),
+          availability,
+          deviceMemory,
+          platform: 'linux',
+        });
+        const activeId = summaryModelId || 'qwen3.5-4b-q4-k-m';
+        return {
+          features: {
+            summary: {
+              modelId: activeId,
+              setupComplete: true,
+              status: 'ready',
+              fit: buildFit(activeId),
+            },
+          },
+          summaryLibrary: {
+            defaultModelId: activeId,
+            models: ['qwen3.5-4b-q4-k-m', 'qwen3.5-9b-q4-k-m', 'gemma-4-12b'].map((id) => ({
+              modelId: id,
+              setupComplete: true,
+              status: 'ready',
+              fit: buildFit(id),
+            })),
+          },
+        };
+      },
+    }, userDataDir);
+
+    const result = await handlers.get('set-default-summary-model')(
+      { sender: {} },
+      { modelId: 'qwen3.5-4b-q4-k-m' },
+    );
+    assert.equal(statusDeviceMemories.length, 2);
+    assert.equal(statusDeviceMemories[0].residentModelId, undefined);
+    assert.equal(statusDeviceMemories[1].residentModelId, 'qwen3.5-9b-q4-k-m');
+    assert.equal(statusDeviceMemories[1].residentModelName, 'Qwen3.5 9B');
+    assert.equal(result.features.summary.fit.residentModelId, 'qwen3.5-9b-q4-k-m');
+    assert.equal(result.features.summary.fit.residentModelName, 'Qwen3.5 9B');
+    const gemma = result.summaryLibrary.models.find((m) => m.modelId === 'gemma-4-12b');
+    assert.equal(gemma.fit.blocked, false);
+    assert.equal(gemma.fit.residentModelId, 'qwen3.5-9b-q4-k-m');
+  });
+});

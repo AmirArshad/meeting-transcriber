@@ -998,3 +998,28 @@ test('Prepare summary handles 0/1/2+ usable models and pre-selects summary-capab
   const submitted = await pending;
   assert.deepEqual({ ...submitted }, { transcriptLanguage: 'en', modelId: 'gemma-4-e4b', template: 'other' });
 });
+
+test('Prepare summary reuses saved template on regeneration unless recording tag changed', async () => {
+  const { context, elements } = createDialogHarness();
+  let pending = context.confirmSummaryTranscriptLanguage({
+    tag: 'meeting',
+    language: 'en',
+    summary: 'Existing summary',
+    ai: { summary: { tag: 'meeting', template: 'interview' } },
+  }, policy, 'en');
+  assert.equal(elements['summary-recording-tag'].value, 'interview');
+  assert.equal(elements['summary-format-preview'].textContent, context.getTagMeta('interview').formatPreview);
+  await elements['summary-language-form'].dispatch('submit');
+  assert.deepEqual({ ...await pending }, { transcriptLanguage: 'en', modelId: null, template: 'interview' });
+
+  pending = context.confirmSummaryTranscriptLanguage({
+    tag: 'appointment',
+    language: 'en',
+    summary: 'Existing summary',
+    ai: { summary: { tag: 'meeting', template: 'interview' } },
+  }, policy, 'en');
+  assert.equal(elements['summary-recording-tag'].value, 'appointment');
+  assert.equal(elements['summary-format-preview'].textContent, context.getTagMeta('appointment').formatPreview);
+  await elements['summary-language-form'].dispatch('submit');
+  assert.deepEqual({ ...await pending }, { transcriptLanguage: 'en', modelId: null, template: 'appointment' });
+});

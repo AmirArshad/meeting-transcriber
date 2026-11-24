@@ -49,6 +49,7 @@ function makeQaHarness({
   checkStatus = null,
   queueAction = null,
   getSummaryArtifactPath = null,
+  getSummaryArtifactForPlatform = null,
   getSummaryDeviceMemory = async () => null,
   ensureSummaryProcessExited = async () => {},
 } = {}) {
@@ -138,7 +139,7 @@ function makeQaHarness({
         },
       },
     })),
-    getSummaryArtifactForPlatform: () => ({ id: 'qwen-artifact', fileName: 'Qwen3.5-9B-Q4_K_M.gguf' }),
+    getSummaryArtifactForPlatform: getSummaryArtifactForPlatform || (() => ({ id: 'qwen-artifact', fileName: 'Qwen3.5-9B-Q4_K_M.gguf' })),
     getSummaryRuntimeArtifactForPlatform: () => ({ id: 'llama-cpp-v0.3.0-linux-x64-cuda-12.8' }),
     getModelById: (feature, modelId) => {
       getModelByIdCalls.push([feature, modelId]);
@@ -1164,4 +1165,82 @@ test('general chat (scope.type = none) bypasses FTS5/zero-hit gate, enforces CUD
     /CUDA 12 runtime/,
   );
   assert.equal(badCuda.spawnedServers.length, 0);
+});
+
+test('ensureServerRunning passes valid reasoningEffort before reasoningBudget and retrieval preflight receives grounded history', async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-qa-effort-hist-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const runnerPayloads = [];
+  const h = makeQaHarness({
+    tmpDir,
+    getSummaryArtifactForPlatform: () => ({
+      id: 'qwen-artifact',
+      fileName: 'Qwen3.5-9B-Q4_K_M.gguf',
+      inference: {
+        contextTokens: 32768,
+        family: 'qwen',
+        promptFormat: 'chatml',
+        disableThinking: false,
+        reasoningEffort: 'low',
+        reasoningBudget: 256,
+      },
+    }),
+    onQaRunnerPayload(payload, proc) {
+      runnerPayloads.push(payload);
+      proc.stdout.emit('data', Buffer.from(JSON.stringify({
+        status: 'answered',
+        chatMode: 'grounded',
+        retrievalMode: 'direct_full',
+        answerMarkdown: `Answer ${runnerPayloads.length} [E1].`,
+        citations: payload.evidence,
+        searchedMeetingCount: 1,
+        evidenceCount: payload.evidence.length,
+      })));
+      proc.emit('close', 0);
+    },
+  });
+
+  const turn1 = await h.handlers.get('ask-history')({}, { question: 'When does beta launch?' });
+  assert.equal(turn1.status, 'answered');
+  const serverArgs = h.spawnedServers[0].args;
+  const effortIdx = serverArgs.indexOf('--reasoning-effort');
+  const budgetIdx = serverArgs.indexOf('--reasoning-budget');
+  assert.notEqual(effortIdx, -1);
+  assert.equal(serverArgs[effortIdx + 1], 'low');
+  assert.ok(effortIdx < budgetIdx);
+  assert.equal(serverArgs[budgetIdx + 1], '256');
+
+  const retrievalSpawns = () => h.spawnedPython.filter((e) => e.args.includes('history_qa.retrieval'));
+  const firstRetrievalPayload = JSON.parse(retrievalSpawns()[0].proc._stdinText);
+  assert.equal(firstRetrievalPayload.history, undefined);
+
+  await h.handlers.get('ask-history')({}, {
+    threadId: turn1.thread.id,
+    question: 'What else did Alice mention?',
+  });
+  const secondRetrievalPayload = JSON.parse(retrievalSpawns()[1].proc._stdinText);
+  assert.deepEqual(secondRetrievalPayload.history, runnerPayloads[1].history);
+  assert.equal(secondRetrievalPayload.history.length, 2);
+  assert.equal(secondRetrievalPayload.history[0].content, 'When does beta launch?');
+  assert.deepEqual(secondRetrievalPayload.history[1].citations, [{ meetingTitle: 'Launch Sync' }]);
+
+  // Invalid or missing reasoningEffort must not emit --reasoning-effort.
+  const tmpBad = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-qa-effort-bad-'));
+  t.after(() => fs.rmSync(tmpBad, { recursive: true, force: true }));
+  const hBad = makeQaHarness({
+    tmpDir: tmpBad,
+    getSummaryArtifactForPlatform: () => ({
+      id: 'qwen-artifact',
+      fileName: 'Qwen3.5-9B-Q4_K_M.gguf',
+      inference: {
+        contextTokens: 32768,
+        family: 'qwen',
+        promptFormat: 'chatml',
+        reasoningEffort: 'extreme',
+      },
+    }),
+  });
+  await hBad.handlers.get('ask-history')({}, { question: 'Hello', scope: { type: 'none' } });
+  assert.equal(hBad.spawnedServers[0].args.includes('--reasoning-effort'), false);
 });

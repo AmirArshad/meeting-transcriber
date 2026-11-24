@@ -256,7 +256,7 @@ test('deduplicates across inline formatting and preserves precise timestamps and
     root.append(paragraph, nextParagraph);
   });
   const container = doc.createElement('div');
-  const citations = [11.1, 11.9, '11.9'].map((startSec, i) => ({
+  const citations = [11.1, 12.9, '12.9'].map((startSec, i) => ({
     evidenceId: `E${i + 1}`, meetingId: 'm1', startSec, kind: 'transcript',
   }));
 
@@ -269,6 +269,30 @@ test('deduplicates across inline formatting and preserves precise timestamps and
   assert.deepEqual(container.querySelectorAll('button').map((button) => button.dataset.evidenceId),
     ['E1', 'E2', 'E3', 'E3', 'E3']);
   assert.deepEqual(container.querySelectorAll('button').slice(0, 2).map((button) => button.dataset.startSec),
-    ['11.1', '11.9']);
+    ['11.1', '12.9']);
   assert.equal(container.querySelectorAll('code')[0].textContent, '[E3]');
+});
+
+test('deduplicates adjacent sub-second citations formatting to the same MM:SS pill', () => {
+  const doc = createMockDocument();
+  const container = doc.createElement('div');
+  const markedLib = { parse: (md) => `<p>${md}</p>` };
+  const domPurifyLib = { sanitize: (html, cfg) => { assert.equal(cfg, STRICT_DOMPURIFY_CONFIG); return html; } };
+  const citations = [
+    { evidenceId: 'E1', meetingId: 'm1', meetingTitle: 'Song Demo', startSec: 11.1, kind: 'transcript' },
+    { evidenceId: 'E2', meetingId: 'm1', meetingTitle: 'Song Demo', startSec: 11.8, kind: 'transcript' },
+  ];
+
+  renderGroundedMarkdown(container, 'Verse one [E1] [E2].', citations, {
+    markedLib,
+    domPurifyLib,
+    documentObj: doc,
+  });
+
+  const buttons = container.querySelectorAll('button');
+  assert.equal(buttons.length, 1);
+  assert.equal(buttons[0].textContent, 'Song Demo · 00:11');
+  assert.equal(buttons[0].dataset.evidenceId, 'E1');
+  assert.equal(buttons[0].dataset.startSec, '11.1');
+  assert.equal(container.querySelectorAll('p')[0].textContent, 'Verse one Song Demo · 00:11.');
 });

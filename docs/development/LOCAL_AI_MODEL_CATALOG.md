@@ -61,8 +61,11 @@ The catalog is organized into three hardware tiers (`Compact`, `Balanced`, and
   16,564,259,744 bytes), and `inkling-2-mini` (`IQ4_NL`, 17,627,940,768 bytes).
 
 Bonsai 2 (`9B` and `27B`) uses stock `Q2_0` on upstream `llama.cpp b12631`.
-Both Bonsai models, `qwen3.8-27b`, and `inkling-2-mini` pass `--reasoning off`
-and `--reasoning-budget 0` to preserve output tokens for structured responses.
+Both Bonsai 2 models (`9B` and `27B`) and `qwen3.8-27b` pass `--reasoning off`,
+`--reasoning-effort none`, and `--reasoning-budget 0` to preserve output tokens
+for structured responses, whereas `inkling-2-mini` on `b12631` passes
+`--reasoning auto`, `--reasoning-effort minimal`, and `--reasoning-budget 256`
+(with `[Start thinking]...[End thinking]` output stripping).
 The catalog uses text weights with a 32,768-token context window. Memory tiers
 are advisory, and Linux CUDA fit uses measured allocation floors for both Bonsai
 models. The [qualification record](V3_2_QUALIFICATION.md) lists verified pins,
@@ -82,10 +85,12 @@ remaining gates in the [v3.1 qualification record](V3_1_QUALIFICATION.md) and
 
 Inkling 2 Mini uses the official ggml-org `IQ4_NL` pin and is wired to the
 shared `b12631` runtime (20 commits ahead of the loop-layer scale fix
-`690b87d8`) with 32,768-token context and non-thinking CLI settings. The memory
-recommendation is 24 GiB VRAM or 32 GiB unified memory. Setup checks the device's
-reported memory and validates full GPU offload at 32k before enabling Chat.
-Working-memory recommendations remain advisory. [v3.2 qualification record](V3_2_QUALIFICATION.md)
+`690b87d8`) with 32,768-token context and bounded minimal-reasoning `b12631`
+settings (`--reasoning auto`, `--reasoning-effort minimal`,
+`--reasoning-budget 256`). The memory recommendation is 24 GiB VRAM or 32 GiB
+unified memory. Setup checks the device's reported memory and validates full GPU
+offload at 32k before enabling Chat. Working-memory recommendations remain
+advisory. [v3.2 qualification record](V3_2_QUALIFICATION.md)
 
 ### Linux Qwen and Gemma 4 summary runtime pins
 
@@ -173,7 +178,7 @@ inference smoke record.
 4. Keep runtime archive URLs under trusted release hosts covered by the setup download host allowlist; setup rejects unallowed hosts even when SHA-256 metadata exists.
 5. Keep `executableName` (`llama-cli`) and `serverExecutableName` (`llama-server`) aligned with the extracted layout under `ai-addons/runtimes/llama-cpp/<runtime-id>/extract/` so Windows DLLs, Linux `.so` libraries, and macOS dylibs remain beside the executables. Shared runtimes are reused across models pinned to the same runtime ID.
 6. For ZIP and `tar.gz` archives, keep extraction paths relative and safe; shared validation lives in `src/ai-addon-archive-helpers.js`. On-disk runtime archives extract off the main thread (`src/ai-addon-zip-extractor-worker.js` on Windows, `src/ai-addon-tar-extractor-worker.js` on macOS/Linux). Setup creates the extraction directory and rejects unsafe or unparseable archive entries before extraction.
-7. Confirm the pinned runtime supports the non-interactive CLI flags used by setup/generation (`--no-warmup`, `--single-turn`, `--simple-io`, and the model's reasoning flag) and `llama-server` loopback flags (`--no-webui`, `--parallel 1`, `--reasoning off`, `LLAMA_API_KEY` env) before changing runtime pins.
+7. Confirm the pinned runtime supports the non-interactive CLI flags used by setup/generation (`--no-warmup`, `--single-turn`, `--simple-io`, and the model's reasoning flags) and `llama-server` loopback flags (`--no-webui`, `--parallel 1`, `--reasoning off|auto`, optional `--reasoning-effort`, optional `--reasoning-budget`, `LLAMA_API_KEY` env) before changing runtime pins.
 8. Run `npm test` and `npm run test:python`.
 
 ## Validation Checklist

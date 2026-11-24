@@ -308,10 +308,10 @@ async function getSummaryDeviceMemory({ live = false, fresh = false } = {}) {
     }
     summaryDeviceMemoryProbe = new Promise((resolve) => {
       execFile(executable, ['--query-gpu=index,uuid,memory.total,memory.free', '--format=csv,noheader,nounits'], {
-        timeout: process.platform === 'linux' ? 10000 : 3000, windowsHide: true,
+        timeout: 10000, windowsHide: true,
       }, (error, stdout) => {
         summaryDeviceMemorySnapshot = error ? null : parseNvidiaMemory(stdout, process.env.CUDA_VISIBLE_DEVICES);
-        summaryDeviceMemoryReadAt = summaryDeviceMemorySnapshot || process.platform !== 'linux' ? Date.now() : 0;
+        summaryDeviceMemoryReadAt = summaryDeviceMemorySnapshot ? Date.now() : 0;
         resolve(summaryDeviceMemorySnapshot);
       });
     }).finally(() => { summaryDeviceMemoryProbe = null; });

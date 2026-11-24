@@ -232,6 +232,22 @@ TAG_META_LABELS: Dict[str, str] = {
     "pt": "Etiqueta",
 }
 
+FORMAT_META_LABELS: Dict[str, str] = {
+    "en": "Format",
+    "es": "Formato",
+    "fr": "Format",
+    "de": "Format",
+    "zh": "格式",
+    "zh-Hant": "格式",
+    "ja": "フォーマット",
+    "it": "Formato",
+    "pa": "ਫਾਰਮੈਟ",
+    "pa-Arab": "فارمیٹ",
+    "hi": "प्रारूप",
+    "ko": "형식",
+    "pt": "Formato",
+}
+
 TAG_DISPLAY_LABELS: Dict[str, Dict[str, str]] = {
     "en": {
         "meeting": "Meeting",
@@ -1132,6 +1148,7 @@ def get_localized_labels(language: str = "en") -> Dict[str, Any]:
     return {
         **base,
         "tag": TAG_META_LABELS.get(lang, TAG_META_LABELS["en"]),
+        "format": FORMAT_META_LABELS.get(lang, FORMAT_META_LABELS["en"]),
         "sections": sections,
         "fields": fields,
         "tag_names": tag_names,

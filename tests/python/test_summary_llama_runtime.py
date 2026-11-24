@@ -494,3 +494,51 @@ def test_peer_setup_smoke_passes_catalog_reasoning_flags(family, prompt_format, 
         assert '--reasoning-budget' not in args
     else:
         assert args[args.index('--reasoning-budget') + 1] == '0'
+
+
+@pytest.mark.parametrize('effort', ['none', 'minimal', 'low', 'medium', 'high'])
+def test_build_llama_cli_args_emits_reasoning_effort_before_budget(effort):
+    from backend.summaries.llama_runtime import apply_inference_descriptor
+
+    runtime = apply_inference_descriptor(
+        {'platform': 'linux', 'executable': '/runtime/llama-cli', 'modelPath': '/model.gguf'},
+        {
+            'contextTokens': 32768,
+            'family': 'qwen',
+            'promptFormat': 'chatml',
+            'disableThinking': False,
+            'reasoningEffort': effort,
+            'reasoningBudget': 512,
+        },
+    )
+    args = build_llama_cli_args(runtime, prompt_path='/prompt')
+    assert args[args.index('--reasoning-effort') + 1] == effort
+    assert args.index('--reasoning-effort') < args.index('--reasoning-budget')
+
+
+def test_build_llama_cli_args_ignores_invalid_reasoning_effort():
+    from backend.summaries.llama_runtime import apply_inference_descriptor
+
+    for bad_effort in (None, '', 'extreme', 123, True):
+        runtime = apply_inference_descriptor(
+            {'platform': 'linux', 'executable': '/runtime/llama-cli', 'modelPath': '/model.gguf'},
+            {'contextTokens': 32768, 'family': 'qwen', 'promptFormat': 'chatml', 'reasoningEffort': bad_effort},
+        )
+        args = build_llama_cli_args(runtime, prompt_path='/prompt')
+        assert '--reasoning-effort' not in args
+
+
+def test_strip_llama_prompt_echo_handles_truncated_non_json_markdown():
+    prompt_text = 'System: Answer concisely in Markdown.\n\nUser: Explain closures.'
+    raw_output = (
+        'available commands:\n'
+        '  /exit or Ctrl+C     stop or exit\n\n'
+        '> System: Answer concisely in Markdown.\n'
+        'User: Explain ... (truncated)\n\n'
+        '## Closures\n\n'
+        'A closure captures its lexical scope.\n'
+        'Exiting...\n'
+    )
+    assert strip_llama_prompt_echo(raw_output, prompt_text) == (
+        '## Closures\n\nA closure captures its lexical scope.'
+    )

@@ -118,6 +118,23 @@ test('NVIDIA parsing skips noise and selects one valid adapter', () => {
   assert.deepEqual(parseNvidiaMemory(output, ''), large);
   assert.deepEqual(parseNvidiaMemory(output, '0'), small);
   assert.deepEqual(parseNvidiaMemory(output, 'GPU-small'), small);
+  assert.deepEqual(parseNvidiaMemory(output, '0,1'), large);
+  assert.deepEqual(parseNvidiaMemory(output, '1,0'), large);
+  assert.deepEqual(parseNvidiaMemory(output, '0, 0'), small);
+  assert.equal(parseNvidiaMemory(output, '-1'), null);
+  assert.deepEqual(parseNvidiaMemory(output, '0,-1,1'), small);
+  assert.deepEqual(parseNvidiaMemory(output, '0,NoDevFiles,1'), small);
+  assert.deepEqual(parseNvidiaMemory(output, '1'), large);
   assert.equal(parseNvidiaMemory(output, '2'), null);
   assert.equal(parseNvidiaMemory('Failed to initialize NVML'), null);
+  assert.deepEqual(parseNvidiaMemory('0, GPU-only, 8190, 8000'), {
+    totalBytes: 8190 * MiB,
+    availableBytes: 8000 * MiB,
+  });
+
+  const uuidPrefixOutput = [
+    '0, GPU-aaa111, 8190, 8000',
+    '1, GPU-bbb222, 12282, 12000',
+  ].join('\n');
+  assert.deepEqual(parseNvidiaMemory(uuidPrefixOutput, 'GPU-a,GPU-b'), large);
 });

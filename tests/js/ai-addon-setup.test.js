@@ -454,6 +454,11 @@ test('download URL validation allows configured HTTPS hosts and expected redirec
   assert.equal(isAllowedDownloadUrl('https://example.test/model.gguf'), false);
   assert.equal(isAllowedDownloadUrl('https://evil.hf.co/model.gguf'), false);
   assert.equal(isAllowedDownloadUrl('https://attacker.huggingface.co/model.gguf'), false);
+  assert.equal(isAllowedDownloadUrl('https://user:pass@github.com/ggml-org/llama.cpp/releases/download/b9173/runtime.zip'), false);
+  assert.equal(isAllowedDownloadUrl('https://token@api.github.com/repos/ggml-org/llama.cpp/releases/assets/778478489'), false);
+  assert.equal(isAllowedDownloadUrl('https://:pass@huggingface.co/unsloth/model/resolve/main/model.gguf'), false);
+  assert.equal(isAllowedDownloadUrl('https://api.github.com/repos/ggml-org/llama.cpp/releases/assets/778478489?access_token=abc'), false);
+  assert.equal(isAllowedDownloadUrl('https://api.github.com/repos/ggml-org/llama.cpp/releases/assets/778478489#fragment'), false);
 });
 
 test('downloadFile requests GitHub asset bytes and follows the allowlisted CDN redirect', async (t) => {

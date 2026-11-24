@@ -170,6 +170,9 @@ def build_llama_cli_args(
         "--reasoning",
         "auto" if inference.get("disableThinking") is False else "off",
     ))
+    reasoning_effort = inference.get("reasoningEffort")
+    if isinstance(reasoning_effort, str) and reasoning_effort in ("none", "minimal", "low", "medium", "high"):
+        args.extend(("--reasoning-effort", reasoning_effort))
     reasoning_budget = inference.get("reasoningBudget")
     if isinstance(reasoning_budget, int) and not isinstance(reasoning_budget, bool):
         args.extend(("--reasoning-budget", str(reasoning_budget)))
@@ -300,6 +303,7 @@ def strip_llama_prompt_echo(raw_output: str, prompt_text: str) -> str:
                 brace_index = search_region.find("{")
                 if brace_index != -1:
                     return search_region[brace_index:].strip()
+                return search_region.strip()
 
     return output.strip()
 

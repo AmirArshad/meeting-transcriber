@@ -9,6 +9,7 @@ atomically rebuilt whenever missing, stale in schema, or corrupted.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import sqlite3
@@ -268,7 +269,7 @@ def _parse_duration_seconds(meeting: Dict[str, Any]) -> float:
     if raw_seconds is not None:
         try:
             value = float(raw_seconds)
-            if value >= 0:
+            if math.isfinite(value) and value >= 0:
                 return value
         except (TypeError, ValueError):
             pass
@@ -1401,7 +1402,7 @@ def _query_passages(
                        MIN(rank_score) AS best_rank,
                        AVG(rank_score) AS mean_rank,
                        MAX(kind = 'summary') AS summary_match,
-                       COUNT(*) * 60.0 / MAX(60.0, MAX(meeting_duration_sec)) AS hits_per_minute
+                       COUNT(*) * 60.0 / MAX(60.0, COALESCE(MAX(meeting_duration_sec), 0.0)) AS hits_per_minute
                 FROM matched
                 WHERE body_tier = 0
                 GROUP BY meeting_id
@@ -1780,7 +1781,7 @@ def estimate_meeting_transcripts(
     rows = conn.execute(
         f"""
         SELECT meeting_id, COUNT(*) AS passage_count,
-               SUM(length(CAST(text AS BLOB))) AS text_bytes
+               COALESCE(SUM(length(CAST(text AS BLOB))), 0) AS text_bytes
         FROM passages
         WHERE kind = 'transcript' AND meeting_id IN ({placeholders})
         GROUP BY meeting_id

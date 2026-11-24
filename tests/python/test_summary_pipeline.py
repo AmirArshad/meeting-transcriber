@@ -632,3 +632,66 @@ def test_inkling_reasoning_auto_and_strip_model_reasoning():
         prompt_path="/tmp/prompt.txt",
     )
     assert off_args[off_args.index("--reasoning") + 1] == "off"
+
+
+def test_render_summary_markdown_localizes_format_label():
+    from backend.summaries.language_labels import FORMAT_META_LABELS, LANGUAGE_LABELS, get_localized_labels
+
+    assert set(FORMAT_META_LABELS.keys()) == set(LANGUAGE_LABELS.keys())
+    for lang, expected in FORMAT_META_LABELS.items():
+        assert get_localized_labels(lang)["format"] == expected
+
+    es_md = render_summary_markdown(
+        {"summary": "Resumen breve."},
+        {"language": "es", "tag": "meeting", "template": "brainstorm"},
+    )
+    assert "**Formato:** Lluvia de ideas" in es_md
+
+    ja_md = render_summary_markdown(
+        {"summary": "短い要約。"},
+        {"language": "ja", "tag": "meeting", "template": "lecture"},
+    )
+    assert "**フォーマット:** 講義・学習" in ja_md
+
+
+def test_mid_body_start_thinking_quote_is_preserved_and_leading_blocks_stripped():
+    from summaries.summary_pipeline import _strip_model_reasoning, extract_json_object
+
+    quoted = '{"summary": "Speaker read [Start thinking] aloud before <think> note.", "topics": []}'
+    assert extract_json_object(quoted)["summary"] == "Speaker read [Start thinking] aloud before <think> note."
+
+    closed_then_unclosed = "<think>draft</think>\n   [Start thinking]\nstill going"
+    assert _strip_model_reasoning(closed_then_unclosed) == ""
+
+    closed_then_quoted = '<think>draft</think>\n{"summary": "Quoted [Start thinking] marker.", "topics": []}'
+    assert extract_json_object(closed_then_quoted)["summary"] == "Quoted [Start thinking] marker."
+
+
+def test_sanitize_prompt_control_tokens_strips_inkling_and_mistral_tokens():
+    from summaries.summary_pipeline import sanitize_prompt_control_tokens
+
+    tokens = (
+        "<|message_system|>",
+        "<|message_user|>",
+        "<|message_model|>",
+        "<|content_thinking|>",
+        "<|end_message|>",
+        "[Start thinking]",
+        "[End thinking]",
+        "[INST]",
+        "[/INST]",
+        "[SYSTEM_PROMPT]",
+        "[/SYSTEM_PROMPT]",
+        "[AVAILABLE_TOOLS]",
+        "[/AVAILABLE_TOOLS]",
+        "[TOOL_CALLS]",
+        "[TOOL_RESULTS]",
+        "[/TOOL_RESULTS]",
+        "<s>",
+        "</s>",
+    )
+    raw = "prefix " + " ".join(tokens) + " suffix"
+    cleaned = sanitize_prompt_control_tokens(raw)
+    for token in tokens:
+        assert token not in cleaned
+    assert "prefix" in cleaned and "suffix" in cleaned

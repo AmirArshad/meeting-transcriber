@@ -1464,9 +1464,13 @@ def retrieve_evidence(
         token_cap = max(0, min(MAX_EVIDENCE_TOKENS, (
             max_evidence_tokens if max_evidence_tokens is not None else MAX_EVIDENCE_TOKENS
         )))
+        strong_ids = set(entities["strongMeetingIds"])
+        strong_entity_headers = [h for h in entity_headers if h["meetingId"] in strong_ids]
         direct_headers = prior_headers if (deepen or not topic_tokens) and prior_headers else filtered_headers
-        if entity_headers and (not topic_tokens or (len(entity_headers) == 1 and entities["strongMeetingIds"])):
+        if entity_headers and not topic_tokens:
             direct_headers = entity_headers
+        elif strong_entity_headers and 1 <= len(strong_entity_headers) <= MAX_OVERVIEW_MEETINGS:
+            direct_headers = strong_entity_headers
         if conn is not None:
             direct = _retrieve_direct_evidence(
                 conn, direct_headers,
@@ -1490,7 +1494,6 @@ def retrieve_evidence(
         if not topic_tokens and not (follow_up and (deepen or pronoun) and (carry_tokens or cited_keys)):
             return overview(entity_headers or prior_headers or filtered_headers)
 
-        strong_ids = set(entities["strongMeetingIds"])
         target_headers = prior_headers or [h for h in entity_headers if h["meetingId"] in strong_ids] or filtered_headers
         query_tokens = list(dict.fromkeys([*topic_tokens, *carry_tokens])) if follow_up and deepen else topic_tokens or carry_tokens
 
@@ -1559,6 +1562,15 @@ def retrieve_evidence(
             )
         if not candidates:
             if follow_up and (deepen or not topic_tokens) and prior_headers:
+                if conn is not None:
+                    direct_fallback = _retrieve_direct_evidence(
+                        conn,
+                        prior_headers,
+                        block_cap=min(MAX_DIRECT_EVIDENCE_BLOCKS, block_limit) if block_limit is not None else MAX_DIRECT_EVIDENCE_BLOCKS,
+                        token_cap=token_cap,
+                    )
+                    if direct_fallback:
+                        return result("direct_full", direct_fallback)
                 return overview(prior_headers)
             return result("targeted", [], query_tokens)
 

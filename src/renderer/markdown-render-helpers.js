@@ -109,8 +109,8 @@
   function getCitationPillKey(citation) {
     const meetingId = String(citation.meetingId).trim();
     const kind = String(citation.kind || '').trim().toLowerCase();
-    const startSec = formatCitationSeconds(citation.startSec) ? Number(citation.startSec) : null;
-    return JSON.stringify([meetingId, kind, startSec]);
+    const formattedTs = formatCitationSeconds(citation.startSec) || null;
+    return JSON.stringify([meetingId, kind, formattedTs]);
   }
 
   function buildCitationMap(verifiedCitations) {

@@ -451,3 +451,109 @@ test('rerender after device check reflects live storageFit and confirmation fall
   const confirmText = ctx.summaryDownloadConfirmation(installedModel, { availableBytes: 50 });
   assert.match(confirmText, /Peak free space needed: 0 B \(Available: 50 B\)/);
 });
+
+test('usableSummaryModels retains ready model blocked only by loaded Chat model while rejecting total VRAM shortfall', () => {
+  const ctx = vm.createContext({
+    aiAddonStatusSnapshot: null,
+    chatState: { modelState: { status: 'loaded', modelId: 'loaded-chat' } },
+  });
+  vm.runInContext(helpers, ctx);
+  const library = {
+    models: [
+      {
+        modelId: 'blocked-only-by-loaded',
+        installed: true,
+        setupComplete: true,
+        status: 'ready',
+        fit: {
+          status: 'needs_more_memory',
+          blocked: true,
+          memoryType: 'graphics memory',
+          minimumRuntimeBytes: 6,
+          totalMemoryBytes: 8,
+          availableMemoryBytes: 3,
+        },
+      },
+      {
+        modelId: 'vram-shortfall',
+        installed: true,
+        setupComplete: true,
+        status: 'ready',
+        fit: {
+          status: 'needs_more_memory',
+          blocked: true,
+          memoryType: 'graphics memory',
+          minimumRuntimeBytes: 10,
+          totalMemoryBytes: 8,
+          availableMemoryBytes: 3,
+        },
+      },
+      {
+        modelId: 'unified-blocked',
+        installed: true,
+        setupComplete: true,
+        status: 'ready',
+        fit: {
+          status: 'needs_more_memory',
+          blocked: true,
+          memoryType: 'unified memory',
+          minimumRuntimeBytes: 6,
+          totalMemoryBytes: 8,
+          availableMemoryBytes: 3,
+        },
+      },
+    ],
+  };
+  assert.deepEqual(Array.from(ctx.usableSummaryModels(library), (model) => model.modelId), ['blocked-only-by-loaded']);
+  ctx.chatState.modelState.status = 'unloaded';
+  assert.deepEqual(ctx.usableSummaryModels(library), []);
+});
+
+test('syncSummaryRuntimeCheckingPoll schedules refresh on runtime_checking and stops once resolved', () => {
+  const scheduled = [];
+  const cleared = [];
+  let nextId = 1;
+  let refreshes = 0;
+  const ctx = vm.createContext({
+    aiAddonStatusSnapshot: null,
+    rendererQuitCommitted: false,
+    setTimeout(fn, delay) {
+      const handle = { id: nextId++, fn, delay, unrefCalled: false, unref() { this.unrefCalled = true; } };
+      scheduled.push(handle);
+      return handle;
+    },
+    clearTimeout(handle) {
+      cleared.push(handle.id);
+    },
+    refreshAiAddonSettings: async () => {
+      refreshes += 1;
+    },
+  });
+  vm.runInContext(helpers, ctx);
+
+  const pendingStatus = { summaryLibrary: { models: [{ modelId: 'a', fit: { status: 'runtime_checking' } }] } };
+  ctx.syncSummaryRuntimeCheckingPoll(pendingStatus);
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0].delay, 600);
+  assert.equal(scheduled[0].unrefCalled, true);
+
+  // Duplicate call while timer is active does not schedule another timer.
+  ctx.syncSummaryRuntimeCheckingPoll(pendingStatus);
+  assert.equal(scheduled.length, 1);
+
+  // Firing timer invokes refreshAiAddonSettings and allows the next poll.
+  scheduled[0].fn();
+  assert.equal(refreshes, 1);
+
+  // Pending status schedules again, and resolving clears the pending timer.
+  ctx.syncSummaryRuntimeCheckingPoll(pendingStatus);
+  assert.equal(scheduled.length, 2);
+  ctx.syncSummaryRuntimeCheckingPoll({ summaryLibrary: { models: [{ modelId: 'a', fit: { status: 'fits' } }] } });
+  assert.deepEqual(cleared, [2]);
+
+  // Resolved status or quit state does not schedule.
+  ctx.syncSummaryRuntimeCheckingPoll(null);
+  ctx.rendererQuitCommitted = true;
+  ctx.syncSummaryRuntimeCheckingPoll(pendingStatus);
+  assert.equal(scheduled.length, 2);
+});

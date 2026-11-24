@@ -369,6 +369,21 @@ function createAiAddonIpc(deps) {
     return resolveModelId('summary', manifest.summaryLibrary.defaultModelId);
   }
 
+  function attachResidentModelToDeviceMemory(deviceMemory) {
+    if (!deviceMemory || typeof deviceMemory !== 'object') {
+      return deviceMemory;
+    }
+    const resident = getResidentSummaryModelState();
+    if (resident?.status === 'loaded') {
+      return {
+        ...deviceMemory,
+        residentModelId: resident.modelId,
+        residentModelName: resident.modelName,
+      };
+    }
+    return deviceMemory;
+  }
+
   function assertNotBlockedByResidentSummaryModel({ modelId, cudaStatus, deviceMemory }) {
     const resident = getResidentSummaryModelState();
     if (!resident || resident.status !== 'loaded') return;
@@ -955,8 +970,8 @@ function createAiAddonIpc(deps) {
           backendPath: pythonConfig.backendPath,
           runtimeValidator: validateSummaryRuntimeSmoke,
           runExclusiveMutation: runExclusiveSummaryMutation,
-          deviceMemory,
-          getDeviceMemory: () => getSummaryDeviceMemory({ live: true, fresh: true }),
+          deviceMemory: attachResidentModelToDeviceMemory(deviceMemory),
+          getDeviceMemory: async () => attachResidentModelToDeviceMemory(await getSummaryDeviceMemory({ live: true, fresh: true })),
           cancelSignal,
           cudaStatus,
         }));
@@ -994,8 +1009,8 @@ function createAiAddonIpc(deps) {
             profile: safeOptions.profile,
             runtimeValidator: validateSummaryRuntimeSmoke,
             runExclusiveMutation: runExclusiveSummaryMutation,
-            deviceMemory,
-            getDeviceMemory: () => getSummaryDeviceMemory({ live: true, fresh: true }),
+            deviceMemory: attachResidentModelToDeviceMemory(deviceMemory),
+            getDeviceMemory: async () => attachResidentModelToDeviceMemory(await getSummaryDeviceMemory({ live: true, fresh: true })),
             cancelSignal,
             cudaStatus,
           }));
@@ -1003,10 +1018,11 @@ function createAiAddonIpc(deps) {
           if (error.code === 'SUMMARY_MODEL_EXIT_UNCONFIRMED' || error.code === 'QUIT_IN_PROGRESS') throw error;
           if (!cancelSignal.aborted && error.code !== AI_ADDON_CANCEL_CODE) throw error;
           emitAiAddonProgress({ feature: 'summary', phase: 'cancelled', modelId: safeOptions.modelId, message: 'Setup check canceled.' });
+          const fallbackDeviceMemory = isQuitCommitted() || safeOptions.unloadLoadedModel === true
+            ? admission?.deviceMemory ?? null
+            : await getSummaryDeviceMemory({ live: true, fresh: true });
           return checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
-            deviceMemory: isQuitCommitted() || safeOptions.unloadLoadedModel === true
-              ? admission?.deviceMemory ?? null
-              : await getSummaryDeviceMemory({ live: true, fresh: true }),
+            deviceMemory: fallbackDeviceMemory ? attachResidentModelToDeviceMemory(fallbackDeviceMemory) : fallbackDeviceMemory,
             cudaStatus: admission?.cudaStatus ?? getCachedCudaStatus(),
           }));
         }
@@ -1051,9 +1067,18 @@ function createAiAddonIpc(deps) {
       return enqueueAiAddonAction(async () => {
         assertSummaryModelActionCanRun();
         if (!getModelById('summary', safeOptions.modelId)) throw new Error('Unknown summary model.');
-        const { deviceMemory } = await readSummaryModelAdmission(safeOptions);
+        const hasCachedCudaStatus = typeof getCachedCudaStatus === 'function'
+          && Boolean(getCachedCudaStatus({ allowStale: true }) || getCachedCudaStatus());
+        const shouldProbeCuda = process.platform === 'linux'
+          && process.arch === 'x64'
+          && !hasCachedCudaStatus;
+        const { cudaStatus, deviceMemory } = await readSummaryModelAdmission(
+          safeOptions,
+          shouldProbeCuda ? { cudaProbeLabel: 'Linux CUDA summary default selection' } : undefined,
+        );
         const status = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
           summaryModelId: safeOptions.modelId,
+          ...(cudaStatus !== undefined ? { cudaStatus } : {}),
           deviceMemory,
         }));
         const model = status.features.summary;
@@ -1076,7 +1101,10 @@ function createAiAddonIpc(deps) {
         }
         assertSummaryModelActionCanRun();
         setDefaultSummaryModel(getAiAddonRuntimeOptions({ modelId: safeOptions.modelId, fsModule: fs }));
-        return checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ deviceMemory }));
+        return checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+          ...(cudaStatus !== undefined ? { cudaStatus } : {}),
+          deviceMemory: attachResidentModelToDeviceMemory(deviceMemory),
+        }));
       });
     });
   }

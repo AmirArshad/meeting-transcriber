@@ -1344,6 +1344,8 @@ def test_starter_prompts_four_plus_meetings_followups_of_date_and_corrupt_recove
     assert cross_meeting["retrievalMode"] == "targeted"
     assert {ev["meetingId"] for ev in cross_meeting["evidence"]} == {"m_rec_5"}
 
+    # Zero keyword hits fail closed with [] rather than returning overview chunks,
+    # even on pronoun follow-ups with prior_headers.
     zero_followup = retrieve_evidence(
         rec_dir,
         index_path,
@@ -1351,6 +1353,14 @@ def test_starter_prompts_four_plus_meetings_followups_of_date_and_corrupt_recove
         thread_context={"lastCitedMeetingIds": ["m_rec_1"], "lastQuestion": "Sync 1"},
     )
     assert zero_followup["evidence"] == []
+
+    zero_non_followup = retrieve_evidence(
+        rec_dir,
+        index_path,
+        question="What was said about quantum submarines?",
+        thread_context={"lastCitedMeetingIds": ["m_rec_1"], "lastQuestion": "Sync 1"},
+    )
+    assert zero_non_followup["evidence"] == []
 
     # A conversational follow-up can load the full prior transcript.
     conv_followup = retrieve_evidence(
@@ -1891,3 +1901,179 @@ def test_inkling_disable_thinking_false_omits_enable_thinking_and_strips_start_t
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_null_duration_sec_does_not_outrank_stronger_bm25_match(tmp_path):
+    import sqlite3
+    from backend.search.history_index import _parse_duration_seconds, estimate_meeting_transcripts
+
+    assert _parse_duration_seconds({"durationSeconds": float("nan")}) == 0.0
+    assert _parse_duration_seconds({"durationSeconds": float("inf")}) == 0.0
+
+    rec_dir = tmp_path / "recordings"
+    index_path = tmp_path / "search" / "history-index.sqlite"
+    _seed_meeting(
+        rec_dir,
+        "strong",
+        "Strong Match",
+        "2026-11-10T09:00:00",
+        "**[00:05 - 00:20]** **Alice:**\n"
+        "Calibration calibration calibration calibration sensor drift calibration.\n",
+    )
+    _seed_meeting(
+        rec_dir,
+        "weak_null",
+        "Weak Null Duration",
+        "2026-11-11T09:00:00",
+        "**[00:05 - 00:20]** **Bob:**\n"
+        "The team briefly mentioned calibration once among many unrelated logistics items and schedules.\n",
+    )
+    for idx in range(3):
+        _seed_meeting(
+            rec_dir,
+            f"unrelated_{idx}",
+            f"Unrelated {idx}",
+            f"2026-11-1{idx + 2}T09:00:00",
+            "**[00:05 - 00:20]** **Carol:**\nLunch menu and office supplies.\n",
+        )
+    sync_history_index(rec_dir, index_path)
+
+    with sqlite3.connect(index_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            PRAGMA foreign_keys = OFF;
+            CREATE TABLE indexed_meetings_nullable (
+                meeting_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                date_iso TEXT NOT NULL,
+                duration_sec REAL,
+                language TEXT NOT NULL,
+                tag TEXT NOT NULL DEFAULT '',
+                speaker_names_hash TEXT NOT NULL DEFAULT '',
+                transcript_hash TEXT NOT NULL,
+                summary_hash TEXT NOT NULL,
+                captions_hash TEXT NOT NULL,
+                title_hash TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO indexed_meetings_nullable SELECT * FROM indexed_meetings;
+            DROP TABLE indexed_meetings;
+            ALTER TABLE indexed_meetings_nullable RENAME TO indexed_meetings;
+            UPDATE indexed_meetings SET duration_sec = NULL WHERE meeting_id = 'weak_null';
+            PRAGMA foreign_keys = ON;
+            """
+        )
+        est = estimate_meeting_transcripts(conn, ["strong", "weak_null"])
+        assert est["strong"][1] > 0
+        row = conn.execute(
+            "SELECT COALESCE(SUM(length(CAST(text AS BLOB))), 0) AS text_bytes FROM passages WHERE meeting_id = 'nonexistent'"
+        ).fetchone()
+        assert row["text_bytes"] == 0
+
+    res = search_history_index(
+        rec_dir,
+        index_path,
+        query="calibration",
+        qa_stopwords=frozenset(),
+        sync=False,
+    )
+    assert [m["meetingId"] for m in res["meetings"]] == ["strong", "weak_null"]
+
+
+def test_direct_full_multi_entity_excludes_unrelated_recording(tmp_path):
+    rec_dir = tmp_path / "recordings"
+    index_path = tmp_path / "search" / "history-index.sqlite"
+    _seed_meeting(
+        rec_dir,
+        "m1",
+        "Alpha Review",
+        "2026-11-10T09:00:00",
+        "**[00:05 - 00:15]** **Alice:**\nAlpha roadmap focuses on offline caching.\n",
+    )
+    _seed_meeting(
+        rec_dir,
+        "m2",
+        "Beta Review",
+        "2026-11-11T09:00:00",
+        "**[00:05 - 00:15]** **Bob:**\nBeta rollout targets December.\n",
+    )
+    _seed_meeting(
+        rec_dir,
+        "m3",
+        "Unrelated Lunch",
+        "2026-11-12T09:00:00",
+        "**[00:05 - 00:15]** **Carol:**\nWe ordered sandwiches for lunch.\n",
+    )
+    sync_history_index(rec_dir, index_path)
+
+    res = retrieve_evidence(
+        rec_dir,
+        index_path,
+        question="Compare Alpha Review and Beta Review decisions",
+        sync=False,
+    )
+    assert res["retrievalMode"] == "direct_full"
+    assert {ev["meetingId"] for ev in res["evidence"]} == {"m1", "m2"}
+
+
+def test_deepening_followup_uses_prior_headers_direct_full_and_topical_pronoun_fails_closed(tmp_path):
+    rec_dir = tmp_path / "recordings"
+    index_path = tmp_path / "search" / "history-index.sqlite"
+    _seed_meeting(
+        rec_dir,
+        "m1",
+        "Vendor Sync",
+        "2026-11-10T09:00:00",
+        "**[00:05 - 00:20]** **Alice:**\nWe agreed to ship the hardware dongle in January.\n",
+    )
+    for idx in range(2, 5):
+        _seed_meeting(
+            rec_dir,
+            f"m{idx}",
+            f"Other Chat {idx}",
+            f"2026-11-1{idx}T09:00:00",
+            "**[00:05 - 00:20]** **Bob:**\nNothing about hardware here.\n",
+        )
+    sync_history_index(rec_dir, index_path)
+
+    res = retrieve_evidence(
+        rec_dir,
+        index_path,
+        question="Elaborate on quantum",
+        thread_context={"lastCitedMeetingIds": ["m1"], "lastQuestion": "What did Alice say?"},
+        sync=False,
+    )
+    assert res["retrievalMode"] == "direct_full"
+    assert {ev["meetingId"] for ev in res["evidence"]} == {"m1"}
+
+    res_fail_closed = retrieve_evidence(
+        rec_dir,
+        index_path,
+        question="What did she say about quantum?",
+        thread_context={"lastCitedMeetingIds": ["m1"], "lastQuestion": "What did Alice say?"},
+        sync=False,
+    )
+    assert res_fail_closed["evidence"] == []
+
+
+def test_mid_answer_start_thinking_quote_does_not_truncate_qa_json():
+    from backend.history_qa.citation_verifier import strip_reasoning_blocks, verify_general_response
+
+    evidence = [{"evidenceId": "E1", "meetingId": "m1", "meetingTitle": "Sync", "startSec": 5.0}]
+    raw = json.dumps(
+        {
+            "answerMarkdown": "Alice literally said [Start thinking] and <think> during the demo [E1].",
+            "citedEvidenceIds": ["E1"],
+            "insufficientEvidence": False,
+        }
+    )
+    verified = verify_grounded_response(raw, evidence)
+    assert verified["ok"] is True
+    assert "[Start thinking]" in verified["answerMarkdown"]
+    assert "<think>" in verified["answerMarkdown"]
+
+    assert strip_reasoning_blocks("<think>closed</think>\n   [Start thinking]\nunclosed") == ""
+    gen = verify_general_response("Note: models sometimes emit [Start thinking] mid-text.")
+    assert gen["ok"] is True
+    assert "[Start thinking]" in gen["answerMarkdown"]

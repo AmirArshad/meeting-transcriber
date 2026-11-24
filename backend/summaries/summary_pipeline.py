@@ -38,13 +38,16 @@ TOPIC_BOUNDARY_RE = re.compile(
     re.IGNORECASE,
 )
 _THINK_BLOCK_RE = re.compile(r"<think>[\s\S]*?</think>", re.IGNORECASE)
-_UNCLOSED_THINK_RE = re.compile(r"<think>[\s\S]*$", re.IGNORECASE)
+_UNCLOSED_THINK_RE = re.compile(r"^\s*<think>[\s\S]*$", re.IGNORECASE)
 _GEMMA_THOUGHT_BLOCK_RE = re.compile(r"<\|channel>thought[\s\S]*?<channel\|>", re.IGNORECASE)
-_UNCLOSED_GEMMA_THOUGHT_RE = re.compile(r"<\|channel>thought[\s\S]*$", re.IGNORECASE)
+_UNCLOSED_GEMMA_THOUGHT_RE = re.compile(r"^\s*<\|channel>thought[\s\S]*$", re.IGNORECASE)
 _INKLING_THINK_BLOCK_RE = re.compile(r"\[Start thinking\][\s\S]*?\[End thinking\]", re.IGNORECASE)
-_UNCLOSED_INKLING_THINK_RE = re.compile(r"\[Start thinking\][\s\S]*$", re.IGNORECASE)
+_UNCLOSED_INKLING_THINK_RE = re.compile(r"^\s*\[Start thinking\][\s\S]*$", re.IGNORECASE)
 _CHAT_CONTROL_TOKEN_RE = re.compile(
-    r"<start_of_turn>|<end_of_turn>|<\|im_start\|>|<\|im_end\|>|<\|channel>|<channel\|>",
+    r"<start_of_turn>|<end_of_turn>|<\|im_start\|>|<\|im_end\|>|<\|channel>|<channel\|>"
+    r"|<\|message_system\|>|<\|message_user\|>|<\|message_model\|>|<\|content_thinking\|>|<\|end_message\|>"
+    r"|\[Start thinking\]|\[End thinking\]"
+    r"|\[/?INST\]|\[/?SYSTEM_PROMPT\]|\[/?AVAILABLE_TOOLS\]|\[TOOL_CALLS\]|\[/?TOOL_RESULTS\]|</?s>",
     re.IGNORECASE,
 )
 
@@ -105,10 +108,10 @@ def sanitize_prompt_control_tokens(value: Any) -> str:
 def _strip_model_reasoning(raw_output: str) -> str:
     cleaned = str(raw_output or "").strip()
     cleaned = _THINK_BLOCK_RE.sub("", cleaned)
-    cleaned = _UNCLOSED_THINK_RE.sub("", cleaned)
     cleaned = _GEMMA_THOUGHT_BLOCK_RE.sub("", cleaned)
-    cleaned = _UNCLOSED_GEMMA_THOUGHT_RE.sub("", cleaned)
     cleaned = _INKLING_THINK_BLOCK_RE.sub("", cleaned)
+    cleaned = _UNCLOSED_THINK_RE.sub("", cleaned)
+    cleaned = _UNCLOSED_GEMMA_THOUGHT_RE.sub("", cleaned)
     cleaned = _UNCLOSED_INKLING_THINK_RE.sub("", cleaned)
     return cleaned.strip()
 
@@ -474,7 +477,21 @@ def extract_json_object(raw_output: str) -> Dict[str, Any]:
         try:
             parsed = json.loads(output[start:end + 1])
         except json.JSONDecodeError as exc:
-            raise SummaryValidationError(f"model output JSON could not be parsed: {exc}") from exc
+            parsed = None
+            decoder = json.JSONDecoder()
+            pos = start
+            while pos != -1:
+                try:
+                    candidate, _ = decoder.raw_decode(output, pos)
+                except json.JSONDecodeError:
+                    pos = output.find("{", pos + 1)
+                    continue
+                if isinstance(candidate, dict):
+                    parsed = candidate
+                    break
+                pos = output.find("{", pos + 1)
+            if parsed is None:
+                raise SummaryValidationError(f"model output JSON could not be parsed: {exc}") from exc
 
     if not isinstance(parsed, dict):
         raise SummaryValidationError("model output must be a JSON object")
@@ -676,7 +693,7 @@ def render_summary_markdown(summary: Dict[str, Any], metadata: Optional[Dict[str
         if tag_display:
             lines.append(f"**{labels['tag']}:** {tag_display}")
         if format_display:
-            lines.append(f"**Format:** {format_display}")
+            lines.append(f"**{labels.get('format', 'Format')}:** {format_display}")
         if profile:
             lines.append(f"**{labels['profile']}:** {profile}")
         if model:

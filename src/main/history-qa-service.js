@@ -79,6 +79,35 @@ function summarizeAssistantForContext(content) {
     .slice(0, 280);
 }
 
+function buildChatHistoryTurns(messages, chatMode) {
+  const isGeneralChat = chatMode === 'general';
+  const historyTurns = [];
+  for (let i = 0; i + 1 < messages.length; i += 2) {
+    const user = messages[i];
+    const assistant = messages[i + 1];
+    if (
+      user.role === 'user'
+      && assistant.role === 'assistant'
+      && assistant.status === 'answered'
+      && getMessageChatMode(assistant) === chatMode
+      && user.content
+      && assistant.content
+    ) {
+      const assistantTurn = { role: 'assistant', content: assistant.content };
+      if (!isGeneralChat && Array.isArray(assistant.citations) && assistant.citations.length > 0) {
+        const citationTitles = assistant.citations
+          .map((c) => (typeof c?.meetingTitle === 'string' && c.meetingTitle ? { meetingTitle: c.meetingTitle } : null))
+          .filter(Boolean);
+        if (citationTitles.length > 0) {
+          assistantTurn.citations = citationTitles;
+        }
+      }
+      historyTurns.push({ role: 'user', content: user.content }, assistantTurn);
+    }
+  }
+  return historyTurns;
+}
+
 const PINNED_LINUX_LLAMA_SERVER = Object.freeze({
   runtimeId: 'llama-cpp-v0.3.0-linux-x64-cuda-12.8',
   relativePath: 'cuda-12.8/llama-server',
@@ -803,6 +832,9 @@ function createHistoryQaService(deps) {
       '--reasoning',
       artifact.inference?.disableThinking === false ? 'auto' : 'off',
     ];
+    if (typeof artifact.inference?.reasoningEffort === 'string' && ['none', 'minimal', 'low', 'medium', 'high'].includes(artifact.inference.reasoningEffort)) {
+      args.push('--reasoning-effort', artifact.inference.reasoningEffort);
+    }
     if (Number.isInteger(artifact.inference?.reasoningBudget)) {
       args.push('--reasoning-budget', String(artifact.inference.reasoningBudget));
     }
@@ -1128,6 +1160,7 @@ function createHistoryQaService(deps) {
         checkCurrent();
       };
       let existingMessages = modeIsolatedMessages;
+      let historyTurns = isGeneralChat ? buildChatHistoryTurns(existingMessages, chatMode) : [];
       let evidence = [];
       let searchedMeetingCount = 0;
       let detectedDateFilter = '';
@@ -1193,6 +1226,7 @@ function createHistoryQaService(deps) {
           return message.role === 'assistant' && message.status === 'answered'
             && modeIsolatedMessages[index - 1]?.role === 'user' && turnMatchesScope(message);
         }) : modeIsolatedMessages;
+        historyTurns = buildChatHistoryTurns(existingMessages, chatMode);
 
         let lastCitedMeetingIds = [];
         let lastCitedPassageKeys = [];
@@ -1292,6 +1326,7 @@ function createHistoryQaService(deps) {
             question,
             scope: effectiveScope,
             contextTokens: activeContextTokens,
+            ...(historyTurns.length > 0 ? { history: historyTurns } : {}),
             ...(threadContext ? { threadContext } : {}),
             ...(priorTurnContext ? { priorTurnContext } : {}),
             sync: false,
@@ -1372,30 +1407,6 @@ function createHistoryQaService(deps) {
       });
 
       const queueRunner = runQueuedCompute || ((action) => enqueueAiComputeAction(() => enqueueGpuResourceActionForQa(action)));
-      const historyTurns = [];
-      for (let i = 0; i + 1 < existingMessages.length; i += 2) {
-        const user = existingMessages[i];
-        const assistant = existingMessages[i + 1];
-        if (
-          user.role === 'user'
-          && assistant.role === 'assistant'
-          && assistant.status === 'answered'
-          && getMessageChatMode(assistant) === chatMode
-          && user.content
-          && assistant.content
-        ) {
-          const assistantTurn = { role: 'assistant', content: assistant.content };
-          if (!isGeneralChat && Array.isArray(assistant.citations) && assistant.citations.length > 0) {
-            const citationTitles = assistant.citations
-              .map((c) => (typeof c?.meetingTitle === 'string' && c.meetingTitle ? { meetingTitle: c.meetingTitle } : null))
-              .filter(Boolean);
-            if (citationTitles.length > 0) {
-              assistantTurn.citations = citationTitles;
-            }
-          }
-          historyTurns.push({ role: 'user', content: user.content }, assistantTurn);
-        }
-      }
 
       const qaResult = await awaitAbortable(queueRunner(async () => runWallClockComputeAction({
         timeoutMs: qaTimeoutMs,

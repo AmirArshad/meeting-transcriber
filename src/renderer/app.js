@@ -5647,7 +5647,8 @@ function confirmSummaryTranscriptLanguage(meeting, policy, preferredLanguage, so
   speakerFieldset.hidden = !showSpeakers;
   formatSelect.replaceChildren(...RECORDING_TAGS.map(({ label, slug }) =>
     new Option(slug === 'other' ? 'General (Other)' : label, slug)));
-  formatSelect.value = normalizeTag(meeting.tag) || 'other';
+  const savedTemplate = !getSummaryTagMismatch(meeting) ? normalizeTag(meeting.ai?.summary?.template) : null;
+  formatSelect.value = savedTemplate || normalizeTag(meeting.tag) || 'other';
   const updateFormat = () => {
     formatPreview.textContent = getTagMeta(formatSelect.value).formatPreview;
   };
@@ -7426,7 +7427,7 @@ function summaryLibrary() {
 }
 
 function usableSummaryModels(library = summaryLibrary()) {
-  return (library?.models || []).filter((model) => model.installed && model.setupComplete && model.status === 'ready' && model.fit?.blocked !== true);
+  return (library?.models || []).filter((model) => model.installed && model.setupComplete && model.status === 'ready' && (model.fit?.blocked !== true || (typeof isSummaryModelBlockedOnlyByLoadedModel === 'function' && isSummaryModelBlockedOnlyByLoadedModel(model))));
 }
 
 function summaryModelName(id, library = summaryLibrary()) {
@@ -7440,6 +7441,31 @@ function summaryModelHasFiles(model) {
 let summaryDeviceCheckSnapshot = null;
 let summaryDeviceCheckPending = false;
 let summaryDeviceCheckGeneration = 0;
+let summaryRuntimeCheckingTimer = null;
+let summaryRuntimeCheckingAttempts = 0;
+
+function syncSummaryRuntimeCheckingPoll(status) {
+  const quitting = typeof rendererQuitCommitted !== 'undefined' && rendererQuitCommitted;
+  const pending = !quitting
+    && Array.isArray(status?.summaryLibrary?.models)
+    && status.summaryLibrary.models.some((model) => model?.fit?.status === 'runtime_checking');
+  if (!pending) {
+    if (summaryRuntimeCheckingTimer !== null) {
+      clearTimeout(summaryRuntimeCheckingTimer);
+      summaryRuntimeCheckingTimer = null;
+    }
+    summaryRuntimeCheckingAttempts = 0;
+    return;
+  }
+  if (pending && summaryRuntimeCheckingTimer === null && summaryRuntimeCheckingAttempts < 20 && typeof setTimeout === 'function') {
+    summaryRuntimeCheckingAttempts += 1;
+    summaryRuntimeCheckingTimer = setTimeout(() => {
+      summaryRuntimeCheckingTimer = null;
+      if (typeof refreshAiAddonSettings === 'function') void refreshAiAddonSettings();
+    }, 600);
+    summaryRuntimeCheckingTimer?.unref?.();
+  }
+}
 
 function onSummaryModelUnloaded() {
   summaryDeviceCheckGeneration += 1;
@@ -8232,6 +8258,7 @@ function renderChatModelChoice() {
 }
 
 function updateAiAddonSettings(status) {
+  if (typeof syncSummaryRuntimeCheckingPoll === 'function') syncSummaryRuntimeCheckingPoll(status);
   if (typeof renderSummaryModelLibrary === 'function') renderSummaryModelLibrary(status?.summaryLibrary);
   if (typeof renderChatModelChoice === 'function') renderChatModelChoice();
   const diarization = status && status.features && status.features.diarization;
@@ -8400,6 +8427,7 @@ async function refreshAiAddonSettings() {
       return status;
     } catch (error) {
       if (generation !== summaryDeviceCheckGeneration) return null;
+      if (typeof syncSummaryRuntimeCheckingPoll === 'function') syncSummaryRuntimeCheckingPoll(null);
       addLog(`Failed to check AI add-ons: ${error.message}`, 'error');
       setStatusBadge(document.getElementById('ai-addons-status-badge'), 'error');
       updateHomeAiAddonCTA(null);
@@ -8422,6 +8450,7 @@ async function refreshHomeAiAddonPrompt() {
     const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false });
     if (generation !== summaryDeviceCheckGeneration) return null;
     aiAddonStatusSnapshot = status;
+    if (typeof syncSummaryRuntimeCheckingPoll === 'function') syncSummaryRuntimeCheckingPoll(status);
     if (typeof renderSummaryModelLibrary === 'function') renderSummaryModelLibrary(status?.summaryLibrary);
     if (typeof renderChatOnboardingAndComposer === 'function') renderChatOnboardingAndComposer();
     updateHomeAiAddonCTA(status);
@@ -8429,6 +8458,7 @@ async function refreshHomeAiAddonPrompt() {
     return status;
   } catch (error) {
     if (generation !== summaryDeviceCheckGeneration) return null;
+    if (typeof syncSummaryRuntimeCheckingPoll === 'function') syncSummaryRuntimeCheckingPoll(null);
     console.warn('Could not refresh home AI add-on prompt:', error);
     updateHomeAiAddonCTA(null);
     updateSummaryGenerationButtons();

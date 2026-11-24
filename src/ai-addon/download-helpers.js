@@ -122,7 +122,10 @@ async function getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule = 
 function isAllowedDownloadUrl(url) {
   try {
     const parsedUrl = new URL(String(url || ''));
-    if (parsedUrl.hostname === 'api.github.com' && !GITHUB_RELEASE_ASSET_PATH.test(parsedUrl.pathname)) {
+    if (parsedUrl.username || parsedUrl.password) {
+      return false;
+    }
+    if (parsedUrl.hostname === 'api.github.com' && (!GITHUB_RELEASE_ASSET_PATH.test(parsedUrl.pathname) || parsedUrl.search || parsedUrl.hash)) {
       return false;
     }
     return parsedUrl.protocol === 'https:' && isAllowedDownloadHost(parsedUrl.hostname);
