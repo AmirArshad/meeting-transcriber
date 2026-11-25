@@ -409,6 +409,7 @@ function createUpdaterService(deps = {}) {
   let checkInFlightPromise = null;
   let installInFlight = false;
   let updateQuitArmed = false;
+  let disposed = false;
   let startupTimer = null;
   let periodicTimer = null;
   const attachedListeners = [];
@@ -661,8 +662,9 @@ function createUpdaterService(deps = {}) {
       ) {
         return;
       }
-      if (state.status === 'installing' || updateQuitArmed) {
-        clearArmedUpdateQuit();
+      const shouldDisarm = state.status === 'installing' || updateQuitArmed;
+      if (shouldDisarm) {
+        updateQuitArmed = false;
       }
       activeCancellationToken = null;
       if (log && typeof log.warn === 'function') {
@@ -673,6 +675,9 @@ function createUpdaterService(deps = {}) {
         progress: null,
         error: sanitizeUpdaterError(err),
       });
+      if (shouldDisarm) {
+        clearArmedUpdateQuit();
+      }
     });
   }
 
@@ -1046,6 +1051,18 @@ function createUpdaterService(deps = {}) {
     }
   }
 
+  function cancelPendingInstall() {
+    if (disposed || installInFlight) {
+      return false;
+    }
+    if (!updateQuitArmed && state.status !== 'installing') {
+      return false;
+    }
+    updateQuitArmed = false;
+    emitState({ status: 'ready-to-install', error: null });
+    return true;
+  }
+
   async function setAutoDownloadUpdates(enabled) {
     if (typeof enabled !== 'boolean') {
       throw new TypeError('autoDownload enabled flag must be a boolean.');
@@ -1104,6 +1121,7 @@ function createUpdaterService(deps = {}) {
   }
 
   function dispose() {
+    disposed = true;
     stopTimers();
     if (activeCancellationToken && typeof activeCancellationToken.cancel === 'function') {
       activeDownloadId += 1;
@@ -1167,6 +1185,7 @@ function createUpdaterService(deps = {}) {
     downloadUpdate,
     cancelUpdateDownload,
     installUpdateNow,
+    cancelPendingInstall,
     setAutoDownloadUpdates,
     openUpdateReleasePage,
     startPeriodicChecks,

@@ -539,6 +539,9 @@ function markQuitCommitted() {
 function clearQuitCommitted() {
   quitCommitted = false;
   pendingUpdateInstall = false;
+  if (updaterService && typeof updaterService.cancelPendingInstall === 'function') {
+    updaterService.cancelPendingInstall();
+  }
 }
 
 function abortInFlightAiSetup() {

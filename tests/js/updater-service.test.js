@@ -848,3 +848,73 @@ test('IPC handlers validate argument types for set-auto-download-updates and ins
 
   service.dispose();
 });
+
+test('cancelPendingInstall restores ready-to-install after quit cancellation without bypassing in-flight drain or non-installing states', async () => {
+  const userDataPath = makeTempUserData();
+  const fakeUpdater = createFakeAutoUpdater();
+  let releaseDrain;
+  const drainStarted = new Promise((resolve) => {
+    releaseDrain = resolve;
+  });
+  let drainPromise = null;
+  let aiActive = false;
+
+  const service = createUpdaterService({
+    app: { isPackaged: true, getVersion: () => '3.0.0' },
+    platform: 'win32',
+    userDataPath,
+    autoUpdater: fakeUpdater,
+    CancellationToken: FakeCancellationToken,
+    hasInFlightAiWork: () => aiActive,
+    drainAiWorkBeforeQuit: async () => {
+      releaseDrain();
+      await drainPromise;
+    },
+  });
+
+  // Returns false before an install is pending.
+  assert.equal(service.cancelPendingInstall(), false);
+
+  fakeUpdater.emit('update-available', { version: '3.1.0' });
+  fakeUpdater.emit('update-downloaded', { version: '3.1.0' });
+  assert.equal(service.getState().status, 'ready-to-install');
+  assert.equal(service.cancelPendingInstall(), false);
+
+  // While installInFlight drain is still running, cancelPendingInstall() must return false.
+  aiActive = true;
+  let finishDrain;
+  drainPromise = new Promise((resolve) => {
+    finishDrain = resolve;
+  });
+  const firstInstallPromise = service.installUpdateNow({ confirmAiInterrupt: true });
+  await drainStarted;
+  assert.equal(service.getState().status, 'installing');
+  assert.equal(service.cancelPendingInstall(), false);
+  assert.equal(service.getState().status, 'installing');
+
+  aiActive = false;
+  finishDrain();
+  const firstInstall = await firstInstallPromise;
+  assert.equal(firstInstall.ok, true);
+  assert.equal(service.getState().status, 'installing');
+  assert.equal(fakeUpdater.quitAndInstallCalls.length, 1);
+
+  // After quitAndInstall is armed (e.g. user cancels quit on active recording),
+  // cancelPendingInstall() restores ready-to-install so subsequent checks and installs work.
+  assert.equal(service.cancelPendingInstall(), true);
+  assert.equal(service.getState().status, 'ready-to-install');
+  assert.equal(service.getState().error, null);
+  assert.equal(service.cancelPendingInstall(), false);
+
+  const manualCheck = await service.checkForUpdates({ manual: true });
+  assert.equal(manualCheck.status, 'ready-to-install');
+  assert.equal(manualCheck.manualCheck, true);
+
+  const secondInstall = await service.installUpdateNow();
+  assert.equal(secondInstall.ok, true);
+  assert.equal(secondInstall.state.status, 'installing');
+  assert.equal(fakeUpdater.quitAndInstallCalls.length, 2);
+
+  service.dispose();
+  assert.equal(service.cancelPendingInstall(), false);
+});

@@ -435,15 +435,21 @@ function createAiAddonIpc(deps) {
         timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
         label: cudaProbeLabel,
         terminateProcess: terminateProcessBestEffort,
-        action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal }),
+        action: (registerProcess, { signal } = {}) => {
+          const combinedSignal = cancelSignal && signal && typeof AbortSignal?.any === 'function'
+            ? AbortSignal.any([cancelSignal, signal])
+            : (signal || cancelSignal);
+          return resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal: combinedSignal });
+        },
       }) : undefined;
       assertSummaryModelActionCanRun(cancelSignal);
       const deviceMemory = await getSummaryDeviceMemory({ live: true, fresh: true });
       assertSummaryModelActionCanRun(cancelSignal);
       return { cudaStatus, deviceMemory };
     };
-    // Setup and smoke validation acquire the GPU queue separately.
-    return unloadLoadedModel ? enqueueGpuResourceAction(read) : read();
+    // Setup and smoke validation acquire the GPU queue separately; Linux CUDA probes serialize here.
+    const needsGpuQueue = unloadLoadedModel || Boolean(cudaProbeLabel && process.platform === 'linux');
+    return needsGpuQueue ? enqueueGpuResourceAction(read) : read();
   }
 
   function assertAddonDiskMutationCanRun(feature, action = 'remove') {
@@ -914,16 +920,27 @@ function createAiAddonIpc(deps) {
         throw new Error('Speaker identification setup is already running. Cancel it or wait for it to finish before validating.');
       }
 
-      return enqueueAiAddonAction(async () => validateDiarizationSetup(getAiAddonRuntimeOptions({
-        includeSafeStorage: true,
-        runtimeValidator: validateDiarizationRuntime,
-        cudaStatus: await runWallClockComputeAction({
-          timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
-          label: 'Linux CUDA admission',
-          terminateProcess: terminateProcessBestEffort,
-          action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess }),
-        }),
-      })));
+      return enqueueAiAddonAction(async () => {
+        const probeCuda = () => {
+          if (isQuitCommitted()) {
+            throw new Error('Cannot check speaker identification setup while AvaNevis is quitting.');
+          }
+          return runWallClockComputeAction({
+            timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+            label: 'Linux CUDA admission',
+            terminateProcess: terminateProcessBestEffort,
+            action: (registerProcess, { signal }) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal: signal }),
+          });
+        };
+        const cudaStatus = process.platform === 'linux'
+          ? await enqueueGpuResourceAction(probeCuda)
+          : await probeCuda();
+        return validateDiarizationSetup(getAiAddonRuntimeOptions({
+          includeSafeStorage: true,
+          runtimeValidator: validateDiarizationRuntime,
+          cudaStatus,
+        }));
+      });
     });
 
     ipcMain.handle('remove-diarization-setup', async (event) => {

@@ -504,13 +504,21 @@ function createHistoryQaService(deps) {
           modelId: null,
           modelName: null,
           artifactId: null,
+          modelInstalled: false,
         };
       }
 
       const modelId = summaryStatus.modelId || null;
-      const modelFit = summaryStatus.fit || targetStatus.summaryLibrary?.models?.find((item) => item.modelId === modelId)?.fit;
+      const libraryItem = modelId
+        ? targetStatus.summaryLibrary?.models?.find((item) => item.modelId === modelId)
+        : null;
+      const modelInstalled = Boolean(
+        (summaryStatus.cache?.installed || summaryStatus.cache?.valid || libraryItem?.installed)
+        && !libraryItem?.removalPending,
+      );
+      const modelFit = summaryStatus.fit || libraryItem?.fit;
       if (checkFit && modelFit?.blocked === true) {
-        return { eligible: false, reason: modelFit.reason || 'This model cannot run safely on this device.', setupTarget: 'ai-addons', modelId };
+        return { eligible: false, reason: modelFit.reason || 'This model cannot run safely on this device.', setupTarget: 'ai-addons', modelId, modelInstalled };
       }
       const modelMeta = modelId ? (getModelById('summary', modelId) || getRetiredSummaryModelById(modelId)) : null;
       const modelName = (modelMeta && (modelMeta.label || modelMeta.name)) || modelId || null;
@@ -528,6 +536,7 @@ function createHistoryQaService(deps) {
             modelId,
             modelName,
             artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
+            modelInstalled,
           };
         }
         const cacheReady = summaryStatus.cache?.valid === true && summaryStatus.runtimeCache?.valid === true;
@@ -539,6 +548,7 @@ function createHistoryQaService(deps) {
             modelId,
             modelName,
             artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
+            modelInstalled,
           };
         }
         return {
@@ -551,6 +561,7 @@ function createHistoryQaService(deps) {
           artifact,
           runtimeArtifact,
           runtimeDir,
+          modelInstalled,
         };
       }
 
@@ -564,6 +575,7 @@ function createHistoryQaService(deps) {
           modelId,
           modelName,
           artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
+          modelInstalled,
         };
       }
 
@@ -575,6 +587,7 @@ function createHistoryQaService(deps) {
           modelId,
           modelName,
           artifactId: artifact ? (artifact.artifactId || artifact.id) : null,
+          modelInstalled,
         };
       }
 
@@ -588,6 +601,7 @@ function createHistoryQaService(deps) {
         artifact,
         runtimeArtifact,
         runtimeDir,
+        modelInstalled,
       };
     };
 
@@ -619,7 +633,7 @@ function createHistoryQaService(deps) {
   async function resolveRetiredReplacementEligibility(requestedModelId, options = {}, { allowMigration = true } = {}) {
     const primary = await resolveEligibility({ ...options, summaryModelId: requestedModelId });
     const retired = requestedModelId ? getRetiredSummaryModelById(requestedModelId) : null;
-    if (!allowMigration || primary.eligible || !retired?.replacedByModelId) {
+    if (!allowMigration || primary.eligible || primary.modelInstalled || !retired?.replacedByModelId) {
       return { eligibility: primary, migratedFromModelId: null };
     }
     const replacement = await resolveEligibility({ ...options, summaryModelId: retired.replacedByModelId });

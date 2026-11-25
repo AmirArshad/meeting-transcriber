@@ -869,3 +869,105 @@ test('set-default-summary-model preserves residentModelId on returned status whe
     assert.equal(gemma.fit.residentModelId, 'qwen3.5-9b-q4-k-m');
   });
 });
+
+test('Linux CUDA live probes in set-default-summary-model and validate-diarization-setup serialize behind gpuResourceActionQueue without releasing loaded summary model', async (t) => {
+  await withPlatform('linux', 'x64', async () => {
+    const userDataDir = createTempUserData(t);
+    const manifestDir = path.join(userDataDir, 'ai-addons');
+    fs.mkdirSync(manifestDir, { recursive: true });
+    fs.writeFileSync(path.join(manifestDir, 'manifest.json'), JSON.stringify({
+      version: 1,
+      features: {
+        summary: { status: 'ready', modelId: 'qwen3.5-9b-q4-k-m' },
+      },
+      summaryLibrary: {
+        defaultModelId: 'qwen3.5-9b-q4-k-m',
+        models: {
+          'qwen3.5-9b-q4-k-m': { status: 'ready', modelId: 'qwen3.5-9b-q4-k-m' },
+          'qwen3.5-4b-q4-k-m': { status: 'ready', modelId: 'qwen3.5-4b-q4-k-m' },
+        },
+      },
+    }));
+
+    const gpuQueue = createAsyncActionQueue();
+    const activeJob = Promise.withResolvers();
+    const callOrder = [];
+    let releaseCalls = 0;
+    let cudaProbeCalls = 0;
+
+    void gpuQueue.enqueue(async () => {
+      callOrder.push('gpu-job-start');
+      await activeJob.promise;
+      callOrder.push('gpu-job-end');
+    });
+
+    const { handlers } = registerHandlers({
+      enqueueGpuResourceAction: gpuQueue.enqueue,
+      getCachedCudaStatus: () => null,
+      releaseSummaryModel: async () => {
+        releaseCalls += 1;
+      },
+      resolveCudaStatusForTranscription: async () => {
+        cudaProbeCalls += 1;
+        callOrder.push(`cuda-probe-${cudaProbeCalls}`);
+        return READY_LINUX_CUDA;
+      },
+      getSummaryDeviceMemory: async () => ({ totalBytes: 12 * GiB, availableBytes: 11 * GiB }),
+      checkAiAddonSetupStatus: async ({ summaryModelId }) => ({
+        features: {
+          summary: {
+            modelId: summaryModelId || 'qwen3.5-4b-q4-k-m',
+            setupComplete: true,
+            status: 'ready',
+            fit: { status: 'likely_fits', blocked: false },
+          },
+        },
+        summaryLibrary: { defaultModelId: 'qwen3.5-4b-q4-k-m', models: [] },
+      }),
+    }, userDataDir);
+
+    const defaultOp = handlers.get('set-default-summary-model')(
+      { sender: {} },
+      { modelId: 'qwen3.5-4b-q4-k-m' },
+    );
+    const validateOp = handlers.get('validate-diarization-setup')({ sender: {} });
+
+    await new Promise(setImmediate);
+    assert.equal(cudaProbeCalls, 0);
+    assert.equal(releaseCalls, 0);
+    assert.deepEqual(callOrder, ['gpu-job-start']);
+
+    activeJob.resolve();
+    const [defaultResult, validateResult] = await Promise.all([defaultOp, validateOp]);
+    assert.equal(defaultResult.summaryLibrary.defaultModelId, 'qwen3.5-4b-q4-k-m');
+    assert.equal(validateResult.features.diarization.status, 'notConfigured');
+    assert.equal(cudaProbeCalls, 2);
+    assert.equal(releaseCalls, 0);
+    assert.deepEqual(callOrder, [
+      'gpu-job-start',
+      'gpu-job-end',
+      'cuda-probe-1',
+      'cuda-probe-2',
+    ]);
+
+    // If quit commits while validate-diarization-setup waits in gpuQueue, it skips the probe.
+    let quitting = false;
+    let quitProbeCalls = 0;
+    const quitBlocker = Promise.withResolvers();
+    void gpuQueue.enqueue(() => quitBlocker.promise);
+    const quitHandlers = registerHandlers({
+      enqueueGpuResourceAction: gpuQueue.enqueue,
+      isQuitCommitted: () => quitting,
+      resolveCudaStatusForTranscription: async () => {
+        quitProbeCalls += 1;
+        return READY_LINUX_CUDA;
+      },
+    }, userDataDir).handlers;
+    const queuedValidate = quitHandlers.get('validate-diarization-setup')({ sender: {} });
+    await new Promise(setImmediate);
+    quitting = true;
+    quitBlocker.resolve();
+    await assert.rejects(queuedValidate, /quitting/i);
+    assert.equal(quitProbeCalls, 0);
+  });
+});

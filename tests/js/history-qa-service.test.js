@@ -1394,3 +1394,210 @@ test('retired bonsai-2-27b-q2-0 threads stay usable when installed, migrate to b
 
   await service.unloadModel('test_cleanup');
 });
+
+test('installed legacy bonsai-2-27b-q2-0 thread preserves thread.modelId on transient ineligibility and migrates only once uninstalled', async (t) => {
+  const { getModelById, getRetiredSummaryModelById, getSummaryArtifactForPlatform } = require('../../src/ai-addon-state');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-qa-bonsai-repair-'));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const model2Path = path.join(tmpDir, 'Ternary-Bonsai-2-27B-Q2_0.gguf');
+  const model25Path = path.join(tmpDir, 'Ternary-Bonsai-2.5-27B-Q2_0.gguf');
+  fs.writeFileSync(model2Path, 'gguf2');
+  fs.writeFileSync(model25Path, 'gguf25');
+
+  const extractDir = path.join(tmpDir, 'runtime', 'extract');
+  fs.mkdirSync(extractDir, { recursive: true });
+  fs.mkdirSync(path.join(tmpDir, 'ai-addons', 'cuda', 'python'), { recursive: true });
+  fs.writeFileSync(path.join(extractDir, 'llama-cli'), 'cli');
+  const serverPath = path.join(extractDir, 'llama-server');
+  fs.writeFileSync(serverPath, 'srv');
+  const serverBytes = fs.readFileSync(serverPath);
+
+  let model2State = { status: 'ready', setupComplete: true, installed: true, valid: true };
+  const chatThreadStore = createChatThreadStore({ app: { getPath: () => tmpDir }, path, fs });
+  const handlers = new Map();
+  const service = createHistoryQaService({
+    app: { getPath: () => tmpDir },
+    path,
+    fs,
+    platform: 'linux',
+    arch: 'x64',
+    pinnedLinuxServer: {
+      runtimeId: 'llama-cpp-b12631-linux-x64-cuda-12.8',
+      sha256: createHash('sha256').update(serverBytes).digest('hex'),
+      sizeBytes: serverBytes.length,
+    },
+    pythonConfig: { backendPath: path.join(tmpDir, 'backend') },
+    getBackendModuleArgs: (mod, args) => ['-m', mod, ...args],
+    getAiAddonRuntimeOptions: (opts) => opts || {},
+    checkAiAddonSetupStatus: async (opts = {}) => {
+      const id = opts.summaryModelId || 'qwen3.5-9b-q4-k-m';
+      const isLegacy = id === 'bonsai-2-27b-q2-0';
+      const summaryEntry = isLegacy
+        ? {
+            status: model2State.status,
+            setupComplete: model2State.setupComplete,
+            modelId: id,
+            cache: { installed: model2State.installed, valid: model2State.valid },
+            runtimeCache: {
+              valid: true,
+              runtimeDir: path.dirname(extractDir),
+              runtimeArtifact: { id: 'llama-cpp-b12631-linux-x64-cuda-12.8' },
+            },
+          }
+        : {
+            status: 'ready',
+            setupComplete: true,
+            modelId: id,
+            cache: { installed: true, valid: true },
+            runtimeCache: {
+              valid: true,
+              runtimeDir: path.dirname(extractDir),
+              runtimeArtifact: { id: 'llama-cpp-b12631-linux-x64-cuda-12.8' },
+            },
+          };
+      return {
+        features: { summary: summaryEntry },
+        summaryLibrary: {
+          defaultModelId: 'bonsai-2.5-27b-q2-0',
+          models: [
+            {
+              modelId: 'bonsai-2-27b-q2-0',
+              installed: model2State.installed,
+              setupComplete: model2State.setupComplete,
+              status: model2State.status,
+            },
+            {
+              modelId: 'bonsai-2.5-27b-q2-0',
+              installed: true,
+              setupComplete: true,
+              status: 'ready',
+            },
+          ],
+        },
+      };
+    },
+    getSummaryArtifactForPlatform: (id, p, a) => getSummaryArtifactForPlatform(id, p, a),
+    getSummaryRuntimeArtifactForPlatform: () => ({ id: 'llama-cpp-b12631-linux-x64-cuda-12.8' }),
+    getModelById: (feature, id) => getModelById(feature, id),
+    getRetiredSummaryModelById: (id) => getRetiredSummaryModelById(id),
+    getSummaryArtifactPath: (_dir, artifact) => (artifact.modelId === 'bonsai-2-27b-q2-0' ? model2Path : model25Path),
+    getSummaryRuntimeDir: () => path.dirname(extractDir),
+    buildSummaryRuntimeEnv: () => ({}),
+    resolveCudaStatusForTranscription: async () => ({
+      statusCode: 'ready',
+      installed: true,
+      deviceAvailable: true,
+      runtimeLoadable: true,
+      missingLibraries: [],
+      matchedProfile: 'cuda12',
+    }),
+    historySearchService: {
+      getGeneration: () => 1,
+      enqueueOperation: (action) => action(),
+      retainProcessUntilExit: () => {},
+      getIndexPath: () => path.join(tmpDir, 'search.sqlite'),
+      async ensureSynced() { return { synced: true }; },
+    },
+    chatThreadStore,
+    enqueueAiComputeAction: (fn) => fn(),
+    allocateLoopbackPort: async () => 45124,
+    probeServerHealth: async () => true,
+    spawnServerProcess: () => {
+      const proc = createFakeProcess();
+      proc.pid = 4243;
+      return proc;
+    },
+    spawnTrackedPython: () => {
+      const proc = createFakeProcess();
+      process.nextTick(() => {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({
+          status: 'answered',
+          chatMode: 'general',
+          answerMarkdown: 'OK',
+          citations: [],
+        })));
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      let stderr = '';
+      python.stdout.on('data', (d) => { stdout += String(d); });
+      python.stderr.on('data', (d) => { stderr += String(d); });
+      return {
+        getStdout: () => stdout,
+        getStderr: () => stderr,
+        assertStdoutWithinLimit() {},
+      };
+    },
+    terminateProcessBestEffort: async (proc) => {
+      if (proc && typeof proc.kill === 'function') {
+        proc.kill('SIGTERM');
+      }
+    },
+  });
+  service.registerIpc({ handle: (ch, fn) => handlers.set(ch, fn) });
+
+  // Create a thread while legacy bonsai-2-27b-q2-0 is ready.
+  const created = await handlers.get('create-chat-thread')({}, { modelId: 'bonsai-2-27b-q2-0', scope: { type: 'none' } });
+  assert.equal(created.thread.modelId, 'bonsai-2-27b-q2-0');
+
+  // Transient/repair-needed ineligibility (installed: true, valid: false, status: 'error')
+  // while bonsai-2.5-27b-q2-0 is also installed must not overwrite thread.modelId.
+  model2State = { status: 'error', setupComplete: false, installed: true, valid: false };
+
+  const blockedElig = await handlers.get('get-history-qa-eligibility')({}, { modelId: 'bonsai-2-27b-q2-0' });
+  assert.equal(blockedElig.eligible, false);
+  assert.equal(blockedElig.modelId, 'bonsai-2-27b-q2-0');
+  assert.match(blockedElig.reason, /Install or repair/i);
+  assert.equal(Object.hasOwn(blockedElig, 'modelInstalled'), false);
+
+  await assert.rejects(
+    () => handlers.get('ask-history')({}, {
+      threadId: created.thread.id,
+      modelId: 'bonsai-2-27b-q2-0',
+      question: 'Still broken?',
+    }),
+    /Install or repair/i,
+  );
+  const persistedBeforeUninstall = await chatThreadStore.getThread(created.thread.id);
+  assert.equal(persistedBeforeUninstall.modelId, 'bonsai-2-27b-q2-0');
+
+  // Draft thread with broken retired modelId must reject without creating a thread.
+  await assert.rejects(
+    () => handlers.get('ask-history')({}, {
+      threadModelId: 'bonsai-2-27b-q2-0',
+      scope: { type: 'none' },
+      question: 'Draft broken?',
+    }),
+    /Invalid Chat model selection/,
+  );
+  assert.equal((await chatThreadStore.listThreads()).length, 1);
+
+  // Once bonsai-2-27b-q2-0 is uninstalled, eligibility and existing thread migrate cleanly.
+  model2State = { status: 'notConfigured', setupComplete: false, installed: false, valid: false };
+  const migratedElig = await handlers.get('get-history-qa-eligibility')({}, { modelId: 'bonsai-2-27b-q2-0' });
+  assert.equal(migratedElig.eligible, true);
+  assert.equal(migratedElig.modelId, 'bonsai-2.5-27b-q2-0');
+
+  const migratedTurn = await handlers.get('ask-history')({}, {
+    threadId: created.thread.id,
+    modelId: 'bonsai-2-27b-q2-0',
+    question: 'Now uninstalled',
+  });
+  assert.equal(migratedTurn.thread.modelId, 'bonsai-2.5-27b-q2-0');
+  assert.equal(migratedTurn.thread.messages.at(-1).modelId, 'bonsai-2.5-27b-q2-0');
+
+  await assert.rejects(
+    () => handlers.get('ask-history')({}, {
+      threadModelId: 'bonsai-2-27b-q2-0',
+      scope: { type: 'none' },
+      question: 'Draft after uninstall?',
+    }),
+    /Invalid Chat model selection/,
+  );
+
+  await service.unloadModel('test_cleanup');
+});
