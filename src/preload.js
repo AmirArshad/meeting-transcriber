@@ -131,6 +131,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateMeetingAi: (meetingId, updates) => ipcRenderer.invoke('update-meeting-ai', { meetingId, updates }),
   saveTranscriptFile: (options) => ipcRenderer.invoke('save-transcript-file', options),
   saveSpeakerSegmentsFile: (options) => ipcRenderer.invoke('save-speaker-segments-file', options),
+  /**
+   * @param {object} options
+   * @param {string} [options.suggestedName]
+   * @param {string} [options.content]
+   * @param {string} [options.title]
+   * @param {'md'|'txt'|'json'|'srt'|'vtt'} [options.format]
+   * @param {string} [options.meetingId]
+   * @param {boolean} [options.includeSpeakers]
+   * @param {boolean} [options.useVoiceTags]
+   * @param {boolean} [options.isPlainText]
+   */
   saveTranscriptAs: (options) => ipcRenderer.invoke('save-transcript-as', options),
   scanRecordings: () => ipcRenderer.invoke('scan-recordings'),
   searchHistory: (options = {}) => ipcRenderer.invoke('search-history', options),

@@ -7,11 +7,14 @@
   root.subtitleExportHelpers = factory();
 }(typeof globalThis !== 'undefined' ? globalThis : this, function buildSubtitleExportHelpers() {
   const CAPTIONS_SCHEMA_VERSION = 1;
-  const VALID_EXPORT_FORMATS = Object.freeze(['md', 'txt', 'srt', 'vtt']);
+  const TRANSCRIPT_EXPORT_JSON_SCHEMA_VERSION = 1;
+  const VALID_EXPORT_FORMATS = Object.freeze(['md', 'txt', 'json', 'srt', 'vtt']);
   const VALID_CAPTION_ENGINES = new Set(['faster-whisper', 'mlx-whisper', 'parakeet']);
   const VALID_TIMING_PRECISIONS = new Set(['segment', 'word']);
   const MIN_CUE_DURATION_MS = 100;
   const SHA256_HASH_RE = /^sha256:[a-f0-9]{64}$/;
+  const SPEAKER_LABEL_PATTERN_SOURCE = '(?:Speaker (?:[1-9]|[1-9]\\d)|SPEAKER_\\d{2})';
+  const CANONICAL_SPEAKER_KEY_RE = new RegExp(`^${SPEAKER_LABEL_PATTERN_SOURCE}$`);
 
   function padNumber(value, width) {
     return String(Math.max(0, Math.floor(value))).padStart(width, '0');
@@ -152,10 +155,31 @@
   }
 
   function applySpeakerNamesToMarkdown(markdown, names) {
-    return String(markdown || '').replace(/^(\s*(?:(?:\*\*)?\[\d{1,2}:\d{2}(?::\d{2})?\s+-\s+\d{1,2}:\d{2}(?::\d{2})?\](?:\*\*)?\s*)?)\*\*((?:Speaker (?:[1-9]|[1-9]\d)|SPEAKER_\d{2})):\*\*/gm, (match, prefix, speaker) => {
+    const pattern = new RegExp(
+      `^(\\s*(?:(?:\\*\\*)?\\[\\d{1,2}:\\d{2}(?::\\d{2})?\\s+-\\s+\\d{1,2}:\\d{2}(?::\\d{2})?\\](?:\\*\\*)?\\s*)?)\\*\\*(${SPEAKER_LABEL_PATTERN_SOURCE}):\\*\\*`,
+      'gm',
+    );
+    return String(markdown || '').replace(pattern, (match, prefix, speaker) => {
       const name = names && Object.hasOwn(names, speaker) && names[speaker];
       const safeName = normalizeExportSpeakerName(name);
       return safeName ? `${prefix}**${safeName.replace(/([\\`_{}\[\]<>!#~|])/g, '\\$1')}:**` : match;
+    });
+  }
+
+  function stripSpeakerPrefixesFromMarkdown(markdown) {
+    const pattern = new RegExp(
+      `^([ \\t]*(?:(?:\\*\\*)?\\[\\d{1,2}:\\d{2}(?::\\d{2})?\\s+-\\s+\\d{1,2}:\\d{2}(?::\\d{2})?\\](?:\\*\\*)?[ \\t]*)?)\\*\\*${SPEAKER_LABEL_PATTERN_SOURCE}:\\*\\*[ \\t]*([^\\r\\n]*)`,
+      'gm',
+    );
+    return String(markdown || '').replace(pattern, (_match, prefix, rest) => {
+      const trimmedPrefix = prefix.trimEnd();
+      if (trimmedPrefix && rest) {
+        return `${trimmedPrefix} ${rest}`;
+      }
+      if (trimmedPrefix) {
+        return trimmedPrefix;
+      }
+      return rest;
     });
   }
 
@@ -347,6 +371,330 @@
     };
   }
 
+  function normalizeOptionalString(value) {
+    if (value === null || value === undefined) {
+      return null;
+    }
+    if (typeof value !== 'string' && typeof value !== 'number') {
+      return null;
+    }
+    const trimmed = String(value).trim();
+    return trimmed ? trimmed : null;
+  }
+
+  function normalizeOptionalNumber(value) {
+    if (value === null || value === undefined || typeof value === 'boolean') {
+      return null;
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return null;
+      }
+      const num = Number(trimmed);
+      return Number.isFinite(num) ? num : null;
+    }
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    return null;
+  }
+
+  function normalizeLfText(value) {
+    return String(value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  }
+
+  function normalizeExportSpeakerNamesMap(names) {
+    if (!names || typeof names !== 'object' || Array.isArray(names)) {
+      return {};
+    }
+    const normalized = {};
+    for (const key of Object.keys(names).sort()) {
+      if (!CANONICAL_SPEAKER_KEY_RE.test(key) || typeof names[key] !== 'string') {
+        continue;
+      }
+      const clean = normalizeExportSpeakerName(names[key]);
+      if (clean) {
+        normalized[key] = clean;
+      }
+    }
+    return normalized;
+  }
+
+  function extractDistinctSpeakerLabelsFromMarkdown(markdown) {
+    const labels = new Set();
+    const pattern = new RegExp(
+      `^(\\s*(?:(?:\\*\\*)?\\[\\d{1,2}:\\d{2}(?::\\d{2})?\\s+-\\s+\\d{1,2}:\\d{2}(?::\\d{2})?\\](?:\\*\\*)?\\s*)?)\\*\\*(${SPEAKER_LABEL_PATTERN_SOURCE}):\\*\\*`,
+      'gm',
+    );
+    for (const match of String(markdown || '').matchAll(pattern)) {
+      if (match[2]) {
+        labels.add(match[2]);
+      }
+    }
+    return labels;
+  }
+
+  function normalizeCaptionsExportStatus(status, available) {
+    if (available) {
+      return 'ready';
+    }
+    const raw = String(status || '').trim().toLowerCase();
+    if (raw === 'stale' || raw === 'captions_stale') {
+      return 'stale';
+    }
+    if (raw === 'invalid' || raw === 'captions_invalid') {
+      return 'invalid';
+    }
+    return 'missing';
+  }
+
+  function buildCaptionsExportSection(captions, { includeSpeakers, speakerNames }) {
+    const raw = captions && typeof captions === 'object' && !Array.isArray(captions) ? captions : null;
+    const rawStatus = String(raw?.status || '').trim().toLowerCase();
+    const isMarkedAvailable = Boolean(
+      raw
+      && raw.available !== false
+      && (!rawStatus || rawStatus === 'ready' || rawStatus === 'ok')
+    );
+    const rawCues = Array.isArray(raw?.cues) ? raw.cues : [];
+
+    if (!isMarkedAvailable || rawCues.length === 0) {
+      return {
+        available: false,
+        status: normalizeCaptionsExportStatus(raw?.status, false),
+        engine: null,
+        timingPrecision: null,
+        cues: [],
+      };
+    }
+
+    const overlaidCues = includeSpeakers ? applySpeakerNamesToCues(rawCues, speakerNames) : rawCues;
+    const normalizedCues = normalizeSubtitleCues(overlaidCues);
+    if (normalizedCues.length === 0) {
+      return {
+        available: false,
+        status: normalizeCaptionsExportStatus(raw?.status, false),
+        engine: null,
+        timingPrecision: null,
+        cues: [],
+      };
+    }
+
+    return {
+      available: true,
+      status: 'ready',
+      engine: normalizeOptionalString(raw.engine),
+      timingPrecision: normalizeOptionalString(raw.timingPrecision),
+      cues: normalizedCues.map((cue, index) => ({
+        index: index + 1,
+        startMs: cue.startMs,
+        endMs: cue.endMs,
+        speaker: includeSpeakers ? (normalizeOptionalString(cue.speaker) || null) : null,
+        text: cue.text,
+      })),
+    };
+  }
+
+  function buildSummaryExportSection(summary, { rec, resolvedTranscriptHash, speakerNamesHash }) {
+    const rawSummary = summary !== undefined
+      ? summary
+      : (rec?.ai?.summary || (typeof rec?.summary === 'string' && rec.summary.trim()
+        ? { status: 'completed', markdown: rec.summary }
+        : null));
+
+    if (!rawSummary || typeof rawSummary !== 'object' || Array.isArray(rawSummary)) {
+      return null;
+    }
+
+    const rawMarkdown = typeof rawSummary.markdown === 'string'
+      ? normalizeLfText(rawSummary.markdown)
+      : (typeof rec?.summary === 'string' ? normalizeLfText(rec.summary) : '');
+    const structured = rawSummary.structured && typeof rawSummary.structured === 'object' && !Array.isArray(rawSummary.structured)
+      ? rawSummary.structured
+      : null;
+
+    if (rawSummary.status && rawSummary.status !== 'completed') {
+      return null;
+    }
+    if (!rawSummary.status && !rawMarkdown.trim() && !structured) {
+      return null;
+    }
+
+    const summarySourceHash = normalizeOptionalString(rawSummary.sourceTranscriptHash);
+    const summarySpeakersHash = normalizeOptionalString(rawSummary.speakerNamesHash);
+    const transcriptStale = Boolean(
+      summarySourceHash
+      && resolvedTranscriptHash
+      && summarySourceHash !== resolvedTranscriptHash
+    );
+    const speakerNamesStale = typeof speakerNamesHash === 'string'
+      ? (summarySpeakersHash || '') !== speakerNamesHash
+      : false;
+    const stale = typeof rawSummary.stale === 'boolean'
+      ? rawSummary.stale
+      : Boolean(rec?.summaryStale || transcriptStale || speakerNamesStale);
+
+    return {
+      status: 'completed',
+      markdown: rawMarkdown.trim() ? rawMarkdown : null,
+      structured,
+      language: normalizeOptionalString(rawSummary.language),
+      languageSource: normalizeOptionalString(rawSummary.languageSource),
+      modelId: normalizeOptionalString(rawSummary.modelId),
+      model: normalizeOptionalString(rawSummary.model),
+      modelProfile: normalizeOptionalString(rawSummary.modelProfile ?? rawSummary.profile),
+      tag: normalizeOptionalString(rawSummary.tag),
+      template: normalizeOptionalString(rawSummary.template ?? structured?.template),
+      templateVersion: normalizeOptionalString(rawSummary.templateVersion),
+      generatedAt: normalizeOptionalString(rawSummary.generatedAt),
+      sourceTranscriptHash: summarySourceHash,
+      speakerNamesHash: summarySpeakersHash,
+      stale,
+    };
+  }
+
+  /**
+   * Serialize recording metadata, speaker overlays, transcript, validated cues,
+   * and summary data into schema-v1 `avanevis-transcript` JSON.
+   * Never emits raw host filesystem paths.
+   */
+  function serializeTranscriptToJson(options = {}) {
+    const {
+      exportedAt = null,
+      recording = null,
+      meeting = null,
+      includeSpeakers = true,
+      speakerNames = undefined,
+      speakerNamesHash = undefined,
+      speakerCount = undefined,
+      transcriptMarkdown = undefined,
+      transcript = undefined,
+      sourceTranscriptHash = undefined,
+      captions = null,
+      summary = undefined,
+    } = options || {};
+
+    const rec = recording && typeof recording === 'object'
+      ? recording
+      : (meeting && typeof meeting === 'object' ? meeting : {});
+    const includeSpeakerLabels = includeSpeakers !== false;
+
+    const rawSpeakerNames = speakerNames !== undefined
+      ? speakerNames
+      : (meeting?.ai?.diarization?.speakerNames || rec?.ai?.diarization?.speakerNames || {});
+    const normalizedNames = normalizeExportSpeakerNamesMap(rawSpeakerNames);
+
+    let rawMarkdownInput = '';
+    if (typeof transcriptMarkdown === 'string') {
+      rawMarkdownInput = transcriptMarkdown;
+    } else if (typeof transcript === 'string') {
+      rawMarkdownInput = transcript;
+    } else if (transcript && typeof transcript === 'object' && typeof transcript.markdown === 'string') {
+      rawMarkdownInput = transcript.markdown;
+    }
+    const rawMarkdownLf = normalizeLfText(rawMarkdownInput);
+    const resolvedTranscriptHash = normalizeOptionalString(
+      sourceTranscriptHash !== undefined
+        ? sourceTranscriptHash
+        : (transcript && typeof transcript === 'object' ? transcript.sourceTranscriptHash : null),
+    );
+
+    const resolvedMarkdown = includeSpeakerLabels
+      ? applySpeakerNamesToMarkdown(rawMarkdownLf, normalizedNames)
+      : stripSpeakerPrefixesFromMarkdown(rawMarkdownLf);
+    const plainText = resolvedMarkdown.trim()
+      ? convertTranscriptMarkdownToPlainText(resolvedMarkdown)
+      : '';
+
+    const captionsSection = buildCaptionsExportSection(captions, {
+      includeSpeakers: includeSpeakerLabels,
+      speakerNames: normalizedNames,
+    });
+
+    let speakersSection;
+    if (!includeSpeakerLabels) {
+      speakersSection = {
+        included: false,
+        names: {},
+        speakerNamesHash: null,
+        count: 0,
+      };
+    } else {
+      const distinctSpeakers = extractDistinctSpeakerLabelsFromMarkdown(rawMarkdownLf);
+      for (const key of Object.keys(normalizedNames)) {
+        distinctSpeakers.add(key);
+      }
+      if (captionsSection.available) {
+        for (const cue of captions.cues) {
+          const cueSpeaker = normalizeOptionalString(cue?.speaker);
+          if (cueSpeaker) {
+            distinctSpeakers.add(cueSpeaker);
+          }
+        }
+      }
+      const explicitCount = normalizeOptionalNumber(
+        speakerCount !== undefined
+          ? speakerCount
+          : (meeting?.ai?.diarization?.speakerCount ?? rec?.ai?.diarization?.speakerCount),
+      );
+      const safeExplicitCount = explicitCount !== null && explicitCount >= 0
+        ? Math.floor(explicitCount)
+        : 0;
+      const resolvedNamesHash = normalizeOptionalString(
+        speakerNamesHash !== undefined ? speakerNamesHash : rec?.speakerNamesHash,
+      );
+      speakersSection = {
+        included: true,
+        names: normalizedNames,
+        speakerNamesHash: resolvedNamesHash,
+        count: Math.max(safeExplicitCount, distinctSpeakers.size),
+      };
+    }
+
+    const summarySection = buildSummaryExportSection(summary, {
+      rec,
+      resolvedTranscriptHash,
+      speakerNamesHash,
+    });
+
+    const payload = {
+      schemaVersion: TRANSCRIPT_EXPORT_JSON_SCHEMA_VERSION,
+      format: 'avanevis-transcript',
+      exportedAt: normalizeOptionalString(exportedAt) || new Date().toISOString(),
+      recording: {
+        id: normalizeOptionalString(rec.id),
+        title: normalizeOptionalString(rec.title),
+        date: normalizeOptionalString(rec.date),
+        duration: normalizeOptionalString(rec.duration),
+        durationSeconds: normalizeOptionalNumber(rec.durationSeconds),
+        tag: normalizeOptionalString(rec.tag),
+        language: normalizeOptionalString(rec.language ?? rec.transcriptionResult?.language),
+        model: normalizeOptionalString(
+          rec.model ?? rec.transcriptionResult?.modelSize ?? rec.transcriptionResult?.modelId,
+        ),
+        engine: normalizeOptionalString(rec.engine ?? rec.transcriptionResult?.engine),
+        transcriptionStatus: normalizeOptionalString(rec.transcriptionStatus),
+        transcriptionDevice: normalizeOptionalString(
+          rec.transcriptionDevice ?? rec.transcriptionResult?.device,
+        ),
+        transcriptionComputeType: normalizeOptionalString(
+          rec.transcriptionComputeType ?? rec.transcriptionResult?.computeType,
+        ),
+      },
+      speakers: speakersSection,
+      transcript: {
+        markdown: resolvedMarkdown,
+        plainText,
+        sourceTranscriptHash: resolvedTranscriptHash,
+      },
+      captions: captionsSection,
+      summary: summarySection,
+    };
+
+    return `${JSON.stringify(payload, null, 2)}\n`;
+  }
+
   function buildExportFormatOptions({
     captionsAvailable = false,
     captionsStatus = 'missing',
@@ -379,6 +727,14 @@
           disabledReason: '',
         },
         {
+          format: 'json',
+          label: 'Structured JSON',
+          extLabel: '.json',
+          description: 'Recording details, speaker-resolved transcript, timings, and summary data.',
+          available: true,
+          disabledReason: '',
+        },
+        {
           format: 'srt',
           label: 'SubRip Subtitles',
           extLabel: '.srt',
@@ -405,6 +761,7 @@
   return {
     CAPTIONS_SCHEMA_VERSION,
     MIN_CUE_DURATION_MS,
+    TRANSCRIPT_EXPORT_JSON_SCHEMA_VERSION,
     VALID_CAPTION_ENGINES: Array.from(VALID_CAPTION_ENGINES),
     VALID_EXPORT_FORMATS,
     VALID_TIMING_PRECISIONS: Array.from(VALID_TIMING_PRECISIONS),
@@ -416,6 +773,8 @@
     normalizeSubtitleCues,
     serializeCuesToSrt,
     serializeCuesToVtt,
+    serializeTranscriptToJson,
+    stripSpeakerPrefixesFromMarkdown,
     validateCaptionsSidecar,
   };
 }));

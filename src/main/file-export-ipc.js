@@ -16,11 +16,16 @@ const {
   convertTranscriptMarkdownToPlainText,
   serializeCuesToSrt,
   serializeCuesToVtt,
+  serializeTranscriptToJson,
   validateCaptionsSidecar,
 } = require('../renderer/subtitle-export-helpers');
+const {
+  isCanonicalSpeakerKey,
+  normalizeSpeakerName,
+} = require('../renderer/speaker-label-helpers');
 
 const WINDOWS_RESERVED_FILE_BASENAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
-const EXPORT_TRANSCRIPT_EXTENSIONS_RE = /\.(?:md|txt|srt|vtt)$/i;
+const EXPORT_TRANSCRIPT_EXTENSIONS_RE = /\.(?:md|txt|json|srt|vtt)$/i;
 const EXPORT_FORMAT_FILTERS = Object.freeze({
   md: [
     { name: 'Markdown', extensions: ['md'] },
@@ -28,6 +33,10 @@ const EXPORT_FORMAT_FILTERS = Object.freeze({
   ],
   txt: [
     { name: 'Plain Text', extensions: ['txt'] },
+    { name: 'All Files', extensions: ['*'] },
+  ],
+  json: [
+    { name: 'JSON', extensions: ['json'] },
     { name: 'All Files', extensions: ['*'] },
   ],
   srt: [
@@ -39,6 +48,33 @@ const EXPORT_FORMAT_FILTERS = Object.freeze({
     { name: 'All Files', extensions: ['*'] },
   ],
 });
+
+/**
+ * Compute the canonical SHA-256 speaker-names hash matching Python
+ * `backend/meetings/speaker_names.py:speaker_names_hash` byte-for-byte.
+ */
+function computeSpeakerNamesHash(speakerNames) {
+  if (!speakerNames || typeof speakerNames !== 'object' || Array.isArray(speakerNames)) {
+    return '';
+  }
+  const normalized = {};
+  for (const key of Object.keys(speakerNames).sort()) {
+    if (!isCanonicalSpeakerKey(key) || typeof speakerNames[key] !== 'string') {
+      continue;
+    }
+    const clean = normalizeSpeakerName(speakerNames[key]);
+    if (clean) {
+      normalized[key] = clean;
+    }
+  }
+  const keys = Object.keys(normalized);
+  if (keys.length === 0) {
+    return '';
+  }
+  // Python json.dumps(..., sort_keys=True, ensure_ascii=False) uses ', ' and ': '.
+  const serialized = `{${keys.map((key) => `${JSON.stringify(key)}: ${JSON.stringify(normalized[key])}`).join(', ')}}`;
+  return `sha256:${crypto.createHash('sha256').update(serialized, 'utf8').digest('hex')}`;
+}
 
 function normalizeExportExtension(extension = '.md') {
   const raw = String(extension || '.md').trim().toLowerCase();
@@ -114,6 +150,72 @@ function createFileExportIpc(deps) {
     }
   }
 
+  function computeTranscriptHash(text) {
+    const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    return `sha256:${crypto.createHash('sha256').update(normalized, 'utf8').digest('hex')}`;
+  }
+
+  function resolveMeetingCaptionsSidecarPath(meeting) {
+    if (!meeting || typeof meeting !== 'object') {
+      return '';
+    }
+    if (meeting.captionsPath) {
+      return String(meeting.captionsPath);
+    }
+    if (meeting.audioPath) {
+      return path.join(path.dirname(meeting.audioPath), `${path.parse(meeting.audioPath).name}.captions.json`);
+    }
+    return '';
+  }
+
+  async function readValidatedTranscriptFile(transcriptPath, recordingsDir) {
+    if (!isSafeRecordingsMarkdownPath({ filePath: transcriptPath, recordingsDir })) {
+      throw new Error('Transcript file must remain inside the recordings directory.');
+    }
+    const resolvedTranscriptPath = path.resolve(transcriptPath);
+    await assertNonSymlinkExistingFile(resolvedTranscriptPath, 'transcript');
+    const transcriptText = await fs.promises.readFile(resolvedTranscriptPath, 'utf8');
+    return {
+      text: transcriptText,
+      hash: computeTranscriptHash(transcriptText),
+    };
+  }
+
+  async function readSafeSidecarFile(targetPath, {
+    recordingsDir,
+    isSafePath,
+    pathErrorMessage,
+    symlinkErrorMessage,
+  }) {
+    if (!isSafePath({ filePath: targetPath, recordingsDir })) {
+      throw new Error(pathErrorMessage);
+    }
+    const resolvedPath = path.resolve(targetPath);
+    if (typeof fs?.promises?.lstat === 'function') {
+      let stats;
+      try {
+        stats = await fs.promises.lstat(resolvedPath);
+      } catch (error) {
+        if (error && error.code === 'ENOENT') {
+          return { exists: false, content: null };
+        }
+        throw error;
+      }
+      if (stats.isSymbolicLink() || !stats.isFile()) {
+        throw new Error(symlinkErrorMessage);
+      }
+    }
+    try {
+      const content = await fs.promises.readFile(resolvedPath, 'utf8');
+      return { exists: true, content };
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        return { exists: false, content: null };
+      }
+      throw error;
+    }
+  }
+
   async function resolveValidatedSubtitleContent({
     meetingId,
     format,
@@ -138,20 +240,12 @@ function createFileExportIpc(deps) {
     }
 
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    if (!isSafeRecordingsMarkdownPath({ filePath: meeting.transcriptPath, recordingsDir })) {
-      throw new Error('Transcript file must remain inside the recordings directory.');
-    }
-    const resolvedTranscriptPath = path.resolve(meeting.transcriptPath);
-    await assertNonSymlinkExistingFile(resolvedTranscriptPath, 'transcript');
+    const { hash: currentTranscriptHash } = await readValidatedTranscriptFile(
+      meeting.transcriptPath,
+      recordingsDir,
+    );
 
-    const transcriptText = await fs.promises.readFile(resolvedTranscriptPath, 'utf8');
-    const normalizedTranscript = transcriptText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    const currentTranscriptHash = `sha256:${crypto.createHash('sha256').update(normalizedTranscript, 'utf8').digest('hex')}`;
-
-    const rawCaptionsPath = meeting.captionsPath
-      || (meeting.audioPath
-        ? path.join(path.dirname(meeting.audioPath), `${path.parse(meeting.audioPath).name}.captions.json`)
-        : '');
+    const rawCaptionsPath = resolveMeetingCaptionsSidecarPath(meeting);
     if (!rawCaptionsPath) {
       return {
         ok: false,
@@ -159,27 +253,24 @@ function createFileExportIpc(deps) {
         error: 'Subtitles require exact segment timings. Re-transcribe from the saved audio to generate them.',
       };
     }
-    if (!isSafeRecordingsJsonPath({ filePath: rawCaptionsPath, recordingsDir })) {
-      throw new Error('Captions sidecar must remain inside the recordings directory.');
-    }
-    const resolvedCaptionsPath = path.resolve(rawCaptionsPath);
-    try {
-      await assertNonSymlinkExistingFile(resolvedCaptionsPath, 'captions sidecar');
-    } catch (error) {
-      if (error && error.code === 'ENOENT') {
-        return {
-          ok: false,
-          code: 'CAPTIONS_MISSING',
-          error: 'Subtitles require exact segment timings. Re-transcribe from the saved audio to generate them.',
-        };
-      }
-      throw error;
+
+    const captionsFile = await readSafeSidecarFile(rawCaptionsPath, {
+      recordingsDir,
+      isSafePath: isSafeRecordingsJsonPath,
+      pathErrorMessage: 'Captions sidecar must remain inside the recordings directory.',
+      symlinkErrorMessage: 'Invalid captions sidecar file.',
+    });
+    if (!captionsFile.exists) {
+      return {
+        ok: false,
+        code: 'CAPTIONS_MISSING',
+        error: 'Subtitles require exact segment timings. Re-transcribe from the saved audio to generate them.',
+      };
     }
 
     let sidecar;
     try {
-      const rawJson = await fs.promises.readFile(resolvedCaptionsPath, 'utf8');
-      sidecar = JSON.parse(rawJson);
+      sidecar = JSON.parse(captionsFile.content);
     } catch (_error) {
       return {
         ok: false,
@@ -206,6 +297,180 @@ function createFileExportIpc(deps) {
       ok: true,
       content,
     };
+  }
+
+  async function resolveJsonExportContent({
+    meetingId,
+    fallbackContent = '',
+    includeSpeakers = true,
+  }) {
+    const meeting = meetingId && typeof getMeeting === 'function'
+      ? await getMeeting(meetingId).catch(() => null)
+      : null;
+
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+    let transcriptMarkdown = fallbackContent || (typeof meeting?.transcript === 'string' ? meeting.transcript : '');
+    let sourceTranscriptHash = transcriptMarkdown ? computeTranscriptHash(transcriptMarkdown) : null;
+
+    if (meeting?.transcriptPath) {
+      const readResult = await readValidatedTranscriptFile(meeting.transcriptPath, recordingsDir);
+      transcriptMarkdown = readResult.text;
+      sourceTranscriptHash = readResult.hash;
+    }
+
+    let captionsInfo = {
+      available: false,
+      status: 'missing',
+      engine: null,
+      timingPrecision: null,
+      cues: [],
+    };
+    const rawCaptionsPath = resolveMeetingCaptionsSidecarPath(meeting);
+    if (rawCaptionsPath) {
+      const captionsFile = await readSafeSidecarFile(rawCaptionsPath, {
+        recordingsDir,
+        isSafePath: isSafeRecordingsJsonPath,
+        pathErrorMessage: 'Invalid captions sidecar path.',
+        symlinkErrorMessage: 'Refusing to read symlinked captions sidecar.',
+      });
+      if (captionsFile.exists) {
+        try {
+          const parsedCaptions = JSON.parse(captionsFile.content);
+          const validation = validateCaptionsSidecar(parsedCaptions, sourceTranscriptHash);
+          if (validation.valid) {
+            captionsInfo = {
+              available: true,
+              status: 'ready',
+              engine: validation.engine,
+              timingPrecision: validation.timingPrecision,
+              cues: validation.cues,
+            };
+          } else {
+            const status = validation.code === 'CAPTIONS_STALE'
+              ? 'stale'
+              : (validation.code === 'CAPTIONS_MISSING' ? 'missing' : 'invalid');
+            captionsInfo = {
+              available: false,
+              status,
+              engine: null,
+              timingPrecision: null,
+              cues: [],
+            };
+          }
+        } catch (_error) {
+          captionsInfo = {
+            available: false,
+            status: 'invalid',
+            engine: null,
+            timingPrecision: null,
+            cues: [],
+          };
+        }
+      }
+    }
+
+    const aiSummary = meeting?.ai?.summary && typeof meeting.ai.summary === 'object'
+      ? meeting.ai.summary
+      : null;
+    let summaryStructured = null;
+    let summarySidecarMeta = null;
+    let summaryMarkdown = typeof meeting?.summary === 'string' ? meeting.summary : '';
+
+    if (aiSummary?.jsonPath) {
+      const summaryJsonFile = await readSafeSidecarFile(aiSummary.jsonPath, {
+        recordingsDir,
+        isSafePath: isSafeRecordingsJsonPath,
+        pathErrorMessage: 'Invalid summary JSON sidecar path.',
+        symlinkErrorMessage: 'Refusing to read symlinked summary JSON sidecar.',
+      });
+      if (summaryJsonFile.exists) {
+        try {
+          const parsedSummaryJson = JSON.parse(summaryJsonFile.content);
+          if (parsedSummaryJson && typeof parsedSummaryJson === 'object' && !Array.isArray(parsedSummaryJson)) {
+            if (
+              parsedSummaryJson.summary
+              && typeof parsedSummaryJson.summary === 'object'
+              && !Array.isArray(parsedSummaryJson.summary)
+            ) {
+              summaryStructured = parsedSummaryJson.summary;
+            }
+            if (
+              parsedSummaryJson.metadata
+              && typeof parsedSummaryJson.metadata === 'object'
+              && !Array.isArray(parsedSummaryJson.metadata)
+            ) {
+              summarySidecarMeta = parsedSummaryJson.metadata;
+            }
+          }
+        } catch (_error) {
+          // Corrupt summary JSON sidecar degrades without blocking transcript JSON export.
+        }
+      }
+    }
+
+    if (aiSummary?.markdownPath) {
+      const summaryMdFile = await readSafeSidecarFile(aiSummary.markdownPath, {
+        recordingsDir,
+        isSafePath: isSafeRecordingsMarkdownPath,
+        pathErrorMessage: 'Invalid summary Markdown sidecar path.',
+        symlinkErrorMessage: 'Refusing to read symlinked summary Markdown sidecar.',
+      });
+      if (summaryMdFile.exists) {
+        summaryMarkdown = summaryMdFile.content;
+      }
+    }
+
+    const speakerNames = meeting?.ai?.diarization?.speakerNames || {};
+    const currentSpeakerNamesHash = computeSpeakerNamesHash(speakerNames);
+
+    const hasCompletedSummary = Boolean(
+      aiSummary?.status === 'completed'
+      || (!aiSummary?.status && ((summaryMarkdown && summaryMarkdown.trim()) || summaryStructured)),
+    );
+    let summaryInput = null;
+    if (hasCompletedSummary) {
+      const meta = aiSummary || {};
+      const sidecarMeta = summarySidecarMeta || {};
+      const summarySourceHash = meta.sourceTranscriptHash ?? sidecarMeta.sourceTranscriptHash ?? null;
+      const summarySpeakerNamesHash = meta.speakerNamesHash ?? sidecarMeta.speakerNamesHash ?? null;
+      const transcriptStale = Boolean(
+        summarySourceHash
+        && sourceTranscriptHash
+        && summarySourceHash !== sourceTranscriptHash,
+      );
+      const speakerNamesStale = (summarySpeakerNamesHash || '') !== currentSpeakerNamesHash;
+      summaryInput = {
+        status: 'completed',
+        markdown: summaryMarkdown,
+        structured: summaryStructured,
+        language: meta.language ?? sidecarMeta.language ?? null,
+        languageSource: meta.languageSource ?? sidecarMeta.languageSource ?? null,
+        modelId: meta.modelId ?? sidecarMeta.modelId ?? null,
+        model: meta.model ?? sidecarMeta.model ?? null,
+        modelProfile: meta.modelProfile ?? sidecarMeta.profile ?? null,
+        tag: meta.tag ?? sidecarMeta.tag ?? null,
+        template: meta.template ?? sidecarMeta.template ?? summaryStructured?.template ?? null,
+        templateVersion: meta.templateVersion ?? sidecarMeta.templateVersion ?? null,
+        generatedAt: meta.generatedAt ?? sidecarMeta.generatedAt ?? null,
+        sourceTranscriptHash: summarySourceHash,
+        speakerNamesHash: summarySpeakerNamesHash,
+        stale: Boolean(meeting?.summaryStale) || transcriptStale || speakerNamesStale,
+      };
+    }
+
+    const content = serializeTranscriptToJson({
+      recording: meeting,
+      includeSpeakers: includeSpeakers !== false,
+      speakerNames,
+      speakerNamesHash: currentSpeakerNamesHash,
+      speakerCount: meeting?.ai?.diarization?.speakerCount,
+      transcriptMarkdown,
+      sourceTranscriptHash,
+      captions: captionsInfo,
+      summary: summaryInput,
+    });
+
+    return { ok: true, content };
   }
 
   function registerIpc(ipcMain) {
@@ -252,8 +517,11 @@ function createFileExportIpc(deps) {
       if (typeof assertTrustedRendererSender === 'function') {
         assertTrustedRendererSender(event);
       }
-      const opts = options || {};
-      const suggestedName = (opts.suggestedName || 'transcript').toString();
+      const opts = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
+      const rawSuggestedName = typeof opts.suggestedName === 'string' && opts.suggestedName.trim()
+        ? opts.suggestedName
+        : 'transcript';
+      const suggestedName = rawSuggestedName;
       const content = typeof opts.content === 'string' ? opts.content : '';
       const title = typeof opts.title === 'string' && opts.title.trim() ? opts.title.trim() : 'Save Transcript';
       const hasExplicitFormat = Object.prototype.hasOwnProperty.call(opts, 'format') && opts.format != null && opts.format !== '';
@@ -278,7 +546,10 @@ function createFileExportIpc(deps) {
         return { canceled: false, filePath: result.filePath };
       }
 
-      const format = String(opts.format).trim().toLowerCase();
+      if (typeof opts.format !== 'string') {
+        throw new Error(`Unsupported export format: ${opts.format}`);
+      }
+      const format = opts.format.trim().toLowerCase();
       if (!VALID_EXPORT_FORMATS.includes(format)) {
         throw new Error(`Unsupported export format: ${opts.format}`);
       }
@@ -294,6 +565,13 @@ function createFileExportIpc(deps) {
       }
       if (format === 'txt') {
         outputText = opts.isPlainText === true ? outputText : convertTranscriptMarkdownToPlainText(outputText);
+      } else if (format === 'json') {
+        const jsonResult = await resolveJsonExportContent({
+          meetingId: typeof opts.meetingId === 'string' ? opts.meetingId.trim() : '',
+          fallbackContent: content,
+          includeSpeakers: opts.includeSpeakers !== false,
+        });
+        outputText = jsonResult.content;
       } else if (format === 'srt' || format === 'vtt') {
         const subtitleResult = await resolveValidatedSubtitleContent({
           meetingId: typeof opts.meetingId === 'string' ? opts.meetingId.trim() : '',
@@ -371,5 +649,6 @@ function registerFileExportIpc(ipcMain, deps) {
 module.exports = {
   createFileExportIpc,
   registerFileExportIpc,
+  computeSpeakerNamesHash,
   WINDOWS_RESERVED_FILE_BASENAME,
 };

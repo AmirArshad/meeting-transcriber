@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const {
   CAPTIONS_SCHEMA_VERSION,
   MIN_CUE_DURATION_MS,
+  TRANSCRIPT_EXPORT_JSON_SCHEMA_VERSION,
   VALID_CAPTION_ENGINES,
   VALID_EXPORT_FORMATS,
   VALID_TIMING_PRECISIONS,
@@ -17,6 +18,8 @@ const {
   normalizeSubtitleCues,
   serializeCuesToSrt,
   serializeCuesToVtt,
+  serializeTranscriptToJson,
+  stripSpeakerPrefixesFromMarkdown,
   validateCaptionsSidecar,
 } = require('../../src/renderer/subtitle-export-helpers');
 
@@ -234,7 +237,7 @@ test('validateCaptionsSidecar validates schema-v1 payloads and reports exact fai
     ],
   };
 
-  assert.deepEqual(VALID_EXPORT_FORMATS, ['md', 'txt', 'srt', 'vtt']);
+  assert.deepEqual(VALID_EXPORT_FORMATS, ['md', 'txt', 'json', 'srt', 'vtt']);
   assert.ok(VALID_CAPTION_ENGINES.includes('parakeet'));
   assert.ok(VALID_TIMING_PRECISIONS.includes('word'));
 
@@ -323,10 +326,20 @@ test('buildExportFormatOptions sets format availability, notices, and canRetrans
     [
       { format: 'md', available: true },
       { format: 'txt', available: true },
+      { format: 'json', available: true },
       { format: 'srt', available: true },
       { format: 'vtt', available: true },
     ],
   );
+  const jsonOpt = ready.options.find((opt) => opt.format === 'json');
+  assert.deepEqual(jsonOpt, {
+    format: 'json',
+    label: 'Structured JSON',
+    extLabel: '.json',
+    description: 'Recording details, speaker-resolved transcript, timings, and summary data.',
+    available: true,
+    disabledReason: '',
+  });
 
   const missingWithAudio = buildExportFormatOptions({
     captionsAvailable: false,
@@ -340,6 +353,7 @@ test('buildExportFormatOptions sets format availability, notices, and canRetrans
     [
       { format: 'md', available: true },
       { format: 'txt', available: true },
+      { format: 'json', available: true },
       { format: 'srt', available: false },
       { format: 'vtt', available: false },
     ],
@@ -356,6 +370,7 @@ test('buildExportFormatOptions sets format availability, notices, and canRetrans
   assert.match(staleWithoutAudio.captionsUnavailableNotice, /changed after its subtitle timings/i);
   assert.equal(staleWithoutAudio.options.find((opt) => opt.format === 'md').available, true);
   assert.equal(staleWithoutAudio.options.find((opt) => opt.format === 'txt').available, true);
+  assert.equal(staleWithoutAudio.options.find((opt) => opt.format === 'json').available, true);
   assert.equal(staleWithoutAudio.options.find((opt) => opt.format === 'srt').available, false);
   assert.equal(staleWithoutAudio.options.find((opt) => opt.format === 'vtt').available, false);
 });
@@ -396,4 +411,246 @@ test('speaker exports handle unbolded timestamps, nested arrows and inherited na
   assert.match(serializeCuesToVtt(cues, { useVoiceTags: true, speakerNames: { 'Speaker 1': 'A--->->B' } }), /<v AB>Hi/);
   assert.match(serializeCuesToSrt(cues, { speakerNames: Object.create({ 'Speaker 1': 'Inherited' }) }), /Speaker 1: Hi/);
   assert.match(serializeCuesToVtt([{ ...cues[0], speaker: 'A--->->B' }], { useVoiceTags: true }), /<v AB>Hi/);
+});
+
+test('stripSpeakerPrefixesFromMarkdown removes speaker labels without touching header metadata or speech', () => {
+  const markdown = [
+    '# Audio Transcript',
+    '',
+    '**File:** meeting.opus',
+    '**Date:** 2026-11-25 10:00:00',
+    '**Duration:** 00:42',
+    '**Language:** en',
+    '',
+    '---',
+    '',
+    '## Transcript',
+    '',
+    '**[00:00 - 00:05]** **Speaker 1:** Mention **Speaker 1:** in speech.',
+    '[00:05 - 00:10] **SPEAKER_02:** Second turn.',
+    '**[00:10 - 00:15]** **Speaker 3:**',
+    'Split line text.',
+    '**[00:15 - 00:20]**',
+    '**Speaker 4:** Next line label.',
+    '**Speaker 5:** Untimed label.',
+  ].join('\n');
+
+  assert.equal(
+    stripSpeakerPrefixesFromMarkdown(markdown),
+    [
+      '# Audio Transcript',
+      '',
+      '**File:** meeting.opus',
+      '**Date:** 2026-11-25 10:00:00',
+      '**Duration:** 00:42',
+      '**Language:** en',
+      '',
+      '---',
+      '',
+      '## Transcript',
+      '',
+      '**[00:00 - 00:05]** Mention **Speaker 1:** in speech.',
+      '[00:05 - 00:10] Second turn.',
+      '**[00:10 - 00:15]**',
+      'Split line text.',
+      '**[00:15 - 00:20]**',
+      'Next line label.',
+      'Untimed label.',
+    ].join('\n'),
+  );
+});
+
+test('serializeTranscriptToJson emits schema v1, resolves speakers, handles missing/stale captions, and omits host paths', () => {
+  const rawMarkdown = [
+    '# Weekly Sync',
+    '',
+    '**Date:** 2026-11-25',
+    '',
+    '## Transcript',
+    '',
+    '**[00:00 - 00:05]** **Speaker 1:** Welcome everyone.',
+    '**[00:05 - 00:10]** **Speaker 2:** Ready to start.',
+    '',
+  ].join('\r\n');
+  const transcriptHash = sha256Hash(rawMarkdown.replace(/\r\n/g, '\n'));
+  const namesHash = sha256Hash('{"Speaker 1": "Alice", "Speaker 2": "Bob"}');
+
+  const jsonText = serializeTranscriptToJson({
+    exportedAt: '2026-11-25T12:00:00.000Z',
+    recording: {
+      id: '20261125_120000',
+      title: 'Weekly Sync',
+      date: '2026-11-25T12:00:00',
+      duration: '0:00',
+      durationSeconds: 0,
+      tag: 'meeting',
+      language: 'en',
+      model: 'large-v3',
+      engine: 'faster-whisper',
+      transcriptionStatus: 'completed',
+      transcriptionDevice: 'cuda',
+      transcriptionComputeType: 'float16',
+      audioPath: '/Users/secret/recordings/meeting_20261125_120000.opus',
+      transcriptPath: '/Users/secret/recordings/meeting_20261125_120000.md',
+      captionsPath: '/Users/secret/recordings/meeting_20261125_120000.captions.json',
+      ai: {
+        diarization: {
+          speakerCount: 2,
+          segmentsPath: '/Users/secret/recordings/meeting_20261125_120000.speakers.json',
+        },
+        summary: {
+          jsonPath: '/Users/secret/recordings/meeting_20261125_120000.summary.json',
+          markdownPath: '/Users/secret/recordings/meeting_20261125_120000.summary.md',
+        },
+      },
+    },
+    includeSpeakers: true,
+    speakerNames: { 'Speaker 2': 'Bob', 'Speaker 1': 'Alice' },
+    speakerNamesHash: namesHash,
+    transcriptMarkdown: rawMarkdown,
+    sourceTranscriptHash: transcriptHash,
+    captions: {
+      available: true,
+      status: 'ready',
+      engine: 'faster-whisper',
+      timingPrecision: 'word',
+      cues: [
+        { startMs: 0, endMs: 2500, speaker: 'Speaker 1', text: 'Welcome everyone.' },
+        { startMs: 5000, endMs: 8000, speaker: 'Speaker 2', text: 'Ready to start.' },
+      ],
+    },
+    summary: {
+      status: 'completed',
+      markdown: '# Summary\n\nTeam aligned.\n',
+      structured: { summary: 'Team aligned.', decisions: [{ decision: 'Ship v3.2' }] },
+      language: 'en',
+      languageSource: 'userConfirmed',
+      modelId: 'gemma-3-4b',
+      model: 'Gemma 3 4B',
+      modelProfile: 'balanced',
+      tag: 'meeting',
+      template: 'meeting',
+      templateVersion: '1',
+      generatedAt: '2026-11-25T12:05:00Z',
+      sourceTranscriptHash: transcriptHash,
+      speakerNamesHash: namesHash,
+      stale: false,
+      jsonPath: '/Users/secret/recordings/summary-leak.json',
+      markdownPath: '/Users/secret/recordings/summary-leak.md',
+    },
+  });
+
+  assert.equal(jsonText.endsWith('\n'), true);
+  assert.doesNotMatch(jsonText, /\/Users\/secret/);
+  for (const forbiddenKey of ['audioPath', 'transcriptPath', 'captionsPath', 'segmentsPath', 'jsonPath', 'markdownPath']) {
+    assert.equal(jsonText.includes(forbiddenKey), false, `must not serialize ${forbiddenKey}`);
+  }
+
+  const parsed = JSON.parse(jsonText);
+  assert.equal(parsed.schemaVersion, TRANSCRIPT_EXPORT_JSON_SCHEMA_VERSION);
+  assert.equal(parsed.schemaVersion, 1);
+  assert.equal(parsed.format, 'avanevis-transcript');
+  assert.equal(parsed.exportedAt, '2026-11-25T12:00:00.000Z');
+  assert.deepEqual(parsed.recording, {
+    id: '20261125_120000',
+    title: 'Weekly Sync',
+    date: '2026-11-25T12:00:00',
+    duration: '0:00',
+    durationSeconds: 0,
+    tag: 'meeting',
+    language: 'en',
+    model: 'large-v3',
+    engine: 'faster-whisper',
+    transcriptionStatus: 'completed',
+    transcriptionDevice: 'cuda',
+    transcriptionComputeType: 'float16',
+  });
+  assert.deepEqual(parsed.speakers, {
+    included: true,
+    names: { 'Speaker 1': 'Alice', 'Speaker 2': 'Bob' },
+    speakerNamesHash: namesHash,
+    count: 2,
+  });
+  assert.match(parsed.transcript.markdown, /\*\*\[00:00 - 00:05\]\*\* \*\*Alice:\*\* Welcome everyone\./);
+  assert.match(parsed.transcript.plainText, /\[00:00 - 00:05\] Alice: Welcome everyone\./);
+  assert.equal(parsed.transcript.sourceTranscriptHash, transcriptHash);
+  assert.deepEqual(parsed.captions, {
+    available: true,
+    status: 'ready',
+    engine: 'faster-whisper',
+    timingPrecision: 'word',
+    cues: [
+      { index: 1, startMs: 0, endMs: 2500, speaker: 'Alice', text: 'Welcome everyone.' },
+      { index: 2, startMs: 5000, endMs: 8000, speaker: 'Bob', text: 'Ready to start.' },
+    ],
+  });
+  assert.deepEqual(parsed.summary, {
+    status: 'completed',
+    markdown: '# Summary\n\nTeam aligned.\n',
+    structured: { summary: 'Team aligned.', decisions: [{ decision: 'Ship v3.2' }] },
+    language: 'en',
+    languageSource: 'userConfirmed',
+    modelId: 'gemma-3-4b',
+    model: 'Gemma 3 4B',
+    modelProfile: 'balanced',
+    tag: 'meeting',
+    template: 'meeting',
+    templateVersion: '1',
+    generatedAt: '2026-11-25T12:05:00Z',
+    sourceTranscriptHash: transcriptHash,
+    speakerNamesHash: namesHash,
+    stale: false,
+  });
+
+  // includeSpeakers: false strips speaker prefixes, nulls cue speakers, zeroes speaker metadata
+  const noSpeakerParsed = JSON.parse(serializeTranscriptToJson({
+    recording: { id: '20261125_120000' },
+    includeSpeakers: false,
+    speakerNames: { 'Speaker 1': 'Alice', 'Speaker 2': 'Bob' },
+    speakerNamesHash: namesHash,
+    speakerCount: 2,
+    transcriptMarkdown: rawMarkdown,
+    sourceTranscriptHash: transcriptHash,
+    captions: {
+      available: true,
+      status: 'ready',
+      engine: 'faster-whisper',
+      timingPrecision: 'segment',
+      cues: [{ startMs: 0, endMs: 2500, speaker: 'Speaker 1', text: 'Welcome everyone.' }],
+    },
+    summary: { status: 'error', error: 'model failed' },
+  }));
+  assert.deepEqual(noSpeakerParsed.speakers, {
+    included: false,
+    names: {},
+    speakerNamesHash: null,
+    count: 0,
+  });
+  assert.doesNotMatch(noSpeakerParsed.transcript.markdown, /\*\*Speaker 1:\*\*/);
+  assert.doesNotMatch(noSpeakerParsed.transcript.plainText, /Speaker 1:|Alice:/);
+  assert.deepEqual(noSpeakerParsed.captions.cues, [
+    { index: 1, startMs: 0, endMs: 2500, speaker: null, text: 'Welcome everyone.' },
+  ]);
+  assert.equal(noSpeakerParsed.summary, null);
+
+  // Stale / missing captions degrade without failing
+  const staleCaptionsParsed = JSON.parse(serializeTranscriptToJson({
+    transcriptMarkdown: 'Hello',
+    captions: {
+      available: false,
+      status: 'stale',
+      engine: 'parakeet',
+      timingPrecision: 'segment',
+      cues: [{ startMs: 0, endMs: 1000, text: 'Old' }],
+    },
+  }));
+  assert.deepEqual(staleCaptionsParsed.captions, {
+    available: false,
+    status: 'stale',
+    engine: null,
+    timingPrecision: null,
+    cues: [],
+  });
+  assert.equal(staleCaptionsParsed.recording.id, null);
+  assert.equal(staleCaptionsParsed.recording.durationSeconds, null);
 });

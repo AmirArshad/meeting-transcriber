@@ -6361,8 +6361,8 @@ function updateTranscriptExportSubtitleControls() {
   if (!form || !prefsEl) return;
   const selected = form.querySelector('input[name="transcript-export-format"]:checked');
   const format = selected ? selected.value : 'md';
-  const isSubtitle = format === 'srt' || format === 'vtt';
-  prefsEl.hidden = !isSubtitle;
+  const showSpeakerToggle = format === 'srt' || format === 'vtt' || format === 'json';
+  prefsEl.hidden = !showSpeakerToggle;
   if (vttVoiceRow) {
     vttVoiceRow.hidden = format !== 'vtt';
   }
