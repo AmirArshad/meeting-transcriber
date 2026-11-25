@@ -199,3 +199,74 @@ On `release/3.2` (starting at `27d4488`, followed by the `Inkling 2 Mini` reason
 - **Open native checks:** Native 32,768-token setup, Grounded/General Chat, English summary, and Linux CUDA VRAM floor measurement for `bonsai-2.5-27b-q2-0` remain open on Linux CUDA, macOS arm64 Metal, and Windows x64 CUDA (untested on the headless CPU-only VPS).
 
 Logs are retained locally under ignored `logs/v3.2-macos-qualification/`. Remaining open items: macOS microphone & mixed-source capture (TCC permission), macOS native checks for `bonsai-2.5-27b-q2-0`, `ministral-3-14b`, `gemma-4-26b-a4b`, and `qwen3.8-27b`, Windows and Linux qualification gates, release-version (`3.2.0`) artifacts, and the authorized release cut. No new cross-platform limits are accepted by this run.
+
+## VPS Hardening, Upstream Reconnaissance & Structured JSON Export (2026-11-25)
+
+Executed on a headless CPU-only Linux VPS on `release/3.2` (`package.json` remains `3.1.0`). **No Electron GUI (`BrowserWindow`), audio capture hardware, CUDA GPU, or local LLM binaries were executed here**; only non-hardware static/unit/integration suites and read-only upstream checks ran on this host.
+
+### Read-only upstream dependency & runtime reconnaissance (no pins changed)
+
+- **GitHub Dependabot alerts & npm audits:** `gh api repos/AmirArshad/meeting-transcriber/dependabot/alerts?state=open --jq 'length'` returned `0` (3 held Dependabot PRs remain open: `#159` `onnxruntime 1.32.0`, `#160` `electron 46.0.0-alpha.12`, `#161` `ctranslate2 4.9.0`). Both `npm audit --omit=dev` and `npm audit` exited `0` (`0` vulnerabilities).
+- **Python 3.11 dependency closure:** `.venv/bin/python scripts/check-build-requirements-closure.py linux windows` exited `0` (`ok requirements-linux-build.txt`, `ok requirements-windows-build.txt`). Native `macos` closure requires a macOS host.
+- **Electron & bundled binaries (holds confirmed):**
+  - `npm view electron dist-tags --json`: `latest: "45.5.0"`, `beta: "45.0.0-beta.7"`, `alpha` / `alpha-46-x-y`: `"46.0.0-alpha.13"` — still no stable Electron `46.x`; held at `46.0.0-alpha.11`.
+  - `shaka-project/static-ffmpeg-binaries`: remains at `n8.1.2-2` (`8.1.2`); matched cross-platform FFmpeg hold at `8.1.2` remains valid.
+  - `astral-sh/python-build-standalone`: `20261124` tag rebuilds the same CPython `3.11.18` version (`cpython-3.11.18+20261124`) while `pip` remains `26.3`; pinned `3.11.18+20261110` stays current.
+- **PyPI / npm upstream deltas (no pins changed without approval/native gates):** `marked` has `18.3.0` (`18.2.1` pinned, 0 advisories), `filelock` has `4.3.1` (`4.3.0` pinned), macOS `regex` has `2026.11.24` (`2026.11.19` pinned); `onnxruntime` (`1.32.0`), `ctranslate2` (`4.9.1`), `pyobjc-*` (`13.1`), and Rust `speakrs` (`0.8.0`) remain held pending native verification; Python 3.11 ceilings (`av 18.1.1`, `numpy 2.4.6`, `scipy 1.17.1`, `huggingface-hub <2`) remain valid.
+- **`ggml-org/llama.cpp` upstream check (`b12631..b12722`):**
+  - Upstream reached tag `b12722` (`2026-11-25T10:37:37Z`, commit `e6443bd7eb970d940b0669cd9ea0d82d91d620a1`, 106 commits ahead of `b12631`) with matching release binaries published across macOS arm64, Windows CUDA 12.4, and Ubuntu CUDA 12.8.
+  - Inspecting `b12631..b12722` shows Inkling 2 graph/grammar/weight fixes (`d2bceda3`, `dd53f70d`, `e683365a`, `396ed2cc`, `33aeb17f`), Qwen3.5 GDN cache-slot replay (`d35dc4d9`), CUDA kernel fixes (`46f4da21`, `4c92c5bf`, `9578bd3f`, `922cff91`, `22b99122`), and `server` prompt-cache fixes (`c212d25a`, `82dd9704`, `40fe9164`), with no breaking changes to Gemma 4, Ministral 3, Qwen 3.8, or Hadamard `Q2_0`.
+  - **Recommendation: STAY on `b12631` for v3.2.0** unless native Windows CUDA or `bonsai-2.5-27b-q2-0` qualification uncovers a specific defect. `b12631` already carries full Linux CUDA 12.8 ELF closure (`51` binaries / `29` shared libraries + `3` cudart pins) and passing Linux/macOS native 32k qualification checks, whereas bumping to `b12722` would invalidate all prior `b12631` runtime evidence and alter `inkling-2-mini`'s tuned chat grammar behavior.
+
+### Code hardening & Structured JSON export pulled into `release/3.2`
+
+- **Lifecycle / queue / retired-model hardening:** Disarmed `updater-service` `'installing'` state when `clearQuitCommitted()` cancels an interrupted recording-quit flow (`cancelPendingInstall()`), prevented installed-but-unready `bonsai-2-27b-q2-0` threads from silently overwriting `thread.modelId` during transient errors, and serialized Linux CUDA live probes inside `readSummaryModelAdmission` and `validate-diarization-setup` through `enqueueGpuResourceAction`.
+- **Structured JSON Transcript Export (`.json`):** Extended `VALID_EXPORT_FORMATS`, `src/renderer/subtitle-export-helpers.js` (`serializeTranscriptToJson`, schema version `1` `avanevis-transcript`), `src/main/file-export-ipc.js` (`save-transcript-as` with `EXPORT_FORMAT_FILTERS.json` and Windows-safe filename sanitization), and the renderer export picker speaker toggle. Exported `.json` files include safe recording metadata, speaker names (unless `includeSpeakers: false`), Markdown + plain-text transcript + `sourceTranscriptHash`, validated caption cues when `.captions.json` is fresh (or explicit `captions.available: false` status when absent/stale without failing export), and completed summary data, while enforcing `recordings` path-jail and non-symlink checks and omitting all host filesystem paths.
+
+## Return-to-PC/Mac Ordered Qualification Runbook
+
+Run the steps below on each target hardware host before cutting `v3.2.0` (while `package.json` stays `3.1.0` for pre-cut verification, then repeat final release-version checks after the authorized bump to `3.2.0`):
+
+### 1. Windows 10/11 x64 (with NVIDIA CUDA GPU)
+
+1. `npm ci && npm run test:all` (must exit `0`, including all Electron `BrowserWindow` suites)
+2. `py -3.11 scripts/agents/validate_setup.py` and `py -3.11 scripts/check-build-requirements-closure.py windows`
+3. `npm audit --omit=dev && npm audit`
+4. Electron `DPAPI` smoke: `node scripts/run-electron-token-migration-smoke.js` (`tests/fixtures/electron/token-migration-smoke.js`)
+5. Pre-cut build & installer check: `npm run build` and `powershell -ExecutionPolicy Bypass -File scripts/verify-windows-installer.ps1`
+6. Native hardware / UI acceptance on isolated profile:
+   - Recording capture + Whisper transcription (CPU & CUDA) + Speakrs setup & diarization
+   - Summaries & Chat on `b12631` CUDA 12.4: `bonsai-2-9b-q2-0`, `bonsai-2.5-27b-q2-0` (32k setup, Chat, English summary, Job Object exit, cancel cleanup), `gemma-4-e4b` / `gemma-4-12b` (for `b12631` adoption decision), and any 16–24+ GiB host models (`ministral-3-14b`, `gemma-4-26b-a4b`, `qwen3.8-27b`, `inkling-2-mini`)
+   - Interactive UI: device fit badges, unload-before-download modal, Chat direct fit / follow-ups / granular timestamps / General Chat mode, ≥5 s speaker voice samples + `"Sample"` caption, always-available Summary format dropdown, and **Save transcript as -> Structured JSON (`.json`)** native dialog + payload spot-check (confirm no host paths in exported JSON)
+   - Only if qualifying held Python upgrades: `powershell -ExecutionPolicy Bypass -File scripts/qualify-windows-onnx.ps1` (ETW telemetry) and `ctranslate2` CPU/CUDA parity
+
+### 2. macOS arm64 (Apple Silicon, macOS 15+)
+
+1. `npm ci && npm run test:all` (exit `0`)
+2. `python3 scripts/agents/validate_setup.py` and `python3 scripts/check-build-requirements-closure.py macos` (native macOS closure gate)
+3. `npm audit --omit=dev && npm audit`
+4. Electron Keychain smoke: `node scripts/run-electron-token-migration-smoke.js`
+5. Pre-cut build & verifiers: `npm run build:mac && npm run verify:mac:packaged && npm run verify:mac:installer`
+6. Native hardware / UI acceptance on isolated profile:
+   - Microphone-only and mixed-source (mic + system audio) hardware capture with microphone TCC permission granted
+   - Native Metal 32k checks on `b12631`: `bonsai-2.5-27b-q2-0`, `ministral-3-14b`, `gemma-4-26b-a4b`, `qwen3.8-27b`, and `gemma-4-e4b` / `gemma-4-12b` (for unified `b12631` adoption decision)
+   - Interactive UI: Settings device fit & library, History, Prepare summary format picker, Chat modes/citations, and **Save transcript as -> Structured JSON (`.json`)** save-dialog + payload spot-check
+   - Only if qualifying `pyobjc 13.x`: ScreenCaptureKit / CoreAudio permission smoke
+
+### 3. Linux x86_64 Desktop (CachyOS / Omarchy with NVIDIA CUDA)
+
+1. `npm ci && npm run test:all` (confirm all JS including the 4 Chromium `BrowserWindow` suites + Python pass after `ff47f8a`, `929b164`, and 2026-11-25 commits)
+2. `.venv/bin/python scripts/agents/validate_setup.py` and `.venv/bin/python scripts/check-build-requirements-closure.py linux`
+3. `.venv/bin/python scripts/pip_audit_inventory.py` and `cargo audit --deny warnings`
+4. `npm run build:linux && npm run verify:linux:packaged`
+5. Native desktop & GPU checks on isolated profile:
+   - `bonsai-2.5-27b-q2-0` 32k setup, VRAM floor measurement, Grounded/General Chat, and English summary check on `b12631` CUDA 12.8
+   - Interactive desktop acceptance: RTX 4070 `12,282 MiB` device fit + Gemma 4 12B, unload-before-download modal, Chat direct fit / follow-ups / granular timestamps / General Chat guardrails, ≥5 s speaker samples + `"Sample"` caption, always-available Summary format dropdown, and **Structured JSON (`.json`)** save-dialog + payload spot-check
+   - Optional 16–24+ GiB host checks for `ministral-3-14b`, `gemma-4-26b-a4b`, `qwen3.8-27b`, `inkling-2-mini` (or record hardware ceilings as accepted limits)
+   - Only if qualifying held Python upgrades: `strace --check-network` VAD parity (`onnxruntime`) and `ctranslate2` parity
+
+### 4. Authorized `v3.2.0` Cut Sequence (Only After Qualification Sign-Off)
+
+1. Update `docs/development/V3_2_QUALIFICATION.md`, `docs/releases/v3.2.0.md` (replacing `[PENDING NATIVE QUALIFICATION]` placeholders), `docs/initiatives/ROADMAP.md`, and `todo.md`.
+2. Bump `package.json` & `package-lock.json` (`3.1.0` -> `3.2.0`), regenerate `npm run legal:sbom` if Python pins changed, and run `npm run legal:release-assets` (`3.2.0` legal archive).
+3. Run final `npm run test:all`, build release-version (`3.2.0`) installers across target platforms, run packaged verifiers, and publish via authorized PR + `v3.2.0` tag.
