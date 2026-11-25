@@ -73,7 +73,7 @@ shape are unchanged.
 An empty attempt ID represents a recording with no committed attempt ID.
 Ready `transcription-queue-state` jobs include `speakerCount` when speaker
 identification found speakers. Transcript exports with a meeting ID apply the
-current speaker names to Markdown, text, and subtitle output.
+current speaker names to Markdown, text, structured JSON (unless `includeSpeakers` is `false`), and subtitle output.
 
 ### Transcript & subtitle export
 

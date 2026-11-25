@@ -654,3 +654,56 @@ test('serializeTranscriptToJson emits schema v1, resolves speakers, handles miss
   assert.equal(staleCaptionsParsed.recording.id, null);
   assert.equal(staleCaptionsParsed.recording.durationSeconds, null);
 });
+
+test('serializeTranscriptToJson detects summary speaker-name staleness from recording.speakerNamesHash regardless of includeSpeakers', () => {
+  const transcriptMarkdown = '# Sync\n\n**[00:00 - 00:02]** **Speaker 1:** Hello.\n';
+  const transcriptHash = sha256Hash(transcriptMarkdown);
+  const oldNamesHash = sha256Hash('{"Speaker 1": "Alice"}');
+  const currentNamesHash = sha256Hash('{"Speaker 1": "Alicia"}');
+  const recording = {
+    id: '20261125_120100',
+    speakerNamesHash: currentNamesHash,
+    ai: {
+      diarization: { speakerNames: { 'Speaker 1': 'Alicia' } },
+      summary: {
+        status: 'completed',
+        markdown: '# Summary\n\nAlice spoke.\n',
+        sourceTranscriptHash: transcriptHash,
+        speakerNamesHash: oldNamesHash,
+      },
+    },
+  };
+
+  const staleWithSpeakers = JSON.parse(serializeTranscriptToJson({
+    recording,
+    includeSpeakers: true,
+    transcriptMarkdown,
+    sourceTranscriptHash: transcriptHash,
+  }));
+  assert.equal(staleWithSpeakers.summary.stale, true);
+
+  const staleWithoutSpeakers = JSON.parse(serializeTranscriptToJson({
+    recording,
+    includeSpeakers: false,
+    transcriptMarkdown,
+    sourceTranscriptHash: transcriptHash,
+  }));
+  assert.equal(staleWithoutSpeakers.summary.stale, true);
+
+  const freshParsed = JSON.parse(serializeTranscriptToJson({
+    recording: {
+      ...recording,
+      ai: {
+        ...recording.ai,
+        summary: {
+          ...recording.ai.summary,
+          speakerNamesHash: currentNamesHash,
+        },
+      },
+    },
+    includeSpeakers: false,
+    transcriptMarkdown,
+    sourceTranscriptHash: transcriptHash,
+  }));
+  assert.equal(freshParsed.summary.stale, false);
+});

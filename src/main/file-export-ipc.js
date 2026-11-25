@@ -372,11 +372,14 @@ function createFileExportIpc(deps) {
     const aiSummary = meeting?.ai?.summary && typeof meeting.ai.summary === 'object'
       ? meeting.ai.summary
       : null;
+    const shouldReadSummarySidecars = !aiSummary?.status || aiSummary.status === 'completed';
     let summaryStructured = null;
     let summarySidecarMeta = null;
-    let summaryMarkdown = typeof meeting?.summary === 'string' ? meeting.summary : '';
+    let summaryMarkdown = shouldReadSummarySidecars && typeof meeting?.summary === 'string'
+      ? meeting.summary
+      : '';
 
-    if (aiSummary?.jsonPath) {
+    if (shouldReadSummarySidecars && aiSummary?.jsonPath) {
       const summaryJsonFile = await readSafeSidecarFile(aiSummary.jsonPath, {
         recordingsDir,
         isSafePath: isSafeRecordingsJsonPath,
@@ -408,7 +411,7 @@ function createFileExportIpc(deps) {
       }
     }
 
-    if (aiSummary?.markdownPath) {
+    if (shouldReadSummarySidecars && aiSummary?.markdownPath) {
       const summaryMdFile = await readSafeSidecarFile(aiSummary.markdownPath, {
         recordingsDir,
         isSafePath: isSafeRecordingsMarkdownPath,

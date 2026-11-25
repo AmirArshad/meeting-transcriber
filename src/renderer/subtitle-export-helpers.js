@@ -612,6 +612,10 @@
       speakerNames: normalizedNames,
     });
 
+    const effectiveSpeakerNamesHash = speakerNamesHash !== undefined
+      ? speakerNamesHash
+      : (typeof rec?.speakerNamesHash === 'string' ? rec.speakerNamesHash : undefined);
+
     let speakersSection;
     if (!includeSpeakerLabels) {
       speakersSection = {
@@ -641,9 +645,7 @@
       const safeExplicitCount = explicitCount !== null && explicitCount >= 0
         ? Math.floor(explicitCount)
         : 0;
-      const resolvedNamesHash = normalizeOptionalString(
-        speakerNamesHash !== undefined ? speakerNamesHash : rec?.speakerNamesHash,
-      );
+      const resolvedNamesHash = normalizeOptionalString(effectiveSpeakerNamesHash);
       speakersSection = {
         included: true,
         names: normalizedNames,
@@ -655,7 +657,7 @@
     const summarySection = buildSummaryExportSection(summary, {
       rec,
       resolvedTranscriptHash,
-      speakerNamesHash,
+      speakerNamesHash: effectiveSpeakerNamesHash,
     });
 
     const payload = {

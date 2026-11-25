@@ -982,3 +982,32 @@ test('save-transcript-as JSON falls back cleanly when getMeeting rejects or meet
   assert.equal(parsedOmitted.recording.id, null);
   assert.equal(parsedOmitted.transcript.sourceTranscriptHash, sha256Hash(fallbackMd));
 });
+
+test('save-transcript-as JSON skips summary sidecars when summary status is not completed', async (t) => {
+  const harness = createHarness(t, {
+    getMeeting: async (id) => ({
+      id,
+      transcriptPath: undefined,
+      summary: '# Stale or failed summary text',
+      ai: {
+        summary: {
+          status: 'error',
+          jsonPath: path.join(harness.rootDir, 'outside-error.summary.json'),
+          markdownPath: path.join(harness.rootDir, 'outside-error.summary.md'),
+        },
+      },
+    }),
+  });
+
+  const mdText = '# Sync\n\n## Transcript\n\nHello.\n';
+  const result = await harness.handlers['save-transcript-as'](harness.fakeEvent, {
+    suggestedName: 'Failed Summary',
+    content: mdText,
+    format: 'json',
+    meetingId: 'failed-summary-1',
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.format, 'json');
+  const parsed = JSON.parse(fs.readFileSync(result.filePath, 'utf8'));
+  assert.equal(parsed.summary, null);
+});
