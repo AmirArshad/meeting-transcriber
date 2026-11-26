@@ -3,19 +3,19 @@ const fs = require('fs');
 
 const BUILD_DOWNLOADS = Object.freeze({
   pythonWin: Object.freeze({
-    label: 'Windows standalone Python 3.11.18+20261110',
-    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18+20261110-x86_64-pc-windows-msvc-install_only.tar.gz',
-    sha256: '5ca7e23bbcc8933a75f4ae9c3a5e5d1ffae5fd143aec9a9d77cf5124cc6e0eef',
+    label: 'Windows standalone Python 3.11.18+20261124',
+    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20261124/cpython-3.11.18+20261124-x86_64-pc-windows-msvc-install_only.tar.gz',
+    sha256: '3e4a35e3c238e5090d36bf95c041d9052bc82d6e298cb912ba7f70f6c66cf81a',
   }),
   pythonMac: Object.freeze({
-    label: 'macOS standalone Python 3.11.18+20261110',
-    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18+20261110-aarch64-apple-darwin-install_only.tar.gz',
-    sha256: '73f1ed14486aa278d331e95f7d6d452f5cfb69d90b418e26e62fd4846d53557d',
+    label: 'macOS standalone Python 3.11.18+20261124',
+    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20261124/cpython-3.11.18+20261124-aarch64-apple-darwin-install_only.tar.gz',
+    sha256: '89ce773f5eb6f072ceea3a30d86258ecd5d02ea0f8e87fda0b940b9067aebf81',
   }),
   pythonLinux: Object.freeze({
-    label: 'Linux standalone Python 3.11.18+20261110',
-    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20261110/cpython-3.11.18+20261110-x86_64-unknown-linux-gnu-install_only.tar.gz',
-    sha256: 'ac0b758b6ae4ba1cb87f7091eb6bb17c9a383a9bcdb5c18493cdd4f34e35ae8c',
+    label: 'Linux standalone Python 3.11.18+20261124',
+    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20261124/cpython-3.11.18+20261124-x86_64-unknown-linux-gnu-install_only.tar.gz',
+    sha256: 'ef0764e884b5e123692281b91bf388f8ebfd0afb41d6a212bb4f2779e51abf0e',
   }),
   ffmpegWin: Object.freeze({
     label: 'Windows ffmpeg 8.1.2 essentials build',

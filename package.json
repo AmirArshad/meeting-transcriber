@@ -43,7 +43,7 @@
     "adm-zip": "0.6.1",
     "dompurify": "3.5.0",
     "electron-updater": "6.8.11",
-    "marked": "18.2.1"
+    "marked": "18.3.0"
   },
   "devDependencies": {
     "electron": "46.0.0-alpha.11",

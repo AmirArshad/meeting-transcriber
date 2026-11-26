@@ -9,7 +9,7 @@ pycparser==3.12
 numpy==2.4.6
 soxr==1.1.0
 faster-whisper==1.2.1
-filelock==4.3.0
+filelock==4.3.1
 av==18.1.1
 # 4.8.5 matched 4.8.2 fixture transcripts on CachyOS CPU and managed CUDA, 2026-11-03.
 ctranslate2==4.8.5
@@ -20,13 +20,13 @@ tqdm==4.70.1
 setuptools==84.2.1
 PyYAML==6.0.4
 flatbuffers==25.12.19
-packaging==26.3
+packaging==26.4
 protobuf==7.36.2
 fsspec==2026.9.0
 hf-xet==1.8.0
 httpx==0.28.1
 httpcore==1.0.9
-typer==0.29.2
+typer==0.29.3
 annotated-types==0.8.0
 pydantic==2.14.4
 pydantic-core==2.50.5

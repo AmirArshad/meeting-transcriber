@@ -223,6 +223,42 @@ Executed on a headless CPU-only Linux VPS on `release/3.2` (`package.json` remai
 - **Lifecycle / queue / retired-model hardening:** Disarmed `updater-service` `'installing'` state when `clearQuitCommitted()` cancels an interrupted recording-quit flow (`cancelPendingInstall()`), prevented installed-but-unready `bonsai-2-27b-q2-0` threads from silently overwriting `thread.modelId` during transient errors, and serialized Linux CUDA live probes inside `readSummaryModelAdmission` and `validate-diarization-setup` through `enqueueGpuResourceAction`.
 - **Structured JSON Transcript Export (`.json`):** Extended `VALID_EXPORT_FORMATS`, `src/renderer/subtitle-export-helpers.js` (`serializeTranscriptToJson`, schema version `1` `avanevis-transcript`), `src/main/file-export-ipc.js` (`save-transcript-as` with `EXPORT_FORMAT_FILTERS.json` and Windows-safe filename sanitization), and the renderer export picker speaker toggle. Exported `.json` files include safe recording metadata, speaker names (unless `includeSpeakers: false`), Markdown + plain-text transcript + `sourceTranscriptHash`, validated caption cues when `.captions.json` is fresh (or explicit `captions.available: false` status when absent/stale without failing export), and completed summary data, while enforcing `recordings` path-jail and non-symlink checks and omitting all host filesystem paths.
 
+## Dependency, Runtime & Ollama Assessment Pass (2026-11-26)
+
+Executed on a headless CPU-only Linux environment on `release/3.2` (`package.json` remains `3.1.0`). **No Electron GUI (`BrowserWindow`), audio hardware, OS keyrings, CUDA/Metal/CoreML accelerators, local AI models, or Rust `cargo` builds (`speakrs-cli` / `prepare-build` / `build:linux`) were executed here**; only non-desktop static/unit/integration suites, dependency-closure/audit checks, archive integrity checks, and read-only upstream verifications ran on this host.
+
+### Applied updates (2026-11-26)
+
+- **Bundled standalone CPython (`build/download-manifest.js`, `tests/js/build-download-manifest.test.js`):** Updated `pythonWin`, `pythonMac`, and `pythonLinux` from `3.11.18+20261110` to Astral `3.11.18+20261124` (`PSF-2.0`), incorporating `libexpat 2.11.0` (fixes `CVE-2026-124317`, `CVE-2026-128241`, `CVE-2026-134703`, plus `#1495` `-fno-strict-aliasing` hardening), `zstd 1.6.0`, and `libffi 3.8.1`:
+  - `win32-x64` (`cpython-3.11.18+20261124-x86_64-pc-windows-msvc-install_only.tar.gz`): `49,096,635` B, SHA-256 `3e4a35e3c238e5090d36bf95c041d9052bc82d6e298cb912ba7f70f6c66cf81a` (`4,056` archive entries; `python/python.exe`, `python/DLLs/_ctypes.pyd`, `python/Lib/os.py` present).
+  - `darwin-arm64` (`cpython-3.11.18+20261124-aarch64-apple-darwin-install_only.tar.gz`): `27,137,621` B, SHA-256 `89ce773f5eb6f072ceea3a30d86258ecd5d02ea0f8e87fda0b940b9067aebf81` (`2,078` archive entries; `python/bin/python3.11`, `python/lib/python3.11/os.py` present).
+  - `linux-x64` (`cpython-3.11.18+20261124-x86_64-unknown-linux-gnu-install_only.tar.gz`): `49,288,374` B, SHA-256 `ef0764e884b5e123692281b91bf388f8ebfd0afb41d6a212bb4f2779e51abf0e` (`4,949` archive entries; isolated Linux interpreter import check reported `3.11.18`, `OpenSSL 3.5.9 29 Sep 2026`, `SQLite 3.54.1`, `expat_2.11.0`).
+  - Packaged `prepare-build` and installer verification on Windows, macOS, and Linux hosts remain open.
+- **npm (`package.json`, `package-lock.json`, `THIRD_PARTY_NOTICES.md`):** Updated `marked` `18.2.1` → `18.3.0` (`MIT`; fixes quadratic inline-link and GFM `@` scans `#4274` / `#4225` and GFM parser edge cases).
+- **Python (`requirements-windows-build.txt`, `requirements-macos-build.txt`, `requirements-linux-build.txt`, `legal/PYTHON-BUNDLED-PACKAGES.md`):** Updated cross-platform `py3-none-any` patch pins `filelock` `4.3.0` → `4.3.1` (`MIT`), `packaging` `26.3` → `26.4` (`Apache-2.0 OR BSD-2-Clause`), and `typer` `0.29.2` → `0.29.3` (`MIT`), and regenerated the `68`-pin direct SBOM via `npm run legal:sbom`.
+
+### Justified holds & native qualification gaps (2026-11-26)
+
+- **`ctranslate2==4.8.5` (upstream `4.9.1`, `MIT`; `faster-whisper==1.2.1` latest; `0` OSV advisories):** Held pending native Windows and Linux CPU (`int8`) + CUDA 12 (`float16`) Whisper transcript parity.
+- **`onnxruntime==1.31.1` (upstream `1.32.0`, `MIT`; `0` OSV advisories; Parakeet `onnxruntime-gpu` locks and Speakrs `1.27.1` CUDA 12 DLLs also `0` OSV advisories):** Held because Windows TraceLogging suppression depends on the audited internal `ORT_RUNNING_UNIT_TESTS=1` code path verified by native Windows active ETW capture (`scripts/qualify-windows-onnx.ps1`) and Linux `strace --check-network` VAD parity (`scripts/qualify-onnx-vad.py`); Dependabot PR `#159` failed those qualification gates as designed.
+- **`ggml-org/llama.cpp` `b12631` (vs 2026-11-26 source-only `v1.1.0` and binary tag `b12776`, `145` commits ahead, `MIT`):** Held on `b12631` because `b12631` has verified 51-binary Linux CUDA 12.8 ELF closure and passing Linux RTX 4070 / macOS M4 Pro 32k qualification, whereas `b12631..b12776` modifies the Inkling chat parser/grammar (`#32833`) and graph ops (`#32855`, `#33053`) and cannot be qualified on GPU/Metal from a CPU-only host (CUDA `bin_bcast` `#32804` hits `~79k+` context above AvaNevis's `32,768`-token window).
+- **Ollama (`v0.40.18`, `MIT`) & Inkling evaluation (not integrated):** Upstream `ollama/ollama` added `inkling-2-mini` in `v0.40.17` (`2026-11-10`, Apple Silicon only) and updated Metal MLX kernels plus embedded `llama.cpp b12651` in `v0.40.18` (`2026-11-24`, `sha256sum.txt` `b1764522...`). However, discrete NVIDIA CUDA Inkling support (`ollama/ollama#19909`) remains unmerged as of `2026-11-26` alongside open CUDA (`#19915`) and Apple Silicon M2 Pro / M4 Max MLX (`#19900`, `#19820`) issues; release archives are `189 MB` (`ollama-darwin.tgz`) to `1.65–1.95 GB` (Linux `.tar.zst` / Windows `.zip` / `.exe`); and Ollama's persistent daemon + `ollama.com` registry/cloud-launch architecture conflicts with AvaNevis's single-slot `summary-process-slot.js` lifecycle, ephemeral `LLAMA_API_KEY` loopback isolation, and HF SHA-256-pinned GGUF catalog where stock `llama.cpp b12631` already supports `Inkling-2-Mini-IQ4_NL.gguf`.
+- **Other ecosystem holds (`0` OSV/npm/Dependabot findings):**
+  - **Electron (`46.0.0-alpha.11`):** Held (`npm view electron dist-tags`: `latest: 45.5.0`, `beta: 45.0.0-beta.7`, `alpha-46-x-y: 46.0.0-alpha.13` — no stable `46.x` yet; Linux `safeStorage` prefix guard and 3-OS smoke required).
+  - **FFmpeg (`8.1.2`) & `pip` (`26.3`):** `shaka-project/static-ffmpeg-binaries` remains at `n8.1.2-2` (`8.1.2`) while `GyanD/codexffmpeg` is at `9.1`, so no matched 3-OS release `> 8.1.2` exists; `pip 26.3` stays current.
+  - **macOS-compiled wheels & Python 3.11 ceilings:** Held `pyobjc-*==12.2.2` (`13.1`), `mlx`/`mlx-metal==0.32.4` (`0.32.5`), `charset-normalizer==3.5.2` (`3.5.3`), and `regex==2026.11.19` (`2026.11.25`) pending native macOS closure/Metal/TCC verification; Python 3.11 / upstream ceilings (`av==18.1.1`, `numpy==2.4.6`, `scipy==1.17.1`, `networkx==3.6.1`, `huggingface-hub==1.33.0`, `mpmath==1.3.0`, `tiktoken==0.3.3`) and Parakeet/Pyannote/Linux-CUDA catalogs remain unchanged.
+  - **Rust (`speakrs = "=0.7.0"`) & Swift (`AudioCaptureHelper`):** `speakrs 0.8.1` (`ort ^2.0.0-rc.15`) remains held pending full 3-OS native CUDA/CoreML requalification; OSV.dev batch check across all `409` pinned PyPI + crates.io lock entries returned `0` findings (`cargo` CLI not installed on this host); Swift `AudioCaptureHelper` has zero external dependencies.
+
+### Automated checks executed on headless CPU-only Linux (2026-11-26)
+
+- `npm run test:syntax` (`84` JS files under `src/`) & `npm run test:python-syntax` (`backend/` recursive): exited `0`.
+- Pure-Node JS tests (`93` test files, explicitly skipping the `4` Electron `BrowserWindow`-spawning suites `chat-helpers.test.js`, `electron-preload-smoke.test.js`, `import-renderer.test.js`, `history-detail-interaction.test.js`): `1,410` tests (`1,409 passed, 0 failed, 1 skipped`), exited `0`.
+- `npm run test:python` (with updated `filelock==4.3.1` and `packaging==26.4` in `.venv`): `1,018 passed, 8 skipped`, exited `0`.
+- `.venv/bin/python scripts/check-build-requirements-closure.py linux windows`: exited `0` (`ok requirements-linux-build.txt`, `ok requirements-windows-build.txt`; native `macos` closure requires macOS).
+- `npm audit --omit=dev` & `npm audit`: both exited `0` (`0` vulnerabilities); `gh api repos/AmirArshad/meeting-transcriber/dependabot/alerts?state=open --jq 'length'` returned `0`; OSV.dev query across `409` pinned PyPI + `Cargo.lock` entries returned `0` findings.
+- `node scripts/extract-dependency-inventory.js --list` & `RELEASE_LEGAL_DIR=<tmp> node scripts/stage-release-legal-assets.js` (FFmpeg `8.1.2` source SHA-256 verified, `avanevis-legal-3.1.0.zip` staged cleanly in temp dir and cleaned up): exited `0`.
+- `.venv/bin/python scripts/agents/validate_setup.py`: exited `0`.
+
 ## Return-to-PC/Mac Ordered Qualification Runbook
 
 Run the steps below on each target hardware host before cutting `v3.2.0` (while `package.json` stays `3.1.0` for pre-cut verification, then repeat final release-version checks after the authorized bump to `3.2.0`):
@@ -233,7 +269,7 @@ Run the steps below on each target hardware host before cutting `v3.2.0` (while 
 2. `py -3.11 scripts/agents/validate_setup.py` and `py -3.11 scripts/check-build-requirements-closure.py windows`
 3. `npm audit --omit=dev && npm audit`
 4. Electron `DPAPI` smoke: `node scripts/run-electron-token-migration-smoke.js` (`tests/fixtures/electron/token-migration-smoke.js`)
-5. Pre-cut build & installer check: `npm run build` and `powershell -ExecutionPolicy Bypass -File scripts/verify-windows-installer.ps1`
+5. Pre-cut build & installer check: `npm run build` (verifying bundled standalone CPython `3.11.18+20261124`) and `powershell -ExecutionPolicy Bypass -File scripts/verify-windows-installer.ps1`
 6. Native hardware / UI acceptance on isolated profile:
    - Recording capture + Whisper transcription (CPU & CUDA) + Speakrs setup & diarization
    - Summaries & Chat on `b12631` CUDA 12.4: `bonsai-2-9b-q2-0`, `bonsai-2.5-27b-q2-0` (32k setup, Chat, English summary, Job Object exit, cancel cleanup), `gemma-4-e4b` / `gemma-4-12b` (for `b12631` adoption decision), and any 16–24+ GiB host models (`ministral-3-14b`, `gemma-4-26b-a4b`, `qwen3.8-27b`, `inkling-2-mini`)
@@ -246,7 +282,7 @@ Run the steps below on each target hardware host before cutting `v3.2.0` (while 
 2. `python3 scripts/agents/validate_setup.py` and `python3 scripts/check-build-requirements-closure.py macos` (native macOS closure gate)
 3. `npm audit --omit=dev && npm audit`
 4. Electron Keychain smoke: `node scripts/run-electron-token-migration-smoke.js`
-5. Pre-cut build & verifiers: `npm run build:mac && npm run verify:mac:packaged && npm run verify:mac:installer`
+5. Pre-cut build & verifiers: `npm run build:mac` (verifying bundled standalone CPython `3.11.18+20261124`), `npm run verify:mac:packaged`, and `npm run verify:mac:installer`
 6. Native hardware / UI acceptance on isolated profile:
    - Microphone-only and mixed-source (mic + system audio) hardware capture with microphone TCC permission granted
    - Native Metal 32k checks on `b12631`: `bonsai-2.5-27b-q2-0`, `ministral-3-14b`, `gemma-4-26b-a4b`, `qwen3.8-27b`, and `gemma-4-e4b` / `gemma-4-12b` (for unified `b12631` adoption decision)
@@ -258,7 +294,7 @@ Run the steps below on each target hardware host before cutting `v3.2.0` (while 
 1. `npm ci && npm run test:all` (confirm all JS including the 4 Chromium `BrowserWindow` suites + Python pass after `ff47f8a`, `929b164`, and 2026-11-25 commits)
 2. `.venv/bin/python scripts/agents/validate_setup.py` and `.venv/bin/python scripts/check-build-requirements-closure.py linux`
 3. `.venv/bin/python scripts/pip_audit_inventory.py` and `cargo audit --deny warnings`
-4. `npm run build:linux && npm run verify:linux:packaged`
+4. `npm run build:linux && npm run verify:linux:packaged` (verifying bundled standalone CPython `3.11.18+20261124`)
 5. Native desktop & GPU checks on isolated profile:
    - `bonsai-2.5-27b-q2-0` 32k setup, VRAM floor measurement, Grounded/General Chat, and English summary check on `b12631` CUDA 12.8
    - Interactive desktop acceptance: RTX 4070 `12,282 MiB` device fit + Gemma 4 12B, unload-before-download modal, Chat direct fit / follow-ups / granular timestamps / General Chat guardrails, ≥5 s speaker samples + `"Sample"` caption, always-available Summary format dropdown, and **Structured JSON (`.json`)** save-dialog + payload spot-check
